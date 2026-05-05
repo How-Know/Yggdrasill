@@ -37,6 +37,7 @@ import 'services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
+import 'widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'widgets/memo_dialogs.dart';
 import 'app_overlays.dart';
 import 'screens/learning/past_exam_papers_dialog.dart';
@@ -388,7 +389,8 @@ Future<void> _preloadExamDialogData() async {
   // 매번 DataManager 캐시(최신 서버/로컬 반영) → 프리로드 맵 동기화.
   // SG 키가 이미 있어도 stale 상태일 수 있으므로 항상 갱신한다.
   await Future.wait([
-    ...middleAll.map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.middle)),
+    ...middleAll
+        .map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.middle)),
     ...highAll.map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.high)),
   ]);
 }
@@ -452,9 +454,7 @@ class _ExamMetaState {
 Map<String, dynamic> _encodeExamAssignments() {
   return <String, dynamic>{
     for (final entry in _examAssignmentByName.entries)
-      entry.key: {
-        for (final e in entry.value.entries) e.key: e.value.toList()
-      }
+      entry.key: {for (final e in entry.value.entries) e.key: e.value.toList()}
   };
 }
 
@@ -615,15 +615,15 @@ Future<bool> _persistExamMetaToPrefs(
     ok = false;
   }
   try {
-    final r2 =
-        await prefs.setString(_kExamAssignKey, jsonEncode(_encodeExamAssignments()));
+    final r2 = await prefs.setString(
+        _kExamAssignKey, jsonEncode(_encodeExamAssignments()));
     ok = ok && r2;
   } catch (_) {
     ok = false;
   }
   try {
-    final r3 =
-        await prefs.setString(_kExamMetaUpdatedAtKey, updatedAt.toIso8601String());
+    final r3 = await prefs.setString(
+        _kExamMetaUpdatedAtKey, updatedAt.toIso8601String());
     ok = ok && r3;
   } catch (_) {
     ok = false;
@@ -1138,6 +1138,8 @@ class _MyAppState extends State<MyApp>
                   ),
                 ),
                 OverlayEntry(builder: (ctx) => const _GlobalExamOverlay()),
+                OverlayEntry(
+                    builder: (ctx) => const _GlobalRightSheetPdfPanel()),
                 OverlayEntry(builder: (ctx) => const _GlobalMemoOverlay()),
                 OverlayEntry(
                     builder: (ctx) => const _GlobalStartupUpdateCard()),
@@ -1713,6 +1715,97 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
   }
 }
 
+class _GlobalRightSheetPdfPanel extends StatelessWidget {
+  const _GlobalRightSheetPdfPanel();
+
+  static const double _navRailInset = 86.0;
+  static const double _rightSheetBaseWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155;
+  static const double _rightSheetGradingWidthMultiplier = 1.4;
+
+  void _closePanelAndRightSheet() {
+    rightSideSheetPdfPanelSession.value = null;
+    rightSideSheetTestGradingSession.value = null;
+    final closeAction = closeRightSideSheetAction;
+    if (closeAction != null) {
+      unawaited(closeAction());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<RightSideSheetPdfPanelSession?>(
+      valueListenable: rightSideSheetPdfPanelSession,
+      builder: (context, session, _) {
+        final answerPath = session?.answerPath.trim() ?? '';
+        if (session == null || answerPath.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return ValueListenableBuilder<bool>(
+          valueListenable: rightSideSheetOpen,
+          builder: (context, sheetOpen, __) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: rightSideSheetGradingTabActive,
+              builder: (context, gradingTabActive, ___) {
+                final rightInset = sheetOpen
+                    ? _rightSheetBaseWidth *
+                        (gradingTabActive
+                            ? _rightSheetGradingWidthMultiplier
+                            : 1.0)
+                    : 0.0;
+                final overlayEntries = session.overlayEntries
+                    .map(
+                      (entry) => HomeworkAnswerOverlayEntry(
+                        title: entry['title'] ?? '',
+                        page: entry['page'] ?? '',
+                        memo: entry['memo'] ?? '',
+                      ),
+                    )
+                    .toList(growable: false);
+                return AnimatedPositioned(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeInOut,
+                  left: _navRailInset,
+                  right: rightInset,
+                  top: 0,
+                  bottom: 0,
+                  child: Material(
+                    color: const Color(0xFF101415),
+                    elevation: 10,
+                    child: HomeworkAnswerViewerPage(
+                      key: ValueKey<String>(
+                        'right-sheet-pdf:${session.sessionId}|${session.answerPath}|${session.solutionPath}',
+                      ),
+                      filePath: answerPath,
+                      title: session.title.trim().isEmpty
+                          ? '정답 PDF'
+                          : session.title.trim(),
+                      solutionFilePath: session.solutionPath.trim().isEmpty
+                          ? null
+                          : session.solutionPath.trim(),
+                      cacheKey: session.cacheKey.trim().isEmpty
+                          ? 'right-sheet-pdf:${session.sessionId}'
+                          : session.cacheKey.trim(),
+                      enableConfirm: false,
+                      overlayEntries: overlayEntries,
+                      gradingPages: const <HomeworkAnswerGradingPage>[],
+                      hideSourceDocument: true,
+                      initialShowSolution: session.showSolution,
+                      focusPageNumber: session.focusPageNumber,
+                      focusRequestId: session.focusRequestId,
+                      focusRect1k: session.focusRect1k,
+                      onClose: _closePanelAndRightSheet,
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 // 날짜 선택 다이얼로그(저장 가능, 이름 입력 다이얼로그에서 복귀)
 Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
     BuildContext context, List<DateTime> days,
@@ -1823,8 +1916,7 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
                       final d = sorted[i];
                       final key = DateTime(d.year, d.month, d.day);
                       final titles = localTitles[key] ?? [];
-                      final selected =
-                          titles.isNotEmpty ? titles.first : null;
+                      final selected = titles.isNotEmpty ? titles.first : null;
                       return ListTile(
                         title: Text(
                           '${d.year}.${d.month}.${d.day}',
@@ -1866,11 +1958,9 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
                                   .toList(),
                               onChanged: (val) {
                                 setSB(() {
-                                  final k2 =
-                                      DateTime(d.year, d.month, d.day);
-                                  localTitles[k2] = val == null
-                                      ? <String>[]
-                                      : <String>[val];
+                                  final k2 = DateTime(d.year, d.month, d.day);
+                                  localTitles[k2] =
+                                      val == null ? <String>[] : <String>[val];
                                 });
                               },
                             ),
@@ -1993,8 +2083,8 @@ Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context,
                                 hintText: '범위 입력',
                               ),
                               onChanged: (v) {
-                                localRanges[
-                                    DateTime(d.year, d.month, d.day)] = v;
+                                localRanges[DateTime(d.year, d.month, d.day)] =
+                                    v;
                               },
                             ),
                           ),
@@ -2238,9 +2328,9 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
                     // 하단 FAB 클러스터(레일 기준 왼쪽 정렬, 레일과 48 간격)
                     if (!suppressFabCluster)
                       Positioned(
-                        left: (NavigationRailTheme.of(context).minWidth ??
-                                84.0) +
-                            48,
+                        left:
+                            (NavigationRailTheme.of(context).minWidth ?? 84.0) +
+                                48,
                         bottom: 30,
                         child: _ExamFabCluster(),
                       ),
@@ -2291,8 +2381,8 @@ class _ExamFabCluster extends StatelessWidget {
                             : () async {
                                 final navCtx = rootNavigatorKey.currentContext;
                                 if (navCtx == null) return;
-                                final openFlag =
-                                    ExamModeService.instance.examScheduleDialogOpen;
+                                final openFlag = ExamModeService
+                                    .instance.examScheduleDialogOpen;
                                 if (openFlag.value) return;
                                 openFlag.value = true;
                                 try {
@@ -2551,8 +2641,7 @@ class _ExamIconOnlyButton extends StatelessWidget {
                   shape: StadiumBorder(
                       side: BorderSide(color: Colors.transparent, width: 0)),
                 ),
-                child: Center(
-                    child: Icon(icon, color: Colors.white, size: 22)),
+                child: Center(child: Icon(icon, color: Colors.white, size: 22)),
               ),
             ),
           ),
@@ -3791,7 +3880,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                             ? _highKey.currentState
                             : _middleKey.currentState;
                         final tapKey = '${level.index}|$sg';
-                        final period = _examPeriodHighlightDaysForSg(sg, level, st);
+                        final period =
+                            _examPeriodHighlightDaysForSg(sg, level, st);
                         final fallbackDay = day == null
                             ? <DateTime>{}
                             : {DateTime(day.year, day.month, day.day)};
@@ -3817,7 +3907,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                 child: Builder(builder: (context) {
                   final mid = _middleKey.currentState;
                   final hi = _highKey.currentState;
-                  final st = _examLevelTabIndex == 0 ? (mid ?? hi) : (hi ?? mid);
+                  final st =
+                      _examLevelTabIndex == 0 ? (mid ?? hi) : (hi ?? mid);
                   if (st == null) return const SizedBox.shrink();
                   final sg = st._hoveredSchoolGrade;
                   if (sg == null) return const SizedBox.shrink();
@@ -3870,7 +3961,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                       for (final e in st._rangesBySchoolGrade.entries)
                         e.key: {
                           for (final e2 in e.value.entries)
-                            DateTime(e2.key.year, e2.key.month, e2.key.day): e2.value
+                            DateTime(e2.key.year, e2.key.month, e2.key.day):
+                                e2.value
                         }
                     };
                   }
@@ -3938,7 +4030,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
 
                   DateTime? lastDateOverall;
                   void captureLastDate(DateTime d) {
-                    if (lastDateOverall == null || d.isAfter(lastDateOverall!)) {
+                    if (lastDateOverall == null ||
+                        d.isAfter(lastDateOverall!)) {
                       lastDateOverall = d;
                     }
                   }
@@ -3950,7 +4043,11 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                     required EducationLevel level,
                   }) async {
                     final touched = <String>{};
-                    final sgKeys = <String>{...saved.keys, ...ranges.keys, ...days.keys};
+                    final sgKeys = <String>{
+                      ...saved.keys,
+                      ...ranges.keys,
+                      ...days.keys
+                    };
                     for (final sg in sgKeys) {
                       final idx = sg.lastIndexOf(' ');
                       final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
@@ -3959,11 +4056,15 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                           int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
 
                       final titles = <DateTime, List<String>>{
-                        for (final e in (saved[sg] ?? const <DateTime, List<String>>{}).entries)
+                        for (final e
+                            in (saved[sg] ?? const <DateTime, List<String>>{})
+                                .entries)
                           norm(e.key): List<String>.from(e.value),
                       };
                       final rng = <DateTime, String>{
-                        for (final e in (ranges[sg] ?? const <DateTime, String>{}).entries)
+                        for (final e
+                            in (ranges[sg] ?? const <DateTime, String>{})
+                                .entries)
                           norm(e.key): e.value,
                       };
                       final prevTitles = <DateTime, List<String>>{
@@ -3990,28 +4091,27 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                           .map(norm)
                           .toSet();
 
-                      final examChanged =
-                          !sameTitleMap(titles, prevTitles) ||
-                              !sameRangeMap(rng, prevRanges);
-                      final dayChanged =
-                          dsetSession.isNotEmpty &&
-                              !sameDaySet(dsetSession, dsetCurrent);
+                      final examChanged = !sameTitleMap(titles, prevTitles) ||
+                          !sameRangeMap(rng, prevRanges);
+                      final dayChanged = dsetSession.isNotEmpty &&
+                          !sameDaySet(dsetSession, dsetCurrent);
                       if (!examChanged && !dayChanged) continue;
 
                       if (examChanged) {
-                        await DataManager.instance
-                            .saveExamFor(schoolName, level, gradeNum, titles, rng);
+                        await DataManager.instance.saveExamFor(
+                            schoolName, level, gradeNum, titles, rng);
                       }
                       if (dayChanged) {
-                        await DataManager.instance
-                            .saveExamDays(schoolName, level, gradeNum, dsetSession);
+                        await DataManager.instance.saveExamDays(
+                            schoolName, level, gradeNum, dsetSession);
                       }
                       touched.add(sg);
 
                       for (final d in titles.keys) {
                         captureLastDate(d);
                       }
-                      for (final d in (dayChanged ? dsetSession : dsetCurrent)) {
+                      for (final d
+                          in (dayChanged ? dsetSession : dsetCurrent)) {
                         captureLastDate(d);
                       }
                     }
@@ -4035,18 +4135,20 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
 
                     if (lastDateOverall != null) {
                       final d = lastDateOverall!;
-                      final until = DateTime(d.year, d.month, d.day, 23, 59, 59);
+                      final until =
+                          DateTime(d.year, d.month, d.day, 23, 59, 59);
                       await ExamModeService.instance.setUntil(until);
                       await ExamModeService.instance.setOn(true);
                     }
 
                     final syncJobs = <Future<void>>[];
                     for (final sg in touchedMiddle) {
-                      syncJobs
-                          .add(_syncPreloadOneSgFromDm(sg, EducationLevel.middle));
+                      syncJobs.add(
+                          _syncPreloadOneSgFromDm(sg, EducationLevel.middle));
                     }
                     for (final sg in touchedHigh) {
-                      syncJobs.add(_syncPreloadOneSgFromDm(sg, EducationLevel.high));
+                      syncJobs.add(
+                          _syncPreloadOneSgFromDm(sg, EducationLevel.high));
                     }
                     if (syncJobs.isNotEmpty) {
                       await Future.wait(syncJobs);
@@ -4189,7 +4291,8 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
                             IconButton(
                               tooltip: '삭제',
                               onPressed: () async {
-                                final list = [..._examNames.value]..remove(name);
+                                final list = [..._examNames.value]
+                                  ..remove(name);
                                 _examNames.value = list;
                                 _examAssignmentByName.remove(name);
                                 if (ctxSB.mounted) setSB(() {});
@@ -4855,17 +4958,14 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                                 style: FilledButton.styleFrom(
                                                     backgroundColor:
                                                         const Color(0xFFD32F2F),
-                                                    padding:
-                                                        const EdgeInsets
-                                                            .symmetric(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
                                                         horizontal: 24,
                                                         vertical: 14),
-                                                    shape:
-                                                        RoundedRectangleBorder(
-                                                            borderRadius:
-                                                                BorderRadius
-                                                                    .circular(
-                                                                        10))),
+                                                    shape: RoundedRectangleBorder(
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                                10))),
                                                 child: const Text('삭제',
                                                     style: TextStyle(
                                                         color: Colors.white,
@@ -4883,20 +4983,19 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                       final gtext = idx > 0
                                           ? item.substring(idx + 1)
                                           : '';
-                                      final gnum = int.tryParse(gtext
-                                              .replaceAll('학년', '')) ??
+                                      final gnum = int.tryParse(
+                                              gtext.replaceAll('학년', '')) ??
                                           0;
-                                      final level = widget.level ??
-                                          EducationLevel.middle;
-                                      await DataManager.instance.deleteExamData(
-                                          sch, level, gnum);
+                                      final level =
+                                          widget.level ?? EducationLevel.middle;
+                                      await DataManager.instance
+                                          .deleteExamData(sch, level, gnum);
                                       // 로컬 위저드 상태 및 프리로드 데이터 비우기
                                       setState(() {
                                         _savedBySchoolGrade.remove(item);
                                         _rangesBySchoolGrade.remove(item);
                                         _removePreloadedFor(item, level);
-                                        _selectedDaysBySchoolGrade
-                                            .remove(item);
+                                        _selectedDaysBySchoolGrade.remove(item);
                                       });
                                       notifyExamScheduleChanged();
                                     }
@@ -4907,8 +5006,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                     decoration: BoxDecoration(
                                       color: Colors.transparent,
                                       borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                          color: Colors.transparent),
+                                      border:
+                                          Border.all(color: Colors.transparent),
                                     ),
                                     child: Text(
                                       schoolName,
@@ -4924,8 +5023,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                 ),
                                 if (schoolNameLikelyMiddleWhenHighLevel(
                                     schoolName,
-                                    widget.level ??
-                                        EducationLevel.middle))
+                                    widget.level ?? EducationLevel.middle))
                                   Padding(
                                     padding: const EdgeInsets.only(top: 4),
                                     child: Text(
@@ -5028,14 +5126,15 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                             await _openDateSelectAndSaveDialog(
                                                 context, [dateKey],
                                                 schoolGradeLabel: sg,
-                                                schoolGradeLevel: widget.level ??
-                                                    EducationLevel.middle);
+                                                schoolGradeLevel:
+                                                    widget.level ??
+                                                        EducationLevel.middle);
                                         if (edited != null &&
                                             edited.isNotEmpty) {
                                           setState(() {
-                                            final map = _savedBySchoolGrade[
-                                                    sg] ??
-                                                <DateTime, List<String>>{};
+                                            final map =
+                                                _savedBySchoolGrade[sg] ??
+                                                    <DateTime, List<String>>{};
                                             map[dateKey] =
                                                 edited[dateKey] ?? <String>[];
                                             _savedBySchoolGrade[sg] = map;
@@ -5050,14 +5149,15 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                             await _openDateSelectAndSaveDialog(
                                                 context, [dateKey],
                                                 schoolGradeLabel: sg,
-                                                schoolGradeLevel: widget.level ??
-                                                    EducationLevel.middle);
+                                                schoolGradeLevel:
+                                                    widget.level ??
+                                                        EducationLevel.middle);
                                         if (edited != null &&
                                             edited.isNotEmpty) {
                                           setState(() {
-                                            final map = _savedBySchoolGrade[
-                                                    sg] ??
-                                                <DateTime, List<String>>{};
+                                            final map =
+                                                _savedBySchoolGrade[sg] ??
+                                                    <DateTime, List<String>>{};
                                             map[dateKey] =
                                                 edited[dateKey] ?? <String>[];
                                             _savedBySchoolGrade[sg] = map;
@@ -5084,8 +5184,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                       chip(rangeStr,
                                           fs: 13, transparentBorder: true,
                                           onTap: () async {
-                                        final single =
-                                            <DateTime, List<String>>{
+                                        final single = <DateTime, List<String>>{
                                           dateKey: (_savedBySchoolGrade[sg]
                                                   ?[dateKey] ??
                                               <String>[])
@@ -5414,8 +5513,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                       final Map<DateTime, List<String>>? added =
                           await _openDateSelectAndSaveDialog(context, list,
                               schoolGradeLabel: _selectedSchoolGrade,
-                              schoolGradeLevel: widget.level ??
-                                  EducationLevel.middle);
+                              schoolGradeLevel:
+                                  widget.level ?? EducationLevel.middle);
                       if (added != null) {
                         setState(() {
                           // 현재 선택한 학교-학년의 저장 정보에 합치기
@@ -5576,8 +5675,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.of(ctx).pop(),
-                          style:
-                              TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                          style: TextButton.styleFrom(
+                              foregroundColor: kDlgTextSub),
                           child: const Text('취소'),
                         ),
                         FilledButton(
@@ -5653,8 +5752,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.of(ctx).pop(),
-                          style:
-                              TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                          style: TextButton.styleFrom(
+                              foregroundColor: kDlgTextSub),
                           child: const Text('취소'),
                         ),
                         FilledButton(
@@ -5759,8 +5858,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.of(ctx).pop(),
-                          style:
-                              TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                          style: TextButton.styleFrom(
+                              foregroundColor: kDlgTextSub),
                           child: const Text('취소'),
                         ),
                         FilledButton(
@@ -5834,9 +5933,7 @@ Set<DateTime> _periodDaysForWizardRow(
     String sg, EducationLevel level, _ExamScheduleWizardState st) {
   final sessionPicked = st._selectedDaysBySchoolGrade[sg] ?? <DateTime>{};
   if (sessionPicked.isNotEmpty) {
-    return sessionPicked
-        .map((d) => DateTime(d.year, d.month, d.day))
-        .toSet();
+    return sessionPicked.map((d) => DateTime(d.year, d.month, d.day)).toSet();
   }
   final idx = sg.lastIndexOf(' ');
   final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
@@ -5860,11 +5957,9 @@ int _examSgGradeSortKey(String sg) {
 List<({String sg, EducationLevel level})> _examOrderedOverviewEntries(
     List<String> middle, List<String> high) {
   final m = [...middle]
-    ..sort((a, b) =>
-        _examSgGradeSortKey(a).compareTo(_examSgGradeSortKey(b)));
+    ..sort((a, b) => _examSgGradeSortKey(a).compareTo(_examSgGradeSortKey(b)));
   final h = [...high]
-    ..sort((a, b) =>
-        _examSgGradeSortKey(a).compareTo(_examSgGradeSortKey(b)));
+    ..sort((a, b) => _examSgGradeSortKey(a).compareTo(_examSgGradeSortKey(b)));
   return [
     ...m.map((sg) => (sg: sg, level: EducationLevel.middle)),
     ...h.map((sg) => (sg: sg, level: EducationLevel.high)),
@@ -5935,7 +6030,8 @@ List<String> _examOverviewSubjectLabelsForSgDate(
   DateTime dayKey,
   _ExamScheduleWizardState? st,
 ) {
-  final rawFromWizard = st?._savedBySchoolGrade[sg]?[dayKey] ?? const <String>[];
+  final rawFromWizard =
+      st?._savedBySchoolGrade[sg]?[dayKey] ?? const <String>[];
   final rawFromPreload =
       _preloadedSavedFor(sg, level)?[dayKey] ?? const <String>[];
   final mergedRaw = rawFromWizard.isNotEmpty ? rawFromWizard : rawFromPreload;
@@ -6227,8 +6323,8 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
               const separatorH = 1.0;
               final separatorsTotal =
                   weekCount > 1 ? (weekCount - 1) * separatorH : 0.0;
-              final usableHeight =
-                  (constraints.maxHeight - separatorsTotal).clamp(0.0, 100000.0);
+              final usableHeight = (constraints.maxHeight - separatorsTotal)
+                  .clamp(0.0, 100000.0);
               final computedRowH =
                   weekCount == 0 ? 0.0 : (usableHeight / weekCount);
               final rowH = computedRowH < 126 ? 126.0 : computedRowH;
@@ -6258,7 +6354,8 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
                             final sg = row.sg;
                             final level = row.level;
                             final rowSt = _stateForLevel(level);
-                            final subjects = _examOverviewSubjectLabelsForSgDate(
+                            final subjects =
+                                _examOverviewSubjectLabelsForSgDate(
                               sg,
                               level,
                               key,
@@ -6275,7 +6372,8 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
                                   schoolGradeLine: schoolLine,
                                   subject: subject,
                                   isHighSchool: level == EducationLevel.high,
-                                  onTap: () => onSchoolPeriodTap(sg, level, key),
+                                  onTap: () =>
+                                      onSchoolPeriodTap(sg, level, key),
                                 ),
                               );
                             }
@@ -6379,8 +6477,7 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
     return LayoutBuilder(builder: (context, constraints) {
       const double baseWidth =
           238 * 1.2 * 1.2 * 1.1 * 1.155; // 기본 너비 (직전 너비 대비 +10%)
-      const double gradingWidthMultiplier =
-          1.4; // 채점 세션일 때 기본 대비 +40%
+      const double gradingWidthMultiplier = 1.4; // 채점 세션일 때 기본 대비 +40%
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,

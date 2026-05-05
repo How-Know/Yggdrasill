@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -18,6 +19,7 @@ import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/learning_problem_bank_service.dart';
 import '../services/print_routing_service.dart';
+import '../services/right_sheet_answer_preload_service.dart';
 import '../services/textbook_pdf_service.dart';
 import '../models/attendance_record.dart';
 import '../models/student_flow.dart';
@@ -82,6 +84,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _testGradingSerializedDraftByHomeworkId =
       <String, List<Map<String, dynamic>>>{};
   final Set<String> _testGradingSavedHomeworkIds = <String>{};
+  Timer? _rightSheetPreloadDebounce;
+  String _lastRightSheetPreloadKey = '';
 
   Map<({String studentId, String itemId}), bool> get _pendingConfirms =>
       _batchConfirmService.pending;
@@ -95,7 +99,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       gradingModeActive.value = _isGradingMode;
       homeBatchConfirmFabVisible.value = true;
       _batchConfirmService.syncPendingCount();
+      _scheduleRightSheetAnswerPreload();
     });
+    HomeworkStore.instance.revision
+        .addListener(_onHomeworkStoreRevisionChanged);
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
       ..repeat();
@@ -111,6 +118,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   void dispose() {
     homeBatchConfirmFabVisible.value = false;
     rightSideSheetTestGradingSession.value = null;
+    _rightSheetPreloadDebounce?.cancel();
+    HomeworkStore.instance.revision.removeListener(
+      _onHomeworkStoreRevisionChanged,
+    );
     _uiAnimController.dispose();
     _clockTimer.cancel();
     super.dispose();
@@ -125,6 +136,224 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       homeBatchConfirmFabVisible.value = true;
       _batchConfirmService.syncPendingCount();
     });
+  }
+
+  void _onHomeworkStoreRevisionChanged() {
+    _scheduleRightSheetAnswerPreload();
+  }
+
+  void _scheduleRightSheetAnswerPreload() {
+    if (!_isGradingMode) return;
+    _rightSheetPreloadDebounce?.cancel();
+    _rightSheetPreloadDebounce = Timer(const Duration(milliseconds: 900), () {
+      if (!mounted || !_isGradingMode) return;
+      unawaited(_runRightSheetAnswerPreload());
+    });
+  }
+
+  String _rightSheetSessionPayloadCacheKey({
+    required String studentId,
+    required HomeworkItem hw,
+  }) {
+    return 'student:${studentId.trim()}|right_sheet_session:${hw.id.trim()}';
+  }
+
+  Future<void> _runRightSheetAnswerPreload() async {
+    final candidates = <({String studentId, HomeworkItem hw})>[];
+    final seen = <String>{};
+    for (final row in DataManager.instance.students) {
+      final studentId = row.student.id.trim();
+      if (studentId.isEmpty) continue;
+      for (final hw in HomeworkStore.instance.items(studentId)) {
+        if (!_isSubmittedHomeworkForGradingSearch(hw)) continue;
+        final uniqueKey = '$studentId:${hw.id}';
+        if (!seen.add(uniqueKey)) continue;
+        candidates.add((studentId: studentId, hw: hw));
+      }
+    }
+    candidates.sort((a, b) {
+      DateTime stamp(HomeworkItem hw) =>
+          hw.submittedAt ?? hw.updatedAt ?? hw.createdAt ?? DateTime(1970);
+      return stamp(b.hw).compareTo(stamp(a.hw));
+    });
+    final selected = candidates.take(10).toList(growable: false);
+    final preloadKey = selected
+        .map((e) =>
+            '${e.studentId}:${e.hw.id}:${e.hw.updatedAt?.millisecondsSinceEpoch ?? 0}')
+        .join('|');
+    if (preloadKey.isEmpty || preloadKey == _lastRightSheetPreloadKey) return;
+    _lastRightSheetPreloadKey = preloadKey;
+
+    final academyId = await _resolveAcademyIdForPrint();
+    if (!mounted || academyId.trim().isEmpty) return;
+    final sessions = <RightSideSheetTestGradingSession>[];
+    for (final candidate in selected) {
+      if (!mounted || !_isGradingMode) return;
+      final session = await _buildRightSheetPreloadSession(
+        studentId: candidate.studentId,
+        hw: candidate.hw,
+      );
+      if (session == null) continue;
+      sessions.add(session);
+    }
+    if (sessions.isEmpty) return;
+    RightSheetAnswerPreloadService.instance.schedulePreloadSessions(
+      academyId: academyId,
+      sessions: sessions,
+      maxAssignments: 10,
+      maxQuestionsPerAssignment: 60,
+    );
+  }
+
+  Future<RightSideSheetTestGradingSession?> _buildRightSheetPreloadSession({
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    final keys = <({String studentId, String itemId})>[
+      (studentId: studentId, itemId: hw.id),
+    ];
+    final overlayEntries = _buildOverlayEntriesForPendingKeys(
+      keys: keys,
+      fallbackHomework: hw,
+    );
+    final hasPbCandidate = (hw.pbPresetId ?? '').trim().isNotEmpty;
+    if (hasPbCandidate) {
+      final payload = await _resolveTestPbGradingViewerPayload(
+        seedHomework: hw,
+        keys: keys,
+      );
+      if (payload != null) {
+        final links = await _resolveRightSheetAnswerViewerLinks(
+          studentId: studentId,
+          hw: hw,
+        );
+        final cacheKey = (links['cacheKey'] ?? '').trim();
+        final answerPath = (links['answerPathRaw'] ?? '').trim();
+        if (cacheKey.isNotEmpty && answerPath.isNotEmpty) {
+          RightSheetAnswerPreloadService.instance.putPdfLinks(
+            cacheKey: cacheKey,
+            answerPath: answerPath,
+            solutionPath: (links['solutionPathRaw'] ?? '').trim(),
+          );
+        }
+        final overlayMaps = overlayEntries
+            .map(
+              (entry) => <String, String>{
+                'title': entry.title,
+                'page': entry.page,
+                'memo': entry.memo,
+              },
+            )
+            .toList(growable: false);
+        final preloadedPayload = RightSheetPreloadedSessionPayload(
+          sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
+          homeworkId: payload.homeworkId,
+          title: payload.title,
+          studentName: _resolveHomeworkPrintStudentName(studentId),
+          groupHomeworkTitle: _resolveGradingGroupTitleForPending(
+            keys: keys,
+            fallbackHomework: hw,
+            payloadTitle: payload.title,
+          ),
+          assignmentCode: _safeAssignmentCodeForGrading(hw),
+          gradingPages: payload.gradingPages,
+          scoreByQuestionKey: payload.scoreByQuestionKey,
+          overlayEntries: overlayMaps,
+          answerPathRaw: answerPath,
+          solutionPathRaw: (links['solutionPathRaw'] ?? '').trim(),
+          answerViewerCacheKey: cacheKey,
+        );
+        RightSheetAnswerPreloadService.instance.putSessionPayload(
+          cacheKey: _rightSheetSessionPayloadCacheKey(
+            studentId: studentId,
+            hw: hw,
+          ),
+          payload: preloadedPayload,
+        );
+        return RightSideSheetTestGradingSession(
+          sessionId: 'preload:${preloadedPayload.sessionId}',
+          title: preloadedPayload.title,
+          studentName: preloadedPayload.studentName,
+          groupHomeworkTitle: preloadedPayload.groupHomeworkTitle,
+          assignmentCode: preloadedPayload.assignmentCode,
+          gradingPages: _toRightSheetGradingPages(
+            preloadedPayload.gradingPages,
+          ),
+          scoreByQuestionKey: preloadedPayload.scoreByQuestionKey,
+          overlayEntries: preloadedPayload.overlayEntries,
+          answerPathRaw: preloadedPayload.answerPathRaw,
+          solutionPathRaw: preloadedPayload.solutionPathRaw,
+          answerViewerCacheKey: preloadedPayload.answerViewerCacheKey,
+        );
+      }
+    }
+
+    final textbookPayload = await _resolveTextbookProblemGradingPayload(
+      seedHomework: hw,
+      keys: keys,
+    );
+    if (textbookPayload == null) return null;
+    final links = await _resolveRightSheetAnswerViewerLinks(
+      studentId: studentId,
+      hw: hw,
+    );
+    final cacheKey = (links['cacheKey'] ?? '').trim();
+    final answerPath = (links['answerPathRaw'] ?? '').trim();
+    if (cacheKey.isNotEmpty && answerPath.isNotEmpty) {
+      RightSheetAnswerPreloadService.instance.putPdfLinks(
+        cacheKey: cacheKey,
+        answerPath: answerPath,
+        solutionPath: (links['solutionPathRaw'] ?? '').trim(),
+      );
+    }
+    final overlayMaps = overlayEntries
+        .map(
+          (entry) => <String, String>{
+            'title': entry.title,
+            'page': entry.page,
+            'memo': entry.memo,
+          },
+        )
+        .toList(growable: false);
+    final preloadedPayload = RightSheetPreloadedSessionPayload(
+      sessionId:
+          'student:$studentId|textbook_problem_grade:${textbookPayload.homeworkId}',
+      homeworkId: textbookPayload.homeworkId,
+      title: textbookPayload.title,
+      studentName: _resolveHomeworkPrintStudentName(studentId),
+      groupHomeworkTitle: _resolveGradingGroupTitleForPending(
+        keys: keys,
+        fallbackHomework: hw,
+        payloadTitle: textbookPayload.title,
+      ),
+      assignmentCode: _safeAssignmentCodeForGrading(hw),
+      gradingPages: textbookPayload.gradingPages,
+      scoreByQuestionKey: textbookPayload.scoreByQuestionKey,
+      overlayEntries: overlayMaps,
+      answerPathRaw: answerPath,
+      solutionPathRaw: (links['solutionPathRaw'] ?? '').trim(),
+      answerViewerCacheKey: cacheKey,
+    );
+    RightSheetAnswerPreloadService.instance.putSessionPayload(
+      cacheKey: _rightSheetSessionPayloadCacheKey(
+        studentId: studentId,
+        hw: hw,
+      ),
+      payload: preloadedPayload,
+    );
+    return RightSideSheetTestGradingSession(
+      sessionId: 'preload:${preloadedPayload.sessionId}',
+      title: preloadedPayload.title,
+      studentName: preloadedPayload.studentName,
+      groupHomeworkTitle: preloadedPayload.groupHomeworkTitle,
+      assignmentCode: preloadedPayload.assignmentCode,
+      gradingPages: _toRightSheetGradingPages(preloadedPayload.gradingPages),
+      scoreByQuestionKey: preloadedPayload.scoreByQuestionKey,
+      overlayEntries: preloadedPayload.overlayEntries,
+      answerPathRaw: preloadedPayload.answerPathRaw,
+      solutionPathRaw: preloadedPayload.solutionPathRaw,
+      answerViewerCacheKey: preloadedPayload.answerViewerCacheKey,
+    );
   }
 
   bool _isSubmittedHomeworkForGradingSearch(HomeworkItem hw) {
@@ -625,9 +854,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           if (value) {
                                             blockRightSideSheetOpen.value =
                                                 false;
+                                            _scheduleRightSheetAnswerPreload();
                                           } else {
                                             blockRightSideSheetOpen.value =
                                                 true;
+                                            _rightSheetPreloadDebounce
+                                                ?.cancel();
+                                            _lastRightSheetPreloadKey = '';
                                             final closeAction =
                                                 closeRightSideSheetAction;
                                             if (closeAction != null) {
@@ -2906,6 +3139,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     if (cell.answerRenderStyleVersion.trim().isNotEmpty)
                       'answerRenderStyleVersion':
                           cell.answerRenderStyleVersion.trim(),
+                    if (cell.answerPageNumber != null)
+                      'answerPageNumber': cell.answerPageNumber,
+                    if (cell.answerRect1k.length >= 4)
+                      'answerRect1k': cell.answerRect1k.take(4).toList(),
+                    if (cell.focusRect1k.length >= 4)
+                      'focusRect1k': cell.focusRect1k.take(4).toList(),
+                    if (cell.solutionPageNumber != null)
+                      'solutionPageNumber': cell.solutionPageNumber,
+                    if (cell.solutionRect1k.length >= 4)
+                      'solutionRect1k': cell.solutionRect1k.take(4).toList(),
                   },
                 )
                 .toList(growable: false),
@@ -3118,6 +3361,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (raw == null) return null;
     if (raw is num) return raw.toDouble();
     return double.tryParse('$raw'.trim());
+  }
+
+  List<int> _intListFromDynamic(dynamic raw) {
+    dynamic source = raw;
+    if (source is String) {
+      try {
+        source = jsonDecode(source);
+      } catch (_) {
+        source = source
+            .split(RegExp(r'[, ]+'))
+            .where((part) => part.trim().isNotEmpty)
+            .toList();
+      }
+    }
+    if (source is! List) return const <int>[];
+    final values = source
+        .map((entry) => entry is int ? entry : int.tryParse('$entry'.trim()))
+        .whereType<int>()
+        .toList(growable: false);
+    return values.length >= 4 ? values.take(4).toList() : const <int>[];
   }
 
   String _trimDynamic(dynamic raw) => '${raw ?? ''}'.trim();
@@ -3457,6 +3720,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   ? 'raw_answer_image'
                   : (renderStyleVersion.isEmpty ? '' : 'unified_answer_render'),
               answerRenderStyleVersion: renderStyleVersion,
+              answerPageNumber: _intFromDynamic(row['answer_raw_page']) ??
+                  _intFromDynamic(row['answer_display_page']),
+              answerRect1k: _intListFromDynamic(row['answer_bbox_1k']),
+              focusRect1k: _intListFromDynamic(
+                row['item_region_1k'] ?? row['bbox_1k'],
+              ),
+              solutionPageNumber: _intFromDynamic(row['solution_raw_page']) ??
+                  _intFromDynamic(row['solution_display_page']),
+              solutionRect1k: _intListFromDynamic(
+                row['solution_number_region_1k'] ??
+                    row['solution_content_region_1k'],
+              ),
             ),
           );
     }
@@ -3528,29 +3803,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required HomeworkItem hw,
   }) async {
-    try {
-      final assignmentByItemId = await _loadActiveAssignmentByItemId(studentId);
-      final assignment = assignmentByItemId[hw.id.trim()];
-      if (_isPbPrintTarget(hw: hw, assignment: assignment)) {
-        final pbSource = await _resolvePbPrintSource(
-          hw,
-          assignment: assignment,
-          ensureExportJob: true,
-        );
-        final pathRaw = (pbSource?.pathRaw ?? '').trim();
-        if (pathRaw.isNotEmpty) {
-          final sourceKey = (pbSource?.sourceKey ?? '').trim();
-          return <String, String>{
-            'answerPathRaw': pathRaw,
-            'solutionPathRaw': '',
-            'cacheKey': sourceKey.isEmpty
-                ? 'student:$studentId|right_sheet_answer:$pathRaw'
-                : 'student:$studentId|right_sheet_answer:$sourceKey',
-          };
-        }
-      }
-    } catch (_) {}
-
     final textbookLinks = await _resolveHomeworkPdfLinks(
       hw,
       allowFlowFallback: true,
@@ -3593,6 +3845,124 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
   }
 
+  Future<bool> _openPreloadedRightSheetSession({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkItem hw,
+    required List<({String studentId, String itemId})> keys,
+    required RightSheetPreloadedSessionPayload payload,
+  }) async {
+    final cachedStates =
+        _testGradingDraftStatesByHomeworkId[payload.homeworkId] ??
+            const <String, HomeworkAnswerCellState>{};
+    final savedSession =
+        await _gradingResultService.loadLatestSavedSessionForHomework(
+      homeworkItemId: payload.homeworkId,
+    );
+    if (!context.mounted || !mounted) return true;
+    final initialStates = savedSession?.states.isNotEmpty == true
+        ? savedSession!.states
+        : cachedStates;
+    final hasSavedGrading = savedSession != null ||
+        _testGradingSavedHomeworkIds.contains(payload.homeworkId);
+
+    rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
+      sessionId: payload.sessionId,
+      title: payload.title,
+      studentName: payload.studentName,
+      groupHomeworkTitle: payload.groupHomeworkTitle,
+      assignmentCode: payload.assignmentCode,
+      gradingPages: _toRightSheetGradingPages(payload.gradingPages),
+      scoreByQuestionKey: payload.scoreByQuestionKey,
+      overlayEntries: payload.overlayEntries,
+      answerPathRaw: payload.answerPathRaw,
+      solutionPathRaw: payload.solutionPathRaw,
+      answerViewerCacheKey: payload.answerViewerCacheKey,
+      initialStates: _toRightSheetStateMap(initialStates),
+      gradingLocked: hasSavedGrading,
+      onRequestEditReset: () async {
+        final reset = await _gradingResultService.resetAttemptsForHomework(
+          homeworkItemId: payload.homeworkId,
+        );
+        if (!mounted) return false;
+        if (!reset) {
+          _showHomeworkChipSnackBar(this.context, '기존 채점 결과 리셋에 실패했습니다.');
+          return false;
+        }
+        _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
+        _testGradingSerializedDraftByHomeworkId.remove(payload.homeworkId);
+        _testGradingSavedHomeworkIds.remove(payload.homeworkId);
+        _showHomeworkChipSnackBar(
+          this.context,
+          '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.',
+        );
+        return true;
+      },
+      onStatesChanged: (states) {
+        final decoded = _fromRightSheetStateMap(states);
+        _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+            Map<String, HomeworkAnswerCellState>.from(decoded);
+        _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+            _serializeTestGradingDraftRows(
+          homeworkId: payload.homeworkId,
+          gradingPages: payload.gradingPages,
+          states: decoded,
+        );
+      },
+      onAction: (action, states) async {
+        if (!mounted) return;
+        final decoded = _fromRightSheetStateMap(states);
+        _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+            Map<String, HomeworkAnswerCellState>.from(decoded);
+        _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+            _serializeTestGradingDraftRows(
+          homeworkId: payload.homeworkId,
+          gradingPages: payload.gradingPages,
+          states: decoded,
+        );
+        var savedGrading = true;
+        if (action == 'complete' || action == 'confirm') {
+          final targetItem = HomeworkStore.instance.getById(
+                studentId,
+                payload.homeworkId,
+              ) ??
+              hw;
+          final saved = await _gradingResultService.saveAttemptFromSession(
+            studentId: studentId,
+            homeworkItem: targetItem,
+            action: action,
+            states: decoded,
+            gradingPages: payload.gradingPages,
+            scoreByQuestionKey: payload.scoreByQuestionKey,
+            groupHomeworkTitleSnapshot: payload.groupHomeworkTitle,
+          );
+          if (!mounted) return;
+          if (!saved) {
+            savedGrading = false;
+            _showHomeworkChipSnackBar(context, '채점 결과 저장에 실패했습니다.');
+          } else {
+            _testGradingSavedHomeworkIds.add(payload.homeworkId);
+          }
+        }
+        if (!mounted || !savedGrading) return;
+        setState(() {
+          for (final key in keys) {
+            _pendingConfirms[key] = action == 'complete';
+          }
+        });
+        _batchConfirmService.syncPendingCount();
+      },
+    );
+    blockRightSideSheetOpen.value = false;
+    if (!rightSideSheetOpen.value) {
+      final toggleAction = toggleRightSideSheetAction;
+      if (toggleAction != null) {
+        await toggleAction();
+      }
+    }
+    return true;
+  }
+
   Future<void> _handleSubmittedChipTapForPending({
     required BuildContext context,
     required String studentId,
@@ -3614,6 +3984,23 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         }
       });
       return;
+    }
+
+    if (keys.length == 1) {
+      final preloadedPayload =
+          RightSheetAnswerPreloadService.instance.getSessionPayload(
+        _rightSheetSessionPayloadCacheKey(studentId: studentId, hw: hw),
+      );
+      if (preloadedPayload != null) {
+        final opened = await _openPreloadedRightSheetSession(
+          context: context,
+          studentId: studentId,
+          hw: hw,
+          keys: keys,
+          payload: preloadedPayload,
+        );
+        if (opened) return;
+      }
     }
 
     final overlayEntries = _buildOverlayEntriesForPendingKeys(

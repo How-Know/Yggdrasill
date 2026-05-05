@@ -23,9 +23,11 @@ import '../../models/memo.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/right_sheet_answer_preload_service.dart';
 import '../../services/runtime_flags.dart';
 import '../../services/tag_preset_service.dart';
 import '../../services/tenant_service.dart';
+import '../../services/textbook_pdf_service.dart';
 import '../memo_dialogs.dart';
 
 const Color _rsBg = Color(0xFF0B1112);
@@ -141,6 +143,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
       if (!mounted) return;
       final next = rightSideSheetTestGradingSession.value;
       final hasSession = next != null;
+      if (!hasSession) {
+        rightSideSheetPdfPanelSession.value = null;
+      }
       setState(() {
         _testGradingSession = next;
         if (hasSession) {
@@ -159,6 +164,14 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (rightSideSheetGradingTabActive.value != active) {
       rightSideSheetGradingTabActive.value = active;
     }
+  }
+
+  void _handleClose() {
+    if (_mode == RightSideSheetMode.grading || _testGradingSession != null) {
+      rightSideSheetPdfPanelSession.value = null;
+      rightSideSheetTestGradingSession.value = null;
+    }
+    widget.onClose();
   }
 
   Future<void> _ensureGradesThenLoadAnswerKeyData() async {
@@ -200,6 +213,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (rightSideSheetGradingTabActive.value) {
       rightSideSheetGradingTabActive.value = false;
     }
+    rightSideSheetPdfPanelSession.value = null;
     for (final t in _bookGradeSaveTimers.values) {
       t.cancel();
     }
@@ -1313,7 +1327,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
                     unawaited(DataManager.instance.loadMemos());
                   }
                 },
-                onClose: widget.onClose,
+                onClose: _handleClose,
               ),
               const Divider(height: 1, color: Color(0x22FFFFFF)),
               Expanded(child: _buildBody()),
@@ -2648,6 +2662,11 @@ class _RightSheetGradingCellVm {
   final String answerSourceId;
   final String answerAssetKind;
   final String answerRenderStyleVersion;
+  final int? answerPageNumber;
+  final List<int> answerRect1k;
+  final List<int> focusRect1k;
+  final int? solutionPageNumber;
+  final List<int> solutionRect1k;
 
   const _RightSheetGradingCellVm({
     required this.key,
@@ -2664,6 +2683,11 @@ class _RightSheetGradingCellVm {
     this.answerSourceId = '',
     this.answerAssetKind = '',
     this.answerRenderStyleVersion = '',
+    this.answerPageNumber,
+    this.answerRect1k = const <int>[],
+    this.focusRect1k = const <int>[],
+    this.solutionPageNumber,
+    this.solutionRect1k = const <int>[],
   });
 
   String get displayQuestionLabel {
@@ -2735,8 +2759,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   bool _gradingEditLocked = false;
   bool _editResetBusy = false;
   bool _actionBusy = false;
-  final LearningProblemBankService _problemBankService =
-      LearningProblemBankService();
+  bool _answerPdfOpening = false;
+  int _pdfFocusRequestSeq = 0;
+  String _autoOpenedAnswerSessionId = '';
   Map<String, LearningProblemAnswerRender> _answerRenders =
       <String, LearningProblemAnswerRender>{};
   Set<String> _answerRenderFailedKeys = <String>{};
@@ -2865,6 +2890,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _boundSessionId = nextId;
     if (session == null) {
       _answerRenderRequestSeq++;
+      _autoOpenedAnswerSessionId = '';
       setState(() {
         _gradingStates = <String, String>{};
         _gradingEditLocked = false;
@@ -2886,6 +2912,33 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _lastAnswerRenderRouteLogKey = '';
     });
     unawaited(_loadAnswerRendersForSession(session));
+    _scheduleAutoOpenSessionAnswer(session);
+  }
+
+  void _scheduleAutoOpenSessionAnswer(
+      RightSideSheetTestGradingSession session) {
+    final sessionId = session.sessionId.trim();
+    if (sessionId.isEmpty ||
+        session.answerPathRaw.trim().isEmpty ||
+        _autoOpenedAnswerSessionId == sessionId) {
+      return;
+    }
+    _autoOpenedAnswerSessionId = sessionId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.session?.sessionId.trim() != sessionId) return;
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 220), () async {
+          if (!mounted || widget.session?.sessionId.trim() != sessionId) return;
+          final firstFocus = _firstAnswerPdfFocus(session);
+          await _openSessionAnswerSheet(
+            session,
+            initialShowSolution: false,
+            focusPageNumber: firstFocus.pageNumber,
+            focusRect1k: firstFocus.rect1k,
+          );
+        }),
+      );
+    });
   }
 
   Future<String> _resolveActiveAcademyId() async {
@@ -2959,8 +3012,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       if (academyId.isEmpty) return;
       final storedRendersByKey = <String, LearningProblemAnswerRender>{};
       for (final entry in sourceIdsByKind.entries) {
-        final rendersBySourceId =
-            await _problemBankService.loadUnifiedAnswerRenderAssets(
+        final rendersBySourceId = await RightSheetAnswerPreloadService.instance
+            .loadUnifiedAnswerRenderAssets(
           academyId: academyId,
           sourceKind: entry.key,
           sourceIds: entry.value,
@@ -3806,6 +3859,27 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           return value != null && value > 0 ? value : null;
         }
 
+        List<int> parseRect1k(dynamic raw) {
+          final source = raw is String
+              ? (() {
+                  try {
+                    return jsonDecode(raw);
+                  } catch (_) {
+                    return raw
+                        .split(RegExp(r'[, ]+'))
+                        .where((part) => part.trim().isNotEmpty)
+                        .toList();
+                  }
+                })()
+              : raw;
+          if (source is! List) return const <int>[];
+          final values = source
+              .map((entry) => entry is int ? entry : int.tryParse('$entry'))
+              .whereType<int>()
+              .toList(growable: false);
+          return values.length >= 4 ? values.take(4).toList() : const <int>[];
+        }
+
         parsedCells.add(
           _RightSheetGradingCellVm(
             key: key,
@@ -3845,6 +3919,44 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             answerRenderStyleVersion:
                 '${rawCell['answerRenderStyleVersion'] ?? rawCell['answer_render_style_version'] ?? ''}'
                     .trim(),
+            answerPageNumber: parsePositiveInt(
+              rawCell['answerPageNumber'] ??
+                  rawCell['answer_page_number'] ??
+                  rawCell['answerRawPage'] ??
+                  rawCell['answer_raw_page'] ??
+                  rawCell['answerDisplayPage'] ??
+                  rawCell['answer_display_page'],
+            ),
+            answerRect1k: parseRect1k(
+              rawCell['answerRect1k'] ??
+                  rawCell['answer_rect_1k'] ??
+                  rawCell['answerBbox1k'] ??
+                  rawCell['answer_bbox_1k'],
+            ),
+            focusRect1k: parseRect1k(
+              rawCell['focusRect1k'] ??
+                  rawCell['focus_rect_1k'] ??
+                  rawCell['itemRegion1k'] ??
+                  rawCell['item_region_1k'] ??
+                  rawCell['bbox1k'] ??
+                  rawCell['bbox_1k'],
+            ),
+            solutionPageNumber: parsePositiveInt(
+              rawCell['solutionPageNumber'] ??
+                  rawCell['solution_page_number'] ??
+                  rawCell['solutionRawPage'] ??
+                  rawCell['solution_raw_page'] ??
+                  rawCell['solutionDisplayPage'] ??
+                  rawCell['solution_display_page'],
+            ),
+            solutionRect1k: parseRect1k(
+              rawCell['solutionRect1k'] ??
+                  rawCell['solution_rect_1k'] ??
+                  rawCell['solutionNumberRegion1k'] ??
+                  rawCell['solution_number_region_1k'] ??
+                  rawCell['solutionContentRegion1k'] ??
+                  rawCell['solution_content_region_1k'],
+            ),
           ),
         );
       }
@@ -4406,24 +4518,48 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ),
-            if (session.answerPathRaw.trim().isNotEmpty) ...[
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () => unawaited(_openSessionAnswerSheet(session)),
-                icon: const Icon(Icons.picture_as_pdf_outlined, size: 15),
-                label: const Text('답지보기'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _rsTextSub,
-                  side: const BorderSide(color: _rsBorder),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  textStyle: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
+            if (session.solutionPathRaw.trim().isNotEmpty)
+              ValueListenableBuilder<RightSideSheetPdfPanelSession?>(
+                valueListenable: rightSideSheetPdfPanelSession,
+                builder: (context, panelSession, _) {
+                  final showingSolution =
+                      panelSession?.sessionId == session.sessionId &&
+                          panelSession?.showSolution == true;
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: _answerPdfOpening
+                            ? null
+                            : () => unawaited(
+                                  _openSessionAnswerSheet(
+                                    session,
+                                    initialShowSolution: !showingSolution,
+                                  ),
+                                ),
+                        icon:
+                            const Icon(Icons.picture_as_pdf_outlined, size: 15),
+                        label: Text(
+                          _answerPdfOpening
+                              ? '여는중...'
+                              : (showingSolution ? '답지보기' : '해설보기'),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _rsTextSub,
+                          side: const BorderSide(color: _rsBorder),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
+                          textStyle: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
-            ],
           ],
         ),
       ],
@@ -4475,159 +4611,236 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return trimmed;
   }
 
-  HomeworkAnswerCellState _answerViewerStateFromRaw(String? raw) {
-    switch (_normalizeState(raw)) {
-      case 'wrong':
-        return HomeworkAnswerCellState.wrong;
-      case 'unsolved':
-        return HomeworkAnswerCellState.unsolved;
-      case 'correct':
-      default:
-        return HomeworkAnswerCellState.correct;
+  TextbookPdfRef? _textbookPdfRefFromStoragePath(
+    String rawPath, {
+    required String kind,
+  }) {
+    final key = _sessionTextbookStorageKey(rawPath);
+    if (key.isEmpty) return null;
+    final match = RegExp(
+      r'^academies/([^/]+)/files/([^/]+)/(.+)/(body|ans|sol)\.pdf$',
+      caseSensitive: false,
+    ).firstMatch(key);
+    if (match == null) return null;
+    final fileKind = (match.group(4) ?? kind).toLowerCase();
+    return TextbookPdfRef(
+      academyId: match.group(1),
+      fileId: match.group(2),
+      gradeLabel: match.group(3),
+      kind: fileKind,
+    );
+  }
+
+  Future<String> _resolveSessionPdfViewerPath(
+    String rawPath, {
+    required String kind,
+  }) async {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty) return '';
+    if (_isSessionAnswerWebUrl(trimmed)) return trimmed;
+
+    final localCandidate = _sessionLocalFilePath(trimmed);
+    if (localCandidate.isNotEmpty &&
+        localCandidate.toLowerCase().endsWith('.pdf') &&
+        await File(localCandidate).exists()) {
+      return localCandidate;
     }
-  }
 
-  String _answerViewerStateToRaw(HomeworkAnswerCellState state) {
-    switch (state) {
-      case HomeworkAnswerCellState.correct:
-        return 'correct';
-      case HomeworkAnswerCellState.wrong:
-        return 'wrong';
-      case HomeworkAnswerCellState.unsolved:
-        return 'unsolved';
+    final ref = _textbookPdfRefFromStoragePath(trimmed, kind: kind);
+    if (ref != null) {
+      try {
+        final source = await TextbookPdfService.instance.resolve(ref);
+        final resolved = (source.localPath ?? '').trim().isNotEmpty
+            ? source.localPath!.trim()
+            : (source.url ?? '').trim();
+        if (resolved.isNotEmpty) return resolved;
+      } catch (e) {
+        debugPrint('[RIGHT_SHEET_PDF] textbook cache resolve failed: $e');
+      }
+      final signed = await _sessionSignedTextbookPdfUrl(trimmed);
+      if (signed.trim().isNotEmpty) return signed.trim();
     }
-  }
 
-  Map<String, HomeworkAnswerCellState> _answerViewerInitialStates() {
-    final out = <String, HomeworkAnswerCellState>{};
-    _gradingStates.forEach((key, value) {
-      final safeKey = key.trim();
-      if (safeKey.isEmpty) return;
-      out[safeKey] = _answerViewerStateFromRaw(value);
-    });
-    return out;
-  }
-
-  void _syncAnswerViewerStates(
-    Map<String, HomeworkAnswerCellState> states,
-  ) {
-    if (!mounted) return;
-    final mapped = <String, String>{};
-    states.forEach((key, value) {
-      final safeKey = key.trim();
-      if (safeKey.isEmpty) return;
-      mapped[safeKey] = _answerViewerStateToRaw(value);
-    });
-    setState(() {
-      _gradingStates = mapped;
-    });
-    _emitStateChanged();
-  }
-
-  List<HomeworkAnswerGradingPage> _answerViewerGradingPages() {
-    return _visiblePages()
-        .map(
-          (page) => HomeworkAnswerGradingPage(
-            pageNumber: page.pageNumber,
-            cells: page.cells
-                .map(
-                  (cell) => HomeworkAnswerGradingCell(
-                    key: cell.key,
-                    questionIndex: cell.questionIndex,
-                    questionLabel: cell.questionLabel,
-                    answer: cell.answer,
-                    answerMode: cell.answerMode,
-                    answerImageUrl: cell.answerImageUrl,
-                    answerImageWidth: cell.answerImageWidth,
-                    answerImageHeight: cell.answerImageHeight,
-                    answerImagePixelRatio: cell.answerImagePixelRatio,
-                    answerRenderPolicy: cell.answerRenderPolicy,
-                    answerSourceKind: cell.answerSourceKind,
-                    answerSourceId: cell.answerSourceId,
-                    answerAssetKind: cell.answerAssetKind,
-                    answerRenderStyleVersion: cell.answerRenderStyleVersion,
-                  ),
-                )
-                .toList(growable: false),
-          ),
-        )
-        .toList(growable: false);
+    return '';
   }
 
   BuildContext get _navigatorContext => widget.dialogContext ?? context;
 
   Future<void> _openSessionAnswerSheet(
-    RightSideSheetTestGradingSession session,
-  ) async {
+    RightSideSheetTestGradingSession session, {
+    bool initialShowSolution = false,
+    int focusPageNumber = 0,
+    List<int> focusRect1k = const <int>[],
+  }) async {
+    if (_answerPdfOpening) return;
     final raw = session.answerPathRaw.trim();
     if (raw.isEmpty) return;
-    var isUrl = _isSessionAnswerWebUrl(raw);
-    var answerPath = isUrl ? raw : await _sessionSignedTextbookPdfUrl(raw);
-    if (answerPath.trim().isNotEmpty) {
-      isUrl = true;
-    } else {
-      answerPath = _sessionLocalFilePath(raw);
-    }
-    if (answerPath.trim().isEmpty) return;
-    if (!isUrl) {
-      final file = File(answerPath);
-      if (!answerPath.toLowerCase().endsWith('.pdf') || !await file.exists()) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(_navigatorContext).showSnackBar(
-          const SnackBar(content: Text('답지 PDF 파일을 찾을 수 없습니다.')),
-        );
-        return;
+    final cacheKey = session.answerViewerCacheKey.trim().isEmpty
+        ? 'right_sheet_answer:${session.sessionId}'
+        : session.answerViewerCacheKey.trim();
+    setState(() => _answerPdfOpening = true);
+    try {
+      final answerPath = await _resolveSessionPdfViewerPath(raw, kind: 'ans');
+      if (answerPath.trim().isEmpty) return;
+      if (!_isSessionAnswerWebUrl(answerPath)) {
+        final file = File(answerPath);
+        if (!answerPath.toLowerCase().endsWith('.pdf') ||
+            !await file.exists()) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+            const SnackBar(content: Text('답지 PDF 파일을 찾을 수 없습니다.')),
+          );
+          return;
+        }
       }
+
+      final solutionRaw = session.solutionPathRaw.trim();
+      final solutionPath = solutionRaw.isEmpty
+          ? ''
+          : await _resolveSessionPdfViewerPath(solutionRaw, kind: 'sol');
+      if (!mounted) return;
+      final shouldShowSolution =
+          initialShowSolution && solutionPath.trim().isNotEmpty;
+      final focusRequestId = focusPageNumber > 0 ? ++_pdfFocusRequestSeq : 0;
+      rightSideSheetPdfPanelSession.value = RightSideSheetPdfPanelSession(
+        sessionId: session.sessionId,
+        title: session.title.trim().isEmpty ? '답지 확인' : session.title.trim(),
+        answerPath: answerPath.trim(),
+        solutionPath: solutionPath.trim(),
+        cacheKey: cacheKey,
+        showSolution: shouldShowSolution,
+        focusPageNumber: focusPageNumber > 0 ? focusPageNumber : 0,
+        focusRequestId: focusRequestId,
+        focusRect1k: focusPageNumber > 0 ? focusRect1k : const <int>[],
+        overlayEntries: session.overlayEntries
+            .map(
+              (entry) => <String, String>{
+                'title': '${entry['title'] ?? ''}',
+                'page': '${entry['page'] ?? ''}',
+                'memo': '${entry['memo'] ?? ''}',
+              },
+            )
+            .toList(growable: false),
+      );
+      RightSheetAnswerPreloadService.instance.putPdfLinks(
+        cacheKey: cacheKey,
+        answerPath: answerPath,
+        solutionPath: solutionPath,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _answerPdfOpening = false);
+      }
+    }
+  }
+
+  ({int pageNumber, List<int> rect1k}) _firstAnswerPdfFocus(
+    RightSideSheetTestGradingSession session,
+  ) {
+    _RightSheetGradingCellVm? firstCell;
+    var firstPageNumber = 0;
+    for (final page in _visiblePages()) {
+      for (final cell in page.cells) {
+        final answerPage = cell.answerPageNumber;
+        if (answerPage == null || answerPage <= 0) continue;
+        if (firstCell == null ||
+            page.pageNumber < firstPageNumber ||
+            (page.pageNumber == firstPageNumber &&
+                cell.questionIndex < firstCell.questionIndex)) {
+          firstCell = cell;
+          firstPageNumber = page.pageNumber;
+        }
+      }
+    }
+    if (firstCell != null) {
+      return (
+        pageNumber: firstCell.answerPageNumber ?? 0,
+        rect1k: firstCell.answerRect1k,
+      );
     }
 
-    String? solutionPath;
-    final solutionRaw = session.solutionPathRaw.trim();
-    if (_isSessionAnswerWebUrl(solutionRaw)) {
-      solutionPath = solutionRaw;
-    } else if (solutionRaw.isNotEmpty) {
-      final signedSolution = await _sessionSignedTextbookPdfUrl(solutionRaw);
-      if (signedSolution.trim().isNotEmpty) {
-        solutionPath = signedSolution.trim();
-      }
-      final candidate = _sessionLocalFilePath(solutionRaw);
-      if (solutionPath == null &&
-          candidate.toLowerCase().endsWith('.pdf') &&
-          await File(candidate).exists()) {
-        solutionPath = candidate;
+    int parsePositiveInt(dynamic raw) {
+      final value = raw is int ? raw : int.tryParse('$raw');
+      return value != null && value > 0 ? value : 0;
+    }
+
+    List<int> parseRect1k(dynamic raw) {
+      final source = raw is String
+          ? (() {
+              try {
+                return jsonDecode(raw);
+              } catch (_) {
+                return raw
+                    .split(RegExp(r'[, ]+'))
+                    .where((part) => part.trim().isNotEmpty)
+                    .toList();
+              }
+            })()
+          : raw;
+      if (source is! List) return const <int>[];
+      final values = source
+          .map((entry) => entry is int ? entry : int.tryParse('$entry'))
+          .whereType<int>()
+          .toList(growable: false);
+      return values.length >= 4 ? values.take(4).toList() : const <int>[];
+    }
+
+    var fallbackPage = 0;
+    var fallbackIndex = 1 << 30;
+    var fallbackRect = const <int>[];
+    for (final rawPage in session.gradingPages) {
+      final rawCells = rawPage['cells'];
+      if (rawCells is! List) continue;
+      for (final rawCell in rawCells) {
+        if (rawCell is! Map) continue;
+        final answerPage = parsePositiveInt(
+          rawCell['answerPageNumber'] ??
+              rawCell['answer_page_number'] ??
+              rawCell['answerRawPage'] ??
+              rawCell['answer_raw_page'] ??
+              rawCell['answerDisplayPage'] ??
+              rawCell['answer_display_page'],
+        );
+        if (answerPage <= 0) continue;
+        final questionIndex = parsePositiveInt(
+          rawCell['questionIndex'] ?? rawCell['question_index'],
+        );
+        if (fallbackPage == 0 || questionIndex < fallbackIndex) {
+          fallbackPage = answerPage;
+          fallbackIndex = questionIndex <= 0 ? fallbackIndex : questionIndex;
+          fallbackRect = parseRect1k(
+            rawCell['answerRect1k'] ??
+                rawCell['answer_rect_1k'] ??
+                rawCell['answerBbox1k'] ??
+                rawCell['answer_bbox_1k'],
+          );
+        }
       }
     }
-    if (!mounted) return;
-    final action = await openHomeworkAnswerViewerPage(
-      _navigatorContext,
-      filePath: answerPath,
-      title: session.title.trim().isEmpty ? '답지 확인' : session.title.trim(),
-      solutionFilePath: solutionPath,
-      cacheKey: session.answerViewerCacheKey.trim().isEmpty
-          ? 'right_sheet_answer:$answerPath'
-          : session.answerViewerCacheKey.trim(),
-      overlayEntries: session.overlayEntries
-          .map(
-            (entry) => HomeworkAnswerOverlayEntry(
-              title: '${entry['title'] ?? ''}',
-              page: '${entry['page'] ?? ''}',
-              memo: '${entry['memo'] ?? ''}',
-            ),
-          )
-          .toList(growable: false),
-      gradingPages: _answerViewerGradingPages(),
-      initialGradingStates: _answerViewerInitialStates(),
-      onGradingStatesChanged: _syncAnswerViewerStates,
-      enableConfirm: true,
+    return (pageNumber: fallbackPage, rect1k: fallbackRect);
+  }
+
+  Future<void> _openCellSolution(
+    _RightSheetGradingCellVm cell, {
+    required int pageNumber,
+  }) async {
+    final session = widget.session;
+    if (session == null) return;
+    if (session.solutionPathRaw.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+        const SnackBar(content: Text('해설 PDF가 연결되어 있지 않습니다.')),
+      );
+      return;
+    }
+    await _openSessionAnswerSheet(
+      session,
+      initialShowSolution: true,
+      focusPageNumber: cell.solutionPageNumber ?? pageNumber,
+      focusRect1k: cell.solutionRect1k.length >= 4
+          ? cell.solutionRect1k
+          : cell.focusRect1k,
     );
-    if (!mounted || action == null) return;
-    switch (action) {
-      case HomeworkAnswerViewerAction.complete:
-        await _runAction('complete');
-        break;
-      case HomeworkAnswerViewerAction.confirm:
-        await _runAction('confirm');
-        break;
-    }
   }
 
   ({double correctScore, double totalScore}) _computeScoreResult(
@@ -4664,20 +4877,20 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   Widget _buildScoreCalculator(RightSideSheetTestGradingSession session) {
     final result = _computeScoreResult(session);
+    final hasScoreData = session.scoreByQuestionKey.isNotEmpty;
+    final label = hasScoreData ? '총점' : '맞은 개수';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: Text(
-          '총점  ${_formatScoreDisplay(result.correctScore)} / ${_formatScoreDisplay(result.totalScore)}',
-          textAlign: TextAlign.right,
-          style: const TextStyle(
-            color: _rsText,
-            fontWeight: FontWeight.w900,
-            fontSize: 17,
-            letterSpacing: 0.5,
-          ),
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        '$label  ${_formatScoreDisplay(result.correctScore)} / ${_formatScoreDisplay(result.totalScore)}',
+        textAlign: TextAlign.left,
+        style: const TextStyle(
+          color: _rsText,
+          fontWeight: FontWeight.w900,
+          fontSize: 17,
+          letterSpacing: 0.2,
+          height: 1.0,
         ),
       ),
     );
@@ -4787,6 +5000,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final answer = cell.answer.trim().isEmpty ? '-' : cell.answer.trim();
     final numbers = _objectiveAnswerNumbers(answer);
     if (numbers.isNotEmpty) {
+      final circledAnswers = answer.runes
+          .map(String.fromCharCode)
+          .where((ch) => _circledObjectiveNumber(ch) != null)
+          .toList(growable: false);
       return Padding(
         padding: const EdgeInsets.only(right: 12),
         child: Align(
@@ -4797,19 +5014,20 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             spacing: 10,
             runSpacing: 6,
             children: [
-              for (final rune in answer.runes)
-                if (_circledObjectiveNumber(String.fromCharCode(rune)) != null)
-                  Text(
-                    String.fromCharCode(rune),
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(
-                      color: _rsText,
-                      fontFamily: 'ChosunNm',
-                      fontWeight: FontWeight.w400,
-                      fontSize: 39.5,
-                      height: 1.0,
-                    ),
+              for (int i = 0; i < circledAnswers.length; i++)
+                Text(
+                  i == circledAnswers.length - 1
+                      ? circledAnswers[i]
+                      : '${circledAnswers[i]},',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: _rsText,
+                    fontFamily: 'ChosunNm',
+                    fontWeight: FontWeight.w400,
+                    fontSize: 39.5,
+                    height: 1.0,
                   ),
+                ),
             ],
           ),
         ),
@@ -5264,7 +5482,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  Widget _buildAnswerListRow(_RightSheetGradingCellVm cell) {
+  Widget _buildAnswerListRow(
+    _RightSheetGradingCellVm cell, {
+    required int pageNumber,
+  }) {
     final state = _normalizeState(_gradingStates[cell.key]);
     final colors = _resolveAnswerRowStyle(state);
     final questionLabel = cell.displayQuestionLabel;
@@ -5292,25 +5513,34 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Container(
-                      width: 62,
-                      height: 32,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: colors.border.withOpacity(0.18),
+                    Tooltip(
+                      message: '$questionLabel번 해설 PDF로 이동',
+                      child: InkWell(
                         borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: colors.border),
-                      ),
-                      child: Text(
-                        colors.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.fade,
-                        softWrap: false,
-                        style: TextStyle(
-                          color: colors.text,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 13.5,
-                          height: 1.0,
+                        onTap: () => unawaited(
+                          _openCellSolution(cell, pageNumber: pageNumber),
+                        ),
+                        child: Container(
+                          width: 62,
+                          height: 32,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: colors.border.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: colors.border),
+                          ),
+                          child: Text(
+                            '해설',
+                            maxLines: 1,
+                            overflow: TextOverflow.fade,
+                            softWrap: false,
+                            style: TextStyle(
+                              color: colors.text,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 13.5,
+                              height: 1.0,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -5390,7 +5620,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           isFirst: isFirst,
         ),
         for (int i = 0; i < page.cells.length; i++) ...[
-          _buildAnswerListRow(page.cells[i]),
+          _buildAnswerListRow(page.cells[i], pageNumber: page.pageNumber),
           if (i != page.cells.length - 1) const SizedBox(height: 8),
         ],
       ],
@@ -5440,7 +5670,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
       children: [
         button(
           label: _actionBusy ? '완료중' : '완료',
@@ -5453,6 +5683,23 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           filled: true,
         ),
       ],
+    );
+  }
+
+  Widget _buildGradingBottomBar(RightSideSheetTestGradingSession session) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(4, 12, 0, 0),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: _rsBorder)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: _buildScoreCalculator(session)),
+          const SizedBox(width: 12),
+          _buildActionButtons(),
+        ],
+      ),
     );
   }
 
@@ -5492,33 +5739,37 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     ),
                   ),
                 )
-              : SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildSessionHeader(session),
-                      const SizedBox(height: 22),
-                      if (pages.isNotEmpty) _buildAnswerList(pages),
-                      if (pages.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
-                          child: Text(
-                            '검색 결과가 없습니다.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: _rsTextSub,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12.5,
-                            ),
-                          ),
+              : Column(
+                  children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildSessionHeader(session),
+                            const SizedBox(height: 22),
+                            if (pages.isNotEmpty) _buildAnswerList(pages),
+                            if (pages.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 24),
+                                child: Text(
+                                  '검색 결과가 없습니다.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: _rsTextSub,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(height: 12),
+                          ],
                         ),
-                      const SizedBox(height: 10),
-                      _buildScoreCalculator(session),
-                      const SizedBox(height: 24),
-                      _buildActionButtons(),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
+                      ),
+                    ),
+                    _buildGradingBottomBar(session),
+                    const SizedBox(height: 8),
+                  ],
                 ),
         ),
       ],

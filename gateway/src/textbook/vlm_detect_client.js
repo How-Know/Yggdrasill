@@ -15,6 +15,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isDailyQuotaExceededBody(input) {
+  const text = String(input || '').toLowerCase();
+  return (
+    text.includes('resource_exhausted') &&
+    (text.includes('generate_requests_per_model_per_day') ||
+      text.includes('please retry in'))
+  );
+}
+
 export async function detectProblemsOnPage({
   imageBase64,
   mimeType = 'image/png',
@@ -103,7 +112,11 @@ export async function detectProblemsOnPage({
     if (!res.ok) {
       lastStatus = res.status;
       lastBody = textBody;
-      if (TRANSIENT_STATUSES.has(res.status) && attempt + 1 < attempts) {
+      if (
+        TRANSIENT_STATUSES.has(res.status) &&
+        !isDailyQuotaExceededBody(textBody) &&
+        attempt + 1 < attempts
+      ) {
         await sleep(800 * Math.pow(2, attempt));
         continue;
       }

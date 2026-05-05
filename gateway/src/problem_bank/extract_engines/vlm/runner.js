@@ -36,6 +36,32 @@ function problemNumberKey(v) {
   return Number.isFinite(n) && n > 0 ? String(n) : '';
 }
 
+function expectedQuestionKeys(numbers) {
+  return (Array.isArray(numbers) ? numbers : [])
+    .map((number) => problemNumberKey(number))
+    .filter(Boolean);
+}
+
+function missingExpectedQuestionNumbers(questions, expectedNumbers) {
+  const expected = expectedQuestionKeys(expectedNumbers);
+  if (expected.length === 0) return [];
+  const found = new Set(
+    (Array.isArray(questions) ? questions : [])
+      .map((question) => problemNumberKey(question?.question_number))
+      .filter(Boolean),
+  );
+  return expected.filter((key) => !found.has(key));
+}
+
+function isDailyQuotaExceededMessage(input) {
+  const text = String(input || '').toLowerCase();
+  return (
+    text.includes('resource_exhausted') &&
+    (text.includes('generate_requests_per_model_per_day') ||
+      text.includes('please retry in'))
+  );
+}
+
 function normalizeCompactFractionCommands(input) {
   let out = String(input || '');
   for (let i = 0; i < 4; i += 1) {
@@ -311,24 +337,42 @@ async function callGeminiChunkWithRetry({
         apiKey,
         timeoutMs,
         textbookScope: input.textbookScope,
+        expectedQuestionNumbers: input.expectedQuestionNumbers,
       });
+      const chunkQuestions = Array.isArray(result?.parsedJson?.questions)
+        ? result.parsedJson.questions
+        : [];
+      const missingExpected = missingExpectedQuestionNumbers(
+        chunkQuestions,
+        input.expectedQuestionNumbers,
+      );
+      if (missingExpected.length > 0) {
+        throw new Error(
+          `vlm_missing_expected_questions:${missingExpected.join(',')}`,
+        );
+      }
       if (typeof log === 'function') {
         log('vlm_chunk_call_done', {
           chunkIndex: input.chunkIndex,
           totalChunks: input.totalChunks,
           attempt,
           pageRange: input.pageRange,
-          elapsedMs: result?.elapsedMs || 0,
-          questionCount: Array.isArray(result?.parsedJson?.questions)
-            ? result.parsedJson.questions.length
+          expectedQuestionCount: Array.isArray(input.expectedQuestionNumbers)
+            ? input.expectedQuestionNumbers.length
             : 0,
+          elapsedMs: result?.elapsedMs || 0,
+          questionCount: chunkQuestions.length,
           finishReason: result?.finishReason || '',
         });
       }
       return result;
     } catch (err) {
       const msg = compact(err?.message || err);
-      const retryable = /aborted|abort|timeout|deadline|429|500|502|503|504/i.test(msg);
+      const retryable =
+        !isDailyQuotaExceededMessage(msg) &&
+        /aborted|abort|timeout|deadline|429|500|502|503|504|missing_expected_questions/i.test(
+          msg,
+        );
       if (typeof log === 'function') {
         log('vlm_chunk_call_error', {
           chunkIndex: input.chunkIndex,
@@ -471,7 +515,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
   try {
     const { data: crops, error } = await supa
       .from('textbook_problem_crops')
-      .select('problem_number,raw_page,display_page')
+      .select('problem_number,raw_page,display_page,is_set_header')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
@@ -491,10 +535,12 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
     }
     const out = new Map();
     for (const crop of crops) {
+      if (crop?.is_set_header === true) continue;
       const key = problemNumberKey(crop?.problem_number);
       const rawPage = Number(crop?.raw_page);
       if (!key || !Number.isFinite(rawPage) || rawPage <= 0) continue;
       out.set(key, {
+        problemNumber: compact(crop?.problem_number),
         rawPage,
         displayPage: Number.isFinite(Number(crop?.display_page))
           ? Number(crop.display_page)
@@ -574,6 +620,28 @@ function applyTextbookAnswerSidecar(vlmQ, sidecar) {
     has_image_asset: !!compact(sidecar.answer_image_path),
   };
   return next;
+}
+
+function expectedQuestionNumbersForInput(cropPagesByNumber, input) {
+  if (!(cropPagesByNumber instanceof Map) || cropPagesByNumber.size === 0) {
+    return [];
+  }
+  const pageRange = input?.pageRange || null;
+  const rows = Array.from(cropPagesByNumber.values()).filter((row) => {
+    const rawPage = Number(row?.rawPage);
+    if (!Number.isFinite(rawPage) || rawPage <= 0) return false;
+    if (!pageRange) return true;
+    return rawPage >= Number(pageRange.start) && rawPage <= Number(pageRange.end);
+  });
+  rows.sort((a, b) => {
+    const pageDelta = Number(a.rawPage || 0) - Number(b.rawPage || 0);
+    if (pageDelta !== 0) return pageDelta;
+    return (
+      Number.parseInt(String(a.problemNumber || ''), 10) -
+      Number.parseInt(String(b.problemNumber || ''), 10)
+    );
+  });
+  return rows.map((row) => row.problemNumber).filter(Boolean);
 }
 
 // VLM question 하나를 "buildQuestionWritePayload" 가 먹을 수 있는 형태로 변환한다.
@@ -708,6 +776,19 @@ export async function runVlmExtraction({
     textbookScope,
   });
 
+  const cropPagesByNumber = await fetchTextbookCropPages({
+    supa,
+    academyId: job.academy_id,
+    textbookScope,
+    log,
+  });
+  for (const input of pdfInputs.inputs) {
+    input.expectedQuestionNumbers = expectedQuestionNumbersForInput(
+      cropPagesByNumber,
+      input,
+    );
+  }
+
   if (typeof log === 'function') {
     log('vlm_call_start', {
       jobId: job.id,
@@ -727,6 +808,9 @@ export async function runVlmExtraction({
         pageRange: input.pageRange,
         slicedPageCount: input.slicedPageCount,
         pdfBytes: input.buffer.length,
+        expectedQuestionCount: Array.isArray(input.expectedQuestionNumbers)
+          ? input.expectedQuestionNumbers.length
+          : 0,
       })),
       model,
     });
@@ -774,12 +858,6 @@ export async function runVlmExtraction({
   }
   const existingByNum = indexExistingByQuestionNumber(existingRows || []);
   const answerSidecars = await fetchTextbookAnswerSidecars({
-    supa,
-    academyId: job.academy_id,
-    textbookScope,
-    log,
-  });
-  const cropPagesByNumber = await fetchTextbookCropPages({
     supa,
     academyId: job.academy_id,
     textbookScope,
@@ -881,6 +959,9 @@ export async function runVlmExtraction({
           pageRange: input.pageRange,
           sentBytes: input.buffer.length,
           sentPageCount: input.slicedPageCount,
+          expectedQuestionCount: Array.isArray(input.expectedQuestionNumbers)
+            ? input.expectedQuestionNumbers.length
+            : 0,
           questionCount: Array.isArray(chunkResults[idx]?.parsedJson?.questions)
             ? chunkResults[idx].parsedJson.questions.length
             : 0,

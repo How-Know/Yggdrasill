@@ -85,6 +85,58 @@ class RightSideSheetTestGradingSession {
   });
 }
 
+class RightSideSheetPdfPanelSession {
+  final String sessionId;
+  final String title;
+  final String answerPath;
+  final String solutionPath;
+  final String cacheKey;
+  final bool showSolution;
+  final int focusPageNumber;
+  final int focusRequestId;
+  final List<int> focusRect1k;
+  final List<Map<String, String>> overlayEntries;
+
+  const RightSideSheetPdfPanelSession({
+    required this.sessionId,
+    required this.title,
+    required this.answerPath,
+    this.solutionPath = '',
+    this.cacheKey = '',
+    this.showSolution = false,
+    this.focusPageNumber = 0,
+    this.focusRequestId = 0,
+    this.focusRect1k = const <int>[],
+    this.overlayEntries = const <Map<String, String>>[],
+  });
+
+  RightSideSheetPdfPanelSession copyWith({
+    String? sessionId,
+    String? title,
+    String? answerPath,
+    String? solutionPath,
+    String? cacheKey,
+    bool? showSolution,
+    int? focusPageNumber,
+    int? focusRequestId,
+    List<int>? focusRect1k,
+    List<Map<String, String>>? overlayEntries,
+  }) {
+    return RightSideSheetPdfPanelSession(
+      sessionId: sessionId ?? this.sessionId,
+      title: title ?? this.title,
+      answerPath: answerPath ?? this.answerPath,
+      solutionPath: solutionPath ?? this.solutionPath,
+      cacheKey: cacheKey ?? this.cacheKey,
+      showSolution: showSolution ?? this.showSolution,
+      focusPageNumber: focusPageNumber ?? this.focusPageNumber,
+      focusRequestId: focusRequestId ?? this.focusRequestId,
+      focusRect1k: focusRect1k ?? this.focusRect1k,
+      overlayEntries: overlayEntries ?? this.overlayEntries,
+    );
+  }
+}
+
 /// MaterialApp.builder에서 만든 최상위 Overlay(=Navigator 밖) 안에
 /// "FAB 드롭다운 전용 레이어"를 만들기 위한 키.
 ///
@@ -126,6 +178,11 @@ final ValueNotifier<bool> rightSideSheetOpen = ValueNotifier<bool>(false);
 final ValueNotifier<RightSideSheetTestGradingSession?>
     rightSideSheetTestGradingSession =
     ValueNotifier<RightSideSheetTestGradingSession?>(null);
+
+/// 우측 채점 시트와 함께 왼쪽 작업 영역에 표시할 정답/해설 PDF 패널.
+final ValueNotifier<RightSideSheetPdfPanelSession?>
+    rightSideSheetPdfPanelSession =
+    ValueNotifier<RightSideSheetPdfPanelSession?>(null);
 
 /// 답지바로가기 > 채점 탭이 현재 활성화(가시) 상태인지.
 /// - `true` 이면 우측 시트의 너비를 확장해 채점 UI가 답답하지 않도록 한다.

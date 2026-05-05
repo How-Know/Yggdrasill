@@ -440,42 +440,6 @@ class RightSheetGradingSearchService {
     required String studentId,
     required HomeworkItem hw,
   }) async {
-    final presetId = (hw.pbPresetId ?? '').trim();
-    if (presetId.isNotEmpty) {
-      try {
-        final academyId = await _resolveAcademyIdForPrint();
-        final release = await _problemBankService.getLatestLiveReleaseForPreset(
-          academyId: academyId,
-          presetId: presetId,
-        );
-        final exportJobId =
-            (release?.activeExportJobId.trim().isNotEmpty == true)
-                ? release!.activeExportJobId.trim()
-                : (release?.frozenExportJobId ?? '').trim();
-        if (exportJobId.isNotEmpty) {
-          var signedUrl = await _problemBankService.regenerateExportSignedUrl(
-            academyId: academyId,
-            exportJobId: exportJobId,
-          );
-          if (signedUrl.trim().isEmpty) {
-            final job = await _problemBankService.getExportJob(
-              academyId: academyId,
-              jobId: exportJobId,
-            );
-            signedUrl = job?.outputUrl.trim() ?? '';
-          }
-          if (signedUrl.trim().isNotEmpty) {
-            return <String, String>{
-              'answerPathRaw': signedUrl.trim(),
-              'solutionPathRaw': '',
-              'cacheKey':
-                  'student:$studentId|right_sheet_answer:pb:$exportJobId',
-            };
-          }
-        }
-      } catch (_) {}
-    }
-
     final textbookLinks = await _resolveHomeworkPdfLinks(
       hw,
       allowFlowFallback: true,

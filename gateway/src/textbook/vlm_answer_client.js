@@ -14,6 +14,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isDailyQuotaExceededBody(input) {
+  const text = String(input || '').toLowerCase();
+  return (
+    text.includes('resource_exhausted') &&
+    (text.includes('generate_requests_per_model_per_day') ||
+      text.includes('please retry in'))
+  );
+}
+
 export async function extractAnswersOnPage({
   imageBase64,
   mimeType = 'image/png',
@@ -100,7 +109,11 @@ export async function extractAnswersOnPage({
     if (!res.ok) {
       lastStatus = res.status;
       lastBody = textBody;
-      if (ANSWER_TRANSIENT_STATUSES.has(res.status) && attempt + 1 < attempts) {
+      if (
+        ANSWER_TRANSIENT_STATUSES.has(res.status) &&
+        !isDailyQuotaExceededBody(textBody) &&
+        attempt + 1 < attempts
+      ) {
         await sleep(800 * Math.pow(2, attempt));
         continue;
       }
@@ -170,6 +183,28 @@ function compactErrMsg(err) {
 }
 
 const ALLOWED_KINDS = new Set(['objective', 'subjective', 'image']);
+const OBJECTIVE_CHOICE_MAP = new Map([
+  ['1', '①'],
+  ['①', '①'],
+  ['⑴', '①'],
+  ['(1)', '①'],
+  ['2', '②'],
+  ['②', '②'],
+  ['⑵', '②'],
+  ['(2)', '②'],
+  ['3', '③'],
+  ['③', '③'],
+  ['⑶', '③'],
+  ['(3)', '③'],
+  ['4', '④'],
+  ['④', '④'],
+  ['⑷', '④'],
+  ['(4)', '④'],
+  ['5', '⑤'],
+  ['⑤', '⑤'],
+  ['⑸', '⑤'],
+  ['(5)', '⑤'],
+]);
 
 function normalizeCompactFractionCommands(input) {
   let out = String(input || '');
@@ -237,6 +272,24 @@ function normalizeAnswerAssets(rawAssets) {
     .filter(Boolean);
 }
 
+function normalizeObjectiveChoiceText(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const parts = raw
+    .split(/[\/,，、\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return '';
+  const normalized = [];
+  for (const part of parts) {
+    const compact = part.replace(/\s+/g, '');
+    const mapped = OBJECTIVE_CHOICE_MAP.get(compact);
+    if (!mapped) return '';
+    normalized.push(mapped);
+  }
+  return Array.from(new Set(normalized)).join('/');
+}
+
 export function normalizeAnswerResult(parsedJson) {
   const out = { items: [], notes: '' };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
@@ -263,15 +316,20 @@ export function normalizeAnswerResult(parsedJson) {
     const imageMarker = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)/i.test(
       `${rawAnswerText} ${rawAnswerLatex2d}`,
     );
+    const objectiveText = normalizeObjectiveChoiceText(rawAnswerText);
     const kind = kindRaw === 'image' || imageMarker || answerAssets.length > 0 || generatedTableAnswer
       ? 'image'
+      : kindRaw === 'objective' && !objectiveText
+        ? 'subjective'
       : ALLOWED_KINDS.has(kindRaw)
         ? kindRaw
         : 'subjective';
     const answerText =
       kind === 'image'
         ? (imageMarker ? rawAnswerText : `${rawAnswerText} [image]`.trim()) || '[image]'
-        : rawAnswerText;
+        : kind === 'objective'
+          ? objectiveText
+        : rawAnswerText || rawAnswerLatex2d;
     const answerLatex2d = rawAnswerLatex2d;
     const bbox = parseBbox4(raw.bbox) || answerAssets[0]?.bbox || null;
     out.items.push({

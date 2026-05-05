@@ -318,6 +318,43 @@ class TextbookVlmAnswerItem {
       return out;
     }
 
+    String normalizeObjectiveChoiceText(String raw) {
+      final parts = raw
+          .trim()
+          .split(RegExp(r'[/,，、\s]+'))
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty);
+      final normalized = <String>[];
+      for (final part in parts) {
+        final compact = part.replaceAll(RegExp(r'\s+'), '');
+        final mapped = const <String, String>{
+          '1': '①',
+          '①': '①',
+          '⑴': '①',
+          '(1)': '①',
+          '2': '②',
+          '②': '②',
+          '⑵': '②',
+          '(2)': '②',
+          '3': '③',
+          '③': '③',
+          '⑶': '③',
+          '(3)': '③',
+          '4': '④',
+          '④': '④',
+          '⑷': '④',
+          '(4)': '④',
+          '5': '⑤',
+          '⑤': '⑤',
+          '⑸': '⑤',
+          '(5)': '⑤',
+        }[compact];
+        if (mapped == null) return '';
+        if (!normalized.contains(mapped)) normalized.add(mapped);
+      }
+      return normalized.join('/');
+    }
+
     var problemNumber = '${map['problem_number'] ?? ''}'.trim();
     var rawAnswerText = normalizeAnswer('${map['answer_text'] ?? ''}');
     final subNumberMatch =
@@ -339,14 +376,17 @@ class TextbookVlmAnswerItem {
     final imageMarker = RegExp(r'(\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)',
             caseSensitive: false)
         .hasMatch('$rawAnswerText $rawAnswerLatex2d');
+    final objectiveText = normalizeObjectiveChoiceText(rawAnswerText);
     final kind = kindRaw == 'image' ||
             imageMarker ||
             answerAssets.isNotEmpty ||
             generatedTableAnswer
         ? 'image'
-        : const {'objective', 'subjective', 'image'}.contains(kindRaw)
-            ? kindRaw
-            : 'subjective';
+        : kindRaw == 'objective' && objectiveText.isEmpty
+            ? 'subjective'
+            : const {'objective', 'subjective', 'image'}.contains(kindRaw)
+                ? kindRaw
+                : 'subjective';
     return TextbookVlmAnswerItem(
       problemNumber: problemNumber,
       kind: kind,
@@ -354,7 +394,11 @@ class TextbookVlmAnswerItem {
           ? (imageMarker
               ? rawAnswerText
               : '${rawAnswerText.trim()} [image]'.trim())
-          : rawAnswerText,
+          : kind == 'objective'
+              ? objectiveText
+              : rawAnswerText.isNotEmpty
+                  ? rawAnswerText
+                  : rawAnswerLatex2d,
       answerLatex2d: rawAnswerLatex2d,
       answerAssets: answerAssets,
       bbox: parseBbox(map['bbox']) ??

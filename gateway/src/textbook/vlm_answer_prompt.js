@@ -67,6 +67,7 @@ export function buildExtractAnswersPrompt({
     '   - 표준화 매핑: 1/(1)/⑴ → "①", 2 → "②", 3 → "③", 4 → "④", 5 → "⑤".',
     '   - answer_text 는 **원문자 한 글자만** 담아라 (예: "③"). 답이 2개 이상이면 "③/④" 처럼 슬래시로 이어라.',
     '   - answer_latex_2d 는 "" (빈 문자열).',
+    '   - O/X, ○/×, 참/거짓, 맞다/아니다 같은 판단형 정답은 객관식이 아니다. 반드시 kind="subjective" 로 두고 answer_text 에 원문 그대로 담아라.',
     '',
     '[R2] 주관식 정답 (kind="subjective")',
     '   - 수식 그대로를 LaTeX 로 변환해 answer_text 에 담아라.',

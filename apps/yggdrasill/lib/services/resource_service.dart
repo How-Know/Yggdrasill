@@ -982,7 +982,8 @@ class ResourceService {
               'raw_page, display_page, section, '
               'problem_number, label, is_set_header, set_from, set_to, '
               'content_group_kind, content_group_label, content_group_title, '
-              'content_group_order, pb_question_uid',
+              'content_group_order, pb_question_uid, '
+              'column_index, bbox_1k, item_region_1k',
             )
             .eq('academy_id', academyId)
             .eq('book_id', safeBookId);
@@ -1018,6 +1019,29 @@ class ResourceService {
       }
 
       if (byCropId.isEmpty) return <Map<String, dynamic>>[];
+      try {
+        for (final ids in chunks(byCropId.keys.toList(growable: false), 250)) {
+          final refRows = await supa
+              .from('textbook_problem_solution_refs')
+              .select(
+                'crop_id, raw_page, display_page, number_region_1k, content_region_1k',
+              )
+              .eq('academy_id', academyId)
+              .inFilter('crop_id', ids);
+          for (final raw in refRows) {
+            final ref = Map<String, dynamic>.from(raw);
+            final cropId = '${ref['crop_id'] ?? ''}'.trim();
+            final crop = byCropId[cropId];
+            if (crop == null) continue;
+            crop.addAll({
+              'solution_raw_page': ref['raw_page'],
+              'solution_display_page': ref['display_page'],
+              'solution_number_region_1k': ref['number_region_1k'],
+              'solution_content_region_1k': ref['content_region_1k'],
+            });
+          }
+        }
+      } catch (_) {}
       try {
         for (final ids in chunks(byCropId.keys.toList(growable: false), 250)) {
           final answerRows = await supa

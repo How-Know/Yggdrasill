@@ -5,10 +5,18 @@
 // ESM 모듈로 분리한 것이다. 출력 JSON 스키마와 stem 포맷 규약은 매니저/렌더러가
 // 이미 가정하는 규약이므로 여기서 변경하지 말 것.
 
-export function buildPrompt({ textbookScope = null } = {}) {
+export function buildPrompt({
+  textbookScope = null,
+  expectedQuestionNumbers = null,
+} = {}) {
   const scope = textbookScope && typeof textbookScope === 'object'
     ? textbookScope
     : null;
+  const expectedNumbers = Array.isArray(expectedQuestionNumbers)
+    ? expectedQuestionNumbers
+      .map((n) => String(n || '').trim())
+      .filter(Boolean)
+    : [];
   const scopeLines = scope
     ? [
         '=== 교재 소단원 추출 범위 ===',
@@ -22,11 +30,22 @@ export function buildPrompt({ textbookScope = null } = {}) {
         '',
       ]
     : [];
+  const expectedLines = expectedNumbers.length > 0
+    ? [
+        '=== Stage 1 기준 기대 문항번호 ===',
+        `아래 문항번호는 앞 단계에서 이미 탐지된 실제 문항 목록이다: ${expectedNumbers.join(', ')}`,
+        'questions 에는 이 목록의 문항을 모두 포함해야 한다. 특히 마지막 페이지/오른쪽 열/하단 문항을 누락하지 마라.',
+        '목록에 있는 번호가 PDF에서 흐릿해도 보이는 범위에서 stem 을 추출하고 uncertain_fields 에 "stem" 을 넣어라.',
+        '세트 대표 범위 라벨(예: 0752~0755)은 여기서 제외되어 있으므로, 아래 번호 각각을 개별 questions 로 추출하라.',
+        '',
+      ]
+    : [];
   return [
     '당신은 한국 중·고등학교 수학 시험지 PDF 를 분석해 문항을 "Yggdrasill stem 포맷" 의 구조화 JSON 으로 추출하는 AI 입니다.',
     '반드시 다음 JSON 스키마만 출력합니다. 설명 문장·마크다운 금지. JSON 외 어떤 텍스트도 출력하지 마세요.',
     '',
     ...scopeLines,
+    ...expectedLines,
     '=== 출력 스키마 ===',
     '{',
     '  "document_meta": {',
@@ -103,6 +122,7 @@ export function buildPrompt({ textbookScope = null } = {}) {
     '[R1] PDF 에 실제로 인쇄된 문항만 추출 (해설/풀이 페이지 제외).',
     '[R2] document_meta.total_questions 는 questions 배열 길이와 반드시 일치.',
     '[R3] 문항 번호는 시험지 상 번호(1, 2, 3...) 그대로.',
+    '[R4] Stage 1 기준 기대 문항번호가 제공된 경우, questions 배열에는 그 번호들이 모두 있어야 한다.',
     '',
     '=== JSON 이스케이프 규칙 (반드시 지킬 것) ===',
     '[E1] JSON 문자열 안의 LaTeX 백슬래시 "\\" 는 "\\\\" 로 이스케이프해야 한다. 즉 출력 JSON 에서',

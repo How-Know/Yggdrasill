@@ -31,6 +31,11 @@ class HomeworkAnswerGradingCell {
   final String answerSourceId;
   final String answerAssetKind;
   final String answerRenderStyleVersion;
+  final int? answerPageNumber;
+  final List<int> answerRect1k;
+  final List<int> focusRect1k;
+  final int? solutionPageNumber;
+  final List<int> solutionRect1k;
 
   const HomeworkAnswerGradingCell({
     required this.key,
@@ -47,6 +52,11 @@ class HomeworkAnswerGradingCell {
     this.answerSourceId = '',
     this.answerAssetKind = '',
     this.answerRenderStyleVersion = '',
+    this.answerPageNumber,
+    this.answerRect1k = const <int>[],
+    this.focusRect1k = const <int>[],
+    this.solutionPageNumber,
+    this.solutionRect1k = const <int>[],
   });
 }
 
@@ -88,6 +98,11 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
   void Function(Map<String, HomeworkAnswerCellState> states)?
       onGradingStatesChanged,
   bool hideSourceDocument = false,
+  bool initialShowSolution = false,
+  int focusPageNumber = 0,
+  int focusRequestId = 0,
+  List<int> focusRect1k = const <int>[],
+  VoidCallback? onClose,
 }) async {
   final previousMemoFloatingHidden = hideGlobalMemoFloatingBanners.value;
   hideGlobalMemoFloatingBanners.value = true;
@@ -105,6 +120,11 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
           initialGradingStates: initialGradingStates,
           onGradingStatesChanged: onGradingStatesChanged,
           hideSourceDocument: hideSourceDocument,
+          initialShowSolution: initialShowSolution,
+          focusPageNumber: focusPageNumber,
+          focusRequestId: focusRequestId,
+          focusRect1k: focusRect1k,
+          onClose: onClose,
         ),
       ),
     );
@@ -125,6 +145,11 @@ class HomeworkAnswerViewerPage extends StatefulWidget {
   final void Function(Map<String, HomeworkAnswerCellState> states)?
       onGradingStatesChanged;
   final bool hideSourceDocument;
+  final bool initialShowSolution;
+  final int focusPageNumber;
+  final int focusRequestId;
+  final List<int> focusRect1k;
+  final VoidCallback? onClose;
 
   const HomeworkAnswerViewerPage({
     super.key,
@@ -138,6 +163,11 @@ class HomeworkAnswerViewerPage extends StatefulWidget {
     this.initialGradingStates = const <String, HomeworkAnswerCellState>{},
     this.onGradingStatesChanged,
     this.hideSourceDocument = false,
+    this.initialShowSolution = false,
+    this.focusPageNumber = 0,
+    this.focusRequestId = 0,
+    this.focusRect1k = const <int>[],
+    this.onClose,
   });
 
   @override
@@ -193,6 +223,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   bool _draggingSlider = false;
   bool _isViewerReady = false;
   bool _openingSolution = false;
+  late bool _showingSolution;
   bool _overlayCollapsed = false;
   bool _gradingPanelCollapsed = false;
   late Map<String, HomeworkAnswerCellState> _gradingStates;
@@ -212,6 +243,10 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   DateTime? _lastTapAt;
   Offset? _lastTapPos;
   Timer? _singleTapTimer;
+  int _handledFocusRequestId = 0;
+  int _focusStabilizeSeq = 0;
+  Rect? _focusHighlightDocRect;
+  Timer? _focusHighlightTimer;
   static const double _minUserZoom = 0.35;
   static const double _maxUserZoom = 10.0;
 
@@ -228,7 +263,26 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   bool get _hasGradingPanel => widget.gradingPages.isNotEmpty;
   bool get _showDocument => !(widget.hideSourceDocument && _hasGradingPanel);
 
-  String get _cacheKey => (widget.cacheKey ?? '').trim();
+  String get _answerCacheKey => (widget.cacheKey ?? '').trim();
+  String get _solutionCacheKey {
+    final solutionPath = (widget.solutionFilePath ?? '').trim();
+    if (solutionPath.isEmpty) return '';
+    final base =
+        _answerCacheKey.isEmpty ? widget.filePath.trim() : _answerCacheKey;
+    return 'sol|$base|$solutionPath';
+  }
+
+  String get _cacheKey =>
+      _showingSolution ? _solutionCacheKey : _answerCacheKey;
+
+  String get _currentFilePath => _showingSolution
+      ? (widget.solutionFilePath ?? '').trim()
+      : widget.filePath.trim();
+
+  String get _currentTitle {
+    if (!_showingSolution) return widget.title;
+    return '${widget.title} · 해설';
+  }
 
   bool get _useBaselineAsMinScale =>
       !_hasCachedViewState && _baselineZoom != null && _baselineZoom!.isFinite;
@@ -243,9 +297,63 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   @override
   void initState() {
     super.initState();
+    _showingSolution = widget.initialShowSolution &&
+        (widget.solutionFilePath ?? '').trim().isNotEmpty;
     _gradingStates = Map<String, HomeworkAnswerCellState>.from(
       widget.initialGradingStates,
     );
+    _restoreCachedViewStateForCurrentDocument();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeworkAnswerViewerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextShowSolution = widget.initialShowSolution &&
+        (widget.solutionFilePath ?? '').trim().isNotEmpty;
+    final documentChanged = oldWidget.filePath != widget.filePath ||
+        oldWidget.solutionFilePath != widget.solutionFilePath ||
+        oldWidget.cacheKey != widget.cacheKey ||
+        oldWidget.initialShowSolution != widget.initialShowSolution;
+    final focusChanged = oldWidget.focusRequestId != widget.focusRequestId;
+    if (documentChanged) {
+      _savePageCache();
+      setState(() {
+        _showingSolution = nextShowSolution;
+        _restoreCachedViewStateForCurrentDocument();
+      });
+    }
+    if (focusChanged) {
+      _scheduleFocusRequest();
+    }
+  }
+
+  void _closeViewer(BuildContext context) {
+    _savePageCache();
+    _emitGradingStates();
+    final close = widget.onClose;
+    if (close != null) {
+      close();
+      return;
+    }
+    Navigator.of(context).pop(null);
+  }
+
+  void _restoreCachedViewStateForCurrentDocument() {
+    _hasCachedViewState = false;
+    _pageNumber = 1;
+    _lockedPageNumber = 1;
+    _sliderPage = 1;
+    _pageCount = 0;
+    _isViewerReady = false;
+    _draggingSlider = false;
+    _cachedInitialZoom = null;
+    _cachedInitialCenter = null;
+    _cachedInitialCenterRatio = null;
+    _cachedInitialPanRangeRatio = null;
+    _cachedInitialMatrixStorage = null;
+    _cachedInitialViewSize = null;
+    _baselineZoom = null;
+
     final key = _cacheKey;
     if (key.isNotEmpty) {
       final cached = _viewCacheByKey[key];
@@ -297,6 +405,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   void dispose() {
     _singleTapTimer?.cancel();
     _singleTapTimer = null;
+    _focusHighlightTimer?.cancel();
+    _focusHighlightTimer = null;
     _activePointerIds.clear();
     super.dispose();
   }
@@ -678,20 +788,123 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   Future<void> _openSolution() async {
     final solutionPath = (widget.solutionFilePath ?? '').trim();
     if (solutionPath.isEmpty || _openingSolution) return;
-    setState(() => _openingSolution = true);
-    try {
-      await openHomeworkAnswerViewerPage(
-        context,
-        filePath: solutionPath,
-        title: '${widget.title} · 해설',
-        cacheKey:
-            'sol|${_cacheKey.isEmpty ? widget.filePath : _cacheKey}|$solutionPath',
-        enableConfirm: false,
-        overlayEntries: widget.overlayEntries,
-      );
-    } finally {
-      if (mounted) setState(() => _openingSolution = false);
+    _savePageCache();
+    setState(() {
+      _openingSolution = true;
+      _showingSolution = !_showingSolution;
+      _restoreCachedViewStateForCurrentDocument();
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    if (mounted) {
+      setState(() => _openingSolution = false);
     }
+  }
+
+  void _scheduleFocusRequest() {
+    if (widget.focusRequestId <= 0 ||
+        widget.focusRequestId == _handledFocusRequestId) {
+      return;
+    }
+    final seq = ++_focusStabilizeSeq;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_stabilizeFocusRequest(seq));
+    });
+  }
+
+  Future<void> _stabilizeFocusRequest([int? seq]) async {
+    if (widget.focusRequestId <= 0 ||
+        widget.focusRequestId == _handledFocusRequestId) {
+      return;
+    }
+    final runSeq = seq ?? ++_focusStabilizeSeq;
+    final requestId = widget.focusRequestId;
+    var applied = false;
+    for (final delayMs in const <int>[0, 80, 180, 360]) {
+      if (delayMs > 0) {
+        await Future<void>.delayed(Duration(milliseconds: delayMs));
+      }
+      if (!mounted ||
+          runSeq != _focusStabilizeSeq ||
+          widget.focusRequestId != requestId) {
+        return;
+      }
+      applied = await _applyFocusRequestIfReady(
+            force: true,
+            markHandled: false,
+          ) ||
+          applied;
+    }
+    if (!mounted || widget.focusRequestId != requestId) return;
+    if (applied) {
+      _handledFocusRequestId = requestId;
+    }
+  }
+
+  Future<bool> _applyFocusRequestIfReady({
+    bool force = false,
+    bool markHandled = true,
+  }) async {
+    if (!mounted ||
+        !_viewerController.isReady ||
+        widget.focusRequestId <= 0 ||
+        (!force && widget.focusRequestId == _handledFocusRequestId) ||
+        _pageCount <= 0) {
+      return false;
+    }
+    final page = widget.focusPageNumber.clamp(1, _pageCount).toInt();
+    final rect = _pageRectForNumber(page);
+    if (rect == null) return false;
+    final viewSize = _viewerController.viewSize;
+    if (viewSize.width <= 0 || viewSize.height <= 0) return false;
+    final fitWidth = _fitWidthZoomForPage(rect, viewSize);
+    final focusRect = widget.focusRect1k;
+    final hasFocusRect = focusRect.length >= 4;
+    final focusZoomMultiplier = _showingSolution && hasFocusRect ? 1.35 : 1.18;
+    final targetZoom = (fitWidth * focusZoomMultiplier)
+        .clamp(_effectiveMinScale, _maxUserZoom)
+        .toDouble();
+    final focusLeft = hasFocusRect
+        ? rect.left + rect.width * (focusRect[1].clamp(0, 1000) / 1000.0)
+        : rect.left;
+    final focusTop = hasFocusRect
+        ? rect.top + rect.height * (focusRect[0].clamp(0, 1000) / 1000.0)
+        : rect.top;
+    const focusMarginPx = 42.0;
+    final targetCenter = Offset(
+      focusLeft + ((viewSize.width / 2) - focusMarginPx) / targetZoom,
+      focusTop + ((viewSize.height / 2) - focusMarginPx) / targetZoom,
+    );
+    setState(() {
+      _lockedPageNumber = page;
+      _pageNumber = page;
+      if (!_draggingSlider) _sliderPage = page.toDouble();
+    });
+    await _viewerController.goTo(
+      _viewerController.calcMatrixFor(
+        targetCenter,
+        zoom: targetZoom,
+        viewSize: viewSize,
+      ),
+      duration: const Duration(milliseconds: 180),
+    );
+    if (hasFocusRect) {
+      final highlight = Rect.fromLTRB(
+        rect.left + rect.width * (focusRect[1].clamp(0, 1000) / 1000.0),
+        rect.top + rect.height * (focusRect[0].clamp(0, 1000) / 1000.0),
+        rect.left + rect.width * (focusRect[3].clamp(0, 1000) / 1000.0),
+        rect.top + rect.height * (focusRect[2].clamp(0, 1000) / 1000.0),
+      ).inflate(4);
+      _focusHighlightTimer?.cancel();
+      setState(() => _focusHighlightDocRect = highlight);
+      _focusHighlightTimer = Timer(const Duration(seconds: 3), () {
+        if (!mounted) return;
+        setState(() => _focusHighlightDocRect = null);
+      });
+    }
+    if (markHandled) {
+      _handledFocusRequestId = widget.focusRequestId;
+    }
+    return true;
   }
 
   HomeworkAnswerCellState _nextGradingState(HomeworkAnswerCellState current) {
@@ -964,6 +1177,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           } else {
             _logRestore('no cached center available; using viewer default');
           }
+          await _stabilizeFocusRequest();
         }());
       },
       onPageChanged: (page) {
@@ -1013,7 +1227,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   }
 
   Widget _buildViewer() {
-    final source = widget.filePath.trim();
+    final source = _currentFilePath;
     if (_isUrl(source)) {
       final uri = Uri.tryParse(source);
       if (uri == null) {
@@ -1024,21 +1238,27 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           ),
         );
       }
-      return _buildGestureAwareViewer(
-        PdfViewer.uri(
-          uri,
+      return KeyedSubtree(
+        key: ValueKey<String>('pdf:$source'),
+        child: _buildGestureAwareViewer(
+          PdfViewer.uri(
+            uri,
+            controller: _viewerController,
+            params: _viewerParams(),
+            initialPageNumber: _pageNumber,
+          ),
+        ),
+      );
+    }
+    return KeyedSubtree(
+      key: ValueKey<String>('pdf:$source'),
+      child: _buildGestureAwareViewer(
+        PdfViewer.file(
+          source,
           controller: _viewerController,
           params: _viewerParams(),
           initialPageNumber: _pageNumber,
         ),
-      );
-    }
-    return _buildGestureAwareViewer(
-      PdfViewer.file(
-        source,
-        controller: _viewerController,
-        params: _viewerParams(),
-        initialPageNumber: _pageNumber,
       ),
     );
   }
@@ -1068,6 +1288,17 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                       _showDocument ? _buildViewer() : const SizedBox.shrink(),
                 ),
               ),
+              if (_showDocument && _focusHighlightDocRect != null)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _PdfFocusHighlightPainter(
+                        documentRect: _focusHighlightDocRect!,
+                        matrix: _viewerController.value,
+                      ),
+                    ),
+                  ),
+                ),
               if (_chromeVisible)
                 Positioned(
                   left: 8,
@@ -1078,16 +1309,12 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                       _circleIconButton(
                         icon: Icons.arrow_back_rounded,
                         tooltip: '뒤로가기',
-                        onTap: () {
-                          _savePageCache();
-                          _emitGradingStates();
-                          Navigator.of(context).pop(null);
-                        },
+                        onTap: () => _closeViewer(context),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          widget.title,
+                          _currentTitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -1104,9 +1331,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                   _showDocument &&
                   widget.overlayEntries.isNotEmpty)
                 Positioned(
-                  left: 14,
-                  top: 92,
-                  right: showPageSlider ? 78 : 14,
+                  right: controlsRightInset,
+                  bottom: 92,
                   child: _buildChildOverlayPanel(context),
                 ),
               if (_chromeVisible && showPageSlider)
@@ -1260,15 +1486,6 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (_showDocument && _hasSolution)
-                        _pillButton(
-                          label: _openingSolution ? '열기...' : '해설',
-                          icon: Icons.menu_book_rounded,
-                          enabled: !_openingSolution,
-                          onTap: () => unawaited(_openSolution()),
-                        ),
-                      if (_showDocument && _hasSolution)
-                        const SizedBox(width: 12),
                       if (_showDocument) ...[
                         _circleIconButton(
                           icon: Icons.chevron_left_rounded,
@@ -1304,6 +1521,20 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                           onTap: () => unawaited(_goNext()),
                         ),
                       ],
+                      if (_showDocument && _hasSolution)
+                        const SizedBox(width: 12),
+                      if (_showDocument && _hasSolution)
+                        _pillButton(
+                          label: _openingSolution
+                              ? '전환...'
+                              : (_showingSolution ? '답지보기' : '해설보기'),
+                          icon: _showingSolution
+                              ? Icons.picture_as_pdf_rounded
+                              : Icons.menu_book_rounded,
+                          enabled: !_openingSolution,
+                          onTap: () => unawaited(_openSolution()),
+                          fixedWidth: 168,
+                        ),
                       if (widget.enableConfirm) const SizedBox(width: 12),
                       if (widget.enableConfirm)
                         _pillButton(
@@ -1365,7 +1596,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     }
 
     return Align(
-      alignment: Alignment.topLeft,
+      alignment: Alignment.bottomRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: Container(
@@ -1702,42 +1933,78 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     required bool enabled,
     required VoidCallback onTap,
     bool filled = false,
+    double? fixedWidth,
   }) {
-    return Material(
-      color: filled ? kDlgAccent : kDlgPanelBg.withOpacity(0.92),
-      shape: StadiumBorder(
-        side: filled ? BorderSide.none : const BorderSide(color: kDlgBorder),
-      ),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: enabled ? () => onTap() : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 28,
-                color: enabled
-                    ? (filled ? Colors.white : kDlgText)
-                    : kDlgTextSub.withOpacity(0.45),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                label,
-                style: TextStyle(
+    final button = Material(
+        color: filled ? kDlgAccent : kDlgPanelBg.withOpacity(0.92),
+        shape: StadiumBorder(
+          side: filled ? BorderSide.none : const BorderSide(color: kDlgBorder),
+        ),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: enabled ? () => onTap() : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Row(
+              mainAxisSize:
+                  fixedWidth == null ? MainAxisSize.min : MainAxisSize.max,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 28,
                   color: enabled
                       ? (filled ? Colors.white : kDlgText)
                       : kDlgTextSub.withOpacity(0.45),
-                  fontWeight: FontWeight.w800,
-                  fontSize: 20,
                 ),
-              ),
-            ],
+                const SizedBox(width: 10),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: enabled
+                        ? (filled ? Colors.white : kDlgText)
+                        : kDlgTextSub.withOpacity(0.45),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 20,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
-    );
+        ));
+    if (fixedWidth == null) return button;
+    return SizedBox(width: fixedWidth, child: button);
+  }
+}
+
+class _PdfFocusHighlightPainter extends CustomPainter {
+  final Rect documentRect;
+  final Matrix4 matrix;
+
+  const _PdfFocusHighlightPainter({
+    required this.documentRect,
+    required this.matrix,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = MatrixUtils.transformRect(matrix, documentRect);
+    if (rect.isEmpty) return;
+    final fill = Paint()
+      ..color = const Color(0xFFFFE66D).withValues(alpha: 0.28)
+      ..style = PaintingStyle.fill;
+    final stroke = Paint()
+      ..color = const Color(0xFFFFD43B).withValues(alpha: 0.9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.4;
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(6));
+    canvas.drawRRect(rrect, fill);
+    canvas.drawRRect(rrect, stroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PdfFocusHighlightPainter oldDelegate) {
+    return oldDelegate.documentRect != documentRect ||
+        oldDelegate.matrix != matrix;
   }
 }
