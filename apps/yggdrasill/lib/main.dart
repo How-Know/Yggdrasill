@@ -1720,7 +1720,7 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
 
   static const double _navRailInset = 86.0;
   static const double _rightSheetBaseWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155;
-  static const double _rightSheetGradingWidthMultiplier = 1.4;
+  static const double _rightSheetGradingWidthMultiplier = 1.26;
 
   void _closePanelAndRightSheet() {
     rightSideSheetPdfPanelSession.value = null;
@@ -6477,7 +6477,7 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
     return LayoutBuilder(builder: (context, constraints) {
       const double baseWidth =
           238 * 1.2 * 1.2 * 1.1 * 1.155; // 기본 너비 (직전 너비 대비 +10%)
-      const double gradingWidthMultiplier = 1.4; // 채점 세션일 때 기본 대비 +40%
+      const double gradingWidthMultiplier = 1.26; // 채점 세션일 때 기본 대비 +26%
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,

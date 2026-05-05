@@ -1268,7 +1268,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     final canPrev = _showDocument && _isViewerReady && _pageNumber > 1;
     final canNext = _showDocument && _isViewerReady && _pageNumber < _pageCount;
     final showPageSlider = _showDocument && _pageCount > 1;
-    final controlsRightInset = showPageSlider ? 72.0 : 16.0;
+    const controlsRightInset = 16.0;
     final sliderUiValue = _sliderUiValueFromPage(_sliderPage);
     return Scaffold(
       backgroundColor: kDlgBg,
@@ -1337,7 +1337,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                 ),
               if (_chromeVisible && showPageSlider)
                 Positioned(
-                  right: 8,
+                  left: 8,
                   top: 84,
                   bottom: 14,
                   child: Container(
@@ -1422,7 +1422,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                                     ),
                                   ),
                                   Positioned(
-                                    left: -16,
+                                    right: -16,
                                     top: badgeTop,
                                     child: IgnorePointer(
                                       child: Container(
@@ -1495,8 +1495,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                         ),
                         const SizedBox(width: 12),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 18, vertical: 14),
+                          constraints: const BoxConstraints(minHeight: 51),
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
                           decoration: BoxDecoration(
                             color: kDlgPanelBg.withOpacity(0.92),
                             borderRadius: BorderRadius.circular(999),
@@ -1526,14 +1527,14 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                       if (_showDocument && _hasSolution)
                         _pillButton(
                           label: _openingSolution
-                              ? '전환...'
-                              : (_showingSolution ? '답지보기' : '해설보기'),
+                              ? '전환'
+                              : (_showingSolution ? '답지' : '해설'),
                           icon: _showingSolution
                               ? Icons.picture_as_pdf_rounded
                               : Icons.menu_book_rounded,
                           enabled: !_openingSolution,
                           onTap: () => unawaited(_openSolution()),
-                          fixedWidth: 168,
+                          fixedWidth: 112,
                         ),
                       if (widget.enableConfirm) const SizedBox(width: 12),
                       if (widget.enableConfirm)
@@ -1578,6 +1579,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     final entries = widget.overlayEntries;
     if (entries.isEmpty) return const SizedBox.shrink();
     final maxWidth = math.min(MediaQuery.of(context).size.width * 0.29, 380.0);
+    final visibleEntries =
+        _overlayCollapsed ? entries.take(1).toList(growable: false) : entries;
     const titleStyle = TextStyle(
       color: Colors.white,
       fontSize: 20.0,
@@ -1599,112 +1602,79 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       alignment: Alignment.bottomRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF121A20),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.18),
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '하위 과제 ${entries.length}개',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w800,
-                        height: 1.1,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(999),
-                    onTap: () => setState(() {
-                      _overlayCollapsed = !_overlayCollapsed;
-                    }),
-                    child: Padding(
-                      padding: const EdgeInsets.all(3),
-                      child: Icon(
-                        _overlayCollapsed
-                            ? Icons.expand_more_rounded
-                            : Icons.expand_less_rounded,
-                        size: 20,
-                        color: Colors.white.withValues(alpha: 0.92),
-                      ),
-                    ),
-                  ),
-                ],
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() {
+            _overlayCollapsed = !_overlayCollapsed;
+          }),
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF121A20),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.18),
               ),
-              if (!_overlayCollapsed) ...[
-                const SizedBox(height: 8),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 320),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (int i = 0; i < entries.length; i++) ...[
-                          Text(
-                            normalize(
-                              entries[i].title,
-                              fallback: '(제목 없음)',
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: titleStyle,
+            ),
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(maxHeight: _overlayCollapsed ? 78 : 320),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (int i = 0; i < visibleEntries.length; i++) ...[
+                        Text(
+                          normalize(
+                            visibleEntries[i].title,
+                            fallback: '(제목 없음)',
                           ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  normalize(entries[i].page),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.left,
-                                  style: metaStyle,
-                                ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: titleStyle,
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                normalize(visibleEntries[i].page),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.left,
+                                style: metaStyle,
                               ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  normalize(entries[i].memo),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.right,
-                                  style: metaStyle,
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (i != entries.length - 1) ...[
-                            const SizedBox(height: 9),
-                            Container(
-                              width: double.infinity,
-                              height: 1,
-                              color: Colors.white.withValues(alpha: 0.18),
                             ),
-                            const SizedBox(height: 9),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                normalize(visibleEntries[i].memo),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.right,
+                                style: metaStyle,
+                              ),
+                            ),
                           ],
+                        ),
+                        if (i != visibleEntries.length - 1) ...[
+                          const SizedBox(height: 9),
+                          Container(
+                            width: double.infinity,
+                            height: 1,
+                            color: Colors.white.withValues(alpha: 0.18),
+                          ),
+                          const SizedBox(height: 9),
                         ],
                       ],
-                    ),
+                    ],
                   ),
                 ),
-              ],
-            ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1914,12 +1884,15 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: enabled ? () => onTap() : null,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Icon(
-              icon,
-              size: 36,
-              color: enabled ? kDlgText : kDlgTextSub.withOpacity(0.45),
+          child: SizedBox(
+            width: 51,
+            height: 51,
+            child: Center(
+              child: Icon(
+                icon,
+                size: 26,
+                color: enabled ? kDlgText : kDlgTextSub.withOpacity(0.45),
+              ),
             ),
           ),
         ),
@@ -1943,37 +1916,40 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         child: InkWell(
           customBorder: const StadiumBorder(),
           onTap: enabled ? () => onTap() : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Row(
-              mainAxisSize:
-                  fixedWidth == null ? MainAxisSize.min : MainAxisSize.max,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  icon,
-                  size: 28,
-                  color: enabled
-                      ? (filled ? Colors.white : kDlgText)
-                      : kDlgTextSub.withOpacity(0.45),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  label,
-                  style: TextStyle(
+          child: SizedBox(
+            height: 51,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Row(
+                mainAxisSize:
+                    fixedWidth == null ? MainAxisSize.min : MainAxisSize.max,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    icon,
+                    size: 22,
                     color: enabled
                         ? (filled ? Colors.white : kDlgText)
                         : kDlgTextSub.withOpacity(0.45),
-                    fontWeight: FontWeight.w800,
-                    fontSize: 20,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: enabled
+                          ? (filled ? Colors.white : kDlgText)
+                          : kDlgTextSub.withOpacity(0.45),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18.5,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ));
     if (fixedWidth == null) return button;
-    return SizedBox(width: fixedWidth, child: button);
+    return SizedBox(width: fixedWidth, height: 51, child: button);
   }
 }
 

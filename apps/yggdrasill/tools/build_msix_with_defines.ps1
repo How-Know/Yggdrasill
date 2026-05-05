@@ -18,12 +18,27 @@ $envJson = Get-Content $envPath -Raw | ConvertFrom-Json
 $url = $envJson.SUPABASE_URL
 $key = $envJson.SUPABASE_ANON_KEY
 if([string]::IsNullOrWhiteSpace($url) -or [string]::IsNullOrWhiteSpace($key)) { throw 'Missing SUPABASE_URL or SUPABASE_ANON_KEY' }
+$pbGatewayUrl = $envJson.PB_GATEWAY_URL
+if([string]::IsNullOrWhiteSpace($pbGatewayUrl)) {
+  # 이번 배포 정책: 문제은행/해설 PDF signed URL은 지정된 Gateway IP로 고정
+  $pbGatewayUrl = 'http://172.30.1.48:8787'
+}
+
+$buildArgs = @(
+  '--release',
+  '--dart-define=SERVER_ONLY=true',
+  "--dart-define=SUPABASE_URL=$url",
+  "--dart-define=SUPABASE_ANON_KEY=$key",
+  "--dart-define=PB_GATEWAY_URL=$pbGatewayUrl"
+)
+
+Write-Host "[INFO] Build dart-define: PB_GATEWAY_URL=$pbGatewayUrl" -ForegroundColor Cyan
 
 # Ensure flutter deps
 flutter pub get | Out-Host
 
 # Pre-build Windows with same defines
-flutter build windows --release --dart-define=SERVER_ONLY=true --dart-define=SUPABASE_URL=$url --dart-define=SUPABASE_ANON_KEY=$key | Out-Host
+flutter build windows @buildArgs | Out-Host
 if($LASTEXITCODE -ne 0){ throw "flutter build windows failed (exit=$LASTEXITCODE)" }
 
 # Also put env.local.json next to exe so runtime can find it
@@ -48,7 +63,7 @@ if(-not (Test-Path $dist)) { New-Item -ItemType Directory $dist | Out-Null }
 
 if(-not $PortableOnly){
   # Pass build args to msix plugin to avoid losing dart-defines
-  $Env:MSIX_FLUTTER_BUILD_ARGS = "--release --dart-define=SERVER_ONLY=true --dart-define=SUPABASE_URL=$url --dart-define=SUPABASE_ANON_KEY=$key"
+  $Env:MSIX_FLUTTER_BUILD_ARGS = ($buildArgs -join ' ')
   flutter pub run msix:create | Out-Host
   Copy-Item (Join-Path $releaseDir 'mneme_flutter.msix') (Join-Path $dist 'mneme_flutter.msix') -Force
 } else {
