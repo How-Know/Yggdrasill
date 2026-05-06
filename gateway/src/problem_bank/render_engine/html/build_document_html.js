@@ -2652,9 +2652,11 @@ export function buildDocumentHtml({
         const topLeftLogoHtml = profile === 'assignment' && hasAcademyLogo
           ? `<img class="assignment-academy-logo-top-left" src="${escapeHtml(academyLogoDataUrl)}" alt="" />`
           : '';
-        const sessionChipHtml = hasAcademyLogo && profile !== 'assignment'
-          ? `<span class="mock-chip-session-wrap"><img class="mock-academy-logo-overlay" src="${escapeHtml(academyLogoDataUrl)}" alt="" /><span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span></span>`
-          : '<span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>';
+        const sessionChipHtml = profile === 'assignment'
+          ? ''
+          : (hasAcademyLogo
+            ? `<span class="mock-chip-session-wrap"><img class="mock-academy-logo-overlay" src="${escapeHtml(academyLogoDataUrl)}" alt="" /><span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span></span>`
+            : '<span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>');
         return `
           <header class="mock-header-first">
             <div class="mock-header-first-top">

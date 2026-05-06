@@ -191,6 +191,11 @@ class _TextbookUnitAuthoringDialogState
                 slot.startCtrl.text =
                     sub.startPage == null ? '' : '${sub.startPage}';
                 slot.endCtrl.text = sub.endPage == null ? '' : '${sub.endPage}';
+                slot.answerStartCtrl.text =
+                    sub.answerStartPage == null ? '' : '${sub.answerStartPage}';
+                slot.solutionStartCtrl.text = sub.solutionStartPage == null
+                    ? ''
+                    : '${sub.solutionStartPage}';
                 break;
               }
             }
@@ -530,6 +535,8 @@ class _TextbookUnitAuthoringDialogState
             displayName: sub.preset.displayName,
             startPage: _positiveInt(sub.startCtrl.text),
             endPage: _positiveInt(sub.endCtrl.text),
+            answerStartPage: _positiveInt(sub.answerStartCtrl.text),
+            solutionStartPage: _positiveInt(sub.solutionStartCtrl.text),
           ));
         }
         midList.add(MidUnitInput(
@@ -1210,6 +1217,8 @@ class _TextbookUnitAuthoringDialogState
         initialCrops: allSeeds,
         batchScopes:
             scopes.length > 1 ? scopes : const <TextbookAuthoringStageScope>[],
+        answerStartPage: scopes.first.answerStartPage,
+        solutionStartPage: scopes.first.solutionStartPage,
       );
     });
   }
@@ -1228,6 +1237,8 @@ class _TextbookUnitAuthoringDialogState
       bigName: big.nameCtrl.text.trim(),
       midName: mid.nameCtrl.text.trim(),
       subName: sub.preset.displayName,
+      answerStartPage: _positiveInt(sub.answerStartCtrl.text),
+      solutionStartPage: _positiveInt(sub.solutionStartCtrl.text),
     );
   }
 
@@ -1323,6 +1334,8 @@ class _TextbookUnitAuthoringDialogState
                   midName: _embeddedStage!.midName,
                   initialCrops: _embeddedStage!.initialCrops,
                   batchScopes: _embeddedStage!.batchScopes,
+                  answerStartPage: _embeddedStage!.answerStartPage,
+                  solutionStartPage: _embeddedStage!.solutionStartPage,
                   embedded: true,
                   onBack: () {
                     setState(() => _embeddedStage = null);
@@ -1761,6 +1774,32 @@ class _TextbookUnitAuthoringDialogState
                   const SizedBox(width: 4),
                   _PbExtractStatusChip(status: pbStatus),
                 ],
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const SizedBox(width: 38),
+                Expanded(
+                  child: _textInput(
+                    sub.answerStartCtrl,
+                    hint: '정답 시작',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: _textInput(
+                    sub.solutionStartCtrl,
+                    hint: '해설 시작',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 82),
               ],
             ),
           ],
@@ -3283,6 +3322,8 @@ class _EmbeddedStageArgs {
     required this.midName,
     required this.initialCrops,
     required this.batchScopes,
+    this.answerStartPage,
+    this.solutionStartPage,
   });
 
   final int bigOrder;
@@ -3292,6 +3333,8 @@ class _EmbeddedStageArgs {
   final String midName;
   final List<TextbookAuthoringStageCropSeed> initialCrops;
   final List<TextbookAuthoringStageScope> batchScopes;
+  final int? answerStartPage;
+  final int? solutionStartPage;
 }
 
 class _SubRunState {
@@ -3427,9 +3470,13 @@ class _SubSectionEdit {
   final TextbookSubSectionPreset preset;
   final TextEditingController startCtrl = TextEditingController();
   final TextEditingController endCtrl = TextEditingController();
+  final TextEditingController answerStartCtrl = TextEditingController();
+  final TextEditingController solutionStartCtrl = TextEditingController();
   void dispose() {
     startCtrl.dispose();
     endCtrl.dispose();
+    answerStartCtrl.dispose();
+    solutionStartCtrl.dispose();
   }
 }
 

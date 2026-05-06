@@ -82,6 +82,8 @@ class SubSectionInput {
     required this.displayName,
     this.startPage,
     this.endPage,
+    this.answerStartPage,
+    this.solutionStartPage,
   });
 
   final int order;
@@ -89,6 +91,8 @@ class SubSectionInput {
   final String displayName; // e.g. 'A 기본다잡기'
   final int? startPage;
   final int? endPage;
+  final int? answerStartPage;
+  final int? solutionStartPage;
 
   Map<String, dynamic> toPayload() {
     return <String, dynamic>{
@@ -97,6 +101,8 @@ class SubSectionInput {
       'sub_key': subKey,
       'start_page': startPage,
       'end_page': endPage,
+      'answer_start_page': answerStartPage,
+      'solution_start_page': solutionStartPage,
       'page_counts': const <String, int>{},
     };
   }
@@ -631,6 +637,8 @@ List<BigUnitInput> bigUnitsFromPayload(
               displayName: name,
               startPage: _asInt(small['start_page']),
               endPage: _asInt(small['end_page']),
+              answerStartPage: _asInt(small['answer_start_page']),
+              solutionStartPage: _asInt(small['solution_start_page']),
             ));
           }
         }

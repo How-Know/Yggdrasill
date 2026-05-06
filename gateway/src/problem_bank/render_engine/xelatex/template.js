@@ -2131,10 +2131,10 @@ function buildPreamble({
     //   - 제목페이지의 부제/페이지라벨 정렬은 유지
     //   - 가로 디바이더와 슬롯 시작점만 더 아래로
     //   - 오른쪽은 페이지번호 + 홀수형 박스 세로 스택
-    //   - 왼쪽은 "제 2교시" pill 박스
+    //   - 왼쪽은 기본 "제 2교시" pill 박스. 과제형은 로고만 두고 pill 은 제거.
     lines.push(`  \\fancyhead[LE]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}%`);
-    lines.push(isAssignmentProfile && logoEnabled
-      ? `  \\fancyhead[LO]{${logoTitleGraphic}}%`
+    lines.push(isAssignmentProfile
+      ? (logoEnabled ? `  \\fancyhead[LO]{${logoTitleGraphic}}%` : '  \\fancyhead[LO]{}%')
       : `  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
     lines.push(`  \\fancyhead[RO]{${titleRightHeaderSpec}}%`);
     // 부제(위) → \\[11.7pt] → 수학영역(아래, 큰글씨) 순서.

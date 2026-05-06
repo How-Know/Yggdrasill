@@ -50,6 +50,8 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.midName,
     this.initialCrops = const <TextbookAuthoringStageCropSeed>[],
     this.batchScopes = const <TextbookAuthoringStageScope>[],
+    this.answerStartPage,
+    this.solutionStartPage,
     this.embedded = false,
     this.onBack,
     this.onStageChanged,
@@ -67,6 +69,8 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final String? midName;
   final List<TextbookAuthoringStageCropSeed> initialCrops;
   final List<TextbookAuthoringStageScope> batchScopes;
+  final int? answerStartPage;
+  final int? solutionStartPage;
   final bool embedded;
   final VoidCallback? onBack;
   final VoidCallback? onStageChanged;
@@ -87,6 +91,8 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
         const <TextbookAuthoringStageCropSeed>[],
     List<TextbookAuthoringStageScope> batchScopes =
         const <TextbookAuthoringStageScope>[],
+    int? answerStartPage,
+    int? solutionStartPage,
   }) {
     return showDialog<void>(
       context: context,
@@ -104,6 +110,8 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
         midName: midName,
         initialCrops: initialCrops,
         batchScopes: batchScopes,
+        answerStartPage: answerStartPage,
+        solutionStartPage: solutionStartPage,
       ),
     );
   }
@@ -121,6 +129,8 @@ class TextbookAuthoringStageScope {
     this.bigName = '',
     this.midName = '',
     this.subName = '',
+    this.answerStartPage,
+    this.solutionStartPage,
   });
 
   final int bigOrder;
@@ -129,6 +139,8 @@ class TextbookAuthoringStageScope {
   final String bigName;
   final String midName;
   final String subName;
+  final int? answerStartPage;
+  final int? solutionStartPage;
 }
 
 /// Minimal crop row passed from Stage 1 immediately after a successful
@@ -324,6 +336,8 @@ class _TextbookAuthoringStageDialogState
               subKey: widget.subKey,
               bigName: widget.bigName ?? '',
               midName: widget.midName ?? '',
+              answerStartPage: widget.answerStartPage,
+              solutionStartPage: widget.solutionStartPage,
             ),
           ];
     final out = <Map<String, dynamic>>[];
@@ -543,15 +557,25 @@ class _TextbookAuthoringStageDialogState
       return;
     }
     final totalPages = doc.pages.length;
+    final startPage = _startPageFromScopes(answer: true, pageCount: totalPages);
+    final scanTotal = totalPages - startPage + 1;
+    final expectedByKey = <String, String>{
+      for (final number in expected)
+        if (textbookAnswerNumberKey(number).isNotEmpty)
+          textbookAnswerNumberKey(number): number,
+    };
+    final remainingKeys = expectedByKey.keys.toSet();
     final aggregated = <TextbookVlmAnswerItem>[];
     final imageByNumber = <String, _ImageAnswerCrop>{};
     final pageByNumber = <String, ({int rawPage, int displayPage})>{};
 
     try {
-      for (var page = 1; page <= totalPages; page += 1) {
+      for (var page = startPage; page <= totalPages; page += 1) {
+        if (remainingKeys.isEmpty) break;
         if (!mounted) return;
         setState(() {
-          _answerStatus = '답지 $page / $totalPages 페이지 분석…';
+          _answerStatus =
+              '답지 $page / $totalPages 페이지 분석… · 남은 번호 ${remainingKeys.length}개';
         });
         Uint8List png;
         try {
@@ -571,12 +595,17 @@ class _TextbookAuthoringStageDialogState
             academyId: widget.academyId,
             bookId: widget.bookId,
             gradeLabel: widget.gradeLabel,
-            expectedNumbers: expected,
+            expectedNumbers: [
+              for (final key in remainingKeys) expectedByKey[key]!,
+            ],
           );
           for (final it in res.items) {
             if (it.answerText.trim().isEmpty) continue;
-            aggregated.add(it);
             final numberKey = textbookAnswerNumberKey(it.problemNumber);
+            if (numberKey.isEmpty || !remainingKeys.contains(numberKey)) {
+              continue;
+            }
+            aggregated.add(it);
             pageByNumber.putIfAbsent(
               it.problemNumber,
               () => (rawPage: res.rawPage, displayPage: res.displayPage),
@@ -596,13 +625,14 @@ class _TextbookAuthoringStageDialogState
                 }
               }
             }
+            remainingKeys.remove(numberKey);
           }
         } catch (e) {
           debugPrint('[stage2] vlm failed page=$page err=$e');
         }
         if (!mounted) return;
         setState(() {
-          _answerProgress = page / totalPages;
+          _answerProgress = (page - startPage + 1) / scanTotal;
         });
       }
 
@@ -980,18 +1010,26 @@ class _TextbookAuthoringStageDialogState
       });
       return;
     }
-    final remaining = expected.toSet();
+    final expectedByKey = <String, String>{
+      for (final number in expected)
+        if (textbookAnswerNumberKey(number).isNotEmpty)
+          textbookAnswerNumberKey(number): number,
+    };
+    final remainingKeys = expectedByKey.keys.toSet();
     final totalPages = doc.pages.length;
+    final startPage =
+        _startPageFromScopes(answer: false, pageCount: totalPages);
+    final scanTotal = totalPages - startPage + 1;
     final aggregated =
         <String, _SolutionRefWithPage>{}; // problem_number -> draft
 
     try {
-      for (var page = 1; page <= totalPages; page += 1) {
-        if (remaining.isEmpty) break;
+      for (var page = startPage; page <= totalPages; page += 1) {
+        if (remainingKeys.isEmpty) break;
         if (!mounted) return;
         setState(() {
           _solRefStatus =
-              '해설 $page / $totalPages 페이지 분석… · 남은 번호 ${remaining.length}개';
+              '해설 $page / $totalPages 페이지 분석… · 남은 번호 ${remainingKeys.length}개';
         });
         Uint8List png;
         try {
@@ -1011,26 +1049,34 @@ class _TextbookAuthoringStageDialogState
             academyId: widget.academyId,
             bookId: widget.bookId,
             gradeLabel: widget.gradeLabel,
-            expectedNumbers: remaining.toList(),
+            expectedNumbers: [
+              for (final key in remainingKeys) expectedByKey[key]!,
+            ],
           );
           for (final it in res.items) {
-            if (!remaining.contains(it.problemNumber)) continue;
+            final numberKey = textbookAnswerNumberKey(it.problemNumber);
+            final expectedNumber = expectedByKey[numberKey];
+            if (numberKey.isEmpty ||
+                expectedNumber == null ||
+                !remainingKeys.contains(numberKey)) {
+              continue;
+            }
             aggregated.putIfAbsent(
-              it.problemNumber,
+              expectedNumber,
               () => _SolutionRefWithPage(
                 item: it,
                 rawPage: res.rawPage,
                 displayPage: res.displayPage,
               ),
             );
-            remaining.remove(it.problemNumber);
+            remainingKeys.remove(numberKey);
           }
         } catch (e) {
           debugPrint('[stage3] vlm failed page=$page err=$e');
         }
         if (!mounted) return;
         setState(() {
-          _solRefProgress = page / totalPages;
+          _solRefProgress = (page - startPage + 1) / scanTotal;
         });
       }
 
@@ -2076,11 +2122,27 @@ class _TextbookAuthoringStageDialogState
                 subKey: widget.subKey,
                 bigName: widget.bigName ?? '',
                 midName: widget.midName ?? '',
+                answerStartPage: widget.answerStartPage,
+                solutionStartPage: widget.solutionStartPage,
               ),
             ];
 
   String _scopeKey(TextbookAuthoringStageScope scope) =>
       '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}';
+
+  int _startPageFromScopes({
+    required bool answer,
+    required int pageCount,
+  }) {
+    final starts = <int>[
+      for (final scope in _activeScopes)
+        if ((answer ? scope.answerStartPage : scope.solutionStartPage) != null)
+          answer ? scope.answerStartPage! : scope.solutionStartPage!,
+    ].where((page) => page > 0).toList();
+    if (starts.isEmpty) return 1;
+    final minStart = starts.reduce(math.min);
+    return minStart.clamp(1, pageCount);
+  }
 
   bool get _allPbRunsFinished {
     if (_activeScopes.isEmpty) return true;
