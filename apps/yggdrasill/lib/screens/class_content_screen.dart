@@ -10493,9 +10493,23 @@ bool _isWebUrl(String raw) {
   return lower.startsWith('http://') || lower.startsWith('https://');
 }
 
+String _textbookStorageKeyFromRaw(String rawPath) {
+  final trimmed = rawPath.trim();
+  if (trimmed.isEmpty || _isWebUrl(trimmed)) return '';
+  final withoutScheme = trimmed.toLowerCase().startsWith('storage://textbook/')
+      ? trimmed.substring('storage://textbook/'.length)
+      : trimmed;
+  final key = withoutScheme.split('?').first.trim();
+  if (!RegExp(r'^academies/.+\.pdf$', caseSensitive: false).hasMatch(key)) {
+    return '';
+  }
+  return key;
+}
+
 String _toLocalFilePath(String rawPath) {
   final trimmed = rawPath.trim();
   if (trimmed.isEmpty || _isWebUrl(trimmed)) return '';
+  if (_textbookStorageKeyFromRaw(trimmed).isNotEmpty) return '';
   if (trimmed.toLowerCase().startsWith('file://')) {
     try {
       return Uri.parse(trimmed).toFilePath(windows: Platform.isWindows);
@@ -11932,12 +11946,84 @@ Future<_ResolvedHomeworkPrintSource> _resolveTextbookPrintSource(
   );
 }
 
+TextbookPdfRef? _textbookPdfRefFromStoragePath(
+  String rawPath, {
+  required String kind,
+}) {
+  final key = _textbookStorageKeyFromRaw(rawPath);
+  if (key.isEmpty) return null;
+  final match = RegExp(
+    r'^academies/([^/]+)/files/([^/]+)/(.+)/(body|ans|sol)\.pdf$',
+    caseSensitive: false,
+  ).firstMatch(key);
+  if (match == null) return null;
+  final fileKind = (match.group(4) ?? kind).toLowerCase();
+  return TextbookPdfRef(
+    academyId: match.group(1),
+    fileId: match.group(2),
+    gradeLabel: match.group(3),
+    kind: fileKind,
+  );
+}
+
+Future<TextbookPdfRef?> _textbookPdfRefFromPrintSource(
+  _ResolvedHomeworkPrintSource source, {
+  required String kind,
+}) async {
+  final fromStoragePath = _textbookPdfRefFromStoragePath(
+    source.pathRaw,
+    kind: kind,
+  );
+  if (fromStoragePath != null) return fromStoragePath;
+
+  final bookId = source.bookId.trim();
+  final gradeLabel = source.gradeLabel.trim();
+  if (bookId.isEmpty || gradeLabel.isEmpty) return null;
+  final academyId = await _resolveAcademyIdForPrint();
+  if (academyId.trim().isEmpty) return null;
+  return TextbookPdfRef(
+    academyId: academyId.trim(),
+    fileId: bookId,
+    gradeLabel: gradeLabel,
+    kind: kind,
+  );
+}
+
+Future<String?> _downloadPrintablePdfUrl(
+  String rawUrl, {
+  required String cacheKey,
+  LearningProblemBankService? problemBankService,
+}) async {
+  final url = rawUrl.trim();
+  if (!_isWebUrl(url)) return null;
+  final pbService = problemBankService ?? LearningProblemBankService();
+  try {
+    final bytes = await pbService.downloadPdfBytesFromUrl(url);
+    if (bytes.isEmpty) return null;
+    final tmpDir = await getTemporaryDirectory();
+    final path = p.join(
+      tmpDir.path,
+      '${cacheKey}_${DateTime.now().millisecondsSinceEpoch}.pdf',
+    );
+    final file = File(path);
+    await file.writeAsBytes(bytes, flush: true);
+    _scheduleTempDelete(path);
+    return path;
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<bool> _isPrintableResolvedHomeworkPrintSource(
   _ResolvedHomeworkPrintSource source,
 ) async {
   final raw = source.pathRaw.trim();
   if (raw.isEmpty) return false;
   if (_isWebUrl(raw)) return true;
+  if (!source.isProblemBank && _textbookStorageKeyFromRaw(raw).isNotEmpty) {
+    final ref = await _textbookPdfRefFromPrintSource(source, kind: 'body');
+    return ref != null;
+  }
   final localPath = _toLocalFilePath(raw);
   if (localPath.isEmpty) return false;
   return File(localPath).exists();
@@ -11951,19 +12037,32 @@ Future<String?> _materializePrintablePathFromSource(
   final raw = source.pathRaw.trim();
   if (raw.isEmpty) return null;
   if (_isWebUrl(raw)) {
-    final pbService = problemBankService ?? LearningProblemBankService();
+    return _downloadPrintablePdfUrl(
+      raw,
+      cacheKey: cacheKey,
+      problemBankService: problemBankService,
+    );
+  }
+  if (!source.isProblemBank && _textbookStorageKeyFromRaw(raw).isNotEmpty) {
     try {
-      final bytes = await pbService.downloadPdfBytesFromUrl(raw);
-      if (bytes.isEmpty) return null;
-      final tmpDir = await getTemporaryDirectory();
-      final path = p.join(
-        tmpDir.path,
-        '${cacheKey}_${DateTime.now().millisecondsSinceEpoch}.pdf',
-      );
-      final file = File(path);
-      await file.writeAsBytes(bytes, flush: true);
-      _scheduleTempDelete(path);
-      return path;
+      final ref = await _textbookPdfRefFromPrintSource(source, kind: 'body');
+      if (ref == null) return null;
+      final resolved = await TextbookPdfService.instance.resolve(ref);
+      final localPath = (resolved.localPath ?? '').trim();
+      if (localPath.isNotEmpty &&
+          localPath.toLowerCase().endsWith('.pdf') &&
+          await File(localPath).exists()) {
+        return localPath;
+      }
+      final url = (resolved.url ?? '').trim();
+      if (_isWebUrl(url)) {
+        return _downloadPrintablePdfUrl(
+          url,
+          cacheKey: cacheKey,
+          problemBankService: problemBankService,
+        );
+      }
+      return null;
     } catch (_) {
       return null;
     }
@@ -12640,8 +12739,9 @@ Future<_HomeworkGroupPrintRequest> _buildHomeworkGroupPrintRequest({
       await _loadActiveAssignmentByItemIdForPrint(studentId);
   final printableById = <String, bool>{};
   final sourceByItemId = <String, _ResolvedHomeworkPrintSource>{};
-  String? canonicalPipelineKey;
+  String? canonicalPrintGroupKey;
   final observedPipelineKinds = <String>{};
+  final observedPrintGroupKeys = <String>{};
   for (final child in eligibleChildren) {
     final assignment = assignmentByItemId[child.id.trim()];
     final pipelineKey =
@@ -12671,8 +12771,11 @@ Future<_HomeworkGroupPrintRequest> _buildHomeworkGroupPrintRequest({
       printableById[child.id] = false;
       continue;
     }
-    canonicalPipelineKey ??= pipelineKey;
-    printableById[child.id] = canonicalPipelineKey == pipelineKey;
+    final printGroupKey =
+        isPb ? pipelineKey : '$pipelineKey:${source.sourceKey}';
+    observedPrintGroupKeys.add(printGroupKey);
+    canonicalPrintGroupKey ??= printGroupKey;
+    printableById[child.id] = canonicalPrintGroupKey == printGroupKey;
   }
 
   final defaultPrintableChildren = eligibleChildren
@@ -12718,7 +12821,9 @@ Future<_HomeworkGroupPrintRequest> _buildHomeworkGroupPrintRequest({
     sourceByItemId: sourceByItemId,
     warning: observedPipelineKinds.length > 1
         ? '혼합 인쇄는 지원되지 않아요. 문제은행/교재를 분리해서 인쇄해 주세요.'
-        : null,
+        : (observedPrintGroupKeys.length > 1
+            ? '서로 다른 교재 PDF는 함께 인쇄할 수 없어 첫 번째 교재만 인쇄합니다.'
+            : null),
   );
 }
 

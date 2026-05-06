@@ -905,7 +905,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   Future<void> _openExportLayoutPreviewDialog({
-    bool skipDocumentPresetPreload = false,
+    bool skipDocumentPresetPreload = true,
     String editingPresetId = '',
     String editingPresetName = '',
     // 프리셋 카드 탭 → 편집 모드로 들어올 때, 해당 프리셋의 renderConfig 를
@@ -2968,7 +2968,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     activeJob: _activeExportJob,
                     onTemplateChanged: (value) {
                       setState(() {
-                        if (value == '모의고사형' || value == '수능형') {
+                        if (value == '과제형') {
+                          _exportSettings = _exportSettings.copyWith(
+                            templateLabel: value,
+                            paperLabel: 'A4',
+                            layoutColumnLabel: '2단',
+                            maxQuestionsPerPageLabel: '4',
+                          );
+                        } else if (value == '모의고사형' || value == '수능형') {
                           _exportSettings = _exportSettings.copyWith(
                             templateLabel: value,
                             paperLabel: 'B4',

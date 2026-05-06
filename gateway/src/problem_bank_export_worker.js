@@ -130,6 +130,16 @@ const PROFILE_LAYOUT = {
     questionGap: 10,
     choiceIndent: 18,
   },
+  assignment: {
+    title: '\uACFC\uC81C\uD615 \uC2DC\uD5D8\uC9C0',
+    margin: 46,
+    headerHeight: 38,
+    stemSize: 11.3,
+    choiceSize: 10.7,
+    lineHeight: 15.4,
+    questionGap: 12,
+    choiceIndent: 20,
+  },
 };
 
 const STRUCTURAL_MARKER_REGEX = /\[(\uBB38\uB2E8|\uBC15\uC2A4\uC2DC\uC791|\uBC15\uC2A4\uB05D)\]/g;
@@ -1395,16 +1405,17 @@ function detectImageMimeFromBytes(bytes) {
   return 'image/png';
 }
 
-async function fetchAcademyLogoDataUrl(academyId) {
+async function fetchAcademyBranding(academyId) {
   const id = String(academyId || '').trim();
-  if (!id) return '';
+  if (!id) return { logoDataUrl: '', academyName: '' };
   try {
     const { data, error } = await supa
       .from('academy_settings')
-      .select('logo_bucket,logo_path,logo')
+      .select('name,logo_bucket,logo_path,logo')
       .eq('academy_id', id)
       .maybeSingle();
-    if (error || !data) return '';
+    if (error || !data) return { logoDataUrl: '', academyName: '' };
+    const academyName = normalizeWhitespace(data.name || '');
     let bytes = Buffer.alloc(0);
     const bucket = normalizeWhitespace(data.logo_bucket || '');
     const path = normalizeWhitespace(data.logo_path || '');
@@ -1428,12 +1439,17 @@ async function fetchAcademyLogoDataUrl(academyId) {
         bytes = Buffer.from(legacy.data);
       }
     }
-    if (!Buffer.isBuffer(bytes) || bytes.length === 0) return '';
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+      return { logoDataUrl: '', academyName };
+    }
     const mime = detectImageMimeFromBytes(bytes);
-    return `data:${mime};base64,${bytes.toString('base64')}`;
+    return {
+      logoDataUrl: `data:${mime};base64,${bytes.toString('base64')}`,
+      academyName,
+    };
   } catch (err) {
     console.warn('[pb-export-worker] academy logo load failed:', err?.message || err);
-    return '';
+    return { logoDataUrl: '', academyName: '' };
   }
 }
 
@@ -1918,7 +1934,9 @@ function normalizePaper(raw) {
 
 function normalizeProfile(raw) {
   const p = String(raw || '').trim().toLowerCase();
-  if (p === 'csat' || p === 'mock' || p === 'naesin') return p;
+  if (p === 'csat' || p === 'mock' || p === 'naesin' || p === 'assignment' || p === 'homework') {
+    return p === 'homework' ? 'assignment' : p;
+  }
   return 'naesin';
 }
 
@@ -1928,6 +1946,20 @@ function normalizeQuestionMode(raw) {
   if (v === 'subjective' || v === '\uC8FC\uAD00\uC2DD') return 'subjective';
   if (v === 'essay' || v === '\uC11C\uC220\uD615') return 'essay';
   return 'original';
+}
+
+function normalizeQuestionNumberPlacement(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'above' || v === 'top' || v === 'block') return 'above';
+  return 'inline';
+}
+
+function normalizeQuestionNumberFormat(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'two_digit' || v === 'two-digit' || v === '2digit' || v === '02') {
+    return 'two_digit';
+  }
+  return 'source';
 }
 
 function normalizeLayoutColumns(raw) {
@@ -2420,6 +2452,17 @@ function buildRenderConfigFromJob(job) {
     options.hideQuestionNumber ?? options.previewHideQuestionNumber,
     false,
   );
+  const profileHint = normalizeProfile(options.templateProfile || job.template_profile);
+  const questionNumberPlacement = normalizeQuestionNumberPlacement(
+    options.questionNumberPlacement ??
+      options.question_number_placement ??
+      (profileHint === 'assignment' ? 'above' : 'inline'),
+  );
+  const questionNumberFormat = normalizeQuestionNumberFormat(
+    options.questionNumberFormat ??
+      options.question_number_format ??
+      (profileHint === 'assignment' ? 'two_digit' : 'source'),
+  );
   const coverPageTexts = normalizeCoverPageTexts(
     options.coverPageTexts || options.coverTexts || options.coverPageTextConfig,
   );
@@ -2438,7 +2481,7 @@ function buildRenderConfigFromJob(job) {
   return {
     // Always normalize to current renderer version on worker side.
     renderConfigVersion: RENDER_CONFIG_VERSION,
-    templateProfile: normalizeProfile(job.template_profile),
+    templateProfile: profileHint,
     paperSize: normalizePaper(job.paper_size),
     includeAnswerSheet: job.include_answer_sheet === true,
     includeExplanation: job.include_explanation === true,
@@ -2448,6 +2491,8 @@ function buildRenderConfigFromJob(job) {
     includeCoverPage,
     hidePreviewHeader,
     hideQuestionNumber,
+    questionNumberPlacement,
+    questionNumberFormat,
     coverPageTexts,
     layoutColumns,
     maxQuestionsPerPage,
@@ -2501,6 +2546,8 @@ function computeRenderHash(renderConfig) {
     includeQuestionScore: renderConfig.includeQuestionScore,
     questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
+    questionNumberPlacement: renderConfig.questionNumberPlacement,
+    questionNumberFormat: renderConfig.questionNumberFormat,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -3948,15 +3995,16 @@ async function renderPdf(job, questions, renderConfig) {
     'apps', 'yggdrasill', 'assets', 'fonts', 'chosun', 'ChosunNm.ttf',
   );
   const shouldUseAcademyLogo =
-    (profile === 'mock' || profile === 'csat')
+    (profile === 'mock' || profile === 'csat' || profile === 'assignment')
     && renderConfig?.includeAcademyLogo === true;
-  const academyLogoDataUrl = shouldUseAcademyLogo
-    ? await fetchAcademyLogoDataUrl(job?.academy_id)
-    : '';
+  const academyBranding = shouldUseAcademyLogo
+    ? await fetchAcademyBranding(job?.academy_id)
+    : { logoDataUrl: '', academyName: '' };
   const htmlRenderConfig = shouldUseAcademyLogo
     ? {
         ...renderConfig,
-        academyLogoDataUrl,
+        academyLogoDataUrl: academyBranding.logoDataUrl,
+        academyName: academyBranding.academyName,
       }
     : renderConfig;
   return renderPdfWithHtmlEngine({

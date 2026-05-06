@@ -12,6 +12,7 @@ const PAPER_MM = {
 function profileTitle(profile) {
   if (profile === 'csat') return '모의고사형 시험지';
   if (profile === 'mock') return '모의고사형 시험지';
+  if (profile === 'assignment') return '과제형 시험지';
   return '내신형 시험지';
 }
 
@@ -34,6 +35,8 @@ function buildStyles({
   const headerApproxMm = 22;
   const grid4HeightMm = Math.max(100, paperMm.height - 2 * marginMm - headerApproxMm).toFixed(1);
   const mockFirstSubjectPt = ((stemSizePt + 20.5) * 1.1).toFixed(2);
+  const assignmentFirstSubjectPt = ((stemSizePt + 20.5) * 1.21).toFixed(2);
+  const assignmentFirstTitlePt = ((stemSizePt + 5.0) * 1.2).toFixed(2);
   // 사용자 요청 19차: 비제목 페이지 "수학 영역" 폰트를 페이지라벨(.mock-page-no)의 80% 로 맞춤.
   //   .mock-page-no 는 (stemSizePt + 15.8)pt 이므로 80% = (stemSizePt + 15.8) × 0.8.
   const mockSimpleSubjectPt = ((stemSizePt + 15.8) * 0.8).toFixed(2);
@@ -149,6 +152,20 @@ function buildStyles({
       vertical-align: baseline;
       white-space: nowrap;
       margin-right: 0.25em;
+    }
+    .q-num-above {
+      font-family: "YggQNum", "YggMain", serif;
+      font-weight: 700;
+      font-size: calc((var(--stem-size-pt) + 1) * 1pt);
+      -webkit-text-stroke: 0.3pt currentColor;
+      line-height: 1;
+      text-indent: 0;
+      margin: 0 0 2pt 0;
+      white-space: nowrap;
+    }
+    body.profile-assignment .q-num-above {
+      font-size: calc((var(--stem-size-pt) + 1) * 1.1 * 1pt);
+      margin-bottom: 0.6pt;
     }
     .q-stem {
       white-space: normal;
@@ -505,8 +522,10 @@ function buildStyles({
     .mock-cover-pages { display: none; }
     body.profile-mock .paper-title,
     body.profile-csat .paper-title,
+    body.profile-assignment .paper-title,
     body.profile-mock .profile-note,
-    body.profile-csat .profile-note {
+    body.profile-csat .profile-note,
+    body.profile-assignment .profile-note {
       display: none;
     }
     body.profile-mock .mock-cover-pages,
@@ -514,7 +533,8 @@ function buildStyles({
       display: block;
     }
     body.profile-mock .mock-pages,
-    body.profile-csat .mock-pages {
+    body.profile-csat .mock-pages,
+    body.profile-assignment .mock-pages {
       display: block;
     }
     .mock-cover-page,
@@ -1052,6 +1072,27 @@ function buildStyles({
     }
     .mock-page-no-first {
       transform: translateY(4pt);
+    }
+    body.profile-assignment .mock-page-title .mock-header-first {
+      margin-top: -5.4mm;
+    }
+    body.profile-assignment .mock-first-title {
+      font-size: ${assignmentFirstTitlePt}pt;
+    }
+    body.profile-assignment .mock-first-subject {
+      font-size: ${assignmentFirstSubjectPt}pt;
+    }
+    .assignment-academy-logo-top-left {
+      max-width: 46pt;
+      max-height: 28pt;
+      object-fit: contain;
+      display: block;
+    }
+    .assignment-footer-text {
+      font-size: calc((var(--stem-size-pt) - 1.4) * 1pt);
+      color: #111;
+      line-height: 1;
+      white-space: nowrap;
     }
     .mock-main {
       flex: 1 1 0;
@@ -1928,7 +1969,8 @@ export function buildDocumentHtml({
   //   columnLabelAnchors 에 들어있는 항목만 그대로 그려진다.
   disableAutoLabels = false,
 }) {
-  const isMockStyle = profile === 'mock' || profile === 'csat';
+  const isExamLabelStyle = profile === 'mock' || profile === 'csat';
+  const isMockStyle = isExamLabelStyle || profile === 'assignment';
   const columns = Number(layout?.layoutColumns || 1) === 2 ? 2 : 1;
   const perPage = Math.max(1, Math.min(99, Number(maxQuestionsPerPage) || 99));
   const styles = buildStyles({
@@ -1955,12 +1997,17 @@ export function buildDocumentHtml({
   const academyLogoDataUrl = includeAcademyLogo
     ? String(layout?.academyLogoDataUrl || '').trim()
     : '';
+  const academyName = includeAcademyLogo
+    ? String(layout?.academyName || '').replace(/\s+/g, ' ').trim()
+    : '';
   const hasAcademyLogo = includeAcademyLogo
     && academyLogoDataUrl.length > 0
     && /^data:image\//i.test(academyLogoDataUrl);
   const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
   const hidePreviewHeader = layout?.hidePreviewHeader === true;
   const hideQuestionNumber = layout?.hideQuestionNumber === true;
+  const questionNumberPlacement = String(layout?.questionNumberPlacement || 'inline').trim();
+  const questionNumberFormat = String(layout?.questionNumberFormat || 'source').trim();
   const coverPageTexts = normalizeCoverPageTexts(layout?.coverPageTexts);
   const scoreMap = questionScoreByQuestionId && typeof questionScoreByQuestionId === 'object'
     ? questionScoreByQuestionId
@@ -1972,6 +2019,8 @@ export function buildDocumentHtml({
     includeQuestionScore,
     questionScoreByQuestionId: scoreMap,
     showQuestionNumber: !hideQuestionNumber,
+    questionNumberPlacement,
+    questionNumberFormat,
     debugDots,
   }));
   let autoAnchorCarryMode = null;
@@ -2048,7 +2097,7 @@ export function buildDocumentHtml({
     // '새로고침' / 'PDF 생성' 경로에서는 클라이언트 payload 의 라벨만 그대로 써야 하므로
     //   여기서 auto 라벨을 만들지 않는다. (최초 렌더에서는 플래그가 false 라 정상 생성.)
     if (disableAutoLabels) return [];
-    if (!isMockStyle) return [];
+    if (!isExamLabelStyle) return [];
     if (!slotPlan || !Array.isArray(slotPlan?.slots)) return [];
     const rows = Array.isArray(questionChunk) ? questionChunk : [];
     if (rows.length === 0) return [];
@@ -2600,13 +2649,16 @@ export function buildDocumentHtml({
         return '';
       }
       if (isTitlePage) {
-        const sessionChipHtml = hasAcademyLogo
+        const topLeftLogoHtml = profile === 'assignment' && hasAcademyLogo
+          ? `<img class="assignment-academy-logo-top-left" src="${escapeHtml(academyLogoDataUrl)}" alt="" />`
+          : '';
+        const sessionChipHtml = hasAcademyLogo && profile !== 'assignment'
           ? `<span class="mock-chip-session-wrap"><img class="mock-academy-logo-overlay" src="${escapeHtml(academyLogoDataUrl)}" alt="" /><span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span></span>`
           : '<span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>';
         return `
           <header class="mock-header-first">
             <div class="mock-header-first-top">
-              <div></div>
+              <div class="mock-side-left">${topLeftLogoHtml}</div>
               <div class="mock-first-title">${escapeHtml(titlePageTopText)}</div>
               <div class="mock-side-right"><span class="mock-page-no mock-page-no-first">${pageNo}</span></div>
             </div>
@@ -2680,18 +2732,32 @@ export function buildDocumentHtml({
       const sectionStyle = pageHasNote
         ? ` style="--page-note-box-height:${noteBoxHeightPt}pt;"`
         : '';
+      const assignmentFooterLeft = profile === 'assignment' && hasAcademyLogo && pageNo % 2 === 0
+        ? `<span class="assignment-footer-text">${escapeHtml(titlePageTopText)}</span>`
+        : '';
+      const assignmentFooterRight = profile === 'assignment' && hasAcademyLogo && pageNo % 2 === 1
+        ? `<span class="assignment-footer-text">${escapeHtml(academyName)}</span>`
+        : '';
       const footerHtml = hidePreviewHeader
         ? ''
-        : `
-          <div class="mock-footer-row">
-            <div></div>
-            <div class="mock-page-box">
-              <span class="mock-page-box-cur">${pageNo}</span>
-              <span class="mock-page-box-total">${totalPages}</span>
+        : (profile === 'assignment'
+          ? `
+            <div class="mock-footer-row">
+              <div>${assignmentFooterLeft}</div>
+              <div></div>
+              <div>${assignmentFooterRight}</div>
             </div>
-            <div></div>
-          </div>
-        `;
+          `
+          : `
+            <div class="mock-footer-row">
+              <div></div>
+              <div class="mock-page-box">
+                <span class="mock-page-box-cur">${pageNo}</span>
+                <span class="mock-page-box-total">${totalPages}</span>
+              </div>
+              <div></div>
+            </div>
+          `);
       return `
         <section class="mock-page${firstClass}${titleClass}${lastClass}${noteClass}${pageBreak}"${sectionStyle}>
           ${renderMockHeader(pageNo, isTitlePage)}

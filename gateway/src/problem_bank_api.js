@@ -159,8 +159,16 @@ function normalizePresetDisplayName(raw, fallback = '') {
 
 function normalizeTemplateProfile(raw) {
   const s = String(raw || '').trim().toLowerCase();
-  if (s === 'csat' || s === 'mock' || s === 'naesin') return s;
+  if (s === 'csat' || s === 'mock' || s === 'naesin' || s === 'assignment' || s === 'homework') {
+    return s === 'homework' ? 'assignment' : s;
+  }
   return 'naesin';
+}
+
+function templateProfileForPbExportsColumn(profile) {
+  const normalized = normalizeTemplateProfile(profile);
+  // DB check constraint currently allows only naesin/csat/mock.
+  return normalized === 'assignment' ? 'naesin' : normalized;
 }
 
 const CURRICULUM_CODES = new Set([
@@ -557,6 +565,20 @@ function normalizeQuestionMode(raw) {
   return 'original';
 }
 
+function normalizeQuestionNumberPlacement(raw, fallback = 'inline') {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'above' || v === 'top' || v === 'block') return 'above';
+  return fallback === 'above' ? 'above' : 'inline';
+}
+
+function normalizeQuestionNumberFormat(raw, fallback = 'source') {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'two_digit' || v === 'two-digit' || v === '2digit' || v === '02') {
+    return 'two_digit';
+  }
+  return fallback === 'two_digit' ? 'two_digit' : 'source';
+}
+
 function normalizeQuestionModeMap(raw, selectedIds, fallbackMode = 'original') {
   const out = {};
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -813,6 +835,15 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     src.disableAutoLabels ?? src.suppressAutoLabels ?? src.disableAutoColumnLabels,
     normalizeBool(defaults.disableAutoLabels, false),
   );
+  const profileHint = normalizeTemplateProfile(src.templateProfile || defaults.templateProfile);
+  const questionNumberPlacement = normalizeQuestionNumberPlacement(
+    src.questionNumberPlacement ?? src.question_number_placement,
+    defaults.questionNumberPlacement || (profileHint === 'assignment' ? 'above' : 'inline'),
+  );
+  const questionNumberFormat = normalizeQuestionNumberFormat(
+    src.questionNumberFormat ?? src.question_number_format,
+    defaults.questionNumberFormat || (profileHint === 'assignment' ? 'two_digit' : 'source'),
+  );
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -828,6 +859,8 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     includeCoverPage,
     hidePreviewHeader,
     hideQuestionNumber,
+    questionNumberPlacement,
+    questionNumberFormat,
     coverPageTexts,
     alignPolicy,
     questionMode,
@@ -972,6 +1005,8 @@ function buildRenderHashPayload({
     includeCoverPage: renderConfig.includeCoverPage,
     hidePreviewHeader: renderConfig.hidePreviewHeader === true,
     hideQuestionNumber: renderConfig.hideQuestionNumber === true,
+    questionNumberPlacement: renderConfig.questionNumberPlacement,
+    questionNumberFormat: renderConfig.questionNumberFormat,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -1026,6 +1061,8 @@ function buildExportOptions({
     includeCoverPage: renderConfig.includeCoverPage,
     hidePreviewHeader: renderConfig.hidePreviewHeader === true,
     hideQuestionNumber: renderConfig.hideQuestionNumber === true,
+    questionNumberPlacement: renderConfig.questionNumberPlacement,
+    questionNumberFormat: renderConfig.questionNumberFormat,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -1876,6 +1913,7 @@ async function createExportJob(body, res) {
       ? { ...body.options }
       : {};
   const templateProfile = normalizeTemplateProfile(body.templateProfile);
+  const storageTemplateProfile = templateProfileForPbExportsColumn(templateProfile);
   const paperSize = normalizePaper(body.paperSize);
   const includeAnswerSheet = normalizeBool(body.includeAnswerSheet, true);
   const includeExplanation = normalizeBool(body.includeExplanation, false);
@@ -1979,7 +2017,7 @@ async function createExportJob(body, res) {
     document_id: documentId,
     requested_by: isUuid(requestedBy) ? requestedBy : null,
     status: 'queued',
-    template_profile: templateProfile,
+    template_profile: storageTemplateProfile,
     paper_size: paperSize,
     include_answer_sheet: includeAnswerSheet,
     include_explanation: includeExplanation,
@@ -3477,6 +3515,7 @@ async function previewPdfArtifacts(res, req) {
   const templateProfile = normalizeTemplateProfile(
     body?.templateProfile || body?.profile || baseOptions.templateProfile,
   );
+  const storageTemplateProfile = templateProfileForPbExportsColumn(templateProfile);
   const paperSize = normalizePaper(
     body?.paperSize || body?.paper || baseOptions.paperSize || baseOptions.paper,
   );
@@ -3613,7 +3652,7 @@ async function previewPdfArtifacts(res, req) {
         document_id: questionDocumentId,
         requested_by: null,
         status: 'queued',
-        template_profile: templateProfile,
+        template_profile: storageTemplateProfile,
         paper_size: paperSize,
         include_answer_sheet: includeAnswerSheet,
         include_explanation: includeExplanation,

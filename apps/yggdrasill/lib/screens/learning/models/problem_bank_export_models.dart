@@ -9,6 +9,7 @@ import '../../../services/learning_problem_bank_service.dart';
 const List<String> kLearningProblemTemplateOptions = <String>[
   '\uB0B4\uC2E0\uD615',
   '\uBAA8\uC758\uACE0\uC0AC\uD615',
+  '\uACFC\uC81C\uD615',
 ];
 
 const List<String> kLearningProblemPaperOptions = <String>[
@@ -483,9 +484,11 @@ class LearningProblemExportSettings {
       if (score == null || !score.isFinite || score < 0) continue;
       scoreMap[uid] = score;
     }
+    final profile = templateProfile;
+    final isAssignment = profile == 'assignment';
     return <String, dynamic>{
       'renderConfigVersion': kLearningRenderConfigVersion,
-      'templateProfile': templateProfile,
+      'templateProfile': profile,
       'paperSize': paperLabel.trim(),
       'font': <String, dynamic>{
         'family': resolvedFontFamily,
@@ -515,6 +518,8 @@ class LearningProblemExportSettings {
         'skipAnchorRows': true,
       },
       'subjectTitleText': '\uC218\uD559 \uC601\uC5ED',
+      'questionNumberPlacement': isAssignment ? 'above' : 'inline',
+      'questionNumberFormat': isAssignment ? 'two_digit' : 'source',
       'questionMode': questionModeValue,
       'layoutTuning': layoutTuning.toJson(),
       'figureQuality': figureQuality.toJson(),
@@ -613,6 +618,8 @@ String templateToProfile(String template) {
     case '\uC218\uB2A5\uD615':
     case '\uBAA8\uC758\uACE0\uC0AC\uD615':
       return 'csat';
+    case '\uACFC\uC81C\uD615':
+      return 'assignment';
     case '\uB0B4\uC2E0\uD615':
     default:
       return 'naesin';
@@ -624,6 +631,9 @@ String profileToTemplate(String profile) {
     case 'mock':
     case 'csat':
       return '모의고사형';
+    case 'assignment':
+    case 'homework':
+      return '과제형';
     case 'naesin':
     default:
       return '내신형';

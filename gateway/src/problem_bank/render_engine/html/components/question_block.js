@@ -819,6 +819,16 @@ function appendScoreToStemHtml(
   return `${base}&nbsp;${score}`;
 }
 
+function formatQuestionNumberForDisplay(raw, format = 'source') {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (String(format || '').trim().toLowerCase() !== 'two_digit') return value;
+  const m = value.match(/\d+/);
+  if (!m) return value;
+  const padded = String(Number.parseInt(m[0], 10)).padStart(2, '0');
+  return `${value.slice(0, m.index)}${padded}${value.slice((m.index || 0) + m[0].length)}`;
+}
+
 export function renderQuestionBlock(
   question,
   mathRenderer,
@@ -827,10 +837,14 @@ export function renderQuestionBlock(
     includeQuestionScore = false,
     questionScoreByQuestionId = {},
     showQuestionNumber = true,
+    questionNumberPlacement = 'inline',
+    questionNumberFormat = 'source',
     debugDots = false,
   } = {},
 ) {
   const number = String(question?.question_number || '?');
+  const displayNumber = formatQuestionNumberForDisplay(number, questionNumberFormat);
+  const numberAbove = showQuestionNumber && questionNumberPlacement === 'above';
   const equations = Array.isArray(question?.equations) ? question.equations : [];
   const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
   const isImageChoice = isImageChoiceQuestion(question);
@@ -889,7 +903,7 @@ export function renderQuestionBlock(
 
   const hasFraction = stem.hasFraction || choiceHtml.includes('has-fraction');
   const questionClass = hasFraction ? 'question has-fraction' : 'question';
-  const indent = showQuestionNumber ? numIndentEm(number) : '0';
+  const indent = showQuestionNumber && !numberAbove ? numIndentEm(number) : '0';
   const scoreSuffix = includeQuestionScore
     ? `<span class="q-score">[${escapeHtml(formatQuestionScore(
       resolveQuestionScore(question, questionScoreByQuestionId),
@@ -910,7 +924,8 @@ export function renderQuestionBlock(
 
   return `
     <article class="${questionClass}" style="padding-left:${indent}em;text-indent:-${indent}em;">
-      <div class="q-stem">${showQuestionNumber ? `<span class="q-num">${escapeHtml(number)}.</span> ` : ''}${stemHtml}</div>
+      ${numberAbove ? `<div class="q-num-above">${escapeHtml(displayNumber)}</div>` : ''}
+      <div class="q-stem">${showQuestionNumber && !numberAbove ? `<span class="q-num">${escapeHtml(displayNumber)}.</span> ` : ''}${stemHtml}</div>
       ${figureHtml}
       ${choiceHtml}
     </article>

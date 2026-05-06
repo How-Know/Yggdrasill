@@ -434,9 +434,14 @@ function buildHtmlLayout(renderConfig, baseLayout) {
   const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
     || renderConfig?.hideDocumentHeader === true;
   const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
+  const questionNumberPlacement = String(renderConfig?.questionNumberPlacement || 'inline').trim();
+  const questionNumberFormat = String(renderConfig?.questionNumberFormat || 'source').trim();
   const includeAcademyLogo = renderConfig?.includeAcademyLogo === true;
   const academyLogoDataUrl = includeAcademyLogo
     ? String(renderConfig?.academyLogoDataUrl || '').trim()
+    : '';
+  const academyName = includeAcademyLogo
+    ? normalizeWhitespace(renderConfig?.academyName || '')
     : '';
   const includeQuestionScore = renderConfig?.includeQuestionScore === true;
   const questionScoreByQuestionId = normalizeQuestionScoreByQuestionId(
@@ -474,8 +479,11 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     includeCoverPage,
     hidePreviewHeader,
     hideQuestionNumber,
+    questionNumberPlacement,
+    questionNumberFormat,
     includeAcademyLogo,
     academyLogoDataUrl,
+    academyName,
     includeQuestionScore,
     questionScoreByQuestionId,
     coverPageTexts,

@@ -1795,6 +1795,8 @@ function buildPreamble({
   geometryOverride = '',
   includeAcademyLogo = false,
   academyLogoPath = '',
+  academyName = '',
+  titlePageTopText = '',
 }) {
   const geom = geometryOverride || paperGeometry(paper);
   const mainFont = fontFamily || 'Malgun Gothic';
@@ -1840,7 +1842,9 @@ function buildPreamble({
   const topLabelFontDirective = '\\newfontfamily\\YggTopLabel{Malgun Gothic}[\n'
     + '  BoldFont = {Malgun Gothic Bold},\n'
     + ']';
-  const isMock = profile === 'mock' || profile === 'csat';
+  const isMockExamProfile = profile === 'mock' || profile === 'csat';
+  const isAssignmentProfile = profile === 'assignment';
+  const isMock = isMockExamProfile || isAssignmentProfile;
 
   const lines = [];
   // 모의고사형은 일반 페이지 헤더가 짝수/홀수 페이지 레이아웃이 달라야 하므로 `twoside` 활성화.
@@ -1962,6 +1966,11 @@ function buildPreamble({
   const logoHeadGraphic = logoEnabled
     ? `\\raisebox{-0.2em}{\\includegraphics[height=1.4em,keepaspectratio]{${logoPathTex}}}`
     : '';
+  const logoTitleGraphic = logoEnabled
+    ? `\\raisebox{42pt}[0pt][0pt]{\\includegraphics[height=2.4em,keepaspectratio]{${logoPathTex}}}`
+    : '';
+  const safeAcademyName = escapeLatexText(String(academyName || '').trim());
+  const safeAssignmentFooterTitle = escapeLatexText(String(titlePageTopText || '').trim());
 
   // 일반/제목 페이지 공통으로 사용하는 헤더 스펙 (모의고사형에서만 의미 있음).
   //   - pageNumSpec : **28.6pt** bold 페이지번호.
@@ -2006,6 +2015,8 @@ function buildPreamble({
     + `\\makebox[0pt][r]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}`
     + `\\makebox[0pt][r]{\\raisebox{1.37pt}[0pt][0pt]{${titleFormBoxSpec}}}`
     + '}';
+  const titleTopScale = isAssignmentProfile ? '1.32' : '1.1';
+  const titleMainScale = isAssignmentProfile ? '1.5972' : '1.452';
 
   if (hidePreviewHeader) {
     // 미리보기 헤더를 숨기는 경우에도 로고는 상단에 찍고자 fancy 를 쓰되 테두리 없음.
@@ -2122,7 +2133,9 @@ function buildPreamble({
     //   - 오른쪽은 페이지번호 + 홀수형 박스 세로 스택
     //   - 왼쪽은 "제 2교시" pill 박스
     lines.push(`  \\fancyhead[LE]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}%`);
-    lines.push(`  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
+    lines.push(isAssignmentProfile && logoEnabled
+      ? `  \\fancyhead[LO]{${logoTitleGraphic}}%`
+      : `  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
     lines.push(`  \\fancyhead[RO]{${titleRightHeaderSpec}}%`);
     // 부제(위) → \\[11.7pt] → 수학영역(아래, 큰글씨) 순서.
     //   parbox[b] 로 마지막 줄 baseline 이 head box 바닥에 align.
@@ -2136,7 +2149,7 @@ function buildPreamble({
     // 사용자 요청 22차: 부제("2026학년도 …") 의 숫자 '2026' 이 한글과 다른 instance 로
     //   분기되는 이질감 제거를 위해 `\YggWithUnifiedDigits` 래퍼로 감싼다. 래퍼는 지역 scope
     //   에서만 0-9 의 charclass 를 HG 로 바꿨다가 즉시 원복하므로 본문 숫자에는 영향 없음.
-    lines.push('      \\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{\\the\\dimexpr 1.1\\mockTitleTopFontSize\\relax}{\\the\\dimexpr 1.1\\mockTitleTopLead\\relax}'
+    lines.push(`      \\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{\\the\\dimexpr ${titleTopScale}\\mockTitleTopFontSize\\relax}{\\the\\dimexpr ${titleTopScale}\\mockTitleTopLead\\relax}`
       + '\\selectfont\\mockTitlePageSubtitle}}\\\\[15.21pt]%');
     // 사용자 요청 23차: 제목페이지 메인 타이틀(기본 "수학 영역") 에 숫자가 올 수 있으므로
     //   `\YggWithUnifiedDigits` 로 감싸 한글-숫자 instance 통일. 래퍼 범위는 이 한 줄.
@@ -2145,7 +2158,7 @@ function buildPreamble({
     //   은 0pt 가 아닐 때 interword-glue 를 덮어쓰므로 그룹 내에서만 적용되도록 스코프 유지.
     // 사용자 요청 25차: 0.5em 은 과도 → 80% 수준인 0.4em 로 축소. 한글 사이 공간이
     //   시각적으로 "1글자" 정도로 자연스러워지도록.
-    lines.push('      \\YggWithUnifiedDigits{{\\YggSubjectDisplay\\fontsize{\\the\\dimexpr 1.452\\mockTitleFontSize\\relax}{\\the\\dimexpr 1.452\\mockTitleLead\\relax}'
+    lines.push(`      \\YggWithUnifiedDigits{{\\YggSubjectDisplay\\fontsize{\\the\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleMainScale}\\mockTitleLead\\relax}`
       + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em\\mockTitlePageMain}}%');
     lines.push('    }%');
     lines.push('  }%');
@@ -2352,17 +2365,27 @@ function buildPreamble({
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
     lines.push('    \\fi%');
-    // 페이지박스 (scope 원점 = 박스 좌하단).
-    lines.push('    \\begin{scope}[shift={([shift={(\\mockLayBoxX,\\mockLayBoxY)}]current page.north west)}]%');
-    lines.push('      \\draw[line width=0.6pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);%');
-    lines.push('      \\draw[line width=0.6pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);%');
-    lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxFont}{0.46*\\mockPageBoxH}%');
-    lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxLead}{0.55*\\mockPageBoxH}%');
-    lines.push('      \\node[anchor=center, inner sep=0pt] at (0.18\\mockPageBoxW,0.65\\mockPageBoxH)%');
-    lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\thepage};%');
-    lines.push('      \\node[anchor=center, inner sep=0pt] at (0.82\\mockPageBoxW,0.35\\mockPageBoxH)%');
-    lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\pageref{LastPage}};%');
-    lines.push('    \\end{scope}%');
+    if (isAssignmentProfile) {
+      if (logoEnabled) {
+        lines.push('    \\ifodd\\value{page}%');
+        lines.push(`      \\node[anchor=south east,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(-14mm,8mm)}]current page.south east) {${safeAcademyName}};%`);
+        lines.push('    \\else%');
+        lines.push(`      \\node[anchor=south west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(14mm,8mm)}]current page.south west) {${safeAssignmentFooterTitle}};%`);
+        lines.push('    \\fi%');
+      }
+    } else {
+      // 페이지박스 (scope 원점 = 박스 좌하단).
+      lines.push('    \\begin{scope}[shift={([shift={(\\mockLayBoxX,\\mockLayBoxY)}]current page.north west)}]%');
+      lines.push('      \\draw[line width=0.6pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);%');
+      lines.push('      \\draw[line width=0.6pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);%');
+      lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxFont}{0.46*\\mockPageBoxH}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxLead}{0.55*\\mockPageBoxH}%');
+      lines.push('      \\node[anchor=center, inner sep=0pt] at (0.18\\mockPageBoxW,0.65\\mockPageBoxH)%');
+      lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\thepage};%');
+      lines.push('      \\node[anchor=center, inner sep=0pt] at (0.82\\mockPageBoxW,0.35\\mockPageBoxH)%');
+      lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\pageref{LastPage}};%');
+      lines.push('    \\end{scope}%');
+    }
     lines.push('  \\end{tikzpicture}%');
     lines.push('  \\fi'); // \ifquickanswerpage 닫기
     lines.push('}');
@@ -2481,8 +2504,14 @@ function resolveSetSubScores(question) {
 // 분수 등 라인 높이를 키우는 요소는 stem 전체에 퍼져있지 않고 "첫 paragraph 의 앞부분" 에
 // 집중되는 경향이 있으므로, "문항번호 + stem 첫 text paragraph 전체" 를 한 \hbox 에 담는
 // 것으로 충분한 근사가 된다. \hbox 는 overflow 해도 ht/dp 는 content 의 max 로 계산된다.
-function getFirstLineProbeLatex(question, { showQuestionNumber = true } = {}) {
+function getFirstLineProbeLatex(question, {
+  showQuestionNumber = true,
+  questionNumberPlacement = 'inline',
+  questionNumberFormat = 'source',
+} = {}) {
   const qNum = question?.question_number || question?.questionNumber || '';
+  const qNumDisplay = formatQuestionNumberForDisplay(qNum, questionNumberFormat);
+  const numberAbove = showQuestionNumber && questionNumberPlacement === 'above';
   const stem = question?.stem || '';
   const equations = question?.equations || [];
   // stem 첫 text paragraph 의 첫 source line 만 추출.
@@ -2500,8 +2529,12 @@ function getFirstLineProbeLatex(question, { showQuestionNumber = true } = {}) {
     break;
   }
   const parts = [];
-  if (showQuestionNumber && qNum) {
-    parts.push(`\\textbf{${escapeLatexText(String(qNum))}.}\\enspace`);
+  if (showQuestionNumber && qNumDisplay) {
+    if (numberAbove) {
+      parts.push(`\\textbf{${escapeLatexText(String(qNumDisplay))}}`);
+      return `\\hbox{${parts.join('')}}`;
+    }
+    parts.push(`\\textbf{${escapeLatexText(String(qNumDisplay))}.}\\enspace`);
   }
   if (firstText) {
     parts.push(smartTexLine(firstText, equations));
@@ -2511,9 +2544,21 @@ function getFirstLineProbeLatex(question, { showQuestionNumber = true } = {}) {
   return parts.join('');
 }
 
+function formatQuestionNumberForDisplay(raw, format = 'source') {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (String(format || '').trim().toLowerCase() !== 'two_digit') return value;
+  const m = value.match(/\d+/);
+  if (!m) return value;
+  const padded = String(Number.parseInt(m[0], 10)).padStart(2, '0');
+  return `${value.slice(0, m.index)}${padded}${value.slice((m.index || 0) + m[0].length)}`;
+}
+
 function renderOneQuestion(question, {
   sectionLabel,
   showQuestionNumber = true,
+  questionNumberPlacement = 'inline',
+  questionNumberFormat = 'source',
   mode,
   stemSizePt = 11,
   includeQuestionScore = false,
@@ -2540,6 +2585,10 @@ function renderOneQuestion(question, {
   // eslint-disable-next-line no-param-reassign
   question = sanitizeLatexControlChars(question) || {};
   const qNum = question?.question_number || question?.questionNumber || '';
+  const qNumDisplay = formatQuestionNumberForDisplay(qNum, questionNumberFormat);
+  const numberAbove = showQuestionNumber && questionNumberPlacement === 'above';
+  const aboveNumberFontPt = ((Number(stemSizePt || 11) + 1) * 1.1).toFixed(2);
+  const aboveNumberLeadPt = (((Number(stemSizePt || 11) + 1) * 1.1) * 1.08).toFixed(2);
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
@@ -2841,7 +2890,7 @@ function renderOneQuestion(question, {
   parts.push('\\parfillskip=0pt plus 1fil\\relax');
   parts.push('\\parindent=0pt');
   parts.push('\\tolerance=9999\\emergencystretch=0pt');
-  parts.push(showQuestionNumber ? '\\leftskip=1em' : '\\leftskip=0pt');
+  parts.push(showQuestionNumber && !numberAbove ? '\\leftskip=1em' : '\\leftskip=0pt');
 
   // ─── (주의) 라벨 상단 padding 을 `\vspace*{Npt}` 로 구현하는 것은 불가 ───
   // 실측 결과: minipage[t][h][t] 의 vlist 첫 item 으로 `\vspace*` 를 넣으면
@@ -2911,13 +2960,17 @@ function renderOneQuestion(question, {
     );
   }
 
-  if (showQuestionNumber && qNum) {
+  if (numberAbove && qNumDisplay) {
+    parts.push(
+      `\\noindent{\\fontsize{${aboveNumberFontPt}pt}{${aboveNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}}\\par\\nobreak\\vspace{0.2pt}`,
+    );
+  } else if (showQuestionNumber && qNum) {
     // 라벨이 있으면 문항번호는 "두 번째 라인" → 이미 라벨 박스가 라인 ht 결정.
     // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut(짝 slot 라벨박스 \vphantom)
     // 을 여기서 소비해 라벨박스와 동일 ht 를 가지도록 한다.
     const strut = sectionLabel ? '' : firstLineStrut;
     parts.push(
-      `\\noindent\\hspace{-1em}${strut}\\textbf{${escapeLatexText(String(qNum))}.}\\enspace`,
+      `\\noindent\\hspace{-1em}${strut}\\textbf{${escapeLatexText(String(qNumDisplay))}.}\\enspace`,
     );
   } else if (!sectionLabel && firstLineStrut) {
     parts.push(`\\noindent${firstLineStrut}`);
@@ -3556,6 +3609,8 @@ function renderMockSlotColumnBody(
   slotHeightMacro,
   {
     showQuestionNumber = true,
+    questionNumberPlacement = 'inline',
+    questionNumberFormat = 'source',
     stemSizePt = 11,
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
@@ -3580,6 +3635,8 @@ function renderMockSlotColumnBody(
     if (question) {
       lines.push(renderOneQuestion(question, {
         showQuestionNumber,
+        questionNumberPlacement,
+        questionNumberFormat,
         stemSizePt,
         includeQuestionScore,
         questionScoreByQuestionId,
@@ -3700,6 +3757,8 @@ function renderMockGridPageLatex(
     leftSlots,
     rightSlots,
     showQuestionNumber = true,
+    questionNumberPlacement = 'inline',
+    questionNumberFormat = 'source',
     isFirstPage = false,
     stemSizePt = 11,
     includeQuestionScore = false,
@@ -3807,8 +3866,16 @@ function renderMockGridPageLatex(
     // --- case 2: row 에 라벨 없음 → 양쪽 stem 첫 줄 ht 의 max 로 동기화 ---
     //   분수(\dfrac), 위·아래첨자 등으로 한쪽 첫 줄 ht 가 커질 경우, 짝 slot 에도 동일 ht 가 주입되어
     //   "첫 hbox top edge" 가 수평으로 맞춰진다. \vphantom 은 width=0 이라 가시적 영향은 없다.
-    const probeL = qL ? getFirstLineProbeLatex(qL, { showQuestionNumber }) : '\\strut';
-    const probeR = qR ? getFirstLineProbeLatex(qR, { showQuestionNumber }) : '\\strut';
+    const probeL = qL ? getFirstLineProbeLatex(qL, {
+      showQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+    }) : '\\strut';
+    const probeR = qR ? getFirstLineProbeLatex(qR, {
+      showQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+    }) : '\\strut';
     const macroL = `pair@content@${pageMacroPrefix}@${r}@L`;
     const macroR = `pair@content@${pageMacroPrefix}@${r}@R`;
     pairProbePrelude.push(
@@ -3848,6 +3915,8 @@ function renderMockGridPageLatex(
     `\\begin{minipage}[t][${heightMacro}][t]{${MOCK_MINIPAGE_WIDTH}}`,
     renderMockSlotColumnBody(leftQuestions, safeLeftSlots, leftHeightMacro, {
       showQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
       stemSizePt,
       includeQuestionScore,
       questionScoreByQuestionId,
@@ -3862,6 +3931,8 @@ function renderMockGridPageLatex(
     `\\begin{minipage}[t][${heightMacro}][t]{${MOCK_MINIPAGE_WIDTH}}`,
     renderMockSlotColumnBody(rightQuestions, safeRightSlots, rightHeightMacro, {
       showQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
       stemSizePt,
       includeQuestionScore,
       questionScoreByQuestionId,
@@ -4471,10 +4542,13 @@ export function buildDocumentTexSource(questions, options = {}) {
     maxQuestionsPerPage = 0,
     hidePreviewHeader = false,
     hideQuestionNumber = false,
+    questionNumberPlacement = 'inline',
+    questionNumberFormat = 'source',
     geometryOverride = '',
     pageColumnQuestionCounts = null,
     includeAcademyLogo = false,
     academyLogoPath = '',
+    academyName = '',
     includeCoverPage = false,
     coverPageTexts = {},
     includeQuestionScore = false,
@@ -4506,6 +4580,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     geometryOverride,
     includeAcademyLogo: logoEnabled,
     academyLogoPath,
+    academyName,
+    titlePageTopText,
   });
 
   const parts = [preamble];
@@ -4514,7 +4590,9 @@ export function buildDocumentTexSource(questions, options = {}) {
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
 
   const qList = Array.isArray(questions) ? questions : [];
-  const isMock = profile === 'mock' || profile === 'csat';
+  const isMockExamProfile = profile === 'mock' || profile === 'csat';
+  const isAssignmentProfile = profile === 'assignment';
+  const isMock = isMockExamProfile || isAssignmentProfile;
   const effectiveLayoutMeta = layoutMeta && typeof layoutMeta === 'object' ? layoutMeta : null;
   let lastMode = null;
 
@@ -4613,8 +4691,10 @@ export function buildDocumentTexSource(questions, options = {}) {
     //   가로 디바이더와 슬롯 시작점을 한 번 더 아래로 보낸다.
     //   body_top 과 headsep 을 동일하게 +4.56pt 확장하면 header bottom 은 유지되고
     //   body_top/디바이더/슬롯만 선형으로 하향된다.
+    const titleTopMm = isAssignmentProfile ? '35.06mm' : '52.59mm';
+    const titleHeadSepPt = isAssignmentProfile ? '25.79pt' : '38.68pt';
     const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
-      + ',hmargin=14mm,top=52.59mm,bottom=20mm,headheight=72pt,headsep=38.68pt';
+      + `,hmargin=14mm,top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
     // 직전 페이지가 제목페이지였는지 기록 (일반 페이지 진입 시 \restoregeometry 삽입용).
     let activeTitleGeom = false;
     const autoColumnLabelAnchors = [];
@@ -4726,33 +4806,35 @@ export function buildDocumentTexSource(questions, options = {}) {
       // 페이지 문항들의 sectionLabel 결정. 문항 mode 가 직전 mode 와 다를 때만 라벨 부여.
       const pageQs = pages[i];
       const pageAnchorMap = normalizedAnchorByPage.get(pageNo) || new Map();
-      const pageLabels = pageQs.map((q, idx) => {
-        const qMode = q?.mode
-          || q?.questionMode
-          || q?.export_mode
-          || q?.exportMode
-          || 'objective';
-        const modeChanged = qMode !== lastModeMock;
-        lastModeMock = qMode;
-        const columnIndex = idx < pageLeftSlots ? 0 : 1;
-        const rowIndex = idx < pageLeftSlots ? idx : (idx - pageLeftSlots);
-        const anchorKey = `${columnIndex}:${rowIndex}`;
-        const override = pageAnchorMap.get(anchorKey);
-        // 사용자가 × 로 제거한 slot: 라벨을 완전히 출력하지 않음.
-        if (override?.source === 'suppressed') return null;
-        // 사용자가 직접 입력한 라벨 / 이전 렌더에서 auto 로 붙었다가 클라이언트가 보관해서
-        //   다시 전달한 라벨: 그대로 출력. (auto 든 manual 이든 label 이 있으면 우선.)
-        if (override && override.label) {
-          return override.label;
-        }
-        // 새로고침/PDF 생성 경로에서는 모드 전환 기반 자동 라벨 생성을 중단한다.
-        //   (최초 렌더 경로에서는 flag 가 false 라 아래 기본 분기로 진입해 auto-gen 됨)
-        if (disableAutoLabels) return null;
-        if (!modeChanged) return null;
-        if (qMode === 'objective') return '5지선다형';
-        if (qMode === 'essay') return '서술형';
-        return '단답형';
-      });
+      const pageLabels = isMockExamProfile
+        ? pageQs.map((q, idx) => {
+          const qMode = q?.mode
+            || q?.questionMode
+            || q?.export_mode
+            || q?.exportMode
+            || 'objective';
+          const modeChanged = qMode !== lastModeMock;
+          lastModeMock = qMode;
+          const columnIndex = idx < pageLeftSlots ? 0 : 1;
+          const rowIndex = idx < pageLeftSlots ? idx : (idx - pageLeftSlots);
+          const anchorKey = `${columnIndex}:${rowIndex}`;
+          const override = pageAnchorMap.get(anchorKey);
+          // 사용자가 × 로 제거한 slot: 라벨을 완전히 출력하지 않음.
+          if (override?.source === 'suppressed') return null;
+          // 사용자가 직접 입력한 라벨 / 이전 렌더에서 auto 로 붙었다가 클라이언트가 보관해서
+          //   다시 전달한 라벨: 그대로 출력. (auto 든 manual 이든 label 이 있으면 우선.)
+          if (override && override.label) {
+            return override.label;
+          }
+          // 새로고침/PDF 생성 경로에서는 모드 전환 기반 자동 라벨 생성을 중단한다.
+          //   (최초 렌더 경로에서는 flag 가 false 라 아래 기본 분기로 진입해 auto-gen 됨)
+          if (disableAutoLabels) return null;
+          if (!modeChanged) return null;
+          if (qMode === 'objective') return '5지선다형';
+          if (qMode === 'essay') return '서술형';
+          return '단답형';
+        })
+        : pageQs.map(() => null);
       const defaultTopPt = titleHeader ? 16 : 9.2;
       const defaultPaddingTopPt = titleHeader ? 27 : 35.8;
       pageLabels.forEach((label, idx) => {
@@ -4788,6 +4870,8 @@ export function buildDocumentTexSource(questions, options = {}) {
           leftSlots: pageLeftSlots,
           rightSlots: pageRightSlots,
           showQuestionNumber: !hideQuestionNumber,
+          questionNumberPlacement,
+          questionNumberFormat,
           isFirstPage: i === 0 && !titleHeader,
           stemSizePt: fontSize,
           includeQuestionScore,
@@ -4814,55 +4898,72 @@ export function buildDocumentTexSource(questions, options = {}) {
       parts.push('\\hrule\\vspace{8pt}\n');
     }
 
-    if (columns >= 2) {
-      parts.push(`\\begin{multicols}{${columns}}\n`);
-    }
-
     const forcePagePerQuestion =
       parsePositiveInt(maxQuestionsPerPage, 0) === 1 && columns < 2;
-
-    for (let i = 0; i < qList.length; i++) {
-      if (i > 0) {
-        if (forcePagePerQuestion) {
-          parts.push('\\newpage\n');
-        } else {
-          parts.push('\\vspace{10pt}\n');
-        }
+    const simplePerPage = parsePositiveInt(maxQuestionsPerPage, 0);
+    const chunkSimplePages = columns >= 2 && simplePerPage > 0 && simplePerPage < 99;
+    const simplePages = [];
+    if (chunkSimplePages) {
+      for (let start = 0; start < qList.length; start += simplePerPage) {
+        simplePages.push(qList.slice(start, start + simplePerPage));
       }
-
-      const q = qList[i];
-      let sectionLabel = null;
-      const qMode = q?.mode
-        || q?.questionMode
-        || q?.export_mode
-        || q?.exportMode
-        || 'objective';
-
-      if (isMock) {
-        if (qMode !== lastMode) {
-          if (qMode === 'objective') sectionLabel = '5지선다형';
-          else if (qMode === 'essay') sectionLabel = '서술형';
-          else sectionLabel = '단답형';
-          lastMode = qMode;
-        }
-      }
-
-      parts.push(
-        renderOneQuestion(q, {
-          sectionLabel,
-          showQuestionNumber: !hideQuestionNumber,
-          mode: qMode,
-          stemSizePt: fontSize,
-          includeQuestionScore,
-          questionScoreByQuestionId,
-          layoutColumns: columns,
-        }),
-      );
-      parts.push('\n');
+    } else {
+      simplePages.push(qList);
     }
 
-    if (columns >= 2) {
-      parts.push('\\end{multicols}\n');
+    for (let pageIdx = 0; pageIdx < simplePages.length; pageIdx += 1) {
+      const pageQuestions = simplePages[pageIdx];
+      if (pageIdx > 0) parts.push('\\newpage\n');
+
+      if (columns >= 2) {
+        parts.push(`\\begin{multicols}{${columns}}\n`);
+      }
+
+      for (let i = 0; i < pageQuestions.length; i++) {
+        if (i > 0) {
+          if (forcePagePerQuestion) {
+            parts.push('\\newpage\n');
+          } else {
+            parts.push('\\vspace{10pt}\n');
+          }
+        }
+
+        const q = pageQuestions[i];
+        let sectionLabel = null;
+        const qMode = q?.mode
+          || q?.questionMode
+          || q?.export_mode
+          || q?.exportMode
+          || 'objective';
+
+        if (isMock) {
+          if (qMode !== lastMode) {
+            if (qMode === 'objective') sectionLabel = '5지선다형';
+            else if (qMode === 'essay') sectionLabel = '서술형';
+            else sectionLabel = '단답형';
+            lastMode = qMode;
+          }
+        }
+
+        parts.push(
+          renderOneQuestion(q, {
+            sectionLabel,
+            showQuestionNumber: !hideQuestionNumber,
+            questionNumberPlacement,
+            questionNumberFormat,
+            mode: qMode,
+            stemSizePt: fontSize,
+            includeQuestionScore,
+            questionScoreByQuestionId,
+            layoutColumns: columns,
+          }),
+        );
+        parts.push('\n');
+      }
+
+      if (columns >= 2) {
+        parts.push('\\end{multicols}\n');
+      }
     }
   }
 

@@ -1927,12 +1927,14 @@ class LearningProblemBankService {
       return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
     }
 
+    final storageTemplateProfile =
+        templateProfile.trim() == 'assignment' ? 'naesin' : templateProfile;
     final basePayload = <String, dynamic>{
       'academy_id': academyId,
       'document_id': documentId,
       'requested_by': _client.auth.currentUser?.id,
       'status': 'queued',
-      'template_profile': templateProfile.trim(),
+      'template_profile': storageTemplateProfile.trim(),
       'paper_size': paperSize.trim(),
       'include_answer_sheet': includeAnswerSheet,
       'include_explanation': includeExplanation,

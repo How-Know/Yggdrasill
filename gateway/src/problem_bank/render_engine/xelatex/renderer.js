@@ -615,9 +615,11 @@ export async function renderPdfWithXeLatex({
   const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
     || renderConfig?.hideDocumentHeader === true;
   const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
+  const questionNumberPlacement = String(renderConfig?.questionNumberPlacement || 'inline').trim();
+  const questionNumberFormat = String(renderConfig?.questionNumberFormat || 'source').trim();
   const geometryOverride = String(renderConfig?.geometryOverride || '').trim();
   const fontFamily = fontFamilyResolved || fontFamilyRequested || 'Malgun Gothic';
-  const isMockProfile = profile === 'mock' || profile === 'csat';
+  const isMockProfile = profile === 'mock' || profile === 'csat' || profile === 'assignment';
   const cols = (Number(layoutColumns || 1) >= 2 || isMockProfile) ? 2 : 1;
 
   try {
@@ -633,6 +635,9 @@ export async function renderPdfWithXeLatex({
       : '';
     const academyLogoPath = academyLogoDataUrl
       ? materializeDataUrlLogo(academyLogoDataUrl, workDir)
+      : '';
+    const academyName = includeAcademyLogo
+      ? String(renderConfig?.academyName || '').trim()
       : '';
     const includeQuestionScore = renderConfig?.includeQuestionScore === true;
     const questionScoreByQuestionId = (renderConfig?.questionScoreByQuestionId
@@ -668,10 +673,13 @@ export async function renderPdfWithXeLatex({
       maxQuestionsPerPage: maxQuestionsPerPage || 0,
       hidePreviewHeader,
       hideQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
       geometryOverride,
       pageColumnQuestionCounts: renderConfig?.pageColumnQuestionCounts || null,
       includeAcademyLogo: includeAcademyLogo && !!academyLogoPath,
       academyLogoPath,
+      academyName,
       includeCoverPage,
       coverPageTexts,
       includeQuestionScore,
