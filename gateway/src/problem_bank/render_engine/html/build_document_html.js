@@ -35,8 +35,8 @@ function buildStyles({
   const headerApproxMm = 22;
   const grid4HeightMm = Math.max(100, paperMm.height - 2 * marginMm - headerApproxMm).toFixed(1);
   const mockFirstSubjectPt = ((stemSizePt + 20.5) * 1.1).toFixed(2);
-  const assignmentFirstSubjectPt = ((stemSizePt + 20.5) * 1.21).toFixed(2);
-  const assignmentFirstTitlePt = ((stemSizePt + 5.0) * 1.2).toFixed(2);
+  const assignmentFirstSubjectPt = ((stemSizePt + 20.5) * 0.9801).toFixed(2);
+  const assignmentFirstTitlePt = ((stemSizePt + 5.0) * 0.972).toFixed(2);
   // 사용자 요청 19차: 비제목 페이지 "수학 영역" 폰트를 페이지라벨(.mock-page-no)의 80% 로 맞춤.
   //   .mock-page-no 는 (stemSizePt + 15.8)pt 이므로 80% = (stemSizePt + 15.8) × 0.8.
   const mockSimpleSubjectPt = ((stemSizePt + 15.8) * 0.8).toFixed(2);
@@ -164,7 +164,7 @@ function buildStyles({
       white-space: nowrap;
     }
     body.profile-assignment .q-num-above {
-      font-size: calc((var(--stem-size-pt) + 1) * 1.1 * 1pt);
+      font-size: calc((var(--stem-size-pt) + 1) * 1.21 * 1pt);
       margin-bottom: 0.6pt;
     }
     .q-stem {
@@ -1074,25 +1074,58 @@ function buildStyles({
       transform: translateY(4pt);
     }
     body.profile-assignment .mock-page-title .mock-header-first {
-      margin-top: -5.4mm;
+      margin-top: -4.8mm;
+      margin-bottom: 3pt;
     }
     body.profile-assignment .mock-first-title {
       font-size: ${assignmentFirstTitlePt}pt;
+      justify-self: start;
+      text-align: left;
     }
     body.profile-assignment .mock-first-subject {
       font-size: ${assignmentFirstSubjectPt}pt;
+      justify-self: start;
+      text-align: left;
+    }
+    body.profile-assignment .mock-page-title .mock-header-first-top,
+    body.profile-assignment .mock-page-title .mock-header-first-bottom {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    body.profile-assignment .mock-page-title .mock-first-title,
+    body.profile-assignment .mock-page-title .mock-first-subject {
+      grid-column: 1;
+    }
+    body.profile-assignment .mock-page-title .mock-side-right {
+      grid-column: 2;
+    }
+    body.profile-assignment .mock-page-title .mock-page-no-first {
+      display: none;
     }
     .assignment-academy-logo-top-left {
-      max-width: 46pt;
-      max-height: 28pt;
+      max-width: 92pt;
+      max-height: 56pt;
       object-fit: contain;
       display: block;
+      transform: translateY(1pt);
+    }
+    .assignment-academy-logo-header {
+      max-width: 43pt;
+      max-height: 25pt;
+      object-fit: contain;
+      display: inline-block;
+      vertical-align: middle;
+      transform: translateY(1.2pt);
     }
     .assignment-footer-text {
       font-size: calc((var(--stem-size-pt) - 1.4) * 1pt);
       color: #111;
       line-height: 1;
       white-space: nowrap;
+    }
+    .assignment-footer-page {
+      font-size: calc((var(--stem-size-pt) + 0.2) * 1.2 * 1pt);
+      font-weight: 700;
+      line-height: 1;
     }
     .mock-main {
       flex: 1 1 0;
@@ -1118,6 +1151,9 @@ function buildStyles({
     }
     .mock-page-last .mock-main::before {
       bottom: 5pt;
+    }
+    body.profile-assignment .mock-main::before {
+      bottom: -12pt;
     }
     .mock-section-label {
       display: inline-flex;
@@ -1199,6 +1235,16 @@ function buildStyles({
     .mock-page:not(.mock-page-title) .mock-main {
       margin-top: -6pt;
     }
+    body.profile-assignment .mock-page:not(.mock-page-title) .mock-main {
+      margin-top: -24pt;
+    }
+    body.profile-assignment .mock-page:not(.mock-page-title) .mock-page-no {
+      font-size: ${mockSimpleSubjectPt}pt;
+      transform: translateY(-12pt);
+    }
+    body.profile-assignment .mock-page:not(.mock-page-title) .mock-simple-subject {
+      transform: translateY(-18pt);
+    }
     .mock-page:not(.mock-page-title) .mock-content .question-stream {
       margin-top: 0;
     }
@@ -1238,6 +1284,10 @@ function buildStyles({
       grid-template-columns: 1fr auto 1fr;
       align-items: end;
       gap: 8pt;
+    }
+    body.profile-assignment .mock-footer-row {
+      margin-top: 16pt;
+      align-items: baseline;
     }
     .mock-page-box {
       /* 사용자 요청 21차 (재수정): 너비 10% 증가 + 높이 5% 감소.
@@ -2649,7 +2699,7 @@ export function buildDocumentHtml({
         return '';
       }
       if (isTitlePage) {
-        const topLeftLogoHtml = profile === 'assignment' && hasAcademyLogo
+        const titleRightLogoHtml = profile === 'assignment' && hasAcademyLogo
           ? `<img class="assignment-academy-logo-top-left" src="${escapeHtml(academyLogoDataUrl)}" alt="" />`
           : '';
         const sessionChipHtml = profile === 'assignment'
@@ -2660,7 +2710,7 @@ export function buildDocumentHtml({
         return `
           <header class="mock-header-first">
             <div class="mock-header-first-top">
-              <div class="mock-side-left">${topLeftLogoHtml}</div>
+              <div class="mock-side-left"></div>
               <div class="mock-first-title">${escapeHtml(titlePageTopText)}</div>
               <div class="mock-side-right"><span class="mock-page-no mock-page-no-first">${pageNo}</span></div>
             </div>
@@ -2670,18 +2720,25 @@ export function buildDocumentHtml({
               </div>
               <div class="mock-first-subject">${renderTitleLine(pageNo)}</div>
               <div class="mock-side-right">
-                <span class="mock-chip mock-chip-type mock-first-type"><span class="mock-chip-type-text mock-chip-type-text-first">홀수형</span></span>
+                ${profile === 'assignment'
+                  ? titleRightLogoHtml
+                  : '<span class="mock-chip mock-chip-type mock-first-type"><span class="mock-chip-type-text mock-chip-type-text-first">홀수형</span></span>'}
               </div>
             </div>
           </header>
         `;
       }
       const even = pageNo % 2 === 0;
+      const assignmentHeaderLogoHtml = '';
       const left = even
         ? `<span class="mock-page-no">${pageNo}</span>`
-        : '<span class="mock-chip mock-chip-type mock-chip-type-simple"><span class="mock-chip-type-text">홀수형</span></span>';
+        : (profile === 'assignment'
+          ? assignmentHeaderLogoHtml
+          : '<span class="mock-chip mock-chip-type mock-chip-type-simple"><span class="mock-chip-type-text">홀수형</span></span>');
       const right = even
-        ? '<span class="mock-chip mock-chip-type mock-chip-type-simple"><span class="mock-chip-type-text">홀수형</span></span>'
+        ? (profile === 'assignment'
+          ? assignmentHeaderLogoHtml
+          : '<span class="mock-chip mock-chip-type mock-chip-type-simple"><span class="mock-chip-type-text">홀수형</span></span>')
         : `<span class="mock-page-no">${pageNo}</span>`;
       return `
         <header class="mock-header-simple">
@@ -2734,11 +2791,11 @@ export function buildDocumentHtml({
       const sectionStyle = pageHasNote
         ? ` style="--page-note-box-height:${noteBoxHeightPt}pt;"`
         : '';
-      const assignmentFooterLeft = profile === 'assignment' && hasAcademyLogo && pageNo % 2 === 0
-        ? `<span class="assignment-footer-text">${escapeHtml(titlePageTopText)}</span>`
-        : '';
-      const assignmentFooterRight = profile === 'assignment' && hasAcademyLogo && pageNo % 2 === 1
+      const assignmentFooterLeft = profile === 'assignment' && hasAcademyLogo && pageNo % 2 === 1
         ? `<span class="assignment-footer-text">${escapeHtml(academyName)}</span>`
+        : '';
+      const assignmentFooterRight = profile === 'assignment' && hasAcademyLogo && pageNo % 2 === 0
+        ? `<span class="assignment-footer-text">${escapeHtml(titlePageTopText)}</span>`
         : '';
       const footerHtml = hidePreviewHeader
         ? ''
@@ -2746,7 +2803,7 @@ export function buildDocumentHtml({
           ? `
             <div class="mock-footer-row">
               <div>${assignmentFooterLeft}</div>
-              <div></div>
+              <div><span class="assignment-footer-page">${pageNo}</span></div>
               <div>${assignmentFooterRight}</div>
             </div>
           `

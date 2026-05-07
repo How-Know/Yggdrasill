@@ -4276,6 +4276,35 @@ function buildHwpxFigureMapByQuestionNumber(hwpxBuffer, { threshold, log }) {
   return map;
 }
 
+function figureOverlayComparableText(value) {
+  return normalizeWhitespace(String(value || '')
+    .replace(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|표행|표셀)\]/g, ' ')
+    .replace(/\\[a-zA-Z]+/g, ' ')
+    .replace(/[{}$\\^_]/g, ' ')
+    .replace(/[^\p{L}\p{N}가-힣]+/gu, ' ')
+    .toLowerCase());
+}
+
+function figureOverlayTextTokens(value) {
+  return figureOverlayComparableText(value)
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
+function figureOverlayTextLooksCompatible(vlmText, hwpxText) {
+  const vlmTokens = new Set(figureOverlayTextTokens(vlmText));
+  const hwpxTokens = new Set(figureOverlayTextTokens(hwpxText));
+  if (vlmTokens.size === 0 || hwpxTokens.size === 0) return false;
+  let intersection = 0;
+  for (const token of hwpxTokens) {
+    if (vlmTokens.has(token)) intersection += 1;
+  }
+  const smaller = Math.min(vlmTokens.size, hwpxTokens.size);
+  const ratio = smaller > 0 ? intersection / smaller : 0;
+  return intersection >= 2 && ratio >= 0.18;
+}
+
 // VLM 이 내려준 단일 question payload 에 HWPX overlay 를 적용한다.
 //   - stem 의 [그림] / [도형] 마커와 기존 [[PB_FIG_...]] 토큰을 HWPX 의 토큰 순서로 교체
 //   - figure_refs 를 HWPX 버전으로 교체 (PB_FIG 토큰 포함)
@@ -4292,6 +4321,23 @@ function applyHwpxFigureOverlayToVlmPayload(payload, overlay) {
   if (pbTokens.length === 0 && hwpxFigureRefs.length === 0) return payload;
 
   const next = { ...payload };
+  const originalStem = String(next.stem || '');
+  const originalFigureMarkerCount = (
+    originalStem.match(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형)\]/g) || []
+  ).length;
+  if (originalFigureMarkerCount === 0) {
+    const vlmText = figureOverlayComparableText(originalStem);
+    const hwpxText = figureOverlayComparableText(hwpxFigureRefs.join(' '));
+    if (!figureOverlayTextLooksCompatible(vlmText, hwpxText)) {
+      const prevMeta = next.meta && typeof next.meta === 'object' ? next.meta : {};
+      next.meta = {
+        ...prevMeta,
+        hwpx_figure_overlay_skipped: true,
+        hwpx_figure_overlay_skip_reason: 'no_vlm_marker_text_mismatch',
+      };
+      return next;
+    }
+  }
 
   // stem 덮어쓰기: [그림]/[도형] 과 기존 [[PB_FIG_xxx]] 를 모두 HWPX 토큰 순서로 재배치.
   //   - VLM 마커 수 > HWPX 토큰 수   : 남는 VLM 마커는 제거 (overflow drop)
@@ -4299,7 +4345,6 @@ function applyHwpxFigureOverlayToVlmPayload(payload, overlay) {
   if (pbTokens.length > 0) {
     const markerRe = /\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형)\]/g;
     let cursor = 0;
-    const originalStem = String(next.stem || '');
     const rewritten = originalStem.replace(markerRe, () => {
       if (cursor < pbTokens.length) {
         const id = pbTokens[cursor];

@@ -1,0 +1,67 @@
+{
+  "candidates": [
+    {
+      "label": "C1",
+      "question_number": "7",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "수직선 위에 세 개의 정사각형이 그려진 그림으로 Q7의 내용과 일치함"
+    },
+    {
+      "label": "C2",
+      "question_number": "19",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "사각뿔 A의 그림으로 Q19의 내용과 일치함"
+    },
+    {
+      "label": "C3",
+      "question_number": "17",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "정사각형에서 네 모퉁이를 잘라 만든 정팔각형 그림으로 Q17의 내용과 일치함"
+    },
+    {
+      "label": "C4",
+      "question_number": "8",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "칠교판 조각을 나타내는 정사각형 그림으로 Q8의 첫 번째 그림과 일치함"
+    },
+    {
+      "label": "C5",
+      "question_number": "8",
+      "slot_index": 2,
+      "confidence": "high",
+      "reason": "칠교판 조각으로 만든 물고기 모양 그림으로 Q8의 두 번째 그림과 일치함"
+    },
+    {
+      "label": "C6",
+      "question_number": "19",
+      "slot_index": 2,
+      "confidence": "high",
+      "reason": "사각뿔대 C의 그림으로 Q19의 두 번째 그림과 일치함"
+    },
+    {
+      "label": "C7",
+      "question_number": null,
+      "slot_index": null,
+      "confidence": "high",
+      "reason": "C2와 동일한 사각뿔 A 그림이나, Q19에는 이미 C2가 할당됨"
+    },
+    {
+      "label": "C8",
+      "question_number": null,
+      "slot_index": null,
+      "confidence": "high",
+      "reason": "C6과 동일한 사각뿔대 C 그림이나, Q19에는 이미 C6이 할당됨"
+    },
+    {
+      "label": "C9",
+      "question_number": null,
+      "slot_index": null,
+      "confidence": "high",
+      "reason": "C1과 동일한 수직선 그림이나, Q7에는 이미 C1이 할당됨"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "{\n  \"candidates\": [\n    {\n      \"label\": \"C1\",\n      \"question_number\": \"7\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"수직선 위에 세 개의 정사각형이 그려진 그림으로 Q7의 내용과 일치함\"\n    },\n    {\n      \"label\": \"C2\",\n      \"question_number\": \"19\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"사각뿔 A의 그림으로 Q19의 내용과 일치함\"\n    },\n    {\n      \"label\": \"C3\",\n      \"question_number\": \"17\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"정사각형에서 네 모퉁이를 잘라 만든 정팔각형 그림으로 Q17의 내용과 일치함\"\n    },\n    {\n      \"label\": \"C4\",\n      \"question_number\": \"8\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"칠교판 조각을 나타내는 정사각형 그림으로 Q8의 첫 번째 그림과 일치함\"\n    },\n    {\n      \"label\": \"C5\",\n      \"question_number\": \"8\",\n      \"slot_index\": 2,\n      \"confidence\": \"high\",\n      \"reason\": \"칠교판 조각으로 만든 물고기 모양 그림으로 Q8의 두 번째 그림과 일치함\"\n    },\n    {\n      \"label\": \"C6\",\n      \"question_number\": \"19\",\n      \"slot_index\": 2,\n      \"confidence\": \"high\",\n      \"reason\": \"사각뿔대 C의 그림으로 Q19의 두 번째 그림과 일치함\"\n    },\n    {\n      \"label\": \"C7\",\n      \"question_number\": null,\n      \"slot_index\": null,\n      \"confidence\": \"high\",\n      \"reason\": \"C2와 동일한 사각뿔 A 그림이나, Q19에는 이미 C2가 할당됨\"\n    },\n    {\n      \"label\": \"C8\",\n      \"question_number\": null,\n      \"slot_index\": null,\n      \"confidence\": \"high\",\n      \"reason\": \"C6과 동일한 사각뿔대 C 그림이나, Q19에는 이미 C6이 할당됨\"\n    },\n    {\n      \"label\": \"C9\",\n      \"question_number\": null,\n      \"slot_index\": null,\n      \"confidence\": \"high\",\n      \"reason\": \"C1과 동일한 수직선 그림이나, Q7에는 이미 C1이 할당됨\"\n    }\n  ]\n}",
+            "thoughtSignature": "EjQKMgEMOdbHGqEuiSuDd0P5tqYyhzThM+udR07smvrBNf5P9QOt69fMywBt5sfhdJrOC5M6"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 13705,
+    "candidatesTokenCount": 650,
+    "totalTokenCount": 14355,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 1247
+      },
+      {
+        "modality": "IMAGE",
+        "tokenCount": 12458
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-pro-preview",
+  "responseId": "sIT8acg97rS-vQ_h7v3gAQ"
+}

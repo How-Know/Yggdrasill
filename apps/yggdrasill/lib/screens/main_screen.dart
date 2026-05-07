@@ -2118,11 +2118,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             rotationAnimation: _rotationAnimation,
             onMenuPressed: _toggleSideSheet,
           ),
-          Container(
-            width: 1,
-            height: double.infinity,
-            color: const Color(0xFF223131),
-          ),
           AnimatedBuilder(
             animation: _sideSheetAnimation,
             builder: (context, child) {
@@ -2769,7 +2764,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               );
             },
           ),
-          Container(width: 1, color: const Color(0xFF4A4A4A)),
+          AnimatedBuilder(
+            animation: _sideSheetAnimation,
+            child: Container(width: 1, color: const Color(0xFF4A4A4A)),
+            builder: (context, child) {
+              if (_sideSheetAnimation.value == 0) {
+                return const SizedBox.shrink();
+              }
+              return child!;
+            },
+          ),
           Expanded(child: _buildContent()),
         ],
       ),

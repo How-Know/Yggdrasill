@@ -331,6 +331,42 @@ class TextbookBookRegistry {
     }
   }
 
+  Future<String?> upsertCourseCover({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    String? gradeKey,
+    String? courseKey,
+    String? courseLabel,
+    String? localPath,
+    String? explicitUrl,
+  }) async {
+    final courseInfo = _resolveCourseInfo(
+      gradeLabel: gradeLabel,
+      gradeKey: gradeKey,
+      courseKey: courseKey,
+      courseLabel: courseLabel,
+    );
+    final coverUrl = await _resolveCoverUrl(
+      bookId: bookId,
+      academyId: academyId,
+      gradeLabel: gradeLabel,
+      explicitUrl: explicitUrl,
+      localPath: localPath,
+    );
+    if ((coverUrl ?? '').trim().isEmpty) return null;
+    await _upsertResourceFileLinks(
+      bookId: bookId,
+      academyId: academyId,
+      gradeLabel: gradeLabel,
+      gradeKey: courseInfo.gradeKey,
+      courseKey: courseInfo.courseKey,
+      courseLabel: courseInfo.courseLabel,
+      coverUrl: coverUrl,
+    );
+    return coverUrl;
+  }
+
   Future<String?> _resolveCoverUrl({
     required String bookId,
     required String academyId,

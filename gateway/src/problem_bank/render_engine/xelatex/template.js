@@ -1751,6 +1751,14 @@ function paperGeometry(paper) {
   return `b4paper,hmargin=14mm,${vmargins}`;
 }
 
+function assignmentPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const vmargins = 'top=26.5mm,bottom=20mm,headheight=54pt,headsep=17pt';
+  if (p === 'A4') return `a4paper,hmargin=14mm,${vmargins}`;
+  if (p === 'A3') return `a3paper,hmargin=14mm,${vmargins}`;
+  return `b4paper,hmargin=14mm,${vmargins}`;
+}
+
 function fontSpecDirective(fontPath, fontFamily, fontBold) {
   if (fontPath) {
     const escapedPath = fontPath.replace(/\\/g, '/');
@@ -1798,7 +1806,10 @@ function buildPreamble({
   academyName = '',
   titlePageTopText = '',
 }) {
-  const geom = geometryOverride || paperGeometry(paper);
+  const isAssignmentForGeometry = profile === 'assignment';
+  const geom = geometryOverride || (isAssignmentForGeometry
+    ? assignmentPaperGeometry(paper)
+    : paperGeometry(paper));
   const mainFont = fontFamily || 'Malgun Gothic';
   const boldFont = fontBold || `${mainFont} Bold`;
   const size = fontSize || 11;
@@ -1966,8 +1977,9 @@ function buildPreamble({
   const logoHeadGraphic = logoEnabled
     ? `\\raisebox{-0.2em}{\\includegraphics[height=1.4em,keepaspectratio]{${logoPathTex}}}`
     : '';
-  const logoTitleGraphic = logoEnabled
-    ? `\\raisebox{42pt}[0pt][0pt]{\\includegraphics[height=2.4em,keepaspectratio]{${logoPathTex}}}`
+  const assignmentHeaderLogoGraphic = '';
+  const assignmentTitleLogoGraphic = logoEnabled
+    ? `\\raisebox{-4pt}[0pt][0pt]{\\includegraphics[height=4.8em,keepaspectratio]{${logoPathTex}}}`
     : '';
   const safeAcademyName = escapeLatexText(String(academyName || '').trim());
   const safeAssignmentFooterTitle = escapeLatexText(String(titlePageTopText || '').trim());
@@ -1982,6 +1994,7 @@ function buildPreamble({
   //     (HTML `.mock-chip-type` 이 YggSubject 를 명시 지정하고 있음).
   //   이 두 값은 일반 페이지 `\pagestyle{fancy}` 와 제목 페이지 `mocktitle` 양쪽에서 동일 재사용.
   const pageNumSpec = '{\\fontsize{28.6pt}{34pt}\\selectfont\\bfseries\\thepage}';
+  const assignmentPageNumSpec = '{\\fontsize{22.88pt}{27.5pt}\\selectfont\\bfseries\\thepage}';
   // 사용자 요청 20차: 비제목 페이지 홀수형 박스를 제목 페이지 스타일(titleFormBoxSpec)
   //   참조 tikz 스타일로 교체. 크기는 70% 로 축소.
   //     titleFormBoxSpec : line width=0.8pt, rounded corners=3.0pt, minimum height=35.2pt,
@@ -2015,8 +2028,11 @@ function buildPreamble({
     + `\\makebox[0pt][r]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}`
     + `\\makebox[0pt][r]{\\raisebox{1.37pt}[0pt][0pt]{${titleFormBoxSpec}}}`
     + '}';
-  const titleTopScale = isAssignmentProfile ? '1.32' : '1.1';
-  const titleMainScale = isAssignmentProfile ? '1.5972' : '1.452';
+  const assignmentTitleRightHeaderSpec = '{'
+    + (logoEnabled ? `\\makebox[0pt][r]{${assignmentTitleLogoGraphic}}` : '')
+    + '}';
+  const titleTopScale = isAssignmentProfile ? '1.0692' : '1.1';
+  const titleMainScale = isAssignmentProfile ? '1.29375' : '1.452';
 
   if (hidePreviewHeader) {
     // 미리보기 헤더를 숨기는 경우에도 로고는 상단에 찍고자 fancy 를 쓰되 테두리 없음.
@@ -2076,9 +2092,15 @@ function buildPreamble({
     //                     수학영역 visual center ≈ hbox_baseline + 11pt.
     //   홀수형박스      : tikz baseline=(box.center) 이므로 raisebox 값 = "박스 중심의 상승량".
     //                     수학영역 center(11pt) 와 일치시키기 위해 raisebox 15.7pt → 11pt.
-    lines.push(`\\fancyhead[LE,RO]{\\raisebox{3.37pt}[0pt][0pt]{${pageNumSpec}}}`);
-    lines.push(`\\fancyhead[C]{\\raisebox{3pt}[0pt][0pt]{${centerTitleSpec}}}`);
-    lines.push(`\\fancyhead[LO,RE]{\\raisebox{11pt}[0pt][0pt]{${formBoxSpec}}}`);
+    lines.push(isAssignmentProfile
+      ? `\\fancyhead[LE,RO]{\\raisebox{10.5pt}[0pt][0pt]{${assignmentPageNumSpec}}}`
+      : `\\fancyhead[LE,RO]{\\raisebox{3.37pt}[0pt][0pt]{${pageNumSpec}}}`);
+    lines.push(isAssignmentProfile
+      ? `\\fancyhead[C]{\\raisebox{10.5pt}[0pt][0pt]{${centerTitleSpec}}}`
+      : `\\fancyhead[C]{\\raisebox{3pt}[0pt][0pt]{${centerTitleSpec}}}`);
+    lines.push(isAssignmentProfile
+      ? `\\fancyhead[LO,RE]{${assignmentHeaderLogoGraphic}}`
+      : `\\fancyhead[LO,RE]{\\raisebox{11pt}[0pt][0pt]{${formBoxSpec}}}`);
     // header rule / footer pagebox 는 절대 좌표로 그리므로 fancyhdr 의 기본 rule 은 끈다.
     lines.push('\\renewcommand{\\headrulewidth}{0pt}');
     lines.push('\\renewcommand{\\footrulewidth}{0pt}');
@@ -2134,14 +2156,20 @@ function buildPreamble({
     //   - 왼쪽은 기본 "제 2교시" pill 박스. 과제형은 로고만 두고 pill 은 제거.
     lines.push(`  \\fancyhead[LE]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}%`);
     lines.push(isAssignmentProfile
-      ? (logoEnabled ? `  \\fancyhead[LO]{${logoTitleGraphic}}%` : '  \\fancyhead[LO]{}%')
+      ? '  \\fancyhead[LO]{}%'
       : `  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
-    lines.push(`  \\fancyhead[RO]{${titleRightHeaderSpec}}%`);
+    lines.push(`  \\fancyhead[RO]{${isAssignmentProfile ? assignmentTitleRightHeaderSpec : titleRightHeaderSpec}}%`);
     // 부제(위) → \\[11.7pt] → 수학영역(아래, 큰글씨) 순서.
     //   parbox[b] 로 마지막 줄 baseline 이 head box 바닥에 align.
     lines.push('  \\fancyhead[C]{%');
-    lines.push('    \\parbox[b]{\\dimexpr 0.6\\textwidth\\relax}{%');
-    lines.push('      \\centering%');
+    if (isAssignmentProfile) {
+      lines.push('    \\makebox[\\textwidth][l]{%');
+      lines.push('      \\parbox[b]{\\dimexpr 0.64\\textwidth\\relax}{%');
+      lines.push('        \\raggedright%');
+    } else {
+      lines.push('    \\parbox[b]{\\dimexpr 0.6\\textwidth\\relax}{%');
+      lines.push('      \\centering%');
+    }
     // 사용자 요청 14차:
     //   - 부제/메인타이틀 폰트를 HTML title row 와 같은 YggSubjectDisplay 로 통일
     //   - 메인타이틀 크기 +10% (기존 1.32 → 1.452)
@@ -2160,7 +2188,10 @@ function buildPreamble({
     //   시각적으로 "1글자" 정도로 자연스러워지도록.
     lines.push(`      \\YggWithUnifiedDigits{{\\YggSubjectDisplay\\fontsize{\\the\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleMainScale}\\mockTitleLead\\relax}`
       + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em\\mockTitlePageMain}}%');
-    lines.push('    }%');
+    lines.push(isAssignmentProfile ? '      }%' : '    }%');
+    if (isAssignmentProfile) {
+      lines.push('    }%');
+    }
     lines.push('  }%');
     lines.push('  \\renewcommand{\\headrulewidth}{0pt}%');
     lines.push('  \\renewcommand{\\footrulewidth}{0pt}%');
@@ -2333,14 +2364,18 @@ function buildPreamble({
     //   2) 비제목 페이지 디바이더가 3pt 위로 이동 → 페이지라벨과의 간격 ~20% 축소.
     //      (디바이더↔페이지라벨 하단 간격 ≈ 11.85pt → 8.85pt, 약 25% 감소.)
     //   수학영역/홀수형 박스는 위 raisebox 보정으로 3pt 함께 상승.
-    lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+    lines.push(isAssignmentProfile
+      ? '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+12pt}%'
+      : '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
     // 상단 header rule + 세로 단구분선.
     //   - 일반 페이지  : 가로선 y = \mockLayRuleY        / 세로선 시작 y = \mockLayRuleY.
     //   - 제목페이지   : 가로선 y = \mockLayVRuleStartY  / 세로선 시작 y = \mockLayVRuleStartY.
     //                   → 제목페이지에선 가로선도 헤더 아래로 내려 세로선 상단과 정확히 교차.
     // 세로선이 페이지박스 위에서 끝나는 y 좌표 (본문 하단 + 5pt). 기존엔 본문 하단(\mockLayBotY)까지
     //   그렸으나 사용자 요청으로 세로선 종료 지점을 5pt 위로 올린다.
-    lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY+5pt}%');
+    lines.push(isAssignmentProfile
+      ? '    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-12pt}%'
+      : '    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY+5pt}%');
     // 굵기 정책(사용자 요청):
     //   - 가로선 / 페이지박스 : 0.6pt (기존과 동일).
     //   - 세로 단구분선       : 0.8pt (가로선보다 약간 더 두껍게 — "단 구분선만 조금 더 두껍게").
@@ -2366,11 +2401,13 @@ function buildPreamble({
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
     lines.push('    \\fi%');
     if (isAssignmentProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayAssignmentFooterY}{\\mockLayVRuleEndY-22pt}%');
+      lines.push('    \\node[anchor=base,inner sep=0pt,font=\\fontsize{12.96pt}{14.5pt}\\selectfont\\bfseries] at ([shift={(\\mockLayCenterX,\\mockLayAssignmentFooterY)}]current page.north west) {\\thepage};%');
       if (logoEnabled) {
         lines.push('    \\ifodd\\value{page}%');
-        lines.push(`      \\node[anchor=south east,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(-14mm,8mm)}]current page.south east) {${safeAcademyName}};%`);
+        lines.push(`      \\node[anchor=base west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayLeftX,\\mockLayAssignmentFooterY)}]current page.north west) {${safeAcademyName}};%`);
         lines.push('    \\else%');
-        lines.push(`      \\node[anchor=south west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(14mm,8mm)}]current page.south west) {${safeAssignmentFooterTitle}};%`);
+        lines.push(`      \\node[anchor=base east,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayRightX,\\mockLayAssignmentFooterY)}]current page.north west) {${safeAssignmentFooterTitle}};%`);
         lines.push('    \\fi%');
       }
     } else {
@@ -2587,8 +2624,8 @@ function renderOneQuestion(question, {
   const qNum = question?.question_number || question?.questionNumber || '';
   const qNumDisplay = formatQuestionNumberForDisplay(qNum, questionNumberFormat);
   const numberAbove = showQuestionNumber && questionNumberPlacement === 'above';
-  const aboveNumberFontPt = ((Number(stemSizePt || 11) + 1) * 1.1).toFixed(2);
-  const aboveNumberLeadPt = (((Number(stemSizePt || 11) + 1) * 1.1) * 1.08).toFixed(2);
+  const aboveNumberFontPt = ((Number(stemSizePt || 11) + 1) * 1.21).toFixed(2);
+  const aboveNumberLeadPt = (((Number(stemSizePt || 11) + 1) * 1.21) * 1.08).toFixed(2);
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
@@ -3601,6 +3638,102 @@ function chunkQuestionsForMockGrid(questions, questionsPerPage) {
     pages.push(list.slice(i, i + size));
   }
   return pages;
+}
+
+function estimateAssignmentSlotFillRatio(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const explicit = Number(
+    meta.assignmentSlotFillRatio
+      ?? meta.slotFillRatio
+      ?? meta.estimatedSlotFillRatio
+      ?? question?.assignmentSlotFillRatio
+      ?? question?.slotFillRatio,
+  );
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit > 1 ? explicit / 100 : explicit;
+  }
+  const stem = String(question?.stem || '');
+  const compactLines = stem
+    .replace(/\[(?:문단(?::[^\]]*)?|박스시작|박스끝)\]/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const wrappedStemLines = compactLines.reduce((sum, line) => (
+    sum + Math.max(1, Math.ceil(line.length / 34))
+  ), 0);
+  const markerCount = (stem.match(FIGURE_MARKER_RE) || []).length;
+  const boxCount = (stem.match(/\[박스시작\]|<\s*보\s*기\s*>/g) || []).length;
+  const tableCount = (stem.match(/\[표시작\]|\[표행\]|\[표\]/g) || []).length;
+  const choices = Array.isArray(question?.choices) ? question.choices : [];
+  const choiceLines = choices.length > 0
+    ? Math.max(
+      3,
+      Math.ceil(choices.reduce((sum, one) => {
+        const text = typeof one === 'string' ? one : String(one?.text ?? one?.value ?? '');
+        return sum + text.replace(/\s+/g, ' ').trim().length;
+      }, 0) / 42),
+    )
+    : 0;
+  const figureLayout = resolveFigureLayout(question, 11);
+  const figureItems = Array.isArray(figureLayout?.items) ? figureLayout.items.length : 0;
+  const estimatedLines =
+    1.2 // question number
+    + wrappedStemLines
+    + choiceLines
+    + markerCount * 4.5
+    + figureItems * 4.5
+    + boxCount * 1.5
+    + tableCount * 4;
+  return estimatedLines / 22;
+}
+
+function chunkQuestionsForAssignmentGrid(questions) {
+  const list = Array.isArray(questions) ? questions : [];
+  const pages = [];
+  const pageColumnCounts = [];
+  let columns = [[], []];
+  let col = 0;
+  const hasContent = () => columns.some((items) => items.some(Boolean));
+  const flush = () => {
+    if (!hasContent()) return;
+    const left = columns[0];
+    const right = columns[1];
+    pages.push([...left, ...right]);
+    pageColumnCounts.push({
+      left: Math.max(1, left.length),
+      right: Math.max(0, right.length),
+    });
+    columns = [[], []];
+    col = 0;
+  };
+  const ensureColumn = () => {
+    if (col >= 2) flush();
+  };
+  for (const question of list) {
+    const isLarge = estimateAssignmentSlotFillRatio(question) >= 0.7;
+    ensureColumn();
+    if (!isLarge) {
+      if (columns[col].length >= 2) {
+        col += 1;
+        ensureColumn();
+      }
+      columns[col].push(question);
+      if (columns[col].length >= 2) col += 1;
+      continue;
+    }
+    if (columns[col].length === 1) {
+      columns[col].push(null);
+      col += 1;
+      ensureColumn();
+    } else if (columns[col].length >= 2) {
+      col += 1;
+      ensureColumn();
+    }
+    columns[col].push(question);
+    col += 1;
+  }
+  flush();
+  return { pages, pageColumnCounts };
 }
 
 function renderMockSlotColumnBody(
@@ -4652,6 +4785,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     const hasOverrides = Object.keys(overrides).length > 0;
 
     let pages;
+    let assignmentPageColumnCounts = null;
     if (hasOverrides) {
       pages = [];
       let cursor = 0;
@@ -4663,6 +4797,10 @@ export function buildDocumentTexSource(questions, options = {}) {
         cursor += perPage;
         pageNo += 1;
       }
+    } else if (isAssignmentProfile && qPerPage === 4) {
+      const assignmentPlan = chunkQuestionsForAssignmentGrid(qList);
+      pages = assignmentPlan.pages;
+      assignmentPageColumnCounts = assignmentPlan.pageColumnCounts;
     } else {
       pages = chunkQuestionsForMockGrid(qList, qPerPage);
     }
@@ -4691,8 +4829,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     //   가로 디바이더와 슬롯 시작점을 한 번 더 아래로 보낸다.
     //   body_top 과 headsep 을 동일하게 +4.56pt 확장하면 header bottom 은 유지되고
     //   body_top/디바이더/슬롯만 선형으로 하향된다.
-    const titleTopMm = isAssignmentProfile ? '35.06mm' : '52.59mm';
-    const titleHeadSepPt = isAssignmentProfile ? '25.79pt' : '38.68pt';
+    const titleTopMm = isAssignmentProfile ? '36.81mm' : '52.59mm';
+    const titleHeadSepPt = isAssignmentProfile ? '27.08pt' : '38.68pt';
     const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
       + `,hmargin=14mm,top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
     // 직전 페이지가 제목페이지였는지 기록 (일반 페이지 진입 시 \restoregeometry 삽입용).
@@ -4800,7 +4938,7 @@ export function buildDocumentTexSource(questions, options = {}) {
           parts.push('\\thispagestyle{mockfirst}');
         }
       }
-      const ov = overrides[i];
+      const ov = overrides[i] || assignmentPageColumnCounts?.[i] || null;
       const pageLeftSlots = ov ? ov.left : leftSlots;
       const pageRightSlots = ov ? ov.right : rightSlots;
       // 페이지 문항들의 sectionLabel 결정. 문항 mode 가 직전 mode 와 다를 때만 라벨 부여.

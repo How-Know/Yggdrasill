@@ -1,9 +1,10 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'app_bar_title.dart'; // for AccountButton
 
 const double _navIconSize = 26.0;
-const Color _navAccentColor = Color(0xFF1B6B63);
 const Color _navBackgroundColor = Color(0xFF0B1112);
 const Color _navIconColor = Color(0xFFEAF2F2);
 
@@ -26,15 +27,16 @@ class CustomNavigationRail extends StatelessWidget {
     // Row 안에서는 가로 제약이 무한대(Infinity)로 들어올 수 있어서,
     // 하단 영역에서 width: double.infinity 를 쓰면 레이아웃이 깨질 수 있다.
     // (navigationRailTheme.minWidth와 동일한 폭으로 고정)
-    final double railWidth =
-        NavigationRailTheme.of(context).minWidth ?? 84.0;
+    final double railWidth = NavigationRailTheme.of(context).minWidth ?? 84.0;
     return Column(
       children: [
         Expanded(
           child: NavigationRail(
             backgroundColor: _navBackgroundColor,
-            unselectedIconTheme: const IconThemeData(color: _navIconColor, size: _navIconSize),
-            selectedIconTheme: const IconThemeData(color: _navIconColor, size: _navIconSize),
+            unselectedIconTheme:
+                const IconThemeData(color: _navIconColor, size: _navIconSize),
+            selectedIconTheme:
+                const IconThemeData(color: _navIconColor, size: _navIconSize),
             indicatorColor: const Color(0xFF223131),
             selectedIndex: selectedIndex.clamp(0, 5),
             onDestinationSelected: onDestinationSelected,
@@ -47,12 +49,11 @@ class CustomNavigationRail extends StatelessWidget {
                     icon: AnimatedBuilder(
                       animation: rotationAnimation,
                       builder: (context, child) {
-                        final isExpanded = rotationAnimation.value != 0;
                         return Transform.rotate(
-                          angle: rotationAnimation.value,
-                          child: Icon(
+                          angle: rotationAnimation.value * (math.pi / 2),
+                          child: const Icon(
                             Symbols.package_2,
-                            color: isExpanded ? _navAccentColor : Colors.white,
+                            color: Colors.white,
                             size: 36,
                           ),
                         );
@@ -61,11 +62,7 @@ class CustomNavigationRail extends StatelessWidget {
                     onPressed: onMenuPressed,
                   ),
                   const SizedBox(height: 12),
-                  Container(
-                    width: 32,
-                    height: 1,
-                    color: Colors.white24,
-                  ),
+                  Container(width: 32, height: 1, color: Colors.white24),
                 ],
               ),
             ),
@@ -82,7 +79,11 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 selectedIcon: Tooltip(
                   message: '홈',
-                  child: Icon(Symbols.home_rounded, weight: 700, size: _navIconSize),
+                  child: Icon(
+                    Symbols.home_rounded,
+                    weight: 700,
+                    size: _navIconSize,
+                  ),
                 ),
                 label: Text(''),
               ),
@@ -94,7 +95,11 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 selectedIcon: Tooltip(
                   message: '학생',
-                  child: Icon(Symbols.person_rounded, weight: 700, size: _navIconSize),
+                  child: Icon(
+                    Symbols.person_rounded,
+                    weight: 700,
+                    size: _navIconSize,
+                  ),
                 ),
                 label: Text(''),
               ),
@@ -106,7 +111,11 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 selectedIcon: Tooltip(
                   message: '시간',
-                  child: Icon(Symbols.timer_rounded, weight: 700, size: _navIconSize),
+                  child: Icon(
+                    Symbols.timer_rounded,
+                    weight: 700,
+                    size: _navIconSize,
+                  ),
                 ),
                 label: Text(''),
               ),
@@ -118,7 +127,11 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 selectedIcon: Tooltip(
                   message: '학습',
-                  child: Icon(Symbols.network_intel_node, weight: 700, size: _navIconSize),
+                  child: Icon(
+                    Symbols.network_intel_node,
+                    weight: 700,
+                    size: _navIconSize,
+                  ),
                 ),
                 label: Text(''),
               ),
@@ -130,7 +143,11 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 selectedIcon: Tooltip(
                   message: '자료',
-                  child: Icon(Symbols.auto_stories, weight: 700, size: _navIconSize),
+                  child: Icon(
+                    Symbols.auto_stories,
+                    weight: 700,
+                    size: _navIconSize,
+                  ),
                 ),
                 label: Text(''),
               ),
@@ -142,7 +159,11 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 selectedIcon: Tooltip(
                   message: '설정',
-                  child: Icon(Symbols.settings, weight: 700, size: _navIconSize),
+                  child: Icon(
+                    Symbols.settings,
+                    weight: 700,
+                    size: _navIconSize,
+                  ),
                 ),
                 label: Text(''),
               ),
@@ -167,4 +188,4 @@ class CustomNavigationRail extends StatelessWidget {
       ],
     );
   }
-} 
+}

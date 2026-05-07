@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -49,6 +50,11 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   List<_MigBook> _books = [];
   String? _selectedBookId;
   List<_MigLink> _links = [];
+  final Map<String, String> _coverUrlByScope = <String, String>{};
+  final Map<String, _UnitProgressSummary> _unitProgressByScope =
+      <String, _UnitProgressSummary>{};
+  final Set<String> _unitProgressLoadingScopes = <String>{};
+  int _unitProgressLoadSeq = 0;
 
   // Tracks rows currently busy (upload or status update) so we can disable
   // their action buttons and show a spinner.
@@ -139,7 +145,12 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       _loadingLinks = true;
       _linkError = null;
       _links = [];
+      _coverUrlByScope.clear();
+      _unitProgressByScope.clear();
+      _unitProgressLoadingScopes.clear();
+      _unitProgressLoadSeq += 1;
     });
+    final progressSeq = _unitProgressLoadSeq;
     try {
       final data = await _supabase
           .from('resource_file_links')
@@ -149,6 +160,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           .eq('file_id', bookId);
       final rows = (data as List).cast<Map<String, dynamic>>();
       final parsed = <_MigLink>[];
+      final coverByScope = <String, String>{};
       for (final r in rows) {
         final rawGrade = (r['grade'] as String?)?.trim() ?? '';
         if (rawGrade.isEmpty) continue;
@@ -156,6 +168,15 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         final gradeLabel = parts.isNotEmpty ? parts.first.trim() : '';
         final kind =
             (parts.length > 1 ? parts[1] : 'body').trim().toLowerCase();
+        if (kind == 'cover') {
+          final coverUrl = (r['url'] as String?)?.trim() ?? '';
+          if (coverUrl.isNotEmpty) {
+            final academyId = (r['academy_id'] as String?)?.trim() ?? '';
+            final fileId = (r['file_id'] as String?)?.trim() ?? '';
+            coverByScope[_scopeKey(academyId, fileId, gradeLabel)] = coverUrl;
+          }
+          continue;
+        }
         if (gradeLabel.isEmpty || !_kinds.contains(kind)) continue;
         parsed.add(_MigLink(
           id: (r['id'] as num?)?.toInt() ?? 0,
@@ -185,8 +206,12 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       if (!mounted) return;
       setState(() {
         _links = parsed;
+        _coverUrlByScope
+          ..clear()
+          ..addAll(coverByScope);
         _loadingLinks = false;
       });
+      unawaited(_loadUnitProgressSummaries(parsed, progressSeq));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -194,6 +219,127 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         _linkError = '$e';
       });
     }
+  }
+
+  Future<void> _loadUnitProgressSummaries(
+    List<_MigLink> links,
+    int progressSeq,
+  ) async {
+    final targets = <String, _MigLink>{};
+    for (final link in links) {
+      if (link.academyId.isEmpty ||
+          link.fileId.isEmpty ||
+          link.gradeLabel.isEmpty) {
+        continue;
+      }
+      targets.putIfAbsent(_unitProgressKey(link), () => link);
+    }
+    if (targets.isEmpty) return;
+    if (!mounted || progressSeq != _unitProgressLoadSeq) return;
+    setState(() {
+      _unitProgressLoadingScopes.addAll(targets.keys);
+    });
+
+    for (final entry in targets.entries) {
+      if (!mounted || progressSeq != _unitProgressLoadSeq) return;
+      final key = entry.key;
+      final link = entry.value;
+      try {
+        final row = await _registry.loadPayload(
+          academyId: link.academyId,
+          bookId: link.fileId,
+          gradeLabel: link.gradeLabel,
+        );
+        final payload =
+            (row?['payload'] as Map?)?.cast<String, dynamic>();
+        final scopes = _unitStageScopesFromPayload(payload);
+        final summary = scopes.isEmpty
+            ? const _UnitProgressSummary.noUnitInfo()
+            : await _buildUnitProgressSummary(
+                link: link,
+                scopes: scopes,
+              );
+        if (!mounted || progressSeq != _unitProgressLoadSeq) return;
+        setState(() {
+          _unitProgressByScope[key] = summary;
+          _unitProgressLoadingScopes.remove(key);
+        });
+      } catch (e) {
+        if (!mounted || progressSeq != _unitProgressLoadSeq) return;
+        setState(() {
+          _unitProgressByScope[key] = _UnitProgressSummary.error('$e');
+          _unitProgressLoadingScopes.remove(key);
+        });
+      }
+    }
+  }
+
+  Future<_UnitProgressSummary> _buildUnitProgressSummary({
+    required _MigLink link,
+    required List<Map<String, dynamic>> scopes,
+  }) async {
+    final statuses = await _service.fetchStageStatuses(
+      academyId: link.academyId,
+      bookId: link.fileId,
+      gradeLabel: link.gradeLabel,
+      scopes: scopes,
+    );
+    final completed = statuses.where((s) => s.completedStages >= 3).length;
+    return _UnitProgressSummary(
+      totalUnits: scopes.length,
+      completedStage3Units: completed,
+    );
+  }
+
+  String _unitProgressKey(_MigLink link) =>
+      _scopeKey(link.academyId, link.fileId, link.gradeLabel);
+
+  String _scopeKey(String academyId, String fileId, String gradeLabel) =>
+      '$academyId|$fileId|$gradeLabel';
+
+  List<Map<String, dynamic>> _unitStageScopesFromPayload(
+    Map<String, dynamic>? payload,
+  ) {
+    if (payload == null) return const <Map<String, dynamic>>[];
+    final units = payload['units'];
+    if (units is! List) return const <Map<String, dynamic>>[];
+    final out = <Map<String, dynamic>>[];
+    for (var b = 0; b < units.length; b += 1) {
+      final rawBig = units[b];
+      if (rawBig is! Map) continue;
+      final big = Map<String, dynamic>.from(rawBig);
+      final bigOrder = _asIntLocal(big['order_index']) ?? b;
+      final middles = big['middles'];
+      if (middles is! List) continue;
+      for (var m = 0; m < middles.length; m += 1) {
+        final rawMid = middles[m];
+        if (rawMid is! Map) continue;
+        final mid = Map<String, dynamic>.from(rawMid);
+        final midOrder = _asIntLocal(mid['order_index']) ?? m;
+        final smalls = mid['smalls'];
+        if (smalls is! List || smalls.isEmpty) continue;
+        for (var s = 0; s < smalls.length; s += 1) {
+          final rawSmall = smalls[s];
+          if (rawSmall is! Map) continue;
+          final small = Map<String, dynamic>.from(rawSmall);
+          final subKey = '${small['sub_key'] ?? ''}'.trim().toUpperCase();
+          if (subKey.isEmpty) continue;
+          out.add(<String, dynamic>{
+            'big_order': bigOrder,
+            'mid_order': midOrder,
+            'sub_key': subKey,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  int? _asIntLocal(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   // ---------------- upload + status helpers ----------------
@@ -280,6 +426,51 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       await _loadLinks(book.id);
     } catch (e) {
       _toast('업로드 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy.remove(busyKey));
+    }
+  }
+
+  Future<void> _pickAndUploadCover(_MigLink link) async {
+    final book = _resolveBookForLink(link);
+    final academyId = book.academyId ?? link.academyId;
+    if (academyId.isEmpty) {
+      _toast('이 교재에 academy_id가 설정되어 있지 않습니다', error: true);
+      return;
+    }
+    final picked = await FilePicker.platform.pickFiles(
+      dialogTitle: '교재 표지 이미지 선택 (${link.gradeLabel})',
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+      withData: false,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+    final path = picked.files.first.path;
+    if (path == null || path.isEmpty) {
+      _toast('파일 경로를 읽을 수 없습니다', error: true);
+      return;
+    }
+    final busyKey = 'cover|${link.fileId}|${link.gradeLabel}';
+    setState(() => _busy.add(busyKey));
+    try {
+      final coverUrl = await _registry.upsertCourseCover(
+        academyId: academyId,
+        bookId: link.fileId,
+        gradeLabel: link.gradeLabel,
+        gradeKey: link.gradeKey,
+        courseKey: link.courseKey,
+        courseLabel: link.courseLabel,
+        localPath: path,
+      );
+      if (!mounted) return;
+      if ((coverUrl ?? '').isEmpty) {
+        _toast('표지 업로드 결과 URL을 확인할 수 없습니다', error: true);
+        return;
+      }
+      _toast('${link.gradeLabel} 표지를 등록했습니다');
+      await _loadLinks(book.id);
+    } catch (e) {
+      _toast('표지 업로드 실패: $e', error: true);
     } finally {
       if (mounted) setState(() => _busy.remove(busyKey));
     }
@@ -425,9 +616,9 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     await _loadLinks(result.bookId);
   }
 
-  void _openUnitAuthoring(_MigLink link) {
+  Future<void> _openUnitAuthoring(_MigLink link) async {
     final book = _resolveBookForLink(link);
-    TextbookUnitAuthoringDialog.show(
+    await TextbookUnitAuthoringDialog.show(
       context,
       academyId: link.academyId,
       bookId: link.fileId,
@@ -435,6 +626,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       gradeLabel: link.gradeLabel,
       linkId: link.id == 0 ? null : link.id,
     );
+    if (!mounted || _selectedBookId == null) return;
+    await _loadLinks(_selectedBookId!);
   }
 
   Widget _buildBookList() {
@@ -880,6 +1073,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         Expanded(child: Text('파일', style: style)),
         SizedBox(width: 72, child: Text('크기', style: style)),
         SizedBox(width: 390, child: Text('조작', style: style)),
+        SizedBox(width: 112, child: Text('표지', style: style)),
+        SizedBox(width: 156, child: Text('단원', style: style)),
       ],
     );
   }
@@ -968,8 +1163,72 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
                     children: _buildRowActions(link),
                   ),
           ),
+          SizedBox(
+            width: 112,
+            child: _buildCoverStatusBadge(link),
+          ),
+          SizedBox(
+            width: 156,
+            child: _buildUnitProgressBadge(link),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _buildUnitProgressBadge(_MigLink link) {
+    final key = _unitProgressKey(link);
+    if (_unitProgressLoadingScopes.contains(key)) {
+      return const _UnitProgressBadge(
+        label: '확인 중...',
+        color: Color(0xFF9FB3B3),
+        icon: Icons.hourglass_empty,
+      );
+    }
+    final summary = _unitProgressByScope[key];
+    if (summary == null) {
+      return const _UnitProgressBadge(
+        label: '확인 대기',
+        color: Color(0xFF8A8A8A),
+        icon: Icons.pending_outlined,
+      );
+    }
+    if (!summary.hasUnitInfo) {
+      return const _UnitProgressBadge(
+        label: '단원정보 없음',
+        color: Color(0xFF8A8A8A),
+        icon: Icons.info_outline,
+      );
+    }
+    if (summary.hasError) {
+      return const _UnitProgressBadge(
+        label: '확인 실패',
+        color: Color(0xFFE6A14A),
+        icon: Icons.warning_amber_outlined,
+      );
+    }
+    final ready = summary.totalUnits > 0 &&
+        summary.completedStage3Units >= summary.totalUnits;
+    return _UnitProgressBadge(
+      label:
+          '총 ${summary.totalUnits}개 · ${summary.completedStage3Units}개 완료',
+      color: ready ? const Color(0xFF7CC67C) : const Color(0xFF9FB3B3),
+      icon: ready ? Icons.verified_outlined : Icons.account_tree_outlined,
+    );
+  }
+
+  Widget _buildCoverStatusBadge(_MigLink link) {
+    if (link.kind != 'body') {
+      return const Text(
+        '-',
+        style: TextStyle(color: Color(0xFF5A5A5A), fontSize: 12),
+      );
+    }
+    final hasCover = (_coverUrlByScope[_unitProgressKey(link)] ?? '').isNotEmpty;
+    return _UnitProgressBadge(
+      label: hasCover ? '표지 있음' : '표지 없음',
+      color: hasCover ? const Color(0xFF7CC67C) : const Color(0xFF8A8A8A),
+      icon: hasCover ? Icons.image_outlined : Icons.image_not_supported_outlined,
     );
   }
 
@@ -1000,11 +1259,22 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       }
       if (link.kind == 'body' &&
           (link.storageKey.isNotEmpty || link.url.isNotEmpty)) {
+        final coverBusyKey = 'cover|${link.fileId}|${link.gradeLabel}';
+        final hasCover =
+            (_coverUrlByScope[_unitProgressKey(link)] ?? '').isNotEmpty;
+        widgets.add(const SizedBox(width: 6));
+        widgets.add(_ActionButton(
+          icon: Icons.image_outlined,
+          label: hasCover ? '표지 교체' : '표지 등록',
+          onPressed: _busy.contains(coverBusyKey)
+              ? null
+              : () => unawaited(_pickAndUploadCover(link)),
+        ));
         widgets.add(const SizedBox(width: 6));
         widgets.add(_ActionButton(
           icon: Icons.account_tree_outlined,
           label: '단원·분석',
-          onPressed: () => _openUnitAuthoring(link),
+          onPressed: () => unawaited(_openUnitAuthoring(link)),
         ));
       }
     }
@@ -1312,7 +1582,79 @@ class _NewRowPickerState extends State<_NewRowPicker> {
   }
 }
 
+class _UnitProgressBadge extends StatelessWidget {
+  const _UnitProgressBadge({
+    required this.label,
+    required this.color,
+    required this.icon,
+  });
+
+  final String label;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: label,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.38)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------- data classes ----------------
+
+class _UnitProgressSummary {
+  const _UnitProgressSummary({
+    required this.totalUnits,
+    required this.completedStage3Units,
+  })  : errorMessage = null,
+        hasUnitInfo = true;
+
+  const _UnitProgressSummary.noUnitInfo()
+      : totalUnits = 0,
+        completedStage3Units = 0,
+        errorMessage = null,
+        hasUnitInfo = false;
+
+  const _UnitProgressSummary.error(this.errorMessage)
+      : totalUnits = 0,
+        completedStage3Units = 0,
+        hasUnitInfo = true;
+
+  final int totalUnits;
+  final int completedStage3Units;
+  final String? errorMessage;
+  final bool hasUnitInfo;
+
+  bool get hasError => errorMessage != null && errorMessage!.isNotEmpty;
+}
 
 class _MigBook {
   const _MigBook({

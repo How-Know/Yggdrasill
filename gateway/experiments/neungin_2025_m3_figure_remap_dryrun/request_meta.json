@@ -1,0 +1,168 @@
+{
+  "model": "gemini-3.1-pro-preview",
+  "candidates": [
+    {
+      "label": "C1",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/061ed918-2d0d-4c98-a67d-f1a47b2012e2/a4ddec25-2701-4ed4-bb9a-635894851b11.png",
+      "currentAssignment": "7"
+    },
+    {
+      "label": "C2",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/200f2a3c-3033-45ab-84cf-b06dfbb114b1/b398907c-4855-46f6-88e0-c31834e00e93.png",
+      "currentAssignment": "17"
+    },
+    {
+      "label": "C3",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/2f085b39-4d63-4483-9a3a-a2be313fe97b/5d95995a-5258-4846-8aaf-e5cd19a1b1fc.png",
+      "currentAssignment": "18"
+    },
+    {
+      "label": "C4",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/513e4ef3-6a62-4343-821a-ad7b09fdc45c/94343b0c-c2e0-4a04-888d-d941c35779c0_1.png",
+      "currentAssignment": "9"
+    },
+    {
+      "label": "C5",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/513e4ef3-6a62-4343-821a-ad7b09fdc45c/94343b0c-c2e0-4a04-888d-d941c35779c0_2.png",
+      "currentAssignment": "9"
+    },
+    {
+      "label": "C6",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/61d31c16-b728-4537-bf72-5660c0a65c0d/ca640da9-75f0-405a-8536-1660c466398c.png",
+      "currentAssignment": "19"
+    },
+    {
+      "label": "C7",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/c9c2137d-df22-4ae0-8fcb-268edec3bf49/f3c282fd-7339-4816-9570-a28f4910312d_1.png",
+      "currentAssignment": "20"
+    },
+    {
+      "label": "C8",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/c9c2137d-df22-4ae0-8fcb-268edec3bf49/f3c282fd-7339-4816-9570-a28f4910312d_2.png",
+      "currentAssignment": "20"
+    },
+    {
+      "label": "C9",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/ff650d6b-f758-48cd-b5ea-6818768148c2/752e5d28-7e10-4633-8afd-012f6851d956.png",
+      "currentAssignment": "8"
+    }
+  ],
+  "questions": [
+    {
+      "number": "1",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "10",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "11",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "12",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "13",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "14",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "15",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "16",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "17",
+      "slots": 1,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/200f2a3c-3033-45ab-84cf-b06dfbb114b1/b398907c-4855-46f6-88e0-c31834e00e93.png"
+      ]
+    },
+    {
+      "number": "18",
+      "slots": 0,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/2f085b39-4d63-4483-9a3a-a2be313fe97b/5d95995a-5258-4846-8aaf-e5cd19a1b1fc.png"
+      ]
+    },
+    {
+      "number": "19",
+      "slots": 1,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/61d31c16-b728-4537-bf72-5660c0a65c0d/ca640da9-75f0-405a-8536-1660c466398c.png"
+      ]
+    },
+    {
+      "number": "2",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "20",
+      "slots": 0,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/c9c2137d-df22-4ae0-8fcb-268edec3bf49/f3c282fd-7339-4816-9570-a28f4910312d_1.png",
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/c9c2137d-df22-4ae0-8fcb-268edec3bf49/f3c282fd-7339-4816-9570-a28f4910312d_2.png"
+      ]
+    },
+    {
+      "number": "3",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "4",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "5",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "6",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "7",
+      "slots": 1,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/061ed918-2d0d-4c98-a67d-f1a47b2012e2/a4ddec25-2701-4ed4-bb9a-635894851b11.png"
+      ]
+    },
+    {
+      "number": "8",
+      "slots": 0,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/ff650d6b-f758-48cd-b5ea-6818768148c2/752e5d28-7e10-4633-8afd-012f6851d956.png"
+      ]
+    },
+    {
+      "number": "9",
+      "slots": 0,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/513e4ef3-6a62-4343-821a-ad7b09fdc45c/94343b0c-c2e0-4a04-888d-d941c35779c0_1.png",
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/8bbc0e16-665e-4fc0-be42-30035ac9f8a2/513e4ef3-6a62-4343-821a-ad7b09fdc45c/94343b0c-c2e0-4a04-888d-d941c35779c0_2.png"
+      ]
+    }
+  ]
+}
