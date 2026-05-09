@@ -406,7 +406,7 @@ function normalizeMathSegment(mathContent) {
   // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
   out = out.replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, '\\mtemptybox{}');
   out = out.replace(/\bBOX\b/g, '\\mtemptybox{}');
-  out = out.replace(/box\s*\{\s*(?:~~)?\s*\}/gi, '\\mtemptybox{}');
+  out = out.replace(/(?<![\\A-Za-z])box\s*\{\s*(?:~~)?\s*\}/gi, '\\mtemptybox{}');
   // □ABFE / □CDEF 처럼 도형 이름 앞의 사각형 기호는 빈칸이 아니라 \square 로 유지.
   out = out.replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ');
   out = out.replace(/[□▢◻]/g, '\\mtemptybox{}');
@@ -419,7 +419,8 @@ function normalizeMathSegment(mathContent) {
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   // box{X} (내용이 있는 박스) → \boxed{X}. 빈 경우는 위 규칙이 이미 처리.
-  out = out.replace(/(?<!\\)box\{([^}]+)\}/g, '\\boxed{$1}');
+  out = out.replace(/(?<![\\A-Za-z])box\{([^}]+)\}/g, '\\boxed{$1}');
+  out = out.replace(/\\mtexponentempty\\mtemptybox\{\}/g, '\\mtexponentemptybox{}');
 
   // 한국식 평행기호: slash 두 개를 쓰되 줄 높이에 영향을 주지 않게 격리한다.
   out = out.replace(/∥/g, '\\mtparallel{}');
@@ -4884,6 +4885,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     //   - auto     : 서버 기본 생성. 클라이언트가 payload 에 포함해 보내면 그대로 그려진다.
     //   - suppressed : 사용자가 × 로 '제거' 한 slot. 이 slot 에는 auto 라벨도 출력하지 않는다.
     columnLabelAnchors = [],
+    reviewPdf = false,
     // 클라이언트(Flutter) 가 '새로고침' / 'PDF 생성' 경로에서 true 로 넘겨주는 플래그.
     //   true 이면 모드 전환 기반 자동 라벨 생성(예: '5지선다형') 을 전면 중단하고,
     //   columnLabelAnchors 에 들어있는 항목들만 그대로 사용한다.
@@ -4911,6 +4913,42 @@ export function buildDocumentTexSource(questions, options = {}) {
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
 
   const qList = Array.isArray(questions) ? questions : [];
+  if (profile === 'review_compact' || reviewPdf === true) {
+    const resolveReviewAnswer = (q) => {
+      const exp = String(q?.export_answer || '').trim();
+      if (exp) return exp;
+      const sub = String(q?.subjective_answer || '').trim();
+      if (sub) return sub;
+      const obj = String(q?.objective_answer_key || '').trim();
+      if (obj) return obj;
+      return '(미기입)';
+    };
+    const renderReviewAnswer = (q) => {
+      const raw = resolveReviewAnswer(q)
+        .replace(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi, '[그림]');
+      return smartTexLine(raw, Array.isArray(q?.equations) ? q.equations : []);
+    };
+    parts.push('\\setlength{\\columnsep}{1.2em}');
+    parts.push('\\begin{multicols}{2}');
+    for (const q of qList) {
+      parts.push('\\noindent');
+      parts.push(renderOneQuestion(q, {
+        showQuestionNumber: !hideQuestionNumber,
+        questionNumberPlacement,
+        questionNumberFormat,
+        includeQuestionScore,
+        questionScoreByQuestionId,
+        stemSizePt: fontSize,
+      }));
+      parts.push(
+        `\\noindent\\fbox{\\begin{minipage}{0.96\\linewidth}\\textbf{정답:} ${renderReviewAnswer(q)}\\end{minipage}}`,
+      );
+      parts.push('\\par\\vspace{0.8em}');
+    }
+    parts.push('\\end{multicols}');
+    parts.push('\\end{document}');
+    return parts.join('\n');
+  }
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
   const isAssignmentProfile = profile === 'assignment';
   const isMock = isMockExamProfile || isAssignmentProfile;

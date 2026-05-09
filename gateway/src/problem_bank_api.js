@@ -159,7 +159,14 @@ function normalizePresetDisplayName(raw, fallback = '') {
 
 function normalizeTemplateProfile(raw) {
   const s = String(raw || '').trim().toLowerCase();
-  if (s === 'csat' || s === 'mock' || s === 'naesin' || s === 'assignment' || s === 'homework') {
+  if (
+    s === 'csat' ||
+    s === 'mock' ||
+    s === 'naesin' ||
+    s === 'assignment' ||
+    s === 'homework' ||
+    s === 'review_compact'
+  ) {
     return s === 'homework' ? 'assignment' : s;
   }
   return 'naesin';
@@ -168,7 +175,9 @@ function normalizeTemplateProfile(raw) {
 function templateProfileForPbExportsColumn(profile) {
   const normalized = normalizeTemplateProfile(profile);
   // DB check constraint currently allows only naesin/csat/mock.
-  return normalized === 'assignment' ? 'naesin' : normalized;
+  return normalized === 'assignment' || normalized === 'review_compact'
+    ? 'naesin'
+    : normalized;
 }
 
 const CURRICULUM_CODES = new Set([

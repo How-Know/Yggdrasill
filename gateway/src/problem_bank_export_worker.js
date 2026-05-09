@@ -140,6 +140,16 @@ const PROFILE_LAYOUT = {
     questionGap: 12,
     choiceIndent: 20,
   },
+  review_compact: {
+    title: '\uAC80\uD1A0 PDF',
+    margin: 32,
+    headerHeight: 0,
+    stemSize: 10.2,
+    choiceSize: 9.8,
+    lineHeight: 11.2,
+    questionGap: 8,
+    choiceIndent: 18,
+  },
 };
 
 const STRUCTURAL_MARKER_REGEX = /\[(\uBB38\uB2E8|\uBC15\uC2A4\uC2DC\uC791|\uBC15\uC2A4\uB05D)\]/g;
@@ -1934,7 +1944,14 @@ function normalizePaper(raw) {
 
 function normalizeProfile(raw) {
   const p = String(raw || '').trim().toLowerCase();
-  if (p === 'csat' || p === 'mock' || p === 'naesin' || p === 'assignment' || p === 'homework') {
+  if (
+    p === 'csat' ||
+    p === 'mock' ||
+    p === 'naesin' ||
+    p === 'assignment' ||
+    p === 'homework' ||
+    p === 'review_compact'
+  ) {
     return p === 'homework' ? 'assignment' : p;
   }
   return 'naesin';
@@ -2517,7 +2534,12 @@ function buildRenderConfigFromJob(job) {
     subjectTitleText,
     titlePageTopText,
     timeLimitText,
-    mathEngine: String(options.mathEngine || '').trim() || undefined,
+    mathEngine:
+      profileHint === 'review_compact' ||
+      normalizeBool(options.reviewPdf ?? options.review_pdf, false)
+        ? 'xelatex'
+        : (String(options.mathEngine || '').trim() || undefined),
+    reviewPdf: normalizeBool(options.reviewPdf ?? options.review_pdf, false),
     disableAutoLabels,
   };
 }

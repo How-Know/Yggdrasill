@@ -10,6 +10,7 @@ const PAPER_MM = {
 };
 
 function profileTitle(profile) {
+  if (profile === 'review_compact') return '검토 PDF';
   if (profile === 'csat') return '모의고사형 시험지';
   if (profile === 'mock') return '모의고사형 시험지';
   if (profile === 'assignment') return '과제형 시험지';
@@ -1482,6 +1483,40 @@ function buildStyles({
     .profile-note::before {
       content: "${escapeHtml(title)}";
     }
+    body.profile-review_compact {
+      max-width: ${(paperMm.width - 2 * marginMm).toFixed(1)}mm;
+      font-size: calc(var(--stem-size-pt) * 1pt);
+      line-height: calc(var(--line-height-pt) * 1pt);
+    }
+    .review-stream {
+      columns: 2;
+      column-gap: calc(var(--column-gap-pt) * 1pt);
+      overflow: visible;
+    }
+    .review-item {
+      break-inside: avoid;
+      margin-bottom: calc(var(--question-gap-pt) * 1pt);
+      overflow: visible;
+    }
+    .review-item .question {
+      margin-bottom: 3pt;
+    }
+    .review-answer {
+      break-inside: avoid;
+      margin-top: 3pt;
+      padding: 4pt 5pt;
+      border: 0.4pt solid #cfcfcf;
+      border-radius: 3pt;
+      background: #fafafa;
+      font-size: calc((var(--stem-size-pt) - 0.4) * 1pt);
+      line-height: 1.45;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }
+    .review-answer-label {
+      font-weight: 700;
+      margin-right: 0.35em;
+    }
   `;
 }
 
@@ -1635,6 +1670,45 @@ function renderExplanationSection(questions) {
       ${rows.join('')}
     </section>
   `;
+}
+
+function resolveReviewAnswer(question) {
+  const exp = String(question?.export_answer || '').trim();
+  if (exp) return exp;
+  const sub = String(question?.subjective_answer || '').trim();
+  if (sub) return sub;
+  const obj = String(question?.objective_answer_key || '').trim();
+  if (obj) return obj;
+  return '(미기입)';
+}
+
+function renderReviewAnswerValue(question, mathRenderer) {
+  const raw = resolveReviewAnswer(question);
+  const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\])/gi;
+  const clean = raw.replace(markerRe, '[그림]');
+  if (!mathRenderer) return escapeHtml(clean);
+  const composed = composeLineV1(clean, mathRenderer, question?.equations);
+  return composed.html || escapeHtml(clean);
+}
+
+function renderReviewCompactHtml({
+  questions,
+  renderedQuestionBlocks,
+  mathRenderer,
+}) {
+  const blocks = (questions || []).map((q, index) => {
+    const questionHtml = renderedQuestionBlocks[index] || '';
+    const answerHtml = renderReviewAnswerValue(q, mathRenderer);
+    return `
+      <article class="review-item">
+        ${questionHtml}
+        <div class="review-answer">
+          <span class="review-answer-label">정답:</span>${answerHtml}
+        </div>
+      </article>
+    `;
+  });
+  return `<main class="review-stream">${blocks.join('')}</main>`;
 }
 
 function computeQuestionVisualScore(question, renderedHtml) {
@@ -2073,6 +2147,28 @@ export function buildDocumentHtml({
     questionNumberFormat,
     debugDots,
   }));
+  const isReviewCompact = profile === 'review_compact' || layout?.reviewPdf === true;
+  if (isReviewCompact) {
+    const reviewHtml = renderReviewCompactHtml({
+      questions,
+      renderedQuestionBlocks: allQ,
+      mathRenderer,
+    });
+    return `
+      <!doctype html>
+      <html lang="ko">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>${fontFaceCss}</style>
+          <style>${styles}</style>
+        </head>
+        <body class="profile-review_compact">
+          ${reviewHtml}
+        </body>
+      </html>
+    `;
+  }
   let autoAnchorCarryMode = null;
   const effectiveColumnLabelAnchorRows = [];
   const effectiveAnchorSeen = new Set();

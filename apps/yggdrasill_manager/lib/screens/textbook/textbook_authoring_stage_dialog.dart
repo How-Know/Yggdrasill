@@ -51,7 +51,9 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.initialCrops = const <TextbookAuthoringStageCropSeed>[],
     this.batchScopes = const <TextbookAuthoringStageScope>[],
     this.answerStartPage,
+    this.answerEndPage,
     this.solutionStartPage,
+    this.solutionEndPage,
     this.embedded = false,
     this.onBack,
     this.onStageChanged,
@@ -70,7 +72,9 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final List<TextbookAuthoringStageCropSeed> initialCrops;
   final List<TextbookAuthoringStageScope> batchScopes;
   final int? answerStartPage;
+  final int? answerEndPage;
   final int? solutionStartPage;
+  final int? solutionEndPage;
   final bool embedded;
   final VoidCallback? onBack;
   final VoidCallback? onStageChanged;
@@ -92,7 +96,9 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     List<TextbookAuthoringStageScope> batchScopes =
         const <TextbookAuthoringStageScope>[],
     int? answerStartPage,
+    int? answerEndPage,
     int? solutionStartPage,
+    int? solutionEndPage,
   }) {
     return showDialog<void>(
       context: context,
@@ -111,7 +117,9 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
         initialCrops: initialCrops,
         batchScopes: batchScopes,
         answerStartPage: answerStartPage,
+        answerEndPage: answerEndPage,
         solutionStartPage: solutionStartPage,
+        solutionEndPage: solutionEndPage,
       ),
     );
   }
@@ -130,7 +138,9 @@ class TextbookAuthoringStageScope {
     this.midName = '',
     this.subName = '',
     this.answerStartPage,
+    this.answerEndPage,
     this.solutionStartPage,
+    this.solutionEndPage,
   });
 
   final int bigOrder;
@@ -140,7 +150,9 @@ class TextbookAuthoringStageScope {
   final String midName;
   final String subName;
   final int? answerStartPage;
+  final int? answerEndPage;
   final int? solutionStartPage;
+  final int? solutionEndPage;
 }
 
 /// Minimal crop row passed from Stage 1 immediately after a successful
@@ -190,6 +202,10 @@ class _TextbookAuthoringStageDialogState
   static const _kWarn = Color(0xFFE6C07A);
 
   static const int _kVlmLongEdgePx = 1500;
+  static final Map<String, TextbookVlmAnswerPageResult> _answerVlmPageCache =
+      <String, TextbookVlmAnswerPageResult>{};
+  static final Map<String, TextbookVlmSolutionRefPageResult>
+      _solutionVlmPageCache = <String, TextbookVlmSolutionRefPageResult>{};
 
   final _pdfService = TextbookPdfService();
   final _answerService = TextbookVlmAnswerService();
@@ -229,6 +245,7 @@ class _TextbookAuthoringStageDialogState
   PdfDocument? _solutionDocument;
   String? _solutionLocalPath;
   final _solutionViewerController = PdfViewerController();
+  final Map<int, Uint8List> _solutionPagePngCache = <int, Uint8List>{};
 
   bool _runningSolRefVlm = false;
   double _solRefProgress = 0;
@@ -337,7 +354,9 @@ class _TextbookAuthoringStageDialogState
               bigName: widget.bigName ?? '',
               midName: widget.midName ?? '',
               answerStartPage: widget.answerStartPage,
+              answerEndPage: widget.answerEndPage,
               solutionStartPage: widget.solutionStartPage,
+              solutionEndPage: widget.solutionEndPage,
             ),
           ];
     final out = <Map<String, dynamic>>[];
@@ -515,6 +534,7 @@ class _TextbookAuthoringStageDialogState
       setState(() {
         _solutionDocument = doc;
         _solutionLocalPath = file.path;
+        _solutionPagePngCache.clear();
         _loadingSolutionPdf = false;
       });
       return doc;
@@ -545,20 +565,32 @@ class _TextbookAuthoringStageDialogState
     });
 
     final answerCrops = _crops.where((c) => !c.isSetHeader).toList();
+    final savedCount = answerCrops
+        .where(
+            (c) => _answersByCropId[c.id]?.answerText.trim().isNotEmpty == true)
+        .length;
+    final targetCrops = answerCrops
+        .where(
+            (c) => _answersByCropId[c.id]?.answerText.trim().isNotEmpty != true)
+        .toList();
     final expected = <String>[
-      for (final c in answerCrops)
+      for (final c in targetCrops)
         if (c.problemNumber.isNotEmpty) c.problemNumber,
     ];
     if (expected.isEmpty) {
       setState(() {
         _runningAnswerVlm = false;
-        _answerStatus = '정답 매칭 대상이 없습니다';
+        _answerStatus = savedCount > 0
+            ? '정답 VLM 생략 · 저장된 정답 $savedCount개'
+            : '정답 매칭 대상이 없습니다';
       });
       return;
     }
     final totalPages = doc.pages.length;
-    final startPage = _startPageFromScopes(answer: true, pageCount: totalPages);
-    final scanTotal = totalPages - startPage + 1;
+    final pageRange = _pageRangeFromScopes(answer: true, pageCount: totalPages);
+    final startPage = pageRange.start;
+    final endPage = pageRange.end;
+    final scanTotal = endPage - startPage + 1;
     final expectedByKey = <String, String>{
       for (final number in expected)
         if (textbookAnswerNumberKey(number).isNotEmpty)
@@ -570,31 +602,26 @@ class _TextbookAuthoringStageDialogState
     final pageByNumber = <String, ({int rawPage, int displayPage})>{};
 
     try {
-      for (var page = startPage; page <= totalPages; page += 1) {
+      for (var page = startPage; page <= endPage; page += 1) {
         if (remainingKeys.isEmpty) break;
         if (!mounted) return;
         setState(() {
           _answerStatus =
-              '답지 $page / $totalPages 페이지 분석… · 남은 번호 ${remainingKeys.length}개';
+              '답지 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${remainingKeys.length}개';
         });
-        Uint8List png;
+        final Uint8List png;
         try {
-          png = await renderPdfPageToPng(
-            document: doc,
-            pageNumber: page,
-            longEdgePx: _kVlmLongEdgePx,
-          );
+          final rendered = await _answerPagePng(page);
+          if (rendered == null) continue;
+          png = rendered;
         } catch (e) {
           debugPrint('[stage2] render failed page=$page err=$e');
           continue;
         }
         try {
-          final res = await _answerService.extractAnswersOnPage(
+          final res = await _extractAnswersOnPageCached(
             imageBytes: png,
-            rawPage: page,
-            academyId: widget.academyId,
-            bookId: widget.bookId,
-            gradeLabel: widget.gradeLabel,
+            page: page,
             expectedNumbers: [
               for (final key in remainingKeys) expectedByKey[key]!,
             ],
@@ -641,7 +668,7 @@ class _TextbookAuthoringStageDialogState
         items: aggregated,
       );
       final byNumber = <String, String>{
-        for (final c in answerCrops) c.problemNumber: c.id,
+        for (final c in targetCrops) c.problemNumber: c.id,
       };
       setState(() {
         for (final entry in report.matched.entries) {
@@ -674,8 +701,8 @@ class _TextbookAuthoringStageDialogState
           ..addAll(report.missing);
         _runningAnswerVlm = false;
         _answerStatus = report.missing.isEmpty
-            ? 'VLM 완료 · 모든 번호 매칭됨'
-            : 'VLM 완료 · 누락 ${report.missing.length}개';
+            ? 'VLM 완료 · 신규 ${report.matched.length}개 · 저장 $savedCount개'
+            : 'VLM 완료 · 신규 ${report.matched.length}개 · 저장 $savedCount개 · 누락 ${report.missing.length}개';
       });
     } catch (e) {
       if (!mounted) return;
@@ -914,6 +941,46 @@ class _TextbookAuthoringStageDialogState
     return png;
   }
 
+  String _vlmPageCacheKey(String stage, int page) {
+    return [
+      widget.academyId,
+      widget.bookId,
+      widget.gradeLabel,
+      stage,
+      page,
+    ].join('|');
+  }
+
+  String _expectedCacheKey(List<String> expectedNumbers) {
+    final normalized = expectedNumbers
+        .map((n) => n.trim())
+        .where((n) => n.isNotEmpty)
+        .toList()
+      ..sort();
+    return normalized.join(',');
+  }
+
+  Future<TextbookVlmAnswerPageResult> _extractAnswersOnPageCached({
+    required Uint8List imageBytes,
+    required int page,
+    required List<String> expectedNumbers,
+  }) async {
+    final key =
+        '${_vlmPageCacheKey('answer', page)}|${_expectedCacheKey(expectedNumbers)}';
+    final cached = _answerVlmPageCache[key];
+    if (cached != null) return cached;
+    final result = await _answerService.extractAnswersOnPage(
+      imageBytes: imageBytes,
+      rawPage: page,
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      gradeLabel: widget.gradeLabel,
+      expectedNumbers: expectedNumbers,
+    );
+    _answerVlmPageCache[key] = result;
+    return result;
+  }
+
   Future<_ImageAnswerCrop?> _cropAnswerImageFromPage({
     required int page,
     required List<int> bbox1k,
@@ -984,6 +1051,42 @@ class _TextbookAuthoringStageDialogState
 
   // --------------------------------------------------------------- stage 3
 
+  Future<Uint8List?> _solutionPagePng(int page) async {
+    final doc = await _ensureSolutionPdf();
+    if (doc == null) return null;
+    if (page < 1 || page > doc.pages.length) return null;
+    final cached = _solutionPagePngCache[page];
+    if (cached != null) return cached;
+    final png = await renderPdfPageToPng(
+      document: doc,
+      pageNumber: page,
+      longEdgePx: _kVlmLongEdgePx,
+    );
+    _solutionPagePngCache[page] = png;
+    return png;
+  }
+
+  Future<TextbookVlmSolutionRefPageResult> _detectSolutionRefsOnPageCached({
+    required Uint8List imageBytes,
+    required int page,
+    required List<String> expectedNumbers,
+  }) async {
+    final key =
+        '${_vlmPageCacheKey('solution', page)}|${_expectedCacheKey(expectedNumbers)}';
+    final cached = _solutionVlmPageCache[key];
+    if (cached != null) return cached;
+    final result = await _solRefService.detectOnPage(
+      imageBytes: imageBytes,
+      rawPage: page,
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      gradeLabel: widget.gradeLabel,
+      expectedNumbers: expectedNumbers,
+    );
+    _solutionVlmPageCache[key] = result;
+    return result;
+  }
+
   Future<void> _runSolutionRefVlm() async {
     if (_runningSolRefVlm) return;
     final doc = await _ensureSolutionPdf();
@@ -999,14 +1102,20 @@ class _TextbookAuthoringStageDialogState
     });
 
     final solRefCrops = _crops.where((c) => !c.isSetHeader).toList();
+    final savedCount =
+        solRefCrops.where((c) => _solRefsByCropId.containsKey(c.id)).length;
+    final targetCrops =
+        solRefCrops.where((c) => !_solRefsByCropId.containsKey(c.id)).toList();
     final expected = <String>[
-      for (final c in solRefCrops)
+      for (final c in targetCrops)
         if (c.problemNumber.isNotEmpty) c.problemNumber,
     ];
     if (expected.isEmpty) {
       setState(() {
         _runningSolRefVlm = false;
-        _solRefStatus = '해설 좌표 탐지 대상이 없습니다';
+        _solRefStatus = savedCount > 0
+            ? '해설 VLM 생략 · 저장된 해설 좌표 $savedCount개'
+            : '해설 좌표 탐지 대상이 없습니다';
       });
       return;
     }
@@ -1017,38 +1126,35 @@ class _TextbookAuthoringStageDialogState
     };
     final remainingKeys = expectedByKey.keys.toSet();
     final totalPages = doc.pages.length;
-    final startPage =
-        _startPageFromScopes(answer: false, pageCount: totalPages);
-    final scanTotal = totalPages - startPage + 1;
+    final pageRange =
+        _pageRangeFromScopes(answer: false, pageCount: totalPages);
+    final startPage = pageRange.start;
+    final endPage = pageRange.end;
+    final scanTotal = endPage - startPage + 1;
     final aggregated =
         <String, _SolutionRefWithPage>{}; // problem_number -> draft
 
     try {
-      for (var page = startPage; page <= totalPages; page += 1) {
+      for (var page = startPage; page <= endPage; page += 1) {
         if (remainingKeys.isEmpty) break;
         if (!mounted) return;
         setState(() {
           _solRefStatus =
-              '해설 $page / $totalPages 페이지 분석… · 남은 번호 ${remainingKeys.length}개';
+              '해설 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${remainingKeys.length}개';
         });
-        Uint8List png;
+        final Uint8List png;
         try {
-          png = await renderPdfPageToPng(
-            document: doc,
-            pageNumber: page,
-            longEdgePx: _kVlmLongEdgePx,
-          );
+          final rendered = await _solutionPagePng(page);
+          if (rendered == null) continue;
+          png = rendered;
         } catch (e) {
           debugPrint('[stage3] render failed page=$page err=$e');
           continue;
         }
         try {
-          final res = await _solRefService.detectOnPage(
+          final res = await _detectSolutionRefsOnPageCached(
             imageBytes: png,
-            rawPage: page,
-            academyId: widget.academyId,
-            bookId: widget.bookId,
-            gradeLabel: widget.gradeLabel,
+            page: page,
             expectedNumbers: [
               for (final key in remainingKeys) expectedByKey[key]!,
             ],
@@ -1081,11 +1187,11 @@ class _TextbookAuthoringStageDialogState
       }
 
       final byNumber = <String, String>{
-        for (final c in solRefCrops) c.problemNumber: c.id,
+        for (final c in targetCrops) c.problemNumber: c.id,
       };
       final missing = <String>[];
       setState(() {
-        for (final c in solRefCrops) {
+        for (final c in targetCrops) {
           final found = aggregated[c.problemNumber];
           final cropId = byNumber[c.problemNumber];
           if (cropId == null) continue;
@@ -1109,8 +1215,8 @@ class _TextbookAuthoringStageDialogState
           ..addAll(missing);
         _runningSolRefVlm = false;
         _solRefStatus = missing.isEmpty
-            ? 'VLM 완료 · 모든 번호 좌표 확보'
-            : 'VLM 완료 · 누락 ${missing.length}개';
+            ? 'VLM 완료 · 신규 ${aggregated.length}개 · 저장 $savedCount개'
+            : 'VLM 완료 · 신규 ${aggregated.length}개 · 저장 $savedCount개 · 누락 ${missing.length}개';
       });
     } catch (e) {
       if (!mounted) return;
@@ -2123,14 +2229,16 @@ class _TextbookAuthoringStageDialogState
                 bigName: widget.bigName ?? '',
                 midName: widget.midName ?? '',
                 answerStartPage: widget.answerStartPage,
+                answerEndPage: widget.answerEndPage,
                 solutionStartPage: widget.solutionStartPage,
+                solutionEndPage: widget.solutionEndPage,
               ),
             ];
 
   String _scopeKey(TextbookAuthoringStageScope scope) =>
       '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}';
 
-  int _startPageFromScopes({
+  ({int start, int end}) _pageRangeFromScopes({
     required bool answer,
     required int pageCount,
   }) {
@@ -2139,9 +2247,16 @@ class _TextbookAuthoringStageDialogState
         if ((answer ? scope.answerStartPage : scope.solutionStartPage) != null)
           answer ? scope.answerStartPage! : scope.solutionStartPage!,
     ].where((page) => page > 0).toList();
-    if (starts.isEmpty) return 1;
-    final minStart = starts.reduce(math.min);
-    return minStart.clamp(1, pageCount);
+    final ends = <int>[
+      for (final scope in _activeScopes)
+        if ((answer ? scope.answerEndPage : scope.solutionEndPage) != null)
+          answer ? scope.answerEndPage! : scope.solutionEndPage!,
+    ].where((page) => page > 0).toList();
+    final start = starts.isEmpty ? 1 : starts.reduce(math.min);
+    final end = ends.isEmpty ? pageCount : ends.reduce(math.max);
+    final clampedStart = start.clamp(1, pageCount);
+    final clampedEnd = end.clamp(clampedStart, pageCount);
+    return (start: clampedStart, end: clampedEnd);
   }
 
   bool get _allPbRunsFinished {

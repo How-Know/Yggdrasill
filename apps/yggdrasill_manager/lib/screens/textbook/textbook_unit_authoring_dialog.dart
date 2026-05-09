@@ -1218,7 +1218,9 @@ class _TextbookUnitAuthoringDialogState
         batchScopes:
             scopes.length > 1 ? scopes : const <TextbookAuthoringStageScope>[],
         answerStartPage: scopes.first.answerStartPage,
+        answerEndPage: scopes.first.answerEndPage,
         solutionStartPage: scopes.first.solutionStartPage,
+        solutionEndPage: scopes.first.solutionEndPage,
       );
     });
   }
@@ -1238,8 +1240,43 @@ class _TextbookUnitAuthoringDialogState
       midName: mid.nameCtrl.text.trim(),
       subName: sub.preset.displayName,
       answerStartPage: _positiveInt(sub.answerStartCtrl.text),
+      answerEndPage: _stageEndPageFor(focus, answer: true),
       solutionStartPage: _positiveInt(sub.solutionStartCtrl.text),
+      solutionEndPage: _stageEndPageFor(focus, answer: false),
     );
+  }
+
+  int? _stageEndPageFor(_SubFocus focus, {required bool answer}) {
+    final nextStart = _nextStageStartPageAfter(focus, answer: answer);
+    if (nextStart == null || nextStart <= 1) return null;
+    // 마지막 문제가 다음 단원 시작 페이지와 섞여 있는 교재가 있어
+    // 다음 단원 첫 페이지까지 포함해 스캔한다.
+    return nextStart;
+  }
+
+  int? _nextStageStartPageAfter(_SubFocus focus, {required bool answer}) {
+    var passed = false;
+    for (var b = 0; b < _bigUnits.length; b += 1) {
+      final big = _bigUnits[b];
+      for (var m = 0; m < big.middles.length; m += 1) {
+        final mid = big.middles[m];
+        for (final sub in mid.subs) {
+          final isCurrent = b == focus.bigIndex &&
+              m == focus.midIndex &&
+              sub.preset.key == focus.subKey;
+          if (isCurrent) {
+            passed = true;
+            continue;
+          }
+          if (!passed) continue;
+          final page = _positiveInt(
+            answer ? sub.answerStartCtrl.text : sub.solutionStartCtrl.text,
+          );
+          if (page != null) return page;
+        }
+      }
+    }
+    return null;
   }
 
   List<TextbookAuthoringStageCropSeed> _buildStageCropSeeds(
@@ -1335,7 +1372,9 @@ class _TextbookUnitAuthoringDialogState
                   initialCrops: _embeddedStage!.initialCrops,
                   batchScopes: _embeddedStage!.batchScopes,
                   answerStartPage: _embeddedStage!.answerStartPage,
+                  answerEndPage: _embeddedStage!.answerEndPage,
                   solutionStartPage: _embeddedStage!.solutionStartPage,
+                  solutionEndPage: _embeddedStage!.solutionEndPage,
                   embedded: true,
                   onBack: () {
                     setState(() => _embeddedStage = null);
@@ -3323,7 +3362,9 @@ class _EmbeddedStageArgs {
     required this.initialCrops,
     required this.batchScopes,
     this.answerStartPage,
+    this.answerEndPage,
     this.solutionStartPage,
+    this.solutionEndPage,
   });
 
   final int bigOrder;
@@ -3334,7 +3375,9 @@ class _EmbeddedStageArgs {
   final List<TextbookAuthoringStageCropSeed> initialCrops;
   final List<TextbookAuthoringStageScope> batchScopes;
   final int? answerStartPage;
+  final int? answerEndPage;
   final int? solutionStartPage;
+  final int? solutionEndPage;
 }
 
 class _SubRunState {

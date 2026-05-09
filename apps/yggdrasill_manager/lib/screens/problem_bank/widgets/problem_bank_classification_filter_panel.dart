@@ -14,13 +14,16 @@ class ProblemBankClassificationFilterPanel extends StatelessWidget {
     required this.questionTypeLabels,
     required this.selectedCurriculumCode,
     required this.selectedSourceTypeCode,
+    required this.selectedBookName,
     required this.selectedQuestionType,
+    required this.bookNameOptions,
     required this.yearController,
     required this.gradeController,
     required this.schoolController,
     required this.isSearching,
     required this.onCurriculumChanged,
     required this.onSourceTypeChanged,
+    required this.onBookNameChanged,
     required this.onQuestionTypeChanged,
     required this.onSearch,
     required this.onReset,
@@ -37,13 +40,16 @@ class ProblemBankClassificationFilterPanel extends StatelessWidget {
   final Map<String, String> questionTypeLabels;
   final String selectedCurriculumCode;
   final String selectedSourceTypeCode;
+  final String selectedBookName;
   final String selectedQuestionType;
+  final List<String> bookNameOptions;
   final TextEditingController yearController;
   final TextEditingController gradeController;
   final TextEditingController schoolController;
   final bool isSearching;
   final ValueChanged<String> onCurriculumChanged;
   final ValueChanged<String> onSourceTypeChanged;
+  final ValueChanged<String> onBookNameChanged;
   final ValueChanged<String> onQuestionTypeChanged;
   final VoidCallback onSearch;
   final VoidCallback onReset;
@@ -76,6 +82,21 @@ class ProblemBankClassificationFilterPanel extends StatelessWidget {
             labels: curriculumLabels,
             onChanged: onCurriculumChanged,
           ),
+          if (selectedSourceTypeCode == 'market_book') ...[
+            const SizedBox(height: 8),
+            _buildDropdown(
+              label: '교재명',
+              value: bookNameOptions.contains(selectedBookName)
+                  ? selectedBookName
+                  : '',
+              values: <String>['', ...bookNameOptions],
+              labels: <String, String>{
+                '': '전체',
+                for (final name in bookNameOptions) name: name,
+              },
+              onChanged: onBookNameChanged,
+            ),
+          ],
           const SizedBox(height: 8),
           Row(
             children: [

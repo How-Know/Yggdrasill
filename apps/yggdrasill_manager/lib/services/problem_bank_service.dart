@@ -1273,6 +1273,7 @@ class ProblemBankService {
     String? gradeLabel,
     int? examYear,
     String? schoolName,
+    String? textbookBookName,
     int limit = 120,
   }) async {
     final safeLimit = limit.clamp(1, 400);
@@ -1282,6 +1283,7 @@ class ProblemBankService {
     final safeSourceType = _normalizeSourceTypeCode(sourceTypeCode);
     final safeGrade = (gradeLabel ?? '').trim();
     final safeSchool = (schoolName ?? '').trim();
+    final safeBookName = (textbookBookName ?? '').trim();
     final safeYear = _normalizeExamYear(examYear);
     if ((curriculumCode ?? '').trim().isNotEmpty) {
       q = q.eq('curriculum_code', safeCurriculum);
@@ -1299,11 +1301,30 @@ class ProblemBankService {
       q = q.eq('exam_year', safeYear);
     }
     final rows = await q.order('created_at', ascending: false).limit(safeLimit);
-    return (rows as List<dynamic>)
+    final docs = (rows as List<dynamic>)
         .map((e) => ProblemBankDocument.fromMap(
               Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
             ))
         .toList(growable: false);
+    if (safeBookName.isEmpty) return docs;
+    return docs
+        .where((doc) => _documentBookNameCandidates(doc).any(
+              (name) => name.toLowerCase().contains(safeBookName.toLowerCase()),
+            ))
+        .toList(growable: false);
+  }
+
+  List<String> _documentBookNameCandidates(ProblemBankDocument doc) {
+    final candidates = <String>[
+      doc.materialName.trim(),
+      '${_mapFromDynamic(doc.meta['textbook_scope'])['book_name'] ?? ''}'
+          .trim(),
+      '${_mapFromDynamic(doc.classificationDetail['textbook_scope'])['book_name'] ?? ''}'
+          .trim(),
+      '${_mapFromDynamic(_mapFromDynamic(doc.meta['source_classification'])['textbook'])['book_name'] ?? ''}'
+          .trim(),
+    ];
+    return candidates.where((name) => name.isNotEmpty).toSet().toList();
   }
 
   /// 학습앱의 `listReadyDocuments`와 동일 규칙으로 문서를 조회한다.
@@ -1856,6 +1877,86 @@ class ProblemBankService {
               Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
             ))
         .toList(growable: false);
+  }
+
+  Future<ProblemBankExportJob> createReviewPdfExport({
+    required String academyId,
+    required String documentId,
+    required List<String> questionUids,
+  }) async {
+    if (!hasGateway) {
+      throw StateError('게이트웨이 URL 이 설정되어 있지 않습니다.');
+    }
+    final safeUids = questionUids
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (safeUids.isEmpty) {
+      throw ArgumentError('questionUids must not be empty');
+    }
+    final json = await _gatewayPost(
+      '/pb/jobs/export',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'documentId': documentId,
+        'templateProfile': 'review_compact',
+        'paperSize': 'A4',
+        'includeAnswerSheet': false,
+        'includeExplanation': false,
+        'previewOnly': true,
+        'selectedQuestionUids': safeUids,
+        'options': <String, dynamic>{
+          'reviewPdf': true,
+          'previewOnly': true,
+          'templateProfile': 'review_compact',
+          'layoutColumns': 2,
+          'hidePreviewHeader': true,
+          'questionMode': 'original',
+          'mathEngine': 'xelatex',
+          'font': <String, dynamic>{'size': 10.2},
+          'layoutTuning': <String, dynamic>{
+            'pageMargin': 32,
+            'columnGap': 16,
+            'lineHeight': 11.2,
+            'questionGap': 8,
+            'choiceSpacing': 1.2,
+          },
+        },
+      },
+    );
+    return ProblemBankExportJob.fromMap(_mapFromDynamic(json['job']));
+  }
+
+  Future<ProblemBankExportJob> getExportJob({
+    required String academyId,
+    required String jobId,
+  }) async {
+    if (hasGateway) {
+      final json = await _gatewayGet(
+        '/pb/jobs/export/$jobId',
+        query: {'academyId': academyId},
+      );
+      return ProblemBankExportJob.fromMap(_mapFromDynamic(json['job']));
+    }
+    final rows = await _client
+        .from('pb_exports')
+        .select('*')
+        .eq('academy_id', academyId)
+        .eq('id', jobId)
+        .limit(1);
+    if ((rows as List).isEmpty) throw Exception('export_job_not_found');
+    return ProblemBankExportJob.fromMap(
+      Map<String, dynamic>.from(rows.first as Map<dynamic, dynamic>),
+    );
+  }
+
+  Future<Uint8List> downloadBytesFromUrl(String url) async {
+    final uri = Uri.parse(url.trim());
+    final res = await _http.get(uri);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('download_failed(${res.statusCode})');
+    }
+    return res.bodyBytes;
   }
 
   Future<List<ProblemBankQuestion>> searchQuestions({

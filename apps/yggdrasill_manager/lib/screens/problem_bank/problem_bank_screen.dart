@@ -101,7 +101,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _isResetting = false;
   bool _isRequeuingFigures = false;
   bool _hasExtracted = false;
-  bool _showLowConfidenceOnly = false;
+  bool _showUnuploadedOnly = false;
+  bool _isCreatingReviewPdf = false;
   bool _schemaMissing = false;
   bool _academyMissing = false;
   String _statusText = '초기화 중...';
@@ -152,6 +153,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _sourceExamTerm = '';
   String _classificationCurriculumFilter = '';
   String _classificationSourceTypeFilter = '';
+  String _classificationBookNameFilter = '';
   String _classificationQuestionTypeFilter = '';
   String _issueTypeFilter = '';
   bool _isSearchingClassification = false;
@@ -165,8 +167,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   int get _checkedCount => _questions.where((q) => q.isChecked).length;
   int get _lowConfidenceCount => _questions.where(_isLowConfidence).length;
-  List<ProblemBankQuestion> get _visibleQuestions => _showLowConfidenceOnly
-      ? _questions.where(_isLowConfidence).toList(growable: false)
+  int get _unuploadedCount {
+    if (!_documentDbReady) return _questions.length;
+    if (_needsPublish) return _questions.length;
+    return _questions.where((q) => _dirtyQuestionIds.contains(q.id)).length;
+  }
+
+  List<ProblemBankQuestion> get _visibleQuestions => _showUnuploadedOnly
+      ? _questions.where(_isUnuploadedQuestion).toList(growable: false)
       : _questions;
 
   Duration? get _extractQueuedElapsed {
@@ -181,6 +189,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   bool get _documentDbReady =>
       (_activeDocument?.status ?? '').trim().toLowerCase() == 'ready';
+
+  bool _isUnuploadedQuestion(ProblemBankQuestion q) {
+    if (!_documentDbReady) return true;
+    return _needsPublish || _dirtyQuestionIds.contains(q.id);
+  }
 
   bool get _progressIndeterminate {
     final extractStatus = _activeExtractJob?.status ?? '';
@@ -1569,7 +1582,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isHwpxDropHover = false;
         _isPdfDropHover = false;
         _isExtracting = false;
-        _showLowConfidenceOnly = false;
+        _showUnuploadedOnly = false;
         _needsPublish = false;
         _queuedLongWaitWarned = false;
         _lastExtractStatus = null;
@@ -3281,6 +3294,90 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       // 반대로 로컬에서 반영만 끝낸 skip 케이스는 굳이 다시 저장할 것도 없어서 동일.
       _dirtyQuestionIds.remove(questionId);
     });
+  }
+
+  Future<void> _createReviewPdfForCheckedQuestions() async {
+    if (_isCreatingReviewPdf) return;
+    final academyId = _academyId;
+    final doc = _activeDocument;
+    if (academyId == null || academyId.isEmpty || doc == null) {
+      _showSnack('먼저 문서를 선택해주세요.', error: true);
+      return;
+    }
+    if (!_service.hasGateway) {
+      _showSnack('게이트웨이가 설정되어 있지 않아 검토 PDF를 만들 수 없습니다.', error: true);
+      return;
+    }
+    final targets =
+        _questions.where((q) => q.isChecked).toList(growable: false);
+    if (targets.isEmpty) {
+      _showSnack('검토 PDF로 만들 체크 문항이 없습니다.', error: true);
+      return;
+    }
+    final questionUids = targets
+        .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid : q.id)
+        .where((id) => id.trim().isNotEmpty)
+        .toList(growable: false);
+    if (questionUids.isEmpty) {
+      _showSnack('내보낼 문항 식별자를 찾지 못했습니다.', error: true);
+      return;
+    }
+    setState(() {
+      _isCreatingReviewPdf = true;
+    });
+    try {
+      _showSnack('검토 PDF 생성 작업을 등록했습니다.');
+      var job = await _service.createReviewPdfExport(
+        academyId: academyId,
+        documentId: doc.id,
+        questionUids: questionUids,
+      );
+      for (var i = 0; i < 90 && !job.isTerminal; i += 1) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        job = await _service.getExportJob(
+          academyId: academyId,
+          jobId: job.id,
+        );
+      }
+      if (!job.isTerminal) {
+        _showSnack('검토 PDF 생성이 아직 진행 중입니다. 잠시 후 다시 확인해주세요.', error: true);
+        return;
+      }
+      if (job.status != 'completed' || job.outputUrl.trim().isEmpty) {
+        final msg = job.errorMessage.trim().isEmpty
+            ? job.errorCode.trim()
+            : job.errorMessage.trim();
+        _showSnack('검토 PDF 생성 실패: ${msg.isEmpty ? job.status : msg}',
+            error: true);
+        return;
+      }
+      final now = DateTime.now();
+      final defaultName =
+          'review_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.pdf';
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: '검토 PDF 저장',
+        fileName: defaultName,
+        type: FileType.custom,
+        allowedExtensions: const <String>['pdf'],
+      );
+      if (savePath == null || savePath.trim().isEmpty) {
+        _showSnack('검토 PDF가 생성되었습니다. 저장은 취소되었습니다.');
+        return;
+      }
+      final normalizedPath =
+          savePath.toLowerCase().endsWith('.pdf') ? savePath : '$savePath.pdf';
+      final bytes = await _service.downloadBytesFromUrl(job.outputUrl);
+      await File(normalizedPath).writeAsBytes(bytes, flush: true);
+      _showSnack('검토 PDF를 저장했습니다: $normalizedPath');
+    } catch (e) {
+      _showSnack('검토 PDF 만들기 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingReviewPdf = false;
+        });
+      }
+    }
   }
 
   Future<void> _openObjectiveChoicesEditor(ProblemBankQuestion q) async {
@@ -11396,7 +11493,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           Row(
             children: [
               Text(
-                '총 ${_questions.length}문항 · 선택 $_checkedCount문항 · 저신뢰 $_lowConfidenceCount문항'
+                '총 ${_questions.length}문항 · 선택 $_checkedCount문항 · 미업로드 $_unuploadedCount문항 · 저신뢰 $_lowConfidenceCount문항'
                 '${unsavedCount > 0 ? ' · 저장대기 $unsavedCount건' : ''}',
                 style: const TextStyle(
                   color: _textSub,
@@ -11479,6 +11576,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
+                onPressed: _activeDocument == null ||
+                        _checkedCount == 0 ||
+                        _isCreatingReviewPdf ||
+                        _isSavingQuestionChanges ||
+                        _isDeletingCurrentQuestions
+                    ? null
+                    : () => unawaited(_createReviewPdfForCheckedQuestions()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFB39DDB),
+                  side: const BorderSide(color: Color(0xFFB39DDB)),
+                ),
+                icon: _isCreatingReviewPdf
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: Color(0xFFB39DDB),
+                        ),
+                      )
+                    : const Icon(Icons.picture_as_pdf_outlined, size: 16),
+                label:
+                    Text(_isCreatingReviewPdf ? 'PDF 생성 중...' : '검토 PDF 만들기'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
                 onPressed: _questions.isEmpty ||
                         _isSavingQuestionChanges ||
                         _isDeletingCurrentQuestions
@@ -11528,17 +11651,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ? null
                     : () {
                         setState(() {
-                          _showLowConfidenceOnly = !_showLowConfidenceOnly;
+                          _showUnuploadedOnly = !_showUnuploadedOnly;
                         });
                       },
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: _showLowConfidenceOnly ? _accent : _textSub,
+                  foregroundColor: _showUnuploadedOnly ? _accent : _textSub,
                   side: BorderSide(
-                    color: _showLowConfidenceOnly ? _accent : _border,
+                    color: _showUnuploadedOnly ? _accent : _border,
                   ),
                 ),
                 child: Text(
-                  _showLowConfidenceOnly ? '전체 보기' : '저신뢰만',
+                  _showUnuploadedOnly ? '전체 보기' : '미업로드만',
                 ),
               ),
             ],
@@ -11578,6 +11701,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         gradeLabel: _classificationGradeFilterCtrl.text.trim(),
         examYear: int.tryParse(_classificationYearFilterCtrl.text.trim()),
         schoolName: _classificationSchoolFilterCtrl.text.trim(),
+        textbookBookName: _classificationSourceTypeFilter == 'market_book'
+            ? _classificationBookNameFilter
+            : null,
         limit: 300,
       );
       final countByDocumentId = <String, int>{};
@@ -11609,8 +11735,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             academyId: academyId,
             limit: 300,
           );
+          final safeBookFilter =
+              _classificationSourceTypeFilter == 'market_book'
+                  ? _classificationBookNameFilter.trim().toLowerCase()
+                  : '';
           filteredDocs = recentDocs
-              .where((d) => docIds.contains(d.id))
+              .where((d) =>
+                  docIds.contains(d.id) &&
+                  (safeBookFilter.isEmpty ||
+                      _documentBookName(d)
+                          .toLowerCase()
+                          .contains(safeBookFilter)))
               .toList(growable: false);
         }
       }
@@ -11642,6 +11777,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     setState(() {
       _classificationCurriculumFilter = '';
       _classificationSourceTypeFilter = '';
+      _classificationBookNameFilter = '';
       _classificationQuestionTypeFilter = '';
       _classificationYearFilterCtrl.clear();
       _classificationGradeFilterCtrl.clear();
@@ -11649,6 +11785,34 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _classificationResults = <_ClassificationDocumentResult>[];
     });
     unawaited(_runClassificationSearch());
+  }
+
+  String _documentBookName(ProblemBankDocument doc) {
+    final candidates = <String>[
+      doc.materialName.trim(),
+      '${doc.meta['textbook_scope'] is Map ? (doc.meta['textbook_scope'] as Map)['book_name'] : ''}'
+          .trim(),
+      '${doc.classificationDetail['textbook_scope'] is Map ? (doc.classificationDetail['textbook_scope'] as Map)['book_name'] : ''}'
+          .trim(),
+      '${doc.meta['source_classification'] is Map ? ((doc.meta['source_classification'] as Map)['textbook'] is Map ? ((doc.meta['source_classification'] as Map)['textbook'] as Map)['book_name'] : '') : ''}'
+          .trim(),
+    ];
+    return candidates.firstWhere((name) => name.isNotEmpty, orElse: () => '');
+  }
+
+  List<String> _classificationBookNameOptions() {
+    final names = <String>{
+      for (final doc in _documents)
+        if (doc.sourceTypeCode == 'market_book' &&
+            _documentBookName(doc).isNotEmpty)
+          _documentBookName(doc),
+      for (final item in _classificationResults)
+        if (item.document.sourceTypeCode == 'market_book' &&
+            _documentBookName(item.document).isNotEmpty)
+          _documentBookName(item.document),
+    }.toList(growable: false);
+    names.sort((a, b) => a.compareTo(b));
+    return names;
   }
 
   String _issueTypeLabel(String key) {
@@ -12111,7 +12275,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   questionTypeLabels: _questionTypeFilterLabels,
                   selectedCurriculumCode: _classificationCurriculumFilter,
                   selectedSourceTypeCode: _classificationSourceTypeFilter,
+                  selectedBookName: _classificationBookNameFilter,
                   selectedQuestionType: _classificationQuestionTypeFilter,
+                  bookNameOptions: _classificationBookNameOptions(),
                   yearController: _classificationYearFilterCtrl,
                   gradeController: _classificationGradeFilterCtrl,
                   schoolController: _classificationSchoolFilterCtrl,
@@ -12124,6 +12290,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   onSourceTypeChanged: (v) {
                     setState(() {
                       _classificationSourceTypeFilter = v;
+                      if (v != 'market_book') {
+                        _classificationBookNameFilter = '';
+                      }
+                    });
+                  },
+                  onBookNameChanged: (v) {
+                    setState(() {
+                      _classificationBookNameFilter = v;
                     });
                   },
                   onQuestionTypeChanged: (v) {

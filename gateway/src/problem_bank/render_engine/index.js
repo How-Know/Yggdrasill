@@ -490,6 +490,7 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     alignPolicy: normalizeAlignPolicy(renderConfig?.alignPolicy),
     subjectTitleText,
     titlePageTopText,
+    reviewPdf: renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true,
   };
 }
 

@@ -690,6 +690,7 @@ export async function renderPdfWithXeLatex({
       columnLabelAnchors: Array.isArray(renderConfig?.columnLabelAnchors)
         ? renderConfig.columnLabelAnchors
         : [],
+      reviewPdf: renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true,
       // 새로고침/PDF 생성 경로에서 auto 라벨 생성을 전면 중단.
       disableAutoLabels: renderConfig?.disableAutoLabels === true,
       layoutMeta,
