@@ -3,9 +3,8 @@ import 'package:flutter/material.dart';
 /// 문항에 포함된 표의 가로·세로 배율을 독립적으로 조절하는 다이얼로그.
 ///
 /// 표는 두 종류가 있다:
-///   * `struct` — 구조화된 표 ([표행]/[표셀]). 셀 폭/높이만 스케일 → 폰트 크기 본문 그대로.
-///   * `raw`    — VLM 이 직접 쓴 tabular ([표시작]/[표끝]). `\scalebox` 기하 스케일 →
-///                 폰트 크기도 같이 스케일되는 한계. 사용자에게 라벨로 안내.
+///   * `struct` — 구조화된 표 ([표행]/[표셀]).
+///   * `raw`    — VLM 이 직접 쓴 tabular ([표시작]/[표끝]).
 ///
 /// 결과는 `TableScaleResult` 로 반환. 취소 시 `null`.
 class TableScaleDialog extends StatefulWidget {
@@ -183,8 +182,7 @@ class _TableScaleDialogState extends State<TableScaleDialog> {
               ),
               const SizedBox(width: 6),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: (entry.type == 'raw'
                           ? Colors.orangeAccent
@@ -267,10 +265,8 @@ class _TableScaleDialogState extends State<TableScaleDialog> {
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 3,
-                thumbShape:
-                    const RoundSliderThumbShape(enabledThumbRadius: 7),
-                overlayShape:
-                    const RoundSliderOverlayShape(overlayRadius: 14),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
               ),
               child: Slider(
                 value: clamped,
@@ -331,11 +327,15 @@ class TableScaleValue {
   const TableScaleValue({
     this.widthScale = 1.0,
     this.heightScale = 1.0,
+    this.fontSizeDeltaPt = 0.0,
+    this.tabColSepPt = 6.0,
     this.columnScales,
   });
 
   final double widthScale;
   final double heightScale;
+  final double fontSizeDeltaPt;
+  final double tabColSepPt;
 
   /// struct 표의 컬럼별 상대 가중치(0.3 ~ 2.5). null 이면 전부 균등(기본).
   /// 합이 1 일 필요는 없고, 렌더러가 합으로 정규화해 컬럼 폭 비율로 쓴다.
@@ -345,12 +345,16 @@ class TableScaleValue {
   TableScaleValue copyWith({
     double? widthScale,
     double? heightScale,
+    double? fontSizeDeltaPt,
+    double? tabColSepPt,
     List<double>? columnScales,
     bool clearColumnScales = false,
   }) =>
       TableScaleValue(
         widthScale: widthScale ?? this.widthScale,
         heightScale: heightScale ?? this.heightScale,
+        fontSizeDeltaPt: fontSizeDeltaPt ?? this.fontSizeDeltaPt,
+        tabColSepPt: tabColSepPt ?? this.tabColSepPt,
         columnScales:
             clearColumnScales ? null : (columnScales ?? this.columnScales),
       );
@@ -358,6 +362,8 @@ class TableScaleValue {
   Map<String, dynamic> toJson() => {
         'widthScale': widthScale,
         'heightScale': heightScale,
+        if (fontSizeDeltaPt.abs() >= 1e-3) 'fontSizeDeltaPt': fontSizeDeltaPt,
+        if ((tabColSepPt - 6.0).abs() >= 1e-3) 'tabColSepPt': tabColSepPt,
         if (columnScales != null && columnScales!.isNotEmpty)
           'columnScales': columnScales,
       };
@@ -366,6 +372,12 @@ class TableScaleValue {
     if (raw is! Map) return const TableScaleValue();
     final w = raw['widthScale'] ?? raw['w'] ?? 1.0;
     final h = raw['heightScale'] ?? raw['h'] ?? 1.0;
+    final f = raw['fontSizeDeltaPt'] ??
+        raw['fontDeltaPt'] ??
+        raw['fontSizeOffsetPt'] ??
+        0.0;
+    final p =
+        raw['tabColSepPt'] ?? raw['tabcolsep'] ?? raw['cellPaddingPt'] ?? 6.0;
     final cs = raw['columnScales'];
     List<double>? parsedCs;
     if (cs is List && cs.isNotEmpty) {
@@ -377,6 +389,9 @@ class TableScaleValue {
     return TableScaleValue(
       widthScale: (w is num) ? w.toDouble() : 1.0,
       heightScale: (h is num) ? h.toDouble() : 1.0,
+      fontSizeDeltaPt:
+          (f is num) ? f.toDouble().clamp(-4.0, 4.0).toDouble() : 0.0,
+      tabColSepPt: (p is num) ? p.toDouble().clamp(0.5, 12.0).toDouble() : 6.0,
       columnScales: parsedCs,
     );
   }
@@ -384,6 +399,8 @@ class TableScaleValue {
   bool get isDefault =>
       (widthScale - 1.0).abs() < 1e-3 &&
       (heightScale - 1.0).abs() < 1e-3 &&
+      fontSizeDeltaPt.abs() < 1e-3 &&
+      (tabColSepPt - 6.0).abs() < 1e-3 &&
       (columnScales == null ||
           columnScales!.every((e) => (e - 1.0).abs() < 1e-3));
 }

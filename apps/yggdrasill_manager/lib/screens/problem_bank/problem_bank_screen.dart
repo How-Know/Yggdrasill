@@ -9474,7 +9474,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       child: Text(
                         t.type == 'blank_choice'
                             ? '* 높이와 글자 크기는 고정하고, 가로 간격만 조정합니다.'
-                            : '* 글자 크기는 본문에 동기화됩니다.',
+                            : '* 기본 글자 크기는 본문에 동기화되며, 저장된 표별 보정값이 있으면 함께 적용됩니다.',
                         style: TextStyle(
                           color: _textSub,
                           fontSize: 10.6,

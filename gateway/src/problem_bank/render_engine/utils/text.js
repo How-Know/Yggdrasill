@@ -418,6 +418,8 @@ export function normalizeMathLatex(value) {
     .replace(/∥/g, '\\mathbin{/\\mkern-2mu/}')
     .replace(/\\parallel(?![a-zA-Z])/g, '\\mathbin{/\\mkern-2mu/}')
     .replace(/π/g, '\\pi ')
+    .replace(/([◆◇⬦⬥⋄])\s+/g, '\\text{$1}\\;')
+    .replace(/\\(?:diamond|lozenge|blacklozenge)(?![a-zA-Z])\s+/g, (m) => `${m.trim()}\\;`)
     .replace(/\\left\s*\{/g, '\\left\\{')
     .replace(/\\right\s*\}/g, '\\right\\}')
     .replace(/\s+/g, ' ')

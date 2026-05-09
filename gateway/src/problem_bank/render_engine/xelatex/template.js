@@ -412,6 +412,10 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/[□▢◻]/g, '\\mtemptybox{}');
   // \square ABCD 처럼 도형 이름 앞에 붙은 사각형 기호는 빈칸이 아니라 일반 도형 기호다.
   out = out.replace(/\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '\\mtemptybox{}');
+  // ◆ x^2 같은 마름모 라벨 뒤 일반 공백은 math mode 에서 사라진다.
+  // 라벨 기호 뒤의 추출 공백은 수식 공백 명령으로 고정해 보이게 유지한다.
+  out = out.replace(/([◆◇⬦⬥⋄])\s+/g, '\\text{$1}\\;');
+  out = out.replace(/\\(?:diamond|lozenge|blacklozenge)(?![A-Za-z])\s+/g, (m) => `${m.trim()}\\;`);
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   // box{X} (내용이 있는 박스) → \boxed{X}. 빈 경우는 위 규칙이 이미 처리.
@@ -1459,20 +1463,26 @@ function parseRawTabularToRows(rawTexBlock) {
   return rows;
 }
 
-// tableScale: { widthScale, heightScale, columnScales? } — 사용자 지정 크기 배율.
+// tableScale: { widthScale, heightScale, fontSizeDeltaPt?, fontSizePt?, tabColSepPt?, columnScales? } — 사용자 지정 크기 배율.
 //   widthScale      : 표 전체 폭 (× \linewidth).
-//   heightScale     : 셀 고정 높이 (2.2em × 배수). 폰트 크기는 본문 그대로.
+//   heightScale     : 셀 고정 높이 (2.2em × 배수).
+//   fontSizeDeltaPt : 본문 폰트 크기 대비 표 내부 폰트 보정값(pt). 예: -1 = 1pt 축소.
+//   fontSizePt      : 표 내부 폰트 절대값(pt). 있으면 fontSizeDeltaPt 보다 우선.
+//   tabColSepPt     : 셀 좌우 내부 여백(pt). LaTeX 기본은 6pt.
 //   columnScales[i] : 컬럼별 상대 가중치. 합으로 정규화되어 각 컬럼 폭 비율을 정한다.
 //
 // rows 는 parseTableLines 결과 또는 parseRawTabularToRows 결과. 둘 다 동일한
 // `rows[][cells][lines]` 구조이므로 이 함수 내부에서는 구분 없이 처리.
-function renderTableLatex(rows, equations, tableScale = null) {
+function renderTableLatex(rows, equations, tableScale = null, stemSizePt = 11) {
   if (!Array.isArray(rows) || rows.length === 0) return '';
   const maxCols = Math.max(...rows.map((r) => r.length));
   if (maxCols === 0) return '';
 
   const widthScale = clampTableScale(tableScale?.widthScale);
   const heightScale = clampTableScale(tableScale?.heightScale);
+  const tableFontSizePt = resolveTableFontSizePt(tableScale, stemSizePt);
+  const tableFontLeadPt = Math.max(tableFontSizePt * 1.15, tableFontSizePt + 1).toFixed(2);
+  const tabColSepPt = resolveTableTabColSepPt(tableScale);
   const baseWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
   // 표 전체 폭 분수. 1.0(=\linewidth) 이 상한.
   const effWidthFrac = Math.max(0.05, Math.min(1.0, baseWidthFrac * widthScale));
@@ -1528,7 +1538,7 @@ function renderTableLatex(rows, equations, tableScale = null) {
   });
 
   // 컬럼 폭 레지스터 선언 + 할당.
-  // 각 컬럼 폭 = (colFrac_i × \linewidth) - 2\tabcolsep - 1.2pt (보더/여백 보정).
+  // 각 컬럼 폭 = (colFrac_i × \linewidth) - 좌우 tabcolsep - 1.2pt (보더/여백 보정).
   const lengthDefs = [];
   for (let i = 0; i < maxCols; i += 1) {
     const name = colWidthVar(i);
@@ -1536,14 +1546,14 @@ function renderTableLatex(rows, equations, tableScale = null) {
       `\\makeatletter\\@ifundefined{${name.slice(1)}}{\\newlength{${name}}}{}\\makeatother`,
     );
     lengthDefs.push(
-      `\\setlength{${name}}{\\dimexpr ${colFracs[i].toFixed(6)}\\linewidth - 2\\tabcolsep - 1.2pt\\relax}`,
+      `\\setlength{${name}}{\\dimexpr ${colFracs[i].toFixed(6)}\\linewidth - ${(2 * tabColSepPt).toFixed(2)}pt - 1.2pt\\relax}`,
     );
   }
 
   return [
     ...lengthDefs,
     `\\setlength{\\tblcellht}{${cellHeightEm}em}`,
-    '\\par\\noindent{\\hfill\\renewcommand{\\arraystretch}{1}%',
+    `\\par\\noindent{\\hfill\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
     latexRows.join('\n\\hline\n'),
@@ -1578,8 +1588,40 @@ function clampTableScale(v) {
   return Math.max(0.3, Math.min(2.5, n));
 }
 
+function clampTableFontDeltaPt(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-4, Math.min(4, n));
+}
+
+function resolveTableFontSizePt(tableScale, stemSizePt = 11) {
+  const base = Math.max(7, Math.min(36, Number(stemSizePt) || 11));
+  const absolute = Number(tableScale?.fontSizePt ?? tableScale?.fontPt);
+  if (Number.isFinite(absolute) && absolute > 0) {
+    return Math.max(6, Math.min(36, absolute));
+  }
+  const delta = clampTableFontDeltaPt(
+    tableScale?.fontSizeDeltaPt
+      ?? tableScale?.fontDeltaPt
+      ?? tableScale?.fontSizeOffsetPt
+      ?? 0,
+  );
+  return Math.max(6, Math.min(36, base + delta));
+}
+
+function resolveTableTabColSepPt(tableScale) {
+  const n = Number(
+    tableScale?.tabColSepPt
+      ?? tableScale?.tabcolsep
+      ?? tableScale?.cellPaddingPt
+      ?? 6,
+  );
+  if (!Number.isFinite(n) || n <= 0) return 6;
+  return Math.max(0.5, Math.min(12, n));
+}
+
 // meta.table_scales 에서 특정 표(type: 'struct' | 'raw', index: 1-based)의
-// 스케일 { widthScale, heightScale, columnScales? } 을 찾아 반환.
+// 스케일 { widthScale, heightScale, fontSizeDeltaPt?, fontSizePt?, tabColSepPt?, columnScales? } 을 찾아 반환.
 // 없으면 table_scale_default, 그것도 없으면 { widthScale: 1, heightScale: 1 }.
 // columnScales 는 struct 표에서만 의미가 있고, 길이는 renderTableLatex 에서 maxCols 와 비교해 검증.
 function resolveTableScale(question, type, index) {
@@ -1615,15 +1657,36 @@ function resolveTableScale(question, type, index) {
     if (hit) return {
       widthScale: clampTableScale(hit.widthScale ?? hit.w ?? 1),
       heightScale: clampTableScale(hit.heightScale ?? hit.h ?? 1),
+      fontSizeDeltaPt: clampTableFontDeltaPt(
+        hit.fontSizeDeltaPt ?? hit.fontDeltaPt ?? hit.fontSizeOffsetPt ?? 0,
+      ),
+      fontSizePt: Number.isFinite(Number(hit.fontSizePt ?? hit.fontPt))
+        ? Number(hit.fontSizePt ?? hit.fontPt)
+        : null,
+      tabColSepPt: resolveTableTabColSepPt(hit),
       columnScales: toColumnScales(hit.columnScales ?? hit.cols ?? null),
     };
   }
   if (def) return {
     widthScale: clampTableScale(def.widthScale ?? def.w ?? 1),
     heightScale: clampTableScale(def.heightScale ?? def.h ?? 1),
+    fontSizeDeltaPt: clampTableFontDeltaPt(
+      def.fontSizeDeltaPt ?? def.fontDeltaPt ?? def.fontSizeOffsetPt ?? 0,
+    ),
+    fontSizePt: Number.isFinite(Number(def.fontSizePt ?? def.fontPt))
+      ? Number(def.fontSizePt ?? def.fontPt)
+      : null,
+    tabColSepPt: resolveTableTabColSepPt(def),
     columnScales: toColumnScales(def.columnScales ?? def.cols ?? null),
   };
-  return { widthScale: 1.0, heightScale: 1.0, columnScales: null };
+  return {
+    widthScale: 1.0,
+    heightScale: 1.0,
+    fontSizeDeltaPt: 0,
+    fontSizePt: null,
+    tabColSepPt: 6,
+    columnScales: null,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -3405,7 +3468,7 @@ function renderOneQuestion(question, {
       structTableIdx += 1;
       const scale = resolveTableScale(question, 'struct', structTableIdx);
       const rows = parseTableLines(seg.lines);
-      parts.push(renderTableLatex(rows, equations, scale));
+      parts.push(renderTableLatex(rows, equations, scale, stemSizePt));
     } else if (seg.type === 'raw_tabular') {
       // VLM 이 작성한 \begin{tabular}{...}...\end{tabular} 블록.
       // 1) autoWrapTabularCells 로 각 셀을 수식/텍스트 모드로 감싸고
@@ -3413,7 +3476,7 @@ function renderOneQuestion(question, {
       // 3) renderTableLatex 에 넘겨 struct 와 동일한 그리드 렌더 경로로 통일한다.
       //
       // 이렇게 하면 가로 스케일, 세로 스케일, 컬럼별 독립 너비, 셀 정가운데 정렬,
-      // 폰트 크기 불변성 모두가 한 가지 메커니즘으로 일관되게 동작한다.
+      // 폰트 크기 보정까지 한 가지 메커니즘으로 일관되게 동작한다.
       rawTableIdx += 1;
       const raw = seg.lines.join('\n');
       const patched = autoWrapTabularCells(raw);
@@ -3423,7 +3486,7 @@ function renderOneQuestion(question, {
         // 해체 실패 — 원본을 그대로 중앙 정렬 출력 (fallback).
         parts.push(`\\par\\noindent\\begin{center}\n${patched}\n\\end{center}\\par`);
       } else {
-        parts.push(renderTableLatex(rows, equations, scale));
+        parts.push(renderTableLatex(rows, equations, scale, stemSizePt));
       }
     } else if (seg.type === 'figure') {
       // parseStemSegments 후처리에서 본문 중간의 [그림] 마커를 별도 figure 세그먼트로 승격시킨다.
