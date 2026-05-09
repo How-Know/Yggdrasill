@@ -61,6 +61,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     '주관식': '주관식',
     '서술형': '서술형',
   };
+  static const Map<String, String> _issueTypeLabels = <String, String>{
+    '': '전체',
+    'question_typo': '문제 오타',
+    'answer_typo': '정답 오타',
+    'question_error': '문항 오류',
+    'missing_answer': '정답 없음',
+    'figure_mismatch': '그림 매칭 잘못됨',
+    'figure_size_error': '그림 크기 잘못됨',
+    'figure_error': '그림 오류',
+    'solution_coordinate_error': '해설 좌표 오류',
+    'solution_content_error': '해설/풀이 오류',
+    'classification_error': '문항 범위/분류 오류',
+  };
   static const List<String> _courseLabelOptions = <String>[
     '',
     '중등',
@@ -140,9 +153,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _classificationCurriculumFilter = '';
   String _classificationSourceTypeFilter = '';
   String _classificationQuestionTypeFilter = '';
+  String _issueTypeFilter = '';
   bool _isSearchingClassification = false;
+  bool _isLoadingIssues = false;
   List<_ClassificationDocumentResult> _classificationResults =
       <_ClassificationDocumentResult>[];
+  List<ProblemBankIssueSummary> _issueSummaries = <ProblemBankIssueSummary>[];
   bool _isFigurePolling = false;
   String? _lastExtractStatus;
   bool _queuedLongWaitWarned = false;
@@ -233,11 +249,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   @override
   void initState() {
     super.initState();
-    _topTabController = TabController(length: 2, vsync: this);
+    _topTabController = TabController(length: 3, vsync: this);
     _topTabController.addListener(() {
       if (_topTabController.indexIsChanging) return;
       if (_topTabController.index == 1) {
         unawaited(_runClassificationSearch());
+      } else if (_topTabController.index == 2) {
+        unawaited(_loadIssueSummaries());
       }
     });
     unawaited(_bootstrap());
@@ -487,6 +505,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   static final RegExp _stemFigureMarkerRegex =
       RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(그림|도형|도표)\]');
+  static const String _autoTypeBadgeSuppressionsKey =
+      'suppressed_auto_type_badges';
+  static const String _autoTypeBadgeViewBlock = 'view_block';
+  static const String _autoTypeBadgeBlankChoice = 'blank_choice';
+  static const String _autoTypeBadgeImageChoice = 'image_choice';
+  static const String _autoTypeBadgeSetQuestion = 'set_question';
 
   int _stemFigureMarkerCount(String stem) {
     return _stemFigureMarkerRegex.allMatches(stem).length;
@@ -1120,16 +1144,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       // DB 에 남아 있는 subjective_answer / meta.subjective_answer / meta.answer_parts 를
       // 빈 값으로 강제 덮어써서 객관식 전용 문항에 주관식 답이 유령처럼 남지 않게 한다.
       // (update 페이로드는 null 을 "변경 없음" 으로 취급하므로 빈 문자열을 명시.)
-      final saveSubjectiveAnswer = !q.allowSubjective
-          ? ''
-          : (q.subjectiveAnswer.trim().isEmpty
-              ? null
-              : q.subjectiveAnswer.trim());
       if (!q.allowSubjective) {
         mergedMeta.remove('subjective_answer');
         mergedMeta.remove('answer_parts');
       }
-      _syncFigureMetaWithStem(stem: q.stem, meta: mergedMeta);
+      final normalizedMeta =
+          _metaWithSuppressedAutoTypesNormalized(q, mergedMeta);
+      if (!q.allowSubjective) {
+        normalizedMeta.remove('subjective_answer');
+        normalizedMeta.remove('answer_parts');
+      }
+      final normalizedSubjectiveAnswer =
+          '${normalizedMeta['subjective_answer'] ?? ''}'.trim();
+      final saveSubjectiveAnswer = !q.allowSubjective
+          ? ''
+          : (q.subjectiveAnswer.trim().isEmpty
+              ? (normalizedSubjectiveAnswer.isEmpty
+                  ? null
+                  : normalizedSubjectiveAnswer)
+              : q.subjectiveAnswer.trim());
+      _syncFigureMetaWithStem(stem: q.stem, meta: normalizedMeta);
       final saveFigureRefs = _figureRefsForSave(q);
 
       await _service.updateQuestionReview(
@@ -1147,7 +1181,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         objectiveGenerated: q.allowObjective ? q.objectiveGenerated : false,
         figureRefs: saveFigureRefs,
         equations: q.equations,
-        meta: mergedMeta,
+        meta: normalizedMeta,
       );
       if (!mounted) return null;
       await _prefetchQuestionPreviewUrls(<ProblemBankQuestion>[q]);
@@ -1158,7 +1192,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _questions = _questions
             .map((item) => item.id == qId
                 ? item.copyWith(
-                    meta: mergedMeta,
+                    meta: normalizedMeta,
                     figureRefs: saveFigureRefs ?? item.figureRefs,
                   )
                 : item)
@@ -1440,6 +1474,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _appendPipelineLog('doc', '문서 목록 ${docs.length}건 갱신');
       if (_topTabController.index == 1) {
         unawaited(_runClassificationSearch());
+      } else if (_topTabController.index == 2) {
+        unawaited(_loadIssueSummaries());
       }
     } on ProblemBankSchemaMissingException catch (e) {
       _appendPipelineLog('doc', e.message, error: true);
@@ -2745,7 +2781,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           mergedMeta['score_point'] =
               rounded == parsedScore ? rounded.toInt() : parsedScore;
         }
-        _syncFigureMetaWithStem(stem: q.stem, meta: mergedMeta);
+        final normalizedMeta =
+            _metaWithSuppressedAutoTypesNormalized(q, mergedMeta);
+        _syncFigureMetaWithStem(stem: q.stem, meta: normalizedMeta);
+        final normalizedSubjectiveAnswer = q.subjectiveAnswer.trim().isNotEmpty
+            ? q.subjectiveAnswer
+            : '${normalizedMeta['subjective_answer'] ?? ''}';
         final saveFigureRefs = _figureRefsForSave(q);
         await _service.updateQuestionReview(
           questionId: q.id,
@@ -2758,7 +2799,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           allowSubjective: q.allowSubjective,
           objectiveChoices: q.objectiveChoices,
           objectiveAnswerKey: q.objectiveAnswerKey,
-          subjectiveAnswer: q.subjectiveAnswer,
+          subjectiveAnswer: normalizedSubjectiveAnswer,
           objectiveGenerated: q.objectiveGenerated,
           figureRefs: saveFigureRefs,
           equations: q.equations,
@@ -2773,7 +2814,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           publisherName: publisherName,
           materialName: materialName,
           classificationDetail: classificationDetail,
-          meta: mergedMeta,
+          meta: normalizedMeta,
         );
       }
       if (doc != null) {
@@ -3355,6 +3396,141 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return q.confidence < 0.85 || q.flags.contains('low_confidence');
   }
 
+  Set<String> _autoTypeBadgeSuppressionsOf(ProblemBankQuestion q) {
+    final raw = q.meta[_autoTypeBadgeSuppressionsKey];
+    if (raw is List) {
+      return raw.map((e) => '$e'.trim()).where((e) => e.isNotEmpty).toSet();
+    }
+    return <String>{};
+  }
+
+  bool _isAutoTypeBadgeSuppressed(ProblemBankQuestion q, String badgeKey) {
+    return _autoTypeBadgeSuppressionsOf(q).contains(badgeKey);
+  }
+
+  void _removeAutoTypeBadgeSuppression(
+    Map<String, dynamic> meta,
+    String badgeKey,
+  ) {
+    final raw = meta[_autoTypeBadgeSuppressionsKey];
+    if (raw is! List) return;
+    final next = raw
+        .map((e) => '$e'.trim())
+        .where((e) => e.isNotEmpty && e != badgeKey)
+        .toList(growable: false);
+    if (next.isEmpty) {
+      meta.remove(_autoTypeBadgeSuppressionsKey);
+    } else {
+      meta[_autoTypeBadgeSuppressionsKey] = next;
+    }
+  }
+
+  Map<String, dynamic> _metaWithAutoTypeBadgeReset(
+    ProblemBankQuestion q,
+    String badgeKey,
+  ) {
+    final next = <String, dynamic>{...q.meta};
+    final suppressions = _autoTypeBadgeSuppressionsOf(q)..add(badgeKey);
+    next[_autoTypeBadgeSuppressionsKey] = suppressions.toList(growable: false);
+
+    switch (badgeKey) {
+      case _autoTypeBadgeBlankChoice:
+        next.remove('is_blank_choice_question');
+        if ('${next['choice_layout'] ?? ''}' == 'blank_table') {
+          next.remove('choice_layout');
+        }
+        next.remove('blank_choice_labels');
+        next.remove('blank_choice_scale');
+        break;
+      case _autoTypeBadgeImageChoice:
+        next.remove('is_image_choice_question');
+        if ('${next['choice_layout'] ?? ''}' == 'image_table') {
+          next.remove('choice_layout');
+        }
+        next.remove('image_choice_count');
+        next.remove('image_choice_layout');
+        break;
+      case _autoTypeBadgeSetQuestion:
+        next.remove('is_set_question');
+        final answerParts = q.answerParts;
+        if (answerParts != null && answerParts.isNotEmpty) {
+          final directAnswer = (q.subjectiveAnswer.isNotEmpty
+                  ? q.subjectiveAnswer
+                  : '${next['subjective_answer'] ?? ''}')
+              .trim();
+          if (directAnswer.isEmpty) {
+            final rendered = formatAnswerPartsDisplay(answerParts);
+            if (rendered.trim().isNotEmpty) {
+              next['subjective_answer'] = rendered.trim();
+              next['answer_key'] = rendered.trim();
+            }
+          }
+        }
+        next.remove('answer_parts');
+        final scoreParts = q.scoreParts;
+        if (scoreParts != null && scoreParts.isNotEmpty) {
+          final total = sumScoreParts(scoreParts);
+          if (total > 0) {
+            next['score_point'] =
+                total == total.roundToDouble() ? total.toInt() : total;
+          }
+        }
+        next.remove('score_parts');
+        break;
+    }
+    return next;
+  }
+
+  Map<String, dynamic> _metaWithSuppressedAutoTypesNormalized(
+    ProblemBankQuestion q,
+    Map<String, dynamic> meta,
+  ) {
+    var next = Map<String, dynamic>.from(meta);
+    final raw = next[_autoTypeBadgeSuppressionsKey];
+    final suppressions = raw is List
+        ? raw.map((e) => '$e'.trim()).where((e) => e.isNotEmpty).toSet()
+        : <String>{};
+    for (final badgeKey in suppressions) {
+      next = _metaWithAutoTypeBadgeReset(
+        q.copyWith(meta: next),
+        badgeKey,
+      );
+    }
+    return next;
+  }
+
+  void _resetAutoTypeBadge(
+    ProblemBankQuestion q, {
+    required String badgeKey,
+    required String label,
+  }) {
+    if (_isAutoTypeBadgeSuppressed(q, badgeKey)) return;
+    final nextMeta = _metaWithAutoTypeBadgeReset(q, badgeKey);
+    final nextSubjectiveAnswer = badgeKey == _autoTypeBadgeSetQuestion
+        ? '${nextMeta['subjective_answer'] ?? q.subjectiveAnswer}'
+        : q.subjectiveAnswer;
+    final nextScore = _scorePointOf(q.copyWith(meta: nextMeta));
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions
+          .map(
+            (e) => e.id == q.id
+                ? e.copyWith(
+                    meta: nextMeta,
+                    subjectiveAnswer: nextSubjectiveAnswer,
+                  )
+                : e,
+          )
+          .toList(growable: false);
+      if (badgeKey == _autoTypeBadgeSetQuestion) {
+        _scoreDrafts[q.id] =
+            nextScore == null ? '' : _scorePointInputText(nextScore);
+      }
+      _dirtyQuestionIds.add(q.id);
+    });
+    _showSnack('$label 배지를 기본형으로 되돌렸습니다. 저장하면 반영됩니다.');
+  }
+
   Future<void> _openReviewDialog(ProblemBankQuestion question) async {
     final stemCtrl = TextEditingController(text: question.renderedStem);
     final noteCtrl = TextEditingController(text: question.reviewerNotes);
@@ -3847,6 +4023,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                             ? fallbackLabels[i]
                             : blankChoiceLabelCtrls[i].text.trim(),
                     ];
+                    _removeAutoTypeBadgeSuppression(
+                      updatedMeta,
+                      _autoTypeBadgeBlankChoice,
+                    );
                     updatedMeta['is_blank_choice_question'] = true;
                     updatedMeta['choice_layout'] = 'blank_table';
                     updatedMeta['blank_choice_labels'] = labels;
@@ -5512,9 +5692,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   /// - 세트형 문항: "총점" 버튼 (클릭 시 하위문항별 배점 다이얼로그).
   ///   저장된 `meta.score_parts` 가 있으면 그 합계를, 없으면 `meta.score_point` 를 총점으로 표시.
   Widget _buildScoreField(ProblemBankQuestion q, String scoreDraft) {
-    final isSet = q.isSetQuestion ||
-        (q.answerParts?.isNotEmpty ?? false) ||
-        (q.scoreParts?.isNotEmpty ?? false);
+    final isSet = !_isAutoTypeBadgeSuppressed(
+          q,
+          _autoTypeBadgeSetQuestion,
+        ) &&
+        (q.isSetQuestion ||
+            (q.answerParts?.isNotEmpty ?? false) ||
+            (q.scoreParts?.isNotEmpty ?? false));
     if (isSet) {
       return _buildSetScoreSummary(q);
     }
@@ -5760,6 +5944,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     if (parts.isEmpty) {
                       updatedMeta.remove('score_parts');
                     } else {
+                      _removeAutoTypeBadgeSuppression(
+                        updatedMeta,
+                        _autoTypeBadgeSetQuestion,
+                      );
                       updatedMeta['score_parts'] = scorePartsToMetaRaw(parts);
                       // is_set_question 플래그도 명시.
                       updatedMeta['is_set_question'] = true;
@@ -5961,6 +6149,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   bool _isViewBlockQuestion(ProblemBankQuestion q) {
+    if (_isAutoTypeBadgeSuppressed(q, _autoTypeBadgeViewBlock)) return false;
     final stem = q.renderedStem;
     if (q.flags.contains('view_block')) return true;
     if (RegExp(r'<\s*보\s*기>').hasMatch(stem)) return true;
@@ -5968,11 +6157,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   bool _isBlankChoiceQuestion(ProblemBankQuestion q) {
+    if (_isAutoTypeBadgeSuppressed(q, _autoTypeBadgeBlankChoice)) return false;
     return q.meta['is_blank_choice_question'] == true ||
         '${q.meta['choice_layout'] ?? ''}' == 'blank_table';
   }
 
   bool _isImageChoiceQuestion(ProblemBankQuestion q) {
+    if (_isAutoTypeBadgeSuppressed(q, _autoTypeBadgeImageChoice)) return false;
     if (q.meta['is_image_choice_question'] == true ||
         '${q.meta['choice_layout'] ?? ''}' == 'image_table') {
       return true;
@@ -6009,6 +6200,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   void _writeImageChoiceRowsMeta(Map<String, dynamic> meta, String rows) {
     final safeRows = rows == '3' ? '3' : '2';
+    _removeAutoTypeBadgeSuppression(meta, _autoTypeBadgeImageChoice);
     meta['is_image_choice_question'] = true;
     meta['choice_layout'] = 'image_table';
     meta['image_choice_count'] = 5;
@@ -6327,7 +6519,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 세트형 문항: meta.answer_parts 가 있으면 "(1) ...\n(2) ..." 로 줄바꿈 포맷.
     // _sanitizeAnswerText 는 \s+ 를 단일 공백으로 합쳐 \n 을 지우므로,
     // 파트별로 value 만 위생화하고 "(sub) value" 형태로 조립해 반환한다.
-    final parts = q.answerParts;
+    final parts = _isAutoTypeBadgeSuppressed(q, _autoTypeBadgeSetQuestion)
+        ? null
+        : q.answerParts;
     if (parts != null && parts.isNotEmpty) {
       final directRaw = q.subjectiveAnswer.isNotEmpty
           ? q.subjectiveAnswer
@@ -10183,7 +10377,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         parseAnswerParts(_subjectiveAnswerForPreview(question));
     final initialParts =
         savedParts ?? parsedFromSubjective ?? const <AnswerPart>[];
-    bool isSetMode = question.isSetQuestion || initialParts.isNotEmpty;
+    bool isSetMode = !_isAutoTypeBadgeSuppressed(
+          question,
+          _autoTypeBadgeSetQuestion,
+        ) &&
+        (question.isSetQuestion || initialParts.isNotEmpty);
     final hasAnswerFigures = _orderedAnswerFigureAssetsOf(question).isNotEmpty;
     var answerFigureWidthEm = _answerFigureWidthEm(question, 0);
 
@@ -10398,6 +10596,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         updatedMeta['answer_key'] = legacyAnswer;
                       }
                       if (nextParts != null && nextParts.isNotEmpty) {
+                        _removeAutoTypeBadgeSuppression(
+                          updatedMeta,
+                          _autoTypeBadgeSetQuestion,
+                        );
                         updatedMeta['answer_parts'] =
                             answerPartsToMetaRaw(nextParts);
                         updatedMeta['is_set_question'] = true;
@@ -10563,6 +10765,46 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  Widget _buildResettableAutoTypeBadge({
+    required ProblemBankQuestion question,
+    required String badgeKey,
+    required String label,
+    required Color backgroundColor,
+    required Color borderColor,
+    required Color textColor,
+  }) {
+    return Tooltip(
+      message: '탭하여 기본형으로 변경',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _resetAutoTypeBadge(
+            question,
+            badgeKey: badgeKey,
+            label: label,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: backgroundColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: borderColor),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildQuestionGridCard(ProblemBankQuestion q) {
     final confidenceColor = q.confidence >= 0.9
         ? const Color(0xFF41B883)
@@ -10578,8 +10820,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     //   (2) 답이 구조화(meta.answer_parts)되어 있으면 세트형으로 본다.
     // 두 번째 조건은 사용자가 편집기에서 세트형 모드로 답을 나눠 저장했지만
     // stem 상 시그니처가 약해서 meta 플래그가 없는 경우에도 배지를 유지하기 위함이다.
-    final isSetQuestion =
-        q.isSetQuestion || (q.answerParts?.isNotEmpty ?? false);
+    final isSetQuestion = !_isAutoTypeBadgeSuppressed(
+          q,
+          _autoTypeBadgeSetQuestion,
+        ) &&
+        (q.isSetQuestion || (q.answerParts?.isNotEmpty ?? false));
     final latestFigureAsset = _latestFigureAssetOf(q);
     final figureApproved = _isFigureAssetApproved(latestFigureAsset);
     final figureGenerating = _figureGenerating.contains(q.id);
@@ -10685,82 +10930,46 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
               if (isViewBlock) ...[
                 const SizedBox(width: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF15304A),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF356A92)),
-                  ),
-                  child: const Text(
-                    '<보기>형',
-                    style: TextStyle(
-                      color: Color(0xFF9CC5E8),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                _buildResettableAutoTypeBadge(
+                  question: q,
+                  badgeKey: _autoTypeBadgeViewBlock,
+                  label: '<보기>형',
+                  backgroundColor: const Color(0xFF15304A),
+                  borderColor: const Color(0xFF356A92),
+                  textColor: const Color(0xFF9CC5E8),
                 ),
               ],
               if (isBlankChoice) ...[
                 const SizedBox(width: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF173D31),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF3E806A)),
-                  ),
-                  child: const Text(
-                    '빈칸형',
-                    style: TextStyle(
-                      color: Color(0xFF9ED9C3),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                _buildResettableAutoTypeBadge(
+                  question: q,
+                  badgeKey: _autoTypeBadgeBlankChoice,
+                  label: '빈칸형',
+                  backgroundColor: const Color(0xFF173D31),
+                  borderColor: const Color(0xFF3E806A),
+                  textColor: const Color(0xFF9ED9C3),
                 ),
               ],
               if (isImageChoice) ...[
                 const SizedBox(width: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF21334D),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF506F9E)),
-                  ),
-                  child: const Text(
-                    '그림선지형',
-                    style: TextStyle(
-                      color: Color(0xFFB9D3FF),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                _buildResettableAutoTypeBadge(
+                  question: q,
+                  badgeKey: _autoTypeBadgeImageChoice,
+                  label: '그림선지형',
+                  backgroundColor: const Color(0xFF21334D),
+                  borderColor: const Color(0xFF506F9E),
+                  textColor: const Color(0xFFB9D3FF),
                 ),
               ],
               if (isSetQuestion) ...[
                 const SizedBox(width: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF3A2747),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF7A4F94)),
-                  ),
-                  child: const Text(
-                    '세트형',
-                    style: TextStyle(
-                      color: Color(0xFFD6B8EE),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                _buildResettableAutoTypeBadge(
+                  question: q,
+                  badgeKey: _autoTypeBadgeSetQuestion,
+                  label: '세트형',
+                  backgroundColor: const Color(0xFF3A2747),
+                  borderColor: const Color(0xFF7A4F94),
+                  textColor: const Color(0xFFD6B8EE),
                 ),
               ],
               const SizedBox(width: 6),
@@ -11442,6 +11651,93 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     unawaited(_runClassificationSearch());
   }
 
+  String _issueTypeLabel(String key) {
+    return _issueTypeLabels[key] ?? key;
+  }
+
+  String _formatIssueTime(DateTime? time) {
+    if (time == null) return '-';
+    final local = time.toLocal();
+    return '${local.month.toString().padLeft(2, '0')}/${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _loadIssueSummaries() async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    if (!mounted) return;
+    setState(() => _isLoadingIssues = true);
+    try {
+      final summaries = await _service.listQuestionIssueSummaries(
+        academyId: academyId,
+        status: 'open',
+        issueType: _issueTypeFilter,
+      );
+      if (!mounted) return;
+      setState(() {
+        _issueSummaries = summaries;
+      });
+    } catch (e) {
+      _showSnack('오류 리포트 조회 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingIssues = false);
+      }
+    }
+  }
+
+  Future<void> _openIssueQuestion(ProblemBankIssueSummary summary) async {
+    final question = summary.question;
+    ProblemBankDocument? doc;
+    for (final candidate in _documents) {
+      if (candidate.id == question.documentId) {
+        doc = candidate;
+        break;
+      }
+    }
+    if (doc == null) {
+      await _refreshDocuments();
+      if (!mounted) return;
+      for (final candidate in _documents) {
+        if (candidate.id == question.documentId) {
+          doc = candidate;
+          break;
+        }
+      }
+    }
+    if (doc == null) {
+      _showSnack('신고 문항의 문서를 찾지 못했습니다.', error: true);
+      return;
+    }
+    setState(() {
+      _activeDocument = doc;
+    });
+    await _loadDocumentContext(doc.id);
+    if (!mounted) return;
+    _topTabController.animateTo(0);
+  }
+
+  Future<void> _updateIssueSummaryStatus(
+    ProblemBankIssueSummary summary,
+    String status,
+  ) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    try {
+      await _service.updateQuestionIssueReportsStatus(
+        academyId: academyId,
+        questionId: summary.question.id,
+        status: status,
+      );
+      await _loadIssueSummaries();
+      if (!mounted) return;
+      _showSnack(
+          status == 'resolved' ? '오류 리포트를 해결 처리했습니다.' : '오류 리포트를 무시 처리했습니다.');
+    } catch (e) {
+      _showSnack('오류 리포트 상태 변경 실패: $e', error: true);
+    }
+  }
+
   Future<void> _openDocumentFromClassification(ProblemBankDocument doc) async {
     if (!mounted) return;
     setState(() {
@@ -11854,6 +12150,262 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  Widget _buildIssueFilterPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '오류 리포트',
+            style: TextStyle(
+              color: _text,
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '학습앱에서 신고된 미해결 문항만 모아 봅니다.',
+            style: TextStyle(color: _textSub, fontSize: 12.5, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          DropdownButtonFormField<String>(
+            initialValue: _issueTypeFilter,
+            dropdownColor: _panel,
+            decoration: const InputDecoration(
+              labelText: '오류 유형',
+              labelStyle: TextStyle(color: _textSub),
+              filled: true,
+              fillColor: _field,
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: _border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: _accent),
+              ),
+            ),
+            style: const TextStyle(color: _text),
+            items: [
+              for (final entry in _issueTypeLabels.entries)
+                DropdownMenuItem<String>(
+                  value: entry.key,
+                  child: Text(entry.value),
+                ),
+            ],
+            onChanged: (value) {
+              setState(() => _issueTypeFilter = value ?? '');
+              unawaited(_loadIssueSummaries());
+            },
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _isLoadingIssues
+                  ? null
+                  : () => unawaited(_loadIssueSummaries()),
+              style: FilledButton.styleFrom(
+                backgroundColor: _accent,
+                foregroundColor: Colors.white,
+              ),
+              icon: _isLoadingIssues
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.refresh, size: 16),
+              label: Text(_isLoadingIssues ? '조회 중...' : '새로고침'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIssueSummaryCard(ProblemBankIssueSummary summary) {
+    final q = summary.question;
+    final issueLabels = summary.issueTypes.map(_issueTypeLabel).join(', ');
+    final latestNote = summary.latestNote;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE3B341)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '${q.questionNumber}번',
+                style: const TextStyle(
+                  color: _text,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE3B341).withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0xFFE3B341)),
+                ),
+                child: Text(
+                  '신고 ${summary.reportCount}건',
+                  style: const TextStyle(
+                    color: Color(0xFFE3B341),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                _formatIssueTime(summary.latestReportAt),
+                style: const TextStyle(color: _textSub, fontSize: 11.5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            issueLabels.isEmpty ? '-' : issueLabels,
+            style: const TextStyle(
+              color: Color(0xFFFFDFA6),
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            q.renderedStem,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: _text, fontSize: 13, height: 1.35),
+          ),
+          if (latestNote.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '메모: $latestNote',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  const TextStyle(color: _textSub, fontSize: 12, height: 1.35),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => unawaited(_openIssueQuestion(summary)),
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: const Text('문항 열기'),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () => unawaited(
+                  _updateIssueSummaryStatus(summary, 'dismissed'),
+                ),
+                child: const Text('무시'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => unawaited(
+                  _updateIssueSummaryStatus(summary, 'resolved'),
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _accent,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('해결'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIssueTabBody() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 380,
+          child: _buildIssueFilterPanel(),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _panel,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _border),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '미해결 오류 ${_issueSummaries.length}문항',
+                      style: const TextStyle(
+                        color: _textSub,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_isLoadingIssues)
+                      const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _accent,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: _issueSummaries.isEmpty
+                      ? const Center(
+                          child: Text(
+                            '미해결 오류 리포트가 없습니다.',
+                            style: TextStyle(color: _textSub),
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: _issueSummaries.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, index) =>
+                              _buildIssueSummaryCard(_issueSummaries[index]),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canUpload = !_bootstrapLoading &&
@@ -11961,6 +12513,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     children: [
                       _buildUploadTabBody(),
                       _buildClassificationTabBody(),
+                      _buildIssueTabBody(),
                     ],
                   ),
                 ),

@@ -73,6 +73,19 @@ const VLM_TIMEOUT_MS = Math.max(
 );
 // VLM 엔진은 PB_VLM_ENABLED 를 명시적으로 '0' 으로 두지 않으면 기본 on.
 const VLM_ENABLED = process.env.PB_VLM_ENABLED !== '0';
+const PB_API_INTERNAL_URL = String(
+  process.env.PB_API_INTERNAL_URL ||
+    `http://127.0.0.1:${process.env.PB_API_PORT || '8787'}`,
+)
+  .trim()
+  .replace(/\/+$/, '');
+const PB_API_KEY = String(process.env.PB_API_KEY || '').trim();
+const AUTO_RENDER_ANSWER_ASSETS =
+  process.env.PB_AUTO_RENDER_ANSWER_ASSETS !== '0';
+const ANSWER_RENDER_BACKFILL_TIMEOUT_MS = Math.max(
+  10_000,
+  Number.parseInt(process.env.PB_ANSWER_RENDER_BACKFILL_TIMEOUT_MS || '180000', 10),
+);
 
 const CURRICULUM_CODES = new Set([
   'legacy_1to6',
@@ -145,6 +158,81 @@ function withTimeout(signal, timeoutMs) {
     );
   }
   return { signal: ctrl.signal, clear: () => clearTimeout(timer) };
+}
+
+function uniqueNonEmptyStrings(values) {
+  return Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function arrayChunks(values, size) {
+  const out = [];
+  for (let i = 0; i < values.length; i += size) {
+    out.push(values.slice(i, i + size));
+  }
+  return out;
+}
+
+async function backfillUnifiedAnswerRenderAssetsForPbQuestions({
+  academyId,
+  questionIds,
+}) {
+  const safeAcademyId = String(academyId || '').trim();
+  const ids = uniqueNonEmptyStrings(questionIds);
+  const summary = {
+    attempted: 0,
+    rendered: 0,
+    failed: 0,
+    skippedExisting: 0,
+    chunks: 0,
+    error: '',
+  };
+  if (!AUTO_RENDER_ANSWER_ASSETS || !safeAcademyId || ids.length === 0) {
+    return summary;
+  }
+  if (!PB_API_INTERNAL_URL) {
+    return { ...summary, error: 'missing_pb_api_internal_url' };
+  }
+
+  for (const chunk of arrayChunks(ids, 120)) {
+    const { signal, clear } = withTimeout(null, ANSWER_RENDER_BACKFILL_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(`${PB_API_INTERNAL_URL}/answers/render-assets/backfill`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(PB_API_KEY ? { 'x-api-key': PB_API_KEY } : {}),
+        },
+        body: JSON.stringify({
+          academyId: safeAcademyId,
+          sourceKind: 'pb_question',
+          sourceIds: chunk,
+        }),
+        signal,
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || json?.ok !== true) {
+        throw new Error(
+          `answer_render_backfill_failed:${response.status}:${json?.error || response.statusText}`,
+        );
+      }
+      const assets = json?.render_assets || {};
+      summary.attempted += Number(assets.attempted || 0);
+      summary.rendered += Number(assets.rendered || 0);
+      summary.failed += Number(assets.failed || 0);
+      summary.skippedExisting += Number(json?.skipped_existing || 0);
+      summary.chunks += 1;
+    } finally {
+      clear();
+    }
+  }
+  return summary;
 }
 
 function safeToString(value) {
@@ -5265,6 +5353,7 @@ async function processOneJob(job) {
 
   let previewScreenshotCount = 0;
   let previewScreenshotError = '';
+  let answerRenderQuestionIds = [];
   if (questions.length > 0) {
     try {
       let previewTargets = [];
@@ -5291,6 +5380,9 @@ async function processOneJob(job) {
         }
         previewTargets = allInserted || [];
       }
+      answerRenderQuestionIds = uniqueNonEmptyStrings(
+        previewTargets.map((row) => row?.id),
+      );
       if (previewTargets.length > 0) {
         const results = await generateQuestionPreviews({
           questions: previewTargets,
@@ -5315,6 +5407,42 @@ async function processOneJob(job) {
       console.warn(
         '[pb-extract-worker] preview_screenshot_skip',
         JSON.stringify({ jobId: job.id, message: previewScreenshotError }),
+      );
+    }
+  }
+
+  let answerRenderAssetStats = {
+    attempted: 0,
+    rendered: 0,
+    failed: 0,
+    skippedExisting: 0,
+    chunks: 0,
+    error: '',
+  };
+  if (answerRenderQuestionIds.length > 0) {
+    try {
+      answerRenderAssetStats =
+        await backfillUnifiedAnswerRenderAssetsForPbQuestions({
+          academyId: job.academy_id,
+          questionIds: answerRenderQuestionIds,
+        });
+      console.log(
+        '[pb-extract-worker] answer_render_assets',
+        JSON.stringify({
+          jobId: job.id,
+          total: answerRenderQuestionIds.length,
+          ...answerRenderAssetStats,
+          partialReextract,
+        }),
+      );
+    } catch (err) {
+      answerRenderAssetStats = {
+        ...answerRenderAssetStats,
+        error: compact(err?.message || err),
+      };
+      console.warn(
+        '[pb-extract-worker] answer_render_asset_skip',
+        JSON.stringify({ jobId: job.id, message: answerRenderAssetStats.error }),
       );
     }
   }
@@ -5382,6 +5510,7 @@ async function processOneJob(job) {
     partialLowConfidenceCount,
     partialMissingTargetCount: partialMissingTargets.length,
     partialMissingTargets,
+    answerRenderAssets: answerRenderAssetStats,
   };
 
   const nextDocMeta = {

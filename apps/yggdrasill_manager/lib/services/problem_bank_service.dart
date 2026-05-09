@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -604,6 +605,32 @@ class ProblemBankService {
       );
     }
     return decoded;
+  }
+
+  void _scheduleUnifiedAnswerRenderRefreshForQuestion(String questionId) {
+    final safeQuestionId = questionId.trim();
+    if (!hasGateway || safeQuestionId.isEmpty) return;
+    unawaited(() async {
+      try {
+        final row = await _client
+            .from('pb_questions')
+            .select('academy_id')
+            .eq('id', safeQuestionId)
+            .maybeSingle();
+        final academyId = '${row?['academy_id'] ?? ''}'.trim();
+        if (academyId.isEmpty) return;
+        await _gatewayPost(
+          '/answers/render-assets/backfill',
+          body: <String, dynamic>{
+            'academyId': academyId,
+            'sourceKind': 'pb_question',
+            'sourceIds': <String>[safeQuestionId],
+          },
+        );
+      } catch (_) {
+        // Best-effort only. The next full backfill can repair a missed asset.
+      }
+    }());
   }
 
   Map<String, dynamic> _decodeJsonMap(String raw) {
@@ -1902,6 +1929,96 @@ class ProblemBankService {
         .toList(growable: false);
   }
 
+  Future<List<ProblemBankIssueSummary>> listQuestionIssueSummaries({
+    required String academyId,
+    String status = 'open',
+    String issueType = '',
+    int limit = 500,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safeStatus = status.trim().isEmpty ? 'open' : status.trim();
+    final safeIssueType = issueType.trim();
+    final safeLimit = limit.clamp(1, 1000);
+    var reportQuery = _client
+        .from('pb_question_issue_reports')
+        .select('*')
+        .eq('academy_id', safeAcademyId)
+        .eq('status', safeStatus);
+    if (safeIssueType.isNotEmpty) {
+      reportQuery =
+          reportQuery.contains('issue_types', <String>[safeIssueType]);
+    }
+    final reportRows = await reportQuery
+        .order('created_at', ascending: false)
+        .limit(safeLimit);
+    final reports = (reportRows as List<dynamic>)
+        .map((e) => ProblemBankIssueReport.fromMap(
+              Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
+            ))
+        .toList(growable: false);
+    final questionIds = reports
+        .map((report) => report.questionId.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (questionIds.isEmpty) return const <ProblemBankIssueSummary>[];
+
+    final questionRows = await _client
+        .from('pb_questions')
+        .select('*')
+        .eq('academy_id', safeAcademyId)
+        .inFilter('id', questionIds);
+    final questionsById = <String, ProblemBankQuestion>{};
+    for (final row in (questionRows as List<dynamic>)) {
+      final question = ProblemBankQuestion.fromMap(
+        Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+      );
+      questionsById[question.id] = question;
+    }
+    final reportsByQuestion = <String, List<ProblemBankIssueReport>>{};
+    for (final report in reports) {
+      reportsByQuestion
+          .putIfAbsent(report.questionId, () => <ProblemBankIssueReport>[])
+          .add(report);
+    }
+    final summaries = <ProblemBankIssueSummary>[];
+    for (final entry in reportsByQuestion.entries) {
+      final question = questionsById[entry.key];
+      if (question == null) continue;
+      summaries.add(ProblemBankIssueSummary(
+        question: question,
+        reports: entry.value,
+      ));
+    }
+    summaries.sort((a, b) {
+      final aTime = a.latestReportAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bTime = b.latestReportAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bTime.compareTo(aTime);
+    });
+    return summaries;
+  }
+
+  Future<void> updateQuestionIssueReportsStatus({
+    required String academyId,
+    required String questionId,
+    required String status,
+  }) async {
+    final safeStatus = status.trim();
+    if (!['resolved', 'dismissed'].contains(safeStatus)) {
+      throw ArgumentError('invalid_issue_report_status');
+    }
+    await _client
+        .from('pb_question_issue_reports')
+        .update({
+          'status': safeStatus,
+          'resolved_by': _client.auth.currentUser?.id,
+          'resolved_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId.trim())
+        .eq('question_id', questionId.trim())
+        .eq('status', 'open');
+  }
+
   Future<void> updateDocumentMeta({
     required String documentId,
     required Map<String, dynamic> meta,
@@ -2135,6 +2252,13 @@ class ProblemBankService {
       );
     }
     await _client.from('pb_questions').update(payload).eq('id', questionId);
+    final mayAffectSubjectiveRender = subjectiveAnswer != null ||
+        questionType != null ||
+        allowSubjective != null ||
+        nextMeta != null;
+    if (mayAffectSubjectiveRender) {
+      _scheduleUnifiedAnswerRenderRefreshForQuestion(questionId);
+    }
   }
 
   /// 특정 문항에 대해 가장 최근 revision 한 건을 조회.

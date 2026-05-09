@@ -23,6 +23,7 @@ import '../../models/memo.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/problem_question_issue_report_service.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
 import '../../services/runtime_flags.dart';
 import '../../services/tag_preset_service.dart';
@@ -4630,6 +4631,57 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   BuildContext get _navigatorContext => widget.dialogContext ?? context;
 
+  Future<T?> _showTopOverlayDialog<T>({
+    required Widget Function(
+            BuildContext context, void Function([T? result]) close)
+        builder,
+    bool barrierDismissible = true,
+  }) async {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) {
+      return showDialog<T>(
+        context: _navigatorContext,
+        useRootNavigator: true,
+        barrierDismissible: barrierDismissible,
+        builder: (dialogContext) => builder(
+          dialogContext,
+          ([result]) =>
+              Navigator.of(dialogContext, rootNavigator: true).pop(result),
+        ),
+      );
+    }
+
+    final completer = Completer<T?>();
+    late OverlayEntry entry;
+    void close([T? result]) {
+      if (completer.isCompleted) return;
+      entry.remove();
+      completer.complete(result);
+    }
+
+    entry = OverlayEntry(
+      builder: (overlayContext) {
+        return Material(
+          type: MaterialType.transparency,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  onTap: barrierDismissible ? () => close() : null,
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(color: Colors.black.withValues(alpha: 0.54)),
+                ),
+              ),
+              Center(child: builder(overlayContext, close)),
+            ],
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    return completer.future;
+  }
+
   Future<void> _openSessionAnswerSheet(
     RightSideSheetTestGradingSession session, {
     bool initialShowSolution = false,
@@ -4805,6 +4857,200 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           ? cell.solutionRect1k
           : cell.focusRect1k,
     );
+  }
+
+  ({String studentId, String homeworkItemId}) _reportContextIdsFromSession() {
+    final sessionId =
+        (widget.session?.sessionId ?? '').replaceFirst('preload:', '');
+    final match =
+        RegExp(r'student:([^|]+)\|[^:]+:([^|]+)').firstMatch(sessionId);
+    return (
+      studentId: (match?.group(1) ?? '').trim(),
+      homeworkItemId: (match?.group(2) ?? '').trim(),
+    );
+  }
+
+  Future<void> _openQuestionIssueReportDialog(
+    _RightSheetGradingCellVm cell,
+  ) async {
+    if (cell.answerSourceKind != 'pb_question' ||
+        cell.answerSourceId.trim().isEmpty) {
+      ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+        const SnackBar(content: Text('문제은행 문항만 오류 신고를 남길 수 있습니다.')),
+      );
+      return;
+    }
+    final academyId = await _resolveActiveAcademyId();
+    if (!mounted) return;
+    if (academyId.isEmpty) {
+      ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+        const SnackBar(content: Text('학원 정보를 찾지 못해 오류 신고를 저장할 수 없습니다.')),
+      );
+      return;
+    }
+
+    final selected = <String>{};
+    final noteCtrl = TextEditingController();
+    var submitting = false;
+    await _showTopOverlayDialog<void>(
+      builder: (dialogContext, closeDialog) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> submit() async {
+              if (selected.isEmpty || submitting) return;
+              setDialogState(() => submitting = true);
+              try {
+                final contextIds = _reportContextIdsFromSession();
+                await ProblemQuestionIssueReportService.instance.createReport(
+                  academyId: academyId,
+                  questionId: cell.answerSourceId,
+                  issueTypes: selected.toList(growable: false),
+                  homeworkItemId: contextIds.homeworkItemId,
+                  studentId: contextIds.studentId,
+                  note: noteCtrl.text,
+                );
+                if (!context.mounted) return;
+                closeDialog();
+                if (!mounted) return;
+                ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+                  SnackBar(
+                    content:
+                        Text('${cell.displayQuestionLabel}번 오류 신고를 저장했습니다.'),
+                  ),
+                );
+              } catch (_) {
+                if (!context.mounted) return;
+                setDialogState(() => submitting = false);
+                ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+                  const SnackBar(content: Text('오류 신고 저장에 실패했습니다.')),
+                );
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: _rsBg,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: _rsBorder),
+              ),
+              title: Text(
+                '${cell.displayQuestionLabel}번 오류 리포트',
+                style: const TextStyle(
+                  color: _rsText,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              content: SizedBox(
+                width: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '해당 문항에서 발견한 오류를 선택해 주세요.',
+                      style: TextStyle(color: _rsTextSub, fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final type in kProblemQuestionIssueTypes)
+                          FilterChip(
+                            label: Text(type.label),
+                            selected: selected.contains(type.key),
+                            showCheckmark: false,
+                            onSelected: submitting
+                                ? null
+                                : (value) {
+                                    setDialogState(() {
+                                      if (value) {
+                                        selected.add(type.key);
+                                      } else {
+                                        selected.remove(type.key);
+                                      }
+                                    });
+                                  },
+                            selectedColor: _rsAccent.withValues(alpha: 0.16),
+                            backgroundColor: _rsPanelBg,
+                            surfaceTintColor: Colors.transparent,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 9,
+                              vertical: 6,
+                            ),
+                            side: BorderSide(
+                              color: selected.contains(type.key)
+                                  ? _rsAccent
+                                  : _rsBorder,
+                            ),
+                            labelStyle: TextStyle(
+                              color: selected.contains(type.key)
+                                  ? _rsAccent
+                                  : _rsTextSub,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: noteCtrl,
+                      enabled: !submitting,
+                      minLines: 2,
+                      maxLines: 4,
+                      style: const TextStyle(color: _rsText),
+                      decoration: const InputDecoration(
+                        hintText: '추가 설명이 있으면 적어주세요.',
+                        hintStyle: TextStyle(color: _rsTextSub),
+                        filled: true,
+                        fillColor: _rsPanelBg,
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: _rsBorder),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: _rsAccent),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: submitting ? null : () => closeDialog(),
+                  style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: selected.isEmpty || submitting
+                      ? null
+                      : () => unawaited(submit()),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _rsAccent,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: _rsFieldBg,
+                    disabledForegroundColor: _rsTextSub,
+                  ),
+                  child: submitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('신고'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    noteCtrl.dispose();
   }
 
   ({double correctScore, double totalScore}) _computeScoreResult(
@@ -5475,6 +5721,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               onTap: () => unawaited(
                 _openCellSolution(cell, pageNumber: pageNumber),
               ),
+              onLongPress: () => unawaited(
+                _openQuestionIssueReportDialog(cell),
+              ),
               child: SizedBox(
                 width: 56,
                 height: 44,
@@ -5514,7 +5763,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     Expanded(
                       child: SizedBox(
                         height: answerSlotHeight,
-                        child: _buildAnswerImageOrFallback(cell),
+                        child: Opacity(
+                          opacity: state == 'unsolved' ? 0.48 : 1.0,
+                          child: _buildAnswerImageOrFallback(cell),
+                        ),
                       ),
                     ),
                   ],

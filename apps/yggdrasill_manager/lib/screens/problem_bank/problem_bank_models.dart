@@ -1228,3 +1228,86 @@ class ProblemBankQuestionRevision {
     );
   }
 }
+
+class ProblemBankIssueReport {
+  const ProblemBankIssueReport({
+    required this.id,
+    required this.academyId,
+    required this.questionId,
+    required this.issueTypes,
+    required this.note,
+    required this.status,
+    required this.createdAt,
+    this.homeworkItemId = '',
+    this.studentId = '',
+    this.reporterUserId = '',
+    this.resolvedBy = '',
+    this.resolvedAt,
+  });
+
+  final String id;
+  final String academyId;
+  final String questionId;
+  final String homeworkItemId;
+  final String studentId;
+  final String reporterUserId;
+  final List<String> issueTypes;
+  final String note;
+  final String status;
+  final String resolvedBy;
+  final DateTime? resolvedAt;
+  final DateTime createdAt;
+
+  factory ProblemBankIssueReport.fromMap(Map<String, dynamic> map) {
+    return ProblemBankIssueReport(
+      id: '${map['id'] ?? ''}',
+      academyId: '${map['academy_id'] ?? ''}',
+      questionId: '${map['question_id'] ?? ''}',
+      homeworkItemId: '${map['homework_item_id'] ?? ''}',
+      studentId: '${map['student_id'] ?? ''}',
+      reporterUserId: '${map['reporter_user_id'] ?? ''}',
+      issueTypes: _listOrEmpty(map['issue_types'])
+          .map((e) => '$e')
+          .toList(growable: false),
+      note: '${map['note'] ?? ''}',
+      status: '${map['status'] ?? 'open'}',
+      resolvedBy: '${map['resolved_by'] ?? ''}',
+      resolvedAt: _dateTimeOrNull(map['resolved_at']),
+      createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
+    );
+  }
+}
+
+class ProblemBankIssueSummary {
+  const ProblemBankIssueSummary({
+    required this.question,
+    required this.reports,
+  });
+
+  final ProblemBankQuestion question;
+  final List<ProblemBankIssueReport> reports;
+
+  int get reportCount => reports.length;
+
+  DateTime? get latestReportAt {
+    if (reports.isEmpty) return null;
+    return reports
+        .map((report) => report.createdAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+  }
+
+  List<String> get issueTypes {
+    return reports
+        .expand((report) => report.issueTypes)
+        .toSet()
+        .toList(growable: false);
+  }
+
+  String get latestNote {
+    for (final report in reports) {
+      final note = report.note.trim();
+      if (note.isNotEmpty) return note;
+    }
+    return '';
+  }
+}

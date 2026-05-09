@@ -11416,12 +11416,13 @@ Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
             break;
           }
         }
-        final selected = matched ?? rows.first;
-        if (bookId.isEmpty) {
-          bookId = '${selected['book_id'] ?? ''}'.trim();
-        }
-        if (gradeLabel.isEmpty) {
-          gradeLabel = '${selected['grade_label'] ?? ''}'.trim();
+        if (matched != null) {
+          if (bookId.isEmpty) {
+            bookId = '${matched['book_id'] ?? ''}'.trim();
+          }
+          if (gradeLabel.isEmpty) {
+            gradeLabel = '${matched['grade_label'] ?? ''}'.trim();
+          }
         }
       }
     } catch (_) {}

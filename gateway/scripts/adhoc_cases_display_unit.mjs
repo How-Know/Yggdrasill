@@ -24,6 +24,13 @@ const expandedWithCondition = normalizeMathLatex(withCondition);
 assert.ok(expandedWithCondition.includes(String.raw`@{}l@{\quad}l@{}`), expandedWithCondition);
 assert.ok(expandedWithCondition.includes(String.raw`\displaystyle 3x-2 & \displaystyle (x<1)`), expandedWithCondition);
 
+const nested = String.raw`\text{소수} \begin{cases} \text{유한소수} \\ \text{무한소수} \begin{cases} \text{순환소수} \\ box{~~} \end{cases} \end{cases}`;
+const expandedNested = expandCasesEnvironmentToDisplayArray(nested, { thinBrace: true });
+assert.ok(!expandedNested.includes(String.raw`\begin{cases}`), expandedNested);
+assert.ok(!expandedNested.includes(String.raw`\end{cases}`), expandedNested);
+assert.ok((expandedNested.match(/\\begin\{array\}/g) || []).length >= 2, expandedNested);
+assert.ok(expandedNested.includes(String.raw`\text{무한소수} \vcenter`), expandedNested);
+
 const source = buildTexSource({
   id: 'cases-display-smoke',
   question_number: 1,
@@ -32,10 +39,24 @@ const source = buildTexSource({
   equations: [],
   meta: {},
 });
-assert.ok(source.includes(String.raw`\vcenter{\hbox{\scalebox{0.78}[1]`), source);
-assert.ok(source.includes(String.raw`\hspace{0.45em}`), source);
+assert.ok(source.includes(String.raw`\vcenter{\hbox{\scalebox{0.65}[0.72]`), source);
+assert.ok(source.includes(String.raw`\hspace{0.22em}`), source);
 assert.ok(source.includes(String.raw`\begin{array}`), source);
 assert.ok(!source.includes(String.raw`\begin{cases}`), source);
+
+const nestedSource = buildTexSource({
+  id: 'cases-nested-smoke',
+  question_number: 1,
+  stem: `box{~~} 안의 수에 해당하는 것은?\n[박스시작]\n${nested}\n[박스끝]`,
+  choices: [
+    { label: '①', text: String.raw`-\sqrt{\frac{4}{25}}` },
+    { label: '②', text: String.raw`\sqrt{0.16}` },
+  ],
+  equations: [],
+  meta: {},
+});
+assert.ok(!nestedSource.includes(String.raw`\begin{cases}`), nestedSource);
+assert.ok(!nestedSource.includes(String.raw`\end{cases}`), nestedSource);
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cases-display-'));
 fs.writeFileSync(path.join(dir, 'q.tex'), source, 'utf8');
@@ -45,5 +66,13 @@ const proc = spawnSync(
   { cwd: dir, encoding: 'utf8' },
 );
 assert.equal(proc.status, 0, proc.stdout + proc.stderr);
+
+fs.writeFileSync(path.join(dir, 'nested.tex'), nestedSource, 'utf8');
+const nestedProc = spawnSync(
+  'xelatex',
+  ['-interaction=nonstopmode', '-halt-on-error', 'nested.tex'],
+  { cwd: dir, encoding: 'utf8' },
+);
+assert.equal(nestedProc.status, 0, nestedProc.stdout + nestedProc.stderr);
 
 console.log('cases display smoke: ok');

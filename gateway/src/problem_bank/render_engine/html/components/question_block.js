@@ -53,7 +53,7 @@ const BOGI_ITEM_SPLIT_RE =
   /(?=(?:[ㄱ-ㅎ]\.\s|(?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|）)\s))/;
 const BOGI_ITEM_RE =
   /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
-const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
+const SYMBOL_LABEL_LINE_RE = /^\s*\\(bullet|circ)\b\s*/;
 const PARAGRAPH_MARKER_LINE_RE = /^\s*\[문단(?::[^\]]*)?\]\s*$/;
 
 function cleanLine(line) {
@@ -327,8 +327,12 @@ function splitBogiItemsFromText(text) {
 
 function sectionLabelForBogiPart(part) {
   const text = String(part || '').trim();
-  if (BULLET_LINE_RE.test(text)) {
-    return { labelHtml: '&bull;', content: text.replace(BULLET_LINE_RE, '').trim() };
+  const symbol = text.match(SYMBOL_LABEL_LINE_RE);
+  if (symbol) {
+    return {
+      labelHtml: symbol[1] === 'circ' ? '○' : '&bull;',
+      content: text.replace(SYMBOL_LABEL_LINE_RE, '').trim(),
+    };
   }
   const match = text.match(BOGI_ITEM_RE);
   if (!match) return null;

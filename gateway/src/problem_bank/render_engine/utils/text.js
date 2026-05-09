@@ -187,27 +187,107 @@ export function stripStructuralMarkers(value) {
 function splitLatexRows(body) {
   const rows = [];
   const src = String(body || '');
-  const rowBreakRe = /\\\\(?:\s*\[[^\]]+\])?/g;
-  let last = 0;
-  let m;
-  while ((m = rowBreakRe.exec(src)) !== null) {
-    const row = src.slice(last, m.index).trim();
-    if (row) rows.push(row);
-    last = m.index + m[0].length;
+  let start = 0;
+  let braceDepth = 0;
+  const envStack = [];
+
+  for (let i = 0; i < src.length; i += 1) {
+    if (src.startsWith('\\begin{', i) || src.startsWith('\\end{', i)) {
+      const isBegin = src.startsWith('\\begin{', i);
+      const nameStart = i + (isBegin ? '\\begin{'.length : '\\end{'.length);
+      const nameEnd = src.indexOf('}', nameStart);
+      if (nameEnd > nameStart) {
+        const envName = src.slice(nameStart, nameEnd);
+        if (isBegin) {
+          envStack.push(envName);
+        } else {
+          const idx = envStack.lastIndexOf(envName);
+          if (idx >= 0) envStack.splice(idx, 1);
+        }
+        i = nameEnd;
+        continue;
+      }
+    }
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '\\') {
+      if (next === '\\' && braceDepth === 0 && envStack.length === 0) {
+        const row = src.slice(start, i).trim();
+        if (row) rows.push(row);
+        i += 2;
+        while (i < src.length && /\s/.test(src[i])) i += 1;
+        if (src[i] === '[') {
+          const close = src.indexOf(']', i + 1);
+          if (close >= 0) i = close + 1;
+        }
+        start = i;
+        i -= 1;
+        continue;
+      }
+      // Escaped one-character tokens such as \{, \}, \& must not affect depth.
+      if (next && !/[a-zA-Z]/.test(next)) i += 1;
+      continue;
+    }
+    if (ch === '{') {
+      braceDepth += 1;
+    } else if (ch === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+    }
   }
-  const tail = src.slice(last).trim();
+  const tail = src.slice(start).trim();
   if (tail) rows.push(tail);
   return rows;
 }
 
+function splitLatexTopLevelAmpersands(row) {
+  const src = String(row || '');
+  const cells = [];
+  let start = 0;
+  let braceDepth = 0;
+  const envStack = [];
+
+  for (let i = 0; i < src.length; i += 1) {
+    if (src.startsWith('\\begin{', i) || src.startsWith('\\end{', i)) {
+      const isBegin = src.startsWith('\\begin{', i);
+      const nameStart = i + (isBegin ? '\\begin{'.length : '\\end{'.length);
+      const nameEnd = src.indexOf('}', nameStart);
+      if (nameEnd > nameStart) {
+        const envName = src.slice(nameStart, nameEnd);
+        if (isBegin) {
+          envStack.push(envName);
+        } else {
+          const idx = envStack.lastIndexOf(envName);
+          if (idx >= 0) envStack.splice(idx, 1);
+        }
+        i = nameEnd;
+        continue;
+      }
+    }
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '\\') {
+      if (next && !/[a-zA-Z]/.test(next)) i += 1;
+      continue;
+    }
+    if (ch === '{') {
+      braceDepth += 1;
+    } else if (ch === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+    } else if (ch === '&' && braceDepth === 0 && envStack.length === 0) {
+      cells.push(src.slice(start, i));
+      start = i + 1;
+    }
+  }
+  cells.push(src.slice(start));
+  return cells;
+}
+
 function countUnescapedAmpersands(row) {
-  const matches = String(row || '').match(/(?<!\\)&/g);
-  return matches ? matches.length : 0;
+  return Math.max(0, splitLatexTopLevelAmpersands(row).length - 1);
 }
 
 function applyDisplaystyleToCaseRow(row) {
-  return String(row || '')
-    .split(/(?<!\\)&/)
+  return splitLatexTopLevelAmpersands(row)
     .map((cell) => {
       const trimmed = cell.trim();
       if (!trimmed) return trimmed;
@@ -217,6 +297,33 @@ function applyDisplaystyleToCaseRow(row) {
       return `\\displaystyle ${trimmed}`;
     })
     .join(' & ');
+}
+
+const CASES_BEGIN = '\\begin{cases}';
+const CASES_END = '\\end{cases}';
+
+function findMatchingCasesEnd(src, bodyStart) {
+  let depth = 1;
+  let pos = bodyStart;
+  while (pos < src.length) {
+    const nextBegin = src.indexOf(CASES_BEGIN, pos);
+    const nextEnd = src.indexOf(CASES_END, pos);
+    if (nextEnd < 0) return null;
+    if (nextBegin >= 0 && nextBegin < nextEnd) {
+      depth += 1;
+      pos = nextBegin + CASES_BEGIN.length;
+      continue;
+    }
+    depth -= 1;
+    if (depth === 0) {
+      return {
+        endStart: nextEnd,
+        endAfter: nextEnd + CASES_END.length,
+      };
+    }
+    pos = nextEnd + CASES_END.length;
+  }
+  return null;
 }
 
 /**
@@ -233,30 +340,53 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
     rowGap = '0.35em',
   } = options || {};
 
-  return String(value || '').replace(
-    /\\begin\{cases\}([\s\S]*?)\\end\{cases\}/g,
-    (_match, body) => {
-      const rows = splitLatexRows(body);
-      if (rows.length === 0) return _match;
-      const colCount = Math.max(
-        1,
-        ...rows.map((row) => countUnescapedAmpersands(row) + 1),
-      );
-      const colSpec = `@{}${Array.from({ length: colCount }, () => 'l').join('@{\\quad}')}@{}`;
-      const latexRows = rows
-        .map(applyDisplaystyleToCaseRow)
-        .join(`\\\\[${rowGap}]`);
-      const arrayTex = `\\begin{array}{${colSpec}}${latexRows}\\end{array}`;
-      if (thinBrace) {
-        // XeLaTeX 전용: delimiter 두께를 직접 지정할 수 없으므로 brace만 가로로 살짝
-        // 압축해 선을 얇게 보이게 한다. braceYScale 은 행간을 건드리지 않고
-        // delimiter 자체의 위아래 과한 여유만 줄이는 용도다.
-        // 배열은 별도 math box로 두어 글자폭과 행간은 유지한다.
-        return `\\vcenter{\\hbox{\\scalebox{${braceXScale}}[${braceYScale}]{$\\left\\{\\vphantom{${arrayTex}}\\right.$}${braceGap}$${arrayTex}$}}`;
-      }
-      return `\\left\\{${braceGap}${arrayTex}\\right.`;
-    },
-  );
+  const src = String(value || '');
+  let out = '';
+  let pos = 0;
+  while (pos < src.length) {
+    const begin = src.indexOf(CASES_BEGIN, pos);
+    if (begin < 0) {
+      out += src.slice(pos);
+      break;
+    }
+    const bodyStart = begin + CASES_BEGIN.length;
+    const match = findMatchingCasesEnd(src, bodyStart);
+    if (!match) {
+      out += src.slice(pos);
+      break;
+    }
+    out += src.slice(pos, begin);
+
+    const rawBody = src.slice(bodyStart, match.endStart);
+    // 안쪽 cases 를 먼저 균형 있게 변환해야 바깥 행 분리 시 내부 `\\` 를 건드리지 않는다.
+    const body = expandCasesEnvironmentToDisplayArray(rawBody, options);
+    const rows = splitLatexRows(body);
+    if (rows.length === 0) {
+      out += src.slice(begin, match.endAfter);
+      pos = match.endAfter;
+      continue;
+    }
+    const colCount = Math.max(
+      1,
+      ...rows.map((row) => countUnescapedAmpersands(row) + 1),
+    );
+    const colSpec = `@{}${Array.from({ length: colCount }, () => 'l').join('@{\\quad}')}@{}`;
+    const latexRows = rows
+      .map(applyDisplaystyleToCaseRow)
+      .join(`\\\\[${rowGap}]`);
+    const arrayTex = `\\begin{array}{${colSpec}}${latexRows}\\end{array}`;
+    if (thinBrace) {
+      // XeLaTeX 전용: delimiter 두께를 직접 지정할 수 없으므로 brace만 가로로 살짝
+      // 압축해 선을 얇게 보이게 한다. braceYScale 은 행간을 건드리지 않고
+      // delimiter 자체의 위아래 과한 여유만 줄이는 용도다.
+      // 배열은 별도 math box로 두어 글자폭과 행간은 유지한다.
+      out += `\\vcenter{\\hbox{\\scalebox{${braceXScale}}[${braceYScale}]{$\\left\\{\\vphantom{${arrayTex}}\\right.$}${braceGap}$${arrayTex}$}}`;
+    } else {
+      out += `\\left\\{${braceGap}${arrayTex}\\right.`;
+    }
+    pos = match.endAfter;
+  }
+  return out;
 }
 
 export function normalizeMathLatex(value) {

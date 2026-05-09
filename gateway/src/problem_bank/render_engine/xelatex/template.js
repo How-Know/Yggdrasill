@@ -314,6 +314,72 @@ function stripLatexTextWrappers(input) {
   return out.replace(/\s+/g, ' ').trim();
 }
 
+function findMatchingCurlyBrace(src, openIdx) {
+  if (src[openIdx] !== '{') return -1;
+  let depth = 0;
+  for (let i = openIdx; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function isFractionOnlySqrtArgument(arg) {
+  const body = String(arg || '').trim().replace(/^\\displaystyle\s+/, '');
+  return /^\\(?:dfrac|frac|tfrac)\s*\{[\s\S]*\}\s*\{[\s\S]*\}$/.test(body);
+}
+
+function padSqrtFractionContent(math) {
+  const src = String(math || '');
+  if (!src.includes('\\sqrt')) return src;
+  let out = '';
+  let pos = 0;
+
+  while (pos < src.length) {
+    const idx = src.indexOf('\\sqrt', pos);
+    if (idx < 0) {
+      out += src.slice(pos);
+      break;
+    }
+    out += src.slice(pos, idx);
+    let cursor = idx + '\\sqrt'.length;
+    while (cursor < src.length && /\s/.test(src[cursor])) cursor += 1;
+    // n-th roots have separate visual constraints; leave them unchanged for now.
+    if (src[cursor] === '[') {
+      out += src.slice(idx, cursor + 1);
+      pos = cursor + 1;
+      continue;
+    }
+    if (src[cursor] !== '{') {
+      out += src.slice(idx, cursor);
+      pos = cursor;
+      continue;
+    }
+    const close = findMatchingCurlyBrace(src, cursor);
+    if (close < 0) {
+      out += src.slice(idx);
+      break;
+    }
+    const inner = src.slice(cursor + 1, close);
+    if (isFractionOnlySqrtArgument(inner)) {
+      const normalizedInner = inner.trim().replace(/^\\displaystyle\s+/, '');
+      out += `\\mtsqrtpad{${normalizedInner}}`;
+    } else {
+      out += src.slice(idx, close + 1);
+    }
+    pos = close + 1;
+  }
+  return out;
+}
+
 function normalizeMathSegment(mathContent) {
   let out = String(mathContent || '');
 
@@ -331,14 +397,18 @@ function normalizeMathSegment(mathContent) {
 
   // 지수 자리에 들어간 빈칸은 일반 답안 빈칸보다 작은 정사각형으로 렌더링.
   out = out.replace(/\^\s*\{\s*box\s*\{\s*~~\s*\}\s*\}/gi, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*\{\s*box\s*\{\s*\}\s*\}/gi, '^{\\mtexponentemptybox{}}');
   out = out.replace(/\^\s*box\s*\{\s*~~\s*\}/gi, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*box\s*\{\s*\}/gi, '^{\\mtexponentemptybox{}}');
   out = out.replace(/\^\s*\{\s*\\square\s*\}/g, '^{\\mtexponentemptybox{}}');
   out = out.replace(/\^\s*\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '^{\\mtexponentemptybox{}}');
 
   // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
   out = out.replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, '\\mtemptybox{}');
   out = out.replace(/\bBOX\b/g, '\\mtemptybox{}');
-  out = out.replace(/box\s*\{\s*~~\s*\}/gi, '\\mtemptybox{}');
+  out = out.replace(/box\s*\{\s*(?:~~)?\s*\}/gi, '\\mtemptybox{}');
+  // □ABFE / □CDEF 처럼 도형 이름 앞의 사각형 기호는 빈칸이 아니라 \square 로 유지.
+  out = out.replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ');
   out = out.replace(/[□▢◻]/g, '\\mtemptybox{}');
   // \square ABCD 처럼 도형 이름 앞에 붙은 사각형 기호는 빈칸이 아니라 일반 도형 기호다.
   out = out.replace(/\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '\\mtemptybox{}');
@@ -371,6 +441,7 @@ function normalizeMathSegment(mathContent) {
     braceYScale: 0.72,
     braceGap: '\\hspace{0.22em}',
   });
+  out = padSqrtFractionContent(out);
 
   return out;
 }
@@ -387,9 +458,10 @@ function spaceMarkerToTex(amount) {
 
 function normalizeBlankBoxNotation(input) {
   return String(input || '')
+    .replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ')
     .replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, 'box{~~}')
     .replace(/\bBOX\b/g, 'box{~~}')
-    .replace(/\bbox\s*\{\s*~~\s*\}/gi, 'box{~~}')
+    .replace(/\bbox\s*\{\s*(?:~~)?\s*\}/gi, 'box{~~}')
     .replace(/[□▢◻]/g, 'box{~~}');
 }
 
@@ -510,10 +582,51 @@ function protectLatexTextBlocks(input) {
   };
 }
 
+function normalizeLiteralEscapedNewlines(input) {
+  const src = String(input || '');
+  if (!src.includes('\\n')) return src;
+
+  const preserves = [
+    /^abla(?![A-Za-z])/,       // \nabla
+    /^atural(?![A-Za-z])/,     // \natural
+    /^e(?![A-Za-z])/,          // \ne
+    /^eq(?![A-Za-z])/,         // \neq
+    /^eg(?![A-Za-z])/,         // \neg
+    /^i(?![A-Za-z])/,          // \ni
+    /^ot(?![A-Za-z])/,         // \not
+    /^u(?![A-Za-z])/,          // \nu
+    /^ew(?:command|length|page|line|theorem)\b/,
+    /^oindent\b/,
+    /^onumber\b/,
+    /^ormal(?:font|size)\b/,
+    /^obreakspace\b/,
+    /^ull\b/,
+  ];
+
+  let out = '';
+  for (let i = 0; i < src.length; i += 1) {
+    if (src[i] === '\\' && src[i + 1] === 'n') {
+      const rest = src.slice(i + 2);
+      if (preserves.some((re) => re.test(rest))) {
+        out += '\\n';
+      } else {
+        // VLM/JSON 경로에서 줄바꿈이 실제 LF가 아니라 두 글자 "\n" 으로
+        // 저장된 경우. 그대로 두면 "\na", "\nf", "\nx" 같은 미정의
+        // LaTeX 명령이 되므로, 수식 경계 보존을 위해 공백 하나로 치환한다.
+        out += ' ';
+      }
+      i += 1;
+      continue;
+    }
+    out += src[i];
+  }
+  return out.replace(/[ \t]{2,}/g, ' ');
+}
+
 function smartTexLineCore(text, equations) {
   // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
   const clean = normalizeBlankBoxNotation(
-    stripMathDelimiters(stripMarkers(text)).trim(),
+    normalizeLiteralEscapedNewlines(stripMathDelimiters(stripMarkers(text))).trim(),
   );
   if (!clean) return '';
 
@@ -1125,7 +1238,7 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
 }
 
 // 박스(보기/조건) 내용에 "정렬 힌트가 될 만한 글자" — 한글 낱자(문장부호 제외), ㄱㄴㄷ 라벨,
-// \bullet, (가)/(나) 라벨, ㄱ./ㄴ. 라벨 — 이 하나도 없으면 "가운데 정렬" 모드로 렌더.
+// \bullet/\circ, (가)/(나) 라벨, ㄱ./ㄴ. 라벨 — 이 하나도 없으면 "가운데 정렬" 모드로 렌더.
 // 입력: 이미 flush 된 텍스트 라인(Array<string>). 마커(\[그림\] 등)는 무시하고 순수 본문만 본다.
 function boxContentIsCenteredOnly(lines) {
   const joined = lines
@@ -1138,31 +1251,40 @@ function boxContentIsCenteredOnly(lines) {
     .trim();
   if (!joined) return false;
   if (/[가-힣ㄱ-ㅎ]/.test(joined)) return false;
-  if (/\\bullet\b/.test(joined)) return false;
+  if (/\\(?:bullet|circ)\b/.test(joined)) return false;
   if (BOGI_ITEM_RE.test(joined)) return false;
   return true;
 }
 
-// "\bullet" 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
+// "\bullet" / "\circ" 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
+const SYMBOL_LABEL_LINE_RE = /^\s*\\(bullet|circ)\b\s*/;
 const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
 
-// 한 줄짜리 \bullet 항목 → "bullet + 고정폭 공백 + 본문" 형태의 LaTeX 라인으로 렌더.
-//   - \wd0 = "\bullet\ " 의 폭으로 측정 → hangindent/첫줄 라벨 영역을 동일 폭으로 고정
+function symbolLabelTex(symbol) {
+  if (symbol === 'circ') return `$\\circ$\\ `;
+  return `$\\bullet$\\ `;
+}
+
+// 한 줄짜리 \bullet/\circ 항목 → "기호 + 고정폭 공백 + 본문" 형태의 LaTeX 라인으로 렌더.
+//   - \wd0 = "기호\ " 의 폭으로 측정 → hangindent/첫줄 라벨 영역을 동일 폭으로 고정
 //   - 본문은 smartTexLine 을 거쳐 수식/텍스트 자동 처리
-//   - \ (backslash-space) 를 뒤에 붙여 bullet 뒤 1공백을 LaTeX 에서 절대 소멸하지 않도록 보장
-function renderBulletLine(rawLine, equations, replaceFigureMarkers = null) {
-  const stripped = rawLine.replace(BULLET_LINE_RE, '');
+//   - \ (backslash-space) 를 뒤에 붙여 기호 뒤 1공백을 LaTeX 에서 절대 소멸하지 않도록 보장
+function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) {
+  const match = String(rawLine || '').match(SYMBOL_LABEL_LINE_RE);
+  const symbol = match ? match[1] : 'bullet';
+  const stripped = String(rawLine || '').replace(SYMBOL_LABEL_LINE_RE, '');
   const withFigs = replaceFigureMarkers
     ? replaceFigureMarkers(stripped)
     : stripped;
   const contentTex = smartTexLine(withFigs, equations);
-  const labelTex = `$\\bullet$\\ `;
+  const labelTex = symbolLabelTex(symbol);
   return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
 }
 
 function decoSectionLabelTex(rawLine) {
   const line = String(rawLine || '').trim();
-  if (BULLET_LINE_RE.test(line)) return `$\\bullet$\\ `;
+  const symbol = line.match(SYMBOL_LABEL_LINE_RE);
+  if (symbol) return symbolLabelTex(symbol[1]);
   const labelMatch = line.match(BOGI_ITEM_RE);
   if (!labelMatch) return '';
   const label = labelMatch[1] || labelMatch[2];
@@ -1214,10 +1336,10 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
         activeLabelTex = '';
         continue;
       }
-      if (BULLET_LINE_RE.test(line)) {
+      if (SYMBOL_LABEL_LINE_RE.test(line)) {
         activeLabelTex = decoSectionLabelTex(line);
         contentParts.push(
-          renderBulletLine(line, equations, replaceFigureMarkers),
+          renderSymbolLabelLine(line, equations, replaceFigureMarkers),
         );
       } else if (BOGI_ITEM_RE.test(line)) {
         activeLabelTex = decoSectionLabelTex(line);
@@ -1914,9 +2036,10 @@ function buildPreamble({
   // 한글 글자 전체 높이(ascender+descender 포함)와 시각적으로 동일하도록 1.05em × 1.575em 으로 설정.
   // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
   // \ensuremath + \vcenter 로 수식축(math axis) 에 중앙이 오도록 → 인접 글자와 시각적 정렬.
-  lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}}}');
+  lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}');
   // 지수 전용 빈칸: 정사각형이며 일반 빈칸보다 작다.
   lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
+  lines.push('\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}');
   lines.push('\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}');
   lines.push('\\usepackage{fancyhdr}');
   lines.push('\\usepackage{setspace}');
@@ -3459,8 +3582,9 @@ export function buildTexSource(question, options = {}) {
     '\\usepackage[most]{tcolorbox}',
     '\\newlength{\\tblcellwd}',
     '\\newlength{\\tblcellht}',
-    '\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.35em][c]{\\rule{0pt}{0.9em}}}}}}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
+    '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
@@ -3592,8 +3716,9 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\usepackage{graphicx}',
     '\\usepackage[normalem]{ulem}',
     '\\usepackage{setspace}',
-    '\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.35em][c]{\\rule{0pt}{0.9em}}}}}}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
+    '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
