@@ -28,6 +28,7 @@ class TextbookStageBatchService {
         _http = httpClient ?? http.Client();
 
   static const int _vlmLongEdgePx = 1500;
+  static const int _answerImageLongEdgePx = 3000;
 
   final TextbookPdfService _pdfService;
   final TextbookVlmAnswerService _answerService;
@@ -180,7 +181,25 @@ class TextbookStageBatchService {
     final aggregated = <TextbookVlmAnswerItem>[];
     final imageByNumber = <String, _ImageAnswerCrop>{};
     final pageByNumber = <String, ({int rawPage, int displayPage})>{};
+    final answerImagePageCache = <int, Uint8List>{};
     final totalPages = doc.pages.length;
+
+    Future<Uint8List?> answerImagePagePng(int page) async {
+      final cached = answerImagePageCache[page];
+      if (cached != null) return cached;
+      try {
+        final png = await renderPdfPageToPng(
+          document: doc,
+          pageNumber: page,
+          longEdgePx: _answerImageLongEdgePx,
+        );
+        answerImagePageCache[page] = png;
+        return png;
+      } catch (_) {
+        return null;
+      }
+    }
+
     for (var page = 1; page <= totalPages; page += 1) {
       onStatus?.call('정답 VLM $page / $totalPages 페이지...');
       Uint8List png;
@@ -217,7 +236,10 @@ class TextbookStageBatchService {
             );
           }
           if (item.isImage && item.bbox != null) {
-            final crop = _cropAnswerImage(png, item.bbox!);
+            final imagePng = await answerImagePagePng(result.rawPage);
+            final crop = imagePng == null
+                ? _cropAnswerImage(png, item.bbox!)
+                : _cropAnswerImage(imagePng, item.bbox!);
             if (crop != null) {
               imageByNumber.putIfAbsent(item.problemNumber, () => crop);
               if (numberKey.isNotEmpty) {

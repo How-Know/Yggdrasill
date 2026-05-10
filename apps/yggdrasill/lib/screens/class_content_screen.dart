@@ -9567,6 +9567,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final int runtimeAccumulatedMs = group.runtimeAccumulatedMs;
     final DateTime? runtimeRunStart = group.runtimeRunStart;
     final DateTime? runtimeFirstStartedAt = group.runtimeFirstStartedAt;
+    final DateTime? runtimeUpdatedAt = group.runtimeUpdatedAt;
     final int runtimeCheckCount = group.runtimeCheckCount;
 
     HomeworkItem? runningChild;
@@ -9640,18 +9641,16 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     childCycleBaseCache
         .removeWhere((childId, _) => !currentChildIds.contains(childId));
 
-    int phase = 1;
-    if (runtimePhase >= 1 && runtimePhase <= 4) {
-      phase = runtimePhase;
-    } else if (runningChild != null) {
-      phase = 2;
-    } else if (hasSubmitted) {
-      phase = 3;
-    } else if (hasConfirmed) {
-      phase = 4;
-    } else {
-      phase = maxPhase.clamp(1, 4);
-    }
+    final int childDerivedPhase = runningChild != null
+        ? 2
+        : (hasSubmitted ? 3 : (hasConfirmed ? 4 : maxPhase.clamp(1, 4)));
+    final bool hasFreshRuntimeSnapshot = runtimePhase >= 1 &&
+        runtimePhase <= 4 &&
+        (latestUpdated == null ||
+            (runtimeUpdatedAt != null &&
+                !latestUpdated.isAfter(runtimeUpdatedAt)));
+    final int phase =
+        hasFreshRuntimeSnapshot ? runtimePhase : childDerivedPhase;
     final pageSummary = () {
       if (pages.isEmpty) return '';
       if (pages.length <= 3) return pages.join(', ');
@@ -9676,7 +9675,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         runtimeFirstStartedAt ??
         runtimeRunStart ??
         runningChild?.runStart;
-    final bool hasRuntimeSnapshot = runtimePhase >= 1 && runtimePhase <= 4;
+    final bool hasRuntimeSnapshot = hasFreshRuntimeSnapshot;
     // 표시 계약 통일:
     // - accumulatedMs: "러닝 delta 제외" 누적값(base)
     // - runStart: 러닝 시작 시각(있으면 렌더 단계에서 1회 delta 가산)
@@ -9921,23 +9920,47 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       onDoubleTap: () {
         if (printPickMode) return;
         if (blockDoubleTapForUncheckedHomework) return;
-        if (submittedChildren.isNotEmpty) {
-          onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
-          return;
+
+        final phase = summary.phase.clamp(1, 4);
+        switch (phase) {
+          case 1:
+            if (hasTestChild &&
+                !HomeworkStore.instance.isStudentInClassTime(studentId)) {
+              _showHomeworkChipSnackBar(context, '테스트 카드는 수업시간에만 수행할 수 있어요.');
+              return;
+            }
+            unawaited(
+              HomeworkStore.instance.bulkTransitionGroup(
+                studentId,
+                group.id,
+                fromPhase: 1,
+              ),
+            );
+            return;
+          case 2:
+            unawaited(
+              HomeworkStore.instance.bulkTransitionGroup(
+                studentId,
+                group.id,
+                fromPhase: 2,
+              ),
+            );
+            return;
+          case 3:
+            if (submittedChildren.isNotEmpty) {
+              onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
+            }
+            return;
+          case 4:
+            unawaited(
+              HomeworkStore.instance.bulkTransitionGroup(
+                studentId,
+                group.id,
+                fromPhase: 4,
+              ),
+            );
+            return;
         }
-        if (summary.phase == 1 &&
-            hasTestChild &&
-            !HomeworkStore.instance.isStudentInClassTime(studentId)) {
-          _showHomeworkChipSnackBar(context, '테스트 카드는 수업시간에만 수행할 수 있어요.');
-          return;
-        }
-        unawaited(
-          HomeworkStore.instance.bulkTransitionGroup(
-            studentId,
-            group.id,
-            fromPhase: groupIsConfirmed ? 4 : null,
-          ),
-        );
       },
       child: _buildHomeworkChipWithReorderHandle(
         index: i,
@@ -13157,12 +13180,6 @@ Widget _buildHomeworkChipVisual(
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
-  final TextStyle typeStyle = const TextStyle(
-    color: Color(0xFFCAD2C5),
-    fontSize: 17,
-    fontWeight: FontWeight.w600,
-    height: 1.1,
-  );
   final TextStyle groupChildTitleStyle = const TextStyle(
     color: Color(0xFFB9C3BA),
     fontSize: 15,
@@ -13513,17 +13530,6 @@ Widget _buildHomeworkChipVisual(
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 110,
-            child: Text(
-              typeText,
-              style: typeStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-            ),
-          ),
         ],
       ),
     ),
@@ -13546,8 +13552,15 @@ Widget _buildHomeworkChipVisual(
     constraints: BoxConstraints(maxWidth: maxRowW),
     child: Row(
       children: [
-        Text('과제번호', style: line4Style),
-        const Spacer(),
+        Expanded(
+          child: Text(
+            typeText,
+            style: line4Style,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 10),
         Text(
           assignmentCodeText,
           style: line4Style.copyWith(color: const Color(0xFFB9C9C9)),
@@ -13847,7 +13860,7 @@ Widget _buildHomeworkChipVisual(
           children: [
             Expanded(
               child: Text(
-                '과제번호',
+                typeText,
                 style: line4Style,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

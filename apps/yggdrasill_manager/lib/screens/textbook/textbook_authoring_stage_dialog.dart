@@ -202,6 +202,7 @@ class _TextbookAuthoringStageDialogState
   static const _kWarn = Color(0xFFE6C07A);
 
   static const int _kVlmLongEdgePx = 1500;
+  static const int _kAnswerImageLongEdgePx = 3000;
   static final Map<String, TextbookVlmAnswerPageResult> _answerVlmPageCache =
       <String, TextbookVlmAnswerPageResult>{};
   static final Map<String, TextbookVlmSolutionRefPageResult>
@@ -227,6 +228,7 @@ class _TextbookAuthoringStageDialogState
   String? _answerLocalPath;
   final _answerViewerController = PdfViewerController();
   final Map<int, Uint8List> _answerPagePngCache = <int, Uint8List>{};
+  final Map<int, Uint8List> _answerImagePagePngCache = <int, Uint8List>{};
 
   bool _runningAnswerVlm = false;
   double _answerProgress = 0;
@@ -484,6 +486,7 @@ class _TextbookAuthoringStageDialogState
         _answerDocument = doc;
         _answerLocalPath = file.path;
         _answerPagePngCache.clear();
+        _answerImagePagePngCache.clear();
         _loadingAnswerPdf = false;
       });
       return doc;
@@ -644,7 +647,11 @@ class _TextbookAuthoringStageDialogState
               );
             }
             if (it.isImage && it.bbox != null) {
-              final crop = _cropAnswerImage(png, it.bbox!);
+              final crop = await _cropAnswerImageFromPage(
+                    page: res.rawPage,
+                    bbox1k: it.bbox!,
+                  ) ??
+                  _cropAnswerImage(png, it.bbox!);
               if (crop != null) {
                 imageByNumber.putIfAbsent(it.problemNumber, () => crop);
                 if (numberKey.isNotEmpty) {
@@ -941,6 +948,25 @@ class _TextbookAuthoringStageDialogState
     return png;
   }
 
+  Future<Uint8List?> _answerImagePagePng(int page) async {
+    final doc = await _ensureAnswerPdf();
+    if (doc == null) return null;
+    if (page < 1 || page > doc.pages.length) return null;
+    final cached = _answerImagePagePngCache[page];
+    if (cached != null) return cached;
+    try {
+      final png = await renderPdfPageToPng(
+        document: doc,
+        pageNumber: page,
+        longEdgePx: _kAnswerImageLongEdgePx,
+      );
+      _answerImagePagePngCache[page] = png;
+      return png;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String _vlmPageCacheKey(String stage, int page) {
     return [
       widget.academyId,
@@ -985,7 +1011,7 @@ class _TextbookAuthoringStageDialogState
     required int page,
     required List<int> bbox1k,
   }) async {
-    final png = await _answerPagePng(page);
+    final png = await _answerImagePagePng(page) ?? await _answerPagePng(page);
     if (png == null) return null;
     return _cropAnswerImage(png, bbox1k);
   }
@@ -1007,7 +1033,8 @@ class _TextbookAuthoringStageDialogState
         pageCount: doc.pages.length,
         initialPage: initialPage,
         initialBbox: initialBbox,
-        loadPage: _answerPagePng,
+        loadPage: (page) async =>
+            await _answerImagePagePng(page) ?? await _answerPagePng(page),
       ),
     );
     if (result == null) return;
@@ -2704,6 +2731,9 @@ class _AnswerImageCropDialog extends StatefulWidget {
 }
 
 class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
+  static const double _minZoom = 1.0;
+  static const double _maxZoom = 6.0;
+
   late int _page;
   late List<int> _bbox;
   Uint8List? _png;
@@ -2711,6 +2741,9 @@ class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
   bool _loading = false;
   String? _error;
   Offset? _dragStart;
+  double _zoom = 1.0;
+  final ScrollController _verticalScrollController = ScrollController();
+  final ScrollController _horizontalScrollController = ScrollController();
 
   @override
   void initState() {
@@ -2718,6 +2751,13 @@ class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
     _page = widget.initialPage.clamp(1, widget.pageCount).toInt();
     _bbox = _normalizeBbox(widget.initialBbox);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _verticalScrollController.dispose();
+    _horizontalScrollController.dispose();
+    super.dispose();
   }
 
   static List<int> _normalizeBbox(List<int> raw) {
@@ -2766,6 +2806,12 @@ class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
     if (clamped == _page) return;
     setState(() => _page = clamped);
     _load();
+  }
+
+  void _setZoom(double next) {
+    setState(() {
+      _zoom = next.clamp(_minZoom, _maxZoom).toDouble();
+    });
   }
 
   Rect _rectFor(Size size) {
@@ -2830,7 +2876,7 @@ class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
                 ),
                 const Spacer(),
                 const Text(
-                  '이미지/표 영역을 드래그해서 지정하세요',
+                  '확대 후 스크롤바/휠로 이동하고, 이미지/표 영역을 드래그해서 지정하세요',
                   style: TextStyle(
                     color: _TextbookAuthoringStageDialogState._kTextSub,
                     fontSize: 11,
@@ -2885,48 +2931,139 @@ class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
     if (png == null || _imageSize.width <= 0 || _imageSize.height <= 0) {
       return const SizedBox.shrink();
     }
-    return Center(
-      child: AspectRatio(
-        aspectRatio: _imageSize.width / _imageSize.height,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final size = Size(constraints.maxWidth, constraints.maxHeight);
-            final rect = _rectFor(size);
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanStart: (details) {
-                _dragStart = details.localPosition;
-              },
-              onPanUpdate: (details) {
-                final start = _dragStart;
-                if (start == null) return;
-                setState(() {
-                  _bbox = _bboxFromPoints(start, details.localPosition, size);
-                });
-              },
-              onPanEnd: (_) => _dragStart = null,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.memory(png, fit: BoxFit.fill),
-                  Positioned.fromRect(
-                    rect: rect,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: _TextbookAuthoringStageDialogState._kWarn
-                            .withValues(alpha: 0.14),
-                        border: Border.all(
-                          color: _TextbookAuthoringStageDialogState._kWarn,
-                          width: 2,
+    return Column(
+      children: [
+        Row(
+          children: [
+            const Icon(
+              Icons.zoom_in,
+              size: 16,
+              color: _TextbookAuthoringStageDialogState._kTextSub,
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 380,
+              child: Slider(
+                value: _zoom,
+                min: _minZoom,
+                max: _maxZoom,
+                divisions: 20,
+                label: '${(_zoom * 100).round()}%',
+                onChanged: _setZoom,
+              ),
+            ),
+            Text(
+              '${(_zoom * 100).round()}%',
+              style: const TextStyle(
+                color: _TextbookAuthoringStageDialogState._kTextSub,
+                fontSize: 11,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: _zoom == _minZoom ? null : () => _setZoom(_minZoom),
+              child: const Text('100%'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final viewportSize =
+                  Size(constraints.maxWidth, constraints.maxHeight);
+              final fitted = _containImageSize(viewportSize);
+              final canvasSize =
+                  Size(fitted.width * _zoom, fitted.height * _zoom);
+              return Container(
+                color: const Color(0xFF11181D),
+                child: Scrollbar(
+                  controller: _verticalScrollController,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: _verticalScrollController,
+                    child: Scrollbar(
+                      controller: _horizontalScrollController,
+                      thumbVisibility: true,
+                      notificationPredicate: (notification) =>
+                          notification.depth == 1,
+                      child: SingleChildScrollView(
+                        controller: _horizontalScrollController,
+                        scrollDirection: Axis.horizontal,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minWidth: viewportSize.width,
+                            minHeight: viewportSize.height,
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: canvasSize.width,
+                              height: canvasSize.height,
+                              child: _buildCropCanvas(png, canvasSize),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ],
-              ),
-            );
-          },
+                ),
+              );
+            },
+          ),
         ),
+      ],
+    );
+  }
+
+  Size _containImageSize(Size viewportSize) {
+    final maxWidth = viewportSize.width.isFinite && viewportSize.width > 0
+        ? viewportSize.width
+        : _imageSize.width;
+    final maxHeight = viewportSize.height.isFinite && viewportSize.height > 0
+        ? viewportSize.height
+        : _imageSize.height;
+    final scale = math.min(
+      maxWidth / _imageSize.width,
+      maxHeight / _imageSize.height,
+    );
+    final safeScale = scale.isFinite && scale > 0 ? scale : 1.0;
+    return Size(_imageSize.width * safeScale, _imageSize.height * safeScale);
+  }
+
+  Widget _buildCropCanvas(Uint8List png, Size size) {
+    final rect = _rectFor(size);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (details) {
+        _dragStart = details.localPosition;
+      },
+      onPanUpdate: (details) {
+        final start = _dragStart;
+        if (start == null) return;
+        setState(() {
+          _bbox = _bboxFromPoints(start, details.localPosition, size);
+        });
+      },
+      onPanEnd: (_) => _dragStart = null,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.memory(png, fit: BoxFit.fill),
+          Positioned.fromRect(
+            rect: rect,
+            child: Container(
+              decoration: BoxDecoration(
+                color: _TextbookAuthoringStageDialogState._kWarn
+                    .withValues(alpha: 0.14),
+                border: Border.all(
+                  color: _TextbookAuthoringStageDialogState._kWarn,
+                  width: 2,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

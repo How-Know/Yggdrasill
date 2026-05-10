@@ -4481,24 +4481,6 @@ class HomeworkStore {
           'p_from_phase': normalizedFromPhase,
         },
       );
-      try {
-        final int runtimeFromPhase = normalizedFromPhase ??
-            (hasRunningChild
-                ? 2
-                : (groupChildren.any((child) => child.phase == 3)
-                    ? 3
-                    : (groupChildren.any((child) => child.phase == 4)
-                        ? 4
-                        : 1)));
-        await Supabase.instance.client.rpc(
-          'm5_group_transition_state_v3',
-          params: {
-            'p_academy_id': academyId,
-            'p_group_id': cleanedGroupId,
-            'p_from_phase': runtimeFromPhase,
-          },
-        );
-      } catch (_) {}
       await _reloadStudent(studentId);
       if (normalizedFromPhase == 4 &&
           groupCycleDeltaMs > 0 &&
