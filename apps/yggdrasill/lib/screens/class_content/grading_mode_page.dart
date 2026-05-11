@@ -1178,6 +1178,12 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
     });
   }
 
+  void _selectBookIndex(int index) {
+    if (index == _selectedIndex) return;
+    _lastBookTransitionAt = DateTime.now();
+    setState(() => _selectedIndex = index);
+  }
+
   void _handleBookDragStart(DragStartDetails _) {
     _resetBookDrag();
   }
@@ -1314,6 +1320,11 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
     final distance = slot.abs();
     final isCurrent = slot == 0;
     final scale = isCurrent ? 1.0 : (1.0 - distance * 0.02).clamp(0.94, 0.98);
+    final card = _GradingAnswerBookCard(
+      key: ValueKey<String>('rail-card:${book.id}'),
+      book: book,
+      onOpen: widget.onOpenBook,
+    );
 
     return AnimatedPositioned(
       key: ValueKey<String>('rail-slot:${book.id}'),
@@ -1328,14 +1339,16 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
         curve: Curves.easeInOutCubic,
         scale: scale.toDouble(),
         alignment: Alignment.center,
-        child: IgnorePointer(
-          ignoring: !isCurrent,
-          child: _GradingAnswerBookCard(
-            key: ValueKey<String>('rail-card:${book.id}'),
-            book: book,
-            onOpen: widget.onOpenBook,
-          ),
-        ),
+        child: isCurrent
+            ? card
+            : MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _selectBookIndex(bookIndex),
+                  child: IgnorePointer(child: card),
+                ),
+              ),
       ),
     );
   }
