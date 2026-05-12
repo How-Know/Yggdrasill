@@ -794,7 +794,7 @@ class _TextbookUnitAuthoringDialogState
     }
 
     try {
-      await runRangeAnalysis(
+      final finalProgress = await runRangeAnalysis(
         startPage: rawStartPage,
         endPage: rawEndPage,
         analysisLongEdgePx: _kAnalysisLongEdgePx,
@@ -810,10 +810,13 @@ class _TextbookUnitAuthoringDialogState
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
+          _applyScopeGuards(focus);
           if (!mounted) return;
           setState(() {});
         },
         onPageFailure: (f) {
+          debugPrint('[textbook-stage1] page failed '
+              'raw=${f.rawPage} attempts=${f.attempts} error=${f.error}');
           state.pageResults.add(_PageAnalysisRow.failure(
             rawPage: f.rawPage,
             error: '${f.error}',
@@ -831,7 +834,8 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         state.running = false;
-        state.phase = '완료';
+        state.error = finalProgress.lastError;
+        state.phase = finalProgress.failed > 0 ? '일부 실패' : '완료';
       });
     } catch (e) {
       if (!mounted) return;
@@ -889,7 +893,7 @@ class _TextbookUnitAuthoringDialogState
     }
 
     try {
-      await retryFailedPages(
+      final finalProgress = await retryFailedPages(
         pages: failed.toList()..sort(),
         analysisLongEdgePx: _kAnalysisLongEdgePx,
         renderer: render,
@@ -906,10 +910,13 @@ class _TextbookUnitAuthoringDialogState
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
+          _applyScopeGuards(focus);
           if (!mounted) return;
           setState(() {});
         },
         onPageFailure: (f) {
+          debugPrint('[textbook-stage1-retry] page failed '
+              'raw=${f.rawPage} attempts=${f.attempts} error=${f.error}');
           state.pageResults.removeWhere((r) => r.rawPage == f.rawPage && !r.ok);
           state.pageResults.add(_PageAnalysisRow.failure(
             rawPage: f.rawPage,
@@ -928,7 +935,8 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         state.running = false;
-        state.phase = '재분석 완료';
+        state.error = finalProgress.lastError;
+        state.phase = finalProgress.failed > 0 ? '재분석 일부 실패' : '재분석 완료';
       });
     } catch (e) {
       if (!mounted) return;
@@ -938,6 +946,261 @@ class _TextbookUnitAuthoringDialogState
         state.phase = '재분석 실패';
       });
     }
+  }
+
+  void _applyScopeGuards(_SubFocus focus) {
+    if (focus.subKey != 'A') return;
+    final state = _ensureSubState(focus);
+    if (state.pageResults.isEmpty) return;
+    final guarded = _guardBasicDrillRows(
+      state.pageResults,
+      startRawPage: _rawStartPageForFocus(focus),
+    );
+    if (_samePageRows(state.pageResults, guarded)) return;
+    state.pageResults
+      ..clear()
+      ..addAll(guarded);
+    _manualEdits[_stateKeyFor(focus)]?.removeWhere((key, _) {
+      final parts = key.split(':');
+      if (parts.length != 2) return true;
+      final rawPage = int.tryParse(parts[0]);
+      final index = int.tryParse(parts[1]);
+      if (rawPage == null || index == null) return true;
+      final row = state.pageResults.firstWhere(
+        (r) => r.rawPage == rawPage && r.ok,
+        orElse: () => _PageAnalysisRow.placeholder(),
+      );
+      return index < 0 || index >= row.items.length;
+    });
+  }
+
+  int? _rawStartPageForFocus(_SubFocus focus) {
+    if (focus.bigIndex < 0 || focus.bigIndex >= _bigUnits.length) return null;
+    final big = _bigUnits[focus.bigIndex];
+    if (focus.midIndex < 0 || focus.midIndex >= big.middles.length) {
+      return null;
+    }
+    final mid = big.middles[focus.midIndex];
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    final displayStart = _positiveInt(sub.startCtrl.text);
+    return displayStart == null ? null : _rawPageForDisplayPage(displayStart);
+  }
+
+  List<_PageAnalysisRow> _guardBasicDrillRows(
+    List<_PageAnalysisRow> rows, {
+    int? startRawPage,
+  }) {
+    final firstPass = <_PageAnalysisRow>[];
+
+    for (final row in rows) {
+      if (!row.ok || row.section != 'basic_drill' || row.items.isEmpty) {
+        firstPass.add(row);
+        continue;
+      }
+      final kept = <TextbookVlmItem>[];
+      var dropped = 0;
+      for (final item in row.items) {
+        if (_isValidBasicDrillCandidate(item)) {
+          kept.add(item);
+        } else {
+          dropped += 1;
+        }
+      }
+      firstPass.add(_rowWithGuardedItems(
+        row,
+        kept,
+        dropped,
+        reason: 'basic_drill_candidate_filtered',
+      ));
+    }
+
+    return _guardBasicDrillStartPage(firstPass, startRawPage);
+  }
+
+  List<_PageAnalysisRow> _guardBasicDrillStartPage(
+    List<_PageAnalysisRow> rows,
+    int? startRawPage,
+  ) {
+    if (startRawPage == null) return rows;
+    final firstIndex = rows.indexWhere((r) =>
+        r.ok &&
+        r.rawPage == startRawPage &&
+        r.section == 'basic_drill' &&
+        r.items.isNotEmpty);
+    if (firstIndex < 0) return rows;
+
+    final first = rows[firstIndex];
+    final laterRows = rows
+        .where((r) =>
+            r.ok &&
+            r.rawPage > startRawPage &&
+            r.section == 'basic_drill' &&
+            r.items.isNotEmpty)
+        .toList();
+    if (laterRows.isEmpty) return rows;
+
+    final firstValues = _basicDrillNumberValues(first.items);
+    final laterValues = _basicDrillNumberValues(
+      laterRows.expand((r) => r.items).toList(growable: false),
+    );
+    if (firstValues.isEmpty || laterValues.isEmpty) return rows;
+
+    final firstHasGroup = first.items.any(_hasBasicDrillContentGroup);
+    final laterHasGroup =
+        laterRows.expand((r) => r.items).any(_hasBasicDrillContentGroup);
+    final connected = _numberSetsAreNear(firstValues, laterValues);
+
+    if (connected || firstHasGroup || !laterHasGroup) return rows;
+
+    final out = List<_PageAnalysisRow>.of(rows);
+    out[firstIndex] = _rowWithGuardedItems(
+      first,
+      const <TextbookVlmItem>[],
+      first.items.length,
+      reason: 'basic_drill_start_page_filtered',
+    );
+    return out;
+  }
+
+  _PageAnalysisRow _rowWithGuardedItems(
+    _PageAnalysisRow row,
+    List<TextbookVlmItem> kept,
+    int dropped, {
+    required String reason,
+  }) {
+    if (dropped <= 0) return row;
+    final notes = _appendGuardNote(row.notes, '$reason=$dropped');
+    if (kept.isEmpty) {
+      return _PageAnalysisRow.success(
+        rawPage: row.rawPage,
+        displayPage: row.displayPage,
+        section: row.section,
+        pageKind: 'concept_page',
+        notes: _appendGuardNote(notes, 'concept_page:auto_guarded'),
+        items: const <TextbookVlmItem>[],
+      );
+    }
+    return _PageAnalysisRow.success(
+      rawPage: row.rawPage,
+      displayPage: row.displayPage,
+      section: row.section,
+      pageKind: row.pageKind == 'concept_page' ? 'mixed' : row.pageKind,
+      notes: notes,
+      items: kept,
+    );
+  }
+
+  bool _isValidBasicDrillCandidate(TextbookVlmItem item) {
+    if (!_isBasicDrillNumber(item)) return false;
+    if (item.label.trim().isNotEmpty) return false;
+    final bbox = item.bbox;
+    final region = item.itemRegion;
+    if (bbox == null ||
+        bbox.length != 4 ||
+        region == null ||
+        region.length != 4) {
+      return false;
+    }
+    final byMin = bbox[0];
+    final bxMin = bbox[1];
+    final byMax = bbox[2];
+    final bxMax = bbox[3];
+    final ryMin = region[0];
+    final rxMin = region[1];
+    final ryMax = region[2];
+    final rxMax = region[3];
+    if (byMin >= byMax || bxMin >= bxMax || ryMin >= ryMax || rxMin >= rxMax) {
+      return false;
+    }
+    final regionHeight = ryMax - ryMin;
+    final numberCenterY = (byMin + byMax) / 2;
+    if (regionHeight > 320) return false;
+    final regionStartsAfterNumber = bxMin < rxMin && bxMax <= rxMin + 60;
+    final regionContainsNumber = rxMin <= bxMin + 8 && rxMax >= bxMax + 40;
+    if (!regionStartsAfterNumber && !regionContainsNumber) return false;
+    if (numberCenterY < ryMin - 80 || numberCenterY > ryMax + 80) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _isBasicDrillNumber(TextbookVlmItem item) {
+    final number = item.number.trim();
+    if (item.isSetHeader) {
+      final match = RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$')
+          .firstMatch(number);
+      if (match == null) return false;
+      final from = int.tryParse(match.group(1)!);
+      final to = int.tryParse(match.group(2)!);
+      return from != null && to != null && from <= to;
+    }
+    return RegExp(r'^\d{4}$').hasMatch(number);
+  }
+
+  int? _basicDrillIndividualNumber(TextbookVlmItem item) {
+    if (item.isSetHeader) return null;
+    final number = item.number.trim();
+    if (!RegExp(r'^\d{4}$').hasMatch(number)) return null;
+    return int.tryParse(number);
+  }
+
+  Set<int> _basicDrillNumberValues(List<TextbookVlmItem> items) {
+    final out = <int>{};
+    for (final item in items) {
+      if (item.isSetHeader) {
+        final match = RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$')
+            .firstMatch(item.number.trim());
+        final from = match == null ? null : int.tryParse(match.group(1)!);
+        final to = match == null ? null : int.tryParse(match.group(2)!);
+        if (from != null && to != null && from <= to && to - from <= 30) {
+          for (var n = from; n <= to; n += 1) {
+            out.add(n);
+          }
+        }
+      } else {
+        final n = _basicDrillIndividualNumber(item);
+        if (n != null) out.add(n);
+      }
+    }
+    return out;
+  }
+
+  bool _hasBasicDrillContentGroup(TextbookVlmItem item) {
+    if (item.contentGroupKind != 'basic_subtopic') return false;
+    return item.contentGroupLabel.trim().isNotEmpty ||
+        item.contentGroupTitle.trim().isNotEmpty;
+  }
+
+  bool _numberSetsAreNear(Set<int> a, Set<int> b) {
+    for (final x in a) {
+      for (final y in b) {
+        if ((x - y).abs() <= 2) return true;
+      }
+    }
+    return false;
+  }
+
+  String _appendGuardNote(String notes, String suffix) {
+    final trimmed = notes.trim();
+    if (trimmed.contains(suffix)) return trimmed;
+    return trimmed.isEmpty ? suffix : '$trimmed; $suffix';
+  }
+
+  bool _samePageRows(List<_PageAnalysisRow> a, List<_PageAnalysisRow> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i += 1) {
+      if (a[i].rawPage != b[i].rawPage ||
+          a[i].ok != b[i].ok ||
+          a[i].pageKind != b[i].pageKind ||
+          a[i].notes != b[i].notes ||
+          a[i].items.length != b[i].items.length) {
+        return false;
+      }
+    }
+    return true;
   }
 
   int _totalRegionsFor(_SubRunState state, _SubFocus focus) {
@@ -957,6 +1220,7 @@ class _TextbookUnitAuthoringDialogState
   Future<void> _uploadFocused(_SubFocus focus) async {
     final state = _ensureSubState(focus);
     if (state.running || state.uploading) return;
+    _applyScopeGuards(focus);
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
     final edits = _manualEdits[_stateKeyFor(focus)];
@@ -2504,11 +2768,13 @@ class _TextbookUnitAuthoringDialogState
     );
     if (row.items.isEmpty) {
       if (row.isConceptPage) {
-        return const <Widget>[
+        return <Widget>[
           Positioned(
             left: 12,
             top: 12,
-            child: _ConceptPageMarker(),
+            child: _ConceptPageMarker(
+              text: row.wasAutoGuarded ? '자동 제외 · 개념 페이지' : '개념 페이지',
+            ),
           ),
         ];
       }
@@ -2516,6 +2782,13 @@ class _TextbookUnitAuthoringDialogState
     }
     final pageSize = pageRect.size;
     final widgets = <Widget>[];
+    if (row.wasAutoGuarded) {
+      widgets.add(const Positioned(
+        left: 12,
+        top: 12,
+        child: _AutoGuardMarker(),
+      ));
+    }
     for (var i = 0; i < row.items.length; i += 1) {
       final item = row.items[i];
       final region = _effectiveItemRegion(
@@ -2797,7 +3070,9 @@ class _TextbookUnitAuthoringDialogState
 // ────────────────────────────── overlays ──────────────────────────────
 
 class _ConceptPageMarker extends StatelessWidget {
-  const _ConceptPageMarker();
+  const _ConceptPageMarker({this.text = '개념 페이지'});
+
+  final String text;
 
   @override
   Widget build(BuildContext context) {
@@ -2816,15 +3091,59 @@ class _ConceptPageMarker extends StatelessWidget {
             ),
           ],
         ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.lightbulb_outline,
+              size: 13,
+              color: Color(0xFFE6C07A),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              text,
+              style: const TextStyle(
+                color: Color(0xFFE6C07A),
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AutoGuardMarker extends StatelessWidget {
+  const _AutoGuardMarker();
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF3A2F18).withValues(alpha: 0.92),
+          border: Border.all(color: const Color(0xFFEAB968)),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black38,
+              blurRadius: 6,
+              offset: Offset(1, 2),
+            ),
+          ],
+        ),
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lightbulb_outline, size: 13, color: Color(0xFFE6C07A)),
+            Icon(Icons.rule, size: 13, color: Color(0xFFEAB968)),
             SizedBox(width: 5),
             Text(
-              '개념 페이지',
+              'A 번호 검증 적용',
               style: TextStyle(
-                color: Color(0xFFE6C07A),
+                color: Color(0xFFEAB968),
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
               ),
@@ -3470,6 +3789,14 @@ class _PageAnalysisRow {
       items.isEmpty &&
       (pageKind == 'concept_page' ||
           notes.toLowerCase().contains('concept_page'));
+
+  bool get wasAutoGuarded {
+    final lower = notes.toLowerCase();
+    return lower.contains('auto_guarded') ||
+        lower.contains('basic_drill_candidate_filtered') ||
+        lower.contains('basic_drill_sequence_filtered') ||
+        lower.contains('basic_drill_start_page_filtered');
+  }
 }
 
 // ─────────── reused unit-edit models (tree editor) ───────────

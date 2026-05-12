@@ -5323,6 +5323,15 @@ const TEXTBOOK_VLM_TIMEOUT_MS = Number.parseInt(
 );
 const TEXTBOOK_VLM_VALID_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
+function isTextbookVlmQuotaError(input) {
+  const text = String(input || '').toLowerCase();
+  return (
+    text.includes('resource_exhausted') &&
+    (text.includes('generate_requests_per_model_per_day') ||
+      text.includes('please retry in'))
+  );
+}
+
 async function lookupTextbookPageOffset({ academyId, bookId, gradeLabel }) {
   if (!academyId || !bookId || !gradeLabel) return { pageOffset: 0, found: false };
   const { data, error } = await supa
@@ -5404,6 +5413,26 @@ async function handleTextbookVlmDetectProblems(body, res) {
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
     });
   } catch (err) {
+    const initialMessage = compact(err?.message || err);
+    if (isTextbookVlmQuotaError(initialMessage)) {
+      console.warn(
+        '[textbook-vlm-detect] quota_exceeded',
+        JSON.stringify({
+          rawPage,
+          displayPage,
+          academyId,
+          bookId,
+          gradeLabel,
+          message: initialMessage,
+        }),
+      );
+      sendJson(res, 429, {
+        ok: false,
+        error: 'vlm_daily_quota_exceeded',
+        message: initialMessage,
+      });
+      return;
+    }
     try {
       result = await detectProblemsOnPage({
         imageBase64,
@@ -5418,11 +5447,33 @@ async function handleTextbookVlmDetectProblems(body, res) {
       });
       usedFallbackPrompt = true;
     } catch (fallbackErr) {
+      const fallbackMessage = compact(fallbackErr?.message || fallbackErr);
+      console.warn(
+        '[textbook-vlm-detect] failed',
+        JSON.stringify({
+          rawPage,
+          displayPage,
+          academyId,
+          bookId,
+          gradeLabel,
+          message: initialMessage,
+          fallbackMessage,
+        }),
+      );
+      if (isTextbookVlmQuotaError(fallbackMessage)) {
+        sendJson(res, 429, {
+          ok: false,
+          error: 'vlm_daily_quota_exceeded',
+          message: fallbackMessage,
+          first_message: initialMessage,
+        });
+        return;
+      }
       sendJson(res, 502, {
         ok: false,
         error: 'vlm_detect_failed',
-        message: compact(err?.message || err),
-        fallback_message: compact(fallbackErr?.message || fallbackErr),
+        message: initialMessage,
+        fallback_message: fallbackMessage,
       });
       return;
     }
@@ -5812,7 +5863,9 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     return;
   }
 
-  const normalized = normalizeAnswerResult(result.parsedJson);
+  const normalized = normalizeAnswerResult(result.parsedJson, {
+    expectedNumbers,
+  });
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
@@ -5907,7 +5960,9 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     return;
   }
 
-  const normalized = normalizeSolutionRefsResult(result.parsedJson);
+  const normalized = normalizeSolutionRefsResult(result.parsedJson, {
+    expectedNumbers,
+  });
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,

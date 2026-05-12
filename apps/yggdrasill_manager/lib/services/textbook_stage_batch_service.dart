@@ -177,6 +177,11 @@ class TextbookStageBatchService {
     if (expected.isEmpty) {
       return const _SavedWithMissing(saved: 0, missing: <String>[]);
     }
+    final expectedByKey = <String, String>{
+      for (final number in expected)
+        if (textbookAnswerNumberKey(number).isNotEmpty)
+          textbookAnswerNumberKey(number): number,
+    };
 
     final aggregated = <TextbookVlmAnswerItem>[];
     final imageByNumber = <String, _ImageAnswerCrop>{};
@@ -223,6 +228,11 @@ class TextbookStageBatchService {
         );
         for (final item in result.items) {
           if (item.answerText.trim().isEmpty) continue;
+          final matchedExpectedNumbers = textbookAnswerMatchedExpectedNumbers(
+            detectedNumber: item.problemNumber,
+            expectedByKey: expectedByKey,
+          );
+          if (matchedExpectedNumbers.isEmpty) continue;
           aggregated.add(item);
           final numberKey = textbookAnswerNumberKey(item.problemNumber);
           pageByNumber.putIfAbsent(
@@ -235,6 +245,20 @@ class TextbookStageBatchService {
               () => (rawPage: result.rawPage, displayPage: result.displayPage),
             );
           }
+          for (final expectedNumber in matchedExpectedNumbers) {
+            final expectedKey = textbookAnswerNumberKey(expectedNumber);
+            pageByNumber.putIfAbsent(
+              expectedNumber,
+              () => (rawPage: result.rawPage, displayPage: result.displayPage),
+            );
+            if (expectedKey.isNotEmpty) {
+              pageByNumber.putIfAbsent(
+                expectedKey,
+                () =>
+                    (rawPage: result.rawPage, displayPage: result.displayPage),
+              );
+            }
+          }
           if (item.isImage && item.bbox != null) {
             final imagePng = await answerImagePagePng(result.rawPage);
             final crop = imagePng == null
@@ -244,6 +268,13 @@ class TextbookStageBatchService {
               imageByNumber.putIfAbsent(item.problemNumber, () => crop);
               if (numberKey.isNotEmpty) {
                 imageByNumber.putIfAbsent(numberKey, () => crop);
+              }
+              for (final expectedNumber in matchedExpectedNumbers) {
+                final expectedKey = textbookAnswerNumberKey(expectedNumber);
+                imageByNumber.putIfAbsent(expectedNumber, () => crop);
+                if (expectedKey.isNotEmpty) {
+                  imageByNumber.putIfAbsent(expectedKey, () => crop);
+                }
               }
             }
           }
@@ -328,6 +359,11 @@ class TextbookStageBatchService {
     if (expected.isEmpty) {
       return const _SavedWithMissing(saved: 0, missing: <String>[]);
     }
+    final expectedByKey = <String, String>{
+      for (final number in expected)
+        if (textbookAnswerNumberKey(number).isNotEmpty)
+          textbookAnswerNumberKey(number): number,
+    };
     final aggregated = <String, _SolutionRefWithPage>{};
     final totalPages = doc.pages.length;
     for (var page = 1; page <= totalPages; page += 1) {
@@ -352,14 +388,20 @@ class TextbookStageBatchService {
           expectedNumbers: expected,
         );
         for (final item in result.items) {
-          aggregated.putIfAbsent(
-            item.problemNumber,
-            () => _SolutionRefWithPage(
-              item: item,
-              rawPage: result.rawPage,
-              displayPage: result.displayPage,
-            ),
-          );
+          for (final expectedNumber
+              in textbookSolutionRefMatchedExpectedNumbers(
+            detectedNumber: item.problemNumber,
+            expectedByKey: expectedByKey,
+          )) {
+            aggregated.putIfAbsent(
+              expectedNumber,
+              () => _SolutionRefWithPage(
+                item: item,
+                rawPage: result.rawPage,
+                displayPage: result.displayPage,
+              ),
+            );
+          }
         }
       } catch (_) {
         continue;

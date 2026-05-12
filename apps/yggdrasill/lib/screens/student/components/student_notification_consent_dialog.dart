@@ -3,6 +3,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
+import '../../../models/student_payment_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../services/tenant_service.dart';
 
@@ -23,9 +24,11 @@ class _StudentNotificationConsentDialogState
   static double get _allStudentsListRowHeight => (_cardHeight * 1.3) + 12;
 
   final Set<String> _agreedStudentIds = {};
+  final Set<String> _latenessAgreedStudentIds = {};
   final List<DateTime> _pauseDates = [];
   String? _expandedGradeKey;
   bool _initialized = false;
+  bool _latenessInitialized = false;
   bool _pauseDatesLoading = false;
   String? _pauseDatesError;
 
@@ -33,6 +36,7 @@ class _StudentNotificationConsentDialogState
   void initState() {
     super.initState();
     _loadPauseDates();
+    _loadLatenessNotifications();
   }
 
   DateTime _normalizeDate(DateTime date) =>
@@ -161,6 +165,26 @@ class _StudentNotificationConsentDialogState
     );
   }
 
+  Future<void> _loadLatenessNotifications() async {
+    try {
+      await DataManager.instance.loadStudentPaymentInfos();
+    } catch (_) {
+      // 결제 정보 로드 실패 시 기존 메모리 값만 사용한다.
+    }
+    _initLatenessFromPaymentInfos();
+  }
+
+  void _initLatenessFromPaymentInfos({bool force = false}) {
+    if (_latenessInitialized && !force) return;
+    _latenessInitialized = true;
+    _latenessAgreedStudentIds
+      ..clear()
+      ..addAll(DataManager.instance.studentPaymentInfos
+          .where((info) => info.latenessNotification)
+          .map((info) => info.studentId));
+    if (mounted) setState(() {});
+  }
+
   Map<String, List<StudentWithInfo>> _groupStudentsByGrade(
     List<StudentWithInfo> students,
   ) {
@@ -241,6 +265,65 @@ class _StudentNotificationConsentDialogState
     await DataManager.instance.updateStudentBasicInfo(info.student.id, updated);
   }
 
+  StudentPaymentInfo _paymentInfoForStudent(String studentId) {
+    final existing = DataManager.instance.getStudentPaymentInfo(studentId);
+    if (existing != null) return existing;
+    final now = DateTime.now();
+    return StudentPaymentInfo(
+      studentId: studentId,
+      registrationDate: now,
+      paymentMethod: 'monthly',
+      tuitionFee: 0,
+      latenessThreshold: 10,
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  Future<void> _toggleLatenessConsent(StudentWithInfo info, bool value) async {
+    setState(() {
+      if (value) {
+        _latenessAgreedStudentIds.add(info.student.id);
+      } else {
+        _latenessAgreedStudentIds.remove(info.student.id);
+      }
+    });
+    try {
+      final academyId = await _activeAcademyId();
+      final paymentInfo = _paymentInfoForStudent(info.student.id)
+          .copyWith(latenessNotification: value, updatedAt: DateTime.now());
+      final payload = <String, dynamic>{
+        'academy_id': academyId,
+        'student_id': paymentInfo.studentId,
+        'registration_date': paymentInfo.registrationDate.toIso8601String(),
+        'payment_method': paymentInfo.paymentMethod,
+        'tuition_fee': paymentInfo.tuitionFee,
+        'lateness_threshold': paymentInfo.latenessThreshold,
+        'schedule_notification': paymentInfo.scheduleNotification,
+        'attendance_notification': paymentInfo.attendanceNotification,
+        'departure_notification': paymentInfo.departureNotification,
+        'lateness_notification': paymentInfo.latenessNotification,
+      };
+      if (paymentInfo.id != null && paymentInfo.id!.isNotEmpty) {
+        payload['id'] = paymentInfo.id;
+      }
+      await Supabase.instance.client
+          .from('student_payment_info')
+          .upsert(payload, onConflict: 'student_id');
+      await DataManager.instance.loadStudentPaymentInfos();
+      _initLatenessFromPaymentInfos(force: true);
+    } catch (e) {
+      setState(() {
+        if (value) {
+          _latenessAgreedStudentIds.remove(info.student.id);
+        } else {
+          _latenessAgreedStudentIds.add(info.student.id);
+        }
+      });
+      _showSnack('지각 알림 동의 저장에 실패했습니다.');
+    }
+  }
+
   Future<void> _toggleGradeAll(
       List<StudentWithInfo> students, bool value) async {
     setState(() {
@@ -255,6 +338,22 @@ class _StudentNotificationConsentDialogState
     for (final s in students) {
       final updated = s.basicInfo.copyWith(notificationConsent: value);
       await DataManager.instance.updateStudentBasicInfo(s.student.id, updated);
+    }
+  }
+
+  Future<void> _toggleGradeAllLateness(
+      List<StudentWithInfo> students, bool value) async {
+    setState(() {
+      for (final s in students) {
+        if (value) {
+          _latenessAgreedStudentIds.add(s.student.id);
+        } else {
+          _latenessAgreedStudentIds.remove(s.student.id);
+        }
+      }
+    });
+    for (final s in students) {
+      await _toggleLatenessConsent(s, value);
     }
   }
 
@@ -494,6 +593,8 @@ class _StudentNotificationConsentDialogState
     final String gradeLabel = grade > 0 ? '$levelName $grade학년' : levelName;
     final allAgreed = students.isNotEmpty &&
         students.every((s) => _agreedStudentIds.contains(s.student.id));
+    final allLatenessAgreed = students.isNotEmpty &&
+        students.every((s) => _latenessAgreedStudentIds.contains(s.student.id));
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -517,24 +618,6 @@ class _StudentNotificationConsentDialogState
                       ),
                     ),
                     const SizedBox(width: 8),
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: Checkbox(
-                        value: allAgreed,
-                        tristate: true,
-                        onChanged: (_) {
-                          _toggleGradeAll(students, !allAgreed);
-                        },
-                        activeColor: const Color(0xFF1B6B63),
-                        fillColor: WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return const Color(0xFF1B6B63);
-                          }
-                          return Colors.white24;
-                        }),
-                      ),
-                    ),
                     const Spacer(),
                     Text(
                       '${students.length}명',
@@ -543,6 +626,19 @@ class _StudentNotificationConsentDialogState
                         fontSize: 14 * scale,
                         fontWeight: FontWeight.w600,
                       ),
+                    ),
+                    const SizedBox(width: 12),
+                    _buildHeaderCheckbox(
+                      label: '알림',
+                      value: allAgreed,
+                      onChanged: (_) => _toggleGradeAll(students, !allAgreed),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildHeaderCheckbox(
+                      label: '지각',
+                      value: allLatenessAgreed,
+                      onChanged: (_) =>
+                          _toggleGradeAllLateness(students, !allLatenessAgreed),
                     ),
                     const SizedBox(width: 6),
                     Icon(
@@ -570,6 +666,42 @@ class _StudentNotificationConsentDialogState
     );
   }
 
+  Widget _buildHeaderCheckbox({
+    required String label,
+    required bool value,
+    required ValueChanged<bool?> onChanged,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white60,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        SizedBox(
+          width: 30,
+          height: 30,
+          child: Checkbox(
+            value: value,
+            tristate: true,
+            onChanged: onChanged,
+            activeColor: const Color(0xFF1B6B63),
+            fillColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return const Color(0xFF1B6B63);
+              }
+              return Colors.white24;
+            }),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildStudentRow(StudentWithInfo info) {
     final student = info.student;
     final schoolText =
@@ -580,6 +712,7 @@ class _StudentNotificationConsentDialogState
     final hasParent = (student.parentPhoneNumber ?? '').trim().isNotEmpty ||
         (info.basicInfo.parentPhoneNumber ?? '').trim().isNotEmpty;
     final agreed = _agreedStudentIds.contains(student.id);
+    final latenessAgreed = _latenessAgreedStudentIds.contains(student.id);
 
     return SizedBox(
       height: _allStudentsListRowHeight,
@@ -639,26 +772,56 @@ class _StudentNotificationConsentDialogState
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 40,
-              height: 40,
-              child: Checkbox(
-                value: agreed,
-                onChanged: (value) {
-                  _toggleConsent(info, value ?? false);
-                },
-                activeColor: const Color(0xFF1B6B63),
-                fillColor: WidgetStateProperty.resolveWith((states) {
-                  if (states.contains(WidgetState.selected)) {
-                    return const Color(0xFF1B6B63);
-                  }
-                  return Colors.white24;
-                }),
-              ),
+            _buildStudentCheckbox(
+              label: '알림',
+              value: agreed,
+              onChanged: (value) => _toggleConsent(info, value ?? false),
+            ),
+            const SizedBox(width: 6),
+            _buildStudentCheckbox(
+              label: '지각',
+              value: latenessAgreed,
+              onChanged: (value) =>
+                  _toggleLatenessConsent(info, value ?? false),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildStudentCheckbox({
+    required String label,
+    required bool value,
+    required ValueChanged<bool?> onChanged,
+  }) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white54,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        SizedBox(
+          width: 34,
+          height: 30,
+          child: Checkbox(
+            value: value,
+            onChanged: onChanged,
+            activeColor: const Color(0xFF1B6B63),
+            fillColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return const Color(0xFF1B6B63);
+              }
+              return Colors.white24;
+            }),
+          ),
+        ),
+      ],
     );
   }
 }

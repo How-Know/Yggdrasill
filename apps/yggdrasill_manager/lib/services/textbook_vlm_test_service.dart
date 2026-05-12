@@ -191,17 +191,30 @@ class TextbookVlmDetectResult {
       'mastery',
       'unknown',
     };
+    final section = allowedSections.contains(sec) ? sec : 'unknown';
+    final pageKind = '${map['page_kind'] ?? 'unknown'}';
+    final synthesis = _synthesizeBasicDrillItemRegions(
+      section: section,
+      pageKind: pageKind,
+      items: parsed,
+    );
+    final notes = _appendDetectNote(
+      '${map['notes'] ?? ''}',
+      synthesis.filled > 0
+          ? 'manager_basic_drill_synthesized_item_region=${synthesis.filled}'
+          : '',
+    );
 
     return TextbookVlmDetectResult(
       rawPage: asInt(map['raw_page']),
       displayPage: asInt(map['display_page']),
       pageOffset: asInt(map['page_offset']),
       pageOffsetFound: map['page_offset_found'] == true,
-      section: allowedSections.contains(sec) ? sec : 'unknown',
-      pageKind: '${map['page_kind'] ?? 'unknown'}',
+      section: section,
+      pageKind: pageKind,
       layout: '${map['layout'] ?? 'unknown'}',
-      items: parsed,
-      notes: '${map['notes'] ?? ''}',
+      items: synthesis.items,
+      notes: notes,
       model: '${map['model'] ?? ''}',
       elapsedMs: asInt(map['elapsed_ms']),
       finishReason: '${map['finish_reason'] ?? ''}',
@@ -269,12 +282,18 @@ class TextbookVlmItem {
       return out;
     }
 
+    final number = '${map['number'] ?? ''}';
+    final inferredRange = _basicDrillRangeMatch(number);
     final setRangeRaw = map['set_range'];
     int? from;
     int? to;
     if (setRangeRaw is Map) {
       from = asIntN(setRangeRaw['from']);
       to = asIntN(setRangeRaw['to']);
+    }
+    if ((from == null || to == null) && inferredRange != null) {
+      from = int.tryParse(inferredRange.group(1)!);
+      to = int.tryParse(inferredRange.group(2)!);
     }
     final groupRaw = map['content_group'];
     final group = groupRaw is Map
@@ -288,9 +307,9 @@ class TextbookVlmItem {
             : 'none';
 
     return TextbookVlmItem(
-      number: '${map['number'] ?? ''}',
+      number: number,
       label: '${map['label'] ?? ''}',
-      isSetHeader: map['is_set_header'] == true,
+      isSetHeader: map['is_set_header'] == true || inferredRange != null,
       setFrom: from,
       setTo: to,
       contentGroupKind: safeGroupKind,
@@ -306,4 +325,146 @@ class TextbookVlmItem {
       itemRegion: parseBbox(map['item_region']),
     );
   }
+
+  TextbookVlmItem copyWith({
+    int? column,
+    List<int>? bbox,
+    List<int>? itemRegion,
+  }) {
+    return TextbookVlmItem(
+      number: number,
+      label: label,
+      isSetHeader: isSetHeader,
+      setFrom: setFrom,
+      setTo: setTo,
+      contentGroupKind: contentGroupKind,
+      contentGroupLabel: contentGroupLabel,
+      contentGroupTitle: contentGroupTitle,
+      contentGroupOrder: contentGroupOrder,
+      column: column ?? this.column,
+      bbox: bbox ?? this.bbox,
+      itemRegion: itemRegion ?? this.itemRegion,
+    );
+  }
+}
+
+class _ItemRegionSynthesis {
+  const _ItemRegionSynthesis({
+    required this.items,
+    required this.filled,
+  });
+
+  final List<TextbookVlmItem> items;
+  final int filled;
+}
+
+class _BasicDrillCandidate {
+  const _BasicDrillCandidate({
+    required this.index,
+    required this.item,
+    required this.bbox,
+  });
+
+  final int index;
+  final TextbookVlmItem item;
+  final List<int> bbox;
+}
+
+_ItemRegionSynthesis _synthesizeBasicDrillItemRegions({
+  required String section,
+  required String pageKind,
+  required List<TextbookVlmItem> items,
+}) {
+  if (section != 'basic_drill' ||
+      pageKind == 'concept_page' ||
+      items.isEmpty ||
+      items.every((item) => (item.itemRegion?.length ?? 0) == 4)) {
+    return _ItemRegionSynthesis(items: items, filled: 0);
+  }
+
+  final columns = <int, List<_BasicDrillCandidate>>{};
+  for (var i = 0; i < items.length; i += 1) {
+    final item = items[i];
+    final bbox = item.bbox;
+    if (!_isBasicDrillNumberForSynthesis(item) ||
+        bbox == null ||
+        bbox.length != 4) {
+      continue;
+    }
+    final key = item.column == 1 || item.column == 2
+        ? item.column!
+        : _inferColumn(bbox);
+    columns.putIfAbsent(key, () => <_BasicDrillCandidate>[]).add(
+          _BasicDrillCandidate(index: i, item: item, bbox: bbox),
+        );
+  }
+  if (columns.isEmpty) {
+    return _ItemRegionSynthesis(items: items, filled: 0);
+  }
+
+  final out = List<TextbookVlmItem>.of(items);
+  var filled = 0;
+  for (final columnItems in columns.values) {
+    columnItems.sort((a, b) {
+      final dy = a.bbox[0] - b.bbox[0];
+      return dy.abs() > 12 ? dy : a.bbox[1] - b.bbox[1];
+    });
+    for (var i = 0; i < columnItems.length; i += 1) {
+      final candidate = columnItems[i];
+      if ((candidate.item.itemRegion?.length ?? 0) == 4) continue;
+      final bbox = candidate.bbox;
+      final next = i + 1 < columnItems.length ? columnItems[i + 1].bbox : null;
+      final yMin = _clamp01k(bbox[0] - 4);
+      final minBottom = bbox[2] + 52;
+      final minHeightBottom = bbox[0] + 64;
+      final defaultBottom =
+          _clamp01k(minBottom > minHeightBottom ? minBottom : minHeightBottom);
+      var yMax = defaultBottom;
+      if (next != null) {
+        final beforeNext = next[0] - 6;
+        if (beforeNext < yMax) yMax = beforeNext;
+      }
+      if (yMax < yMin + 20) yMax = yMin + 20;
+      yMax = _clamp01k(yMax);
+      final xMin = _clamp01k(bbox[3] + 8);
+      final xMax = _clamp01k(_inferColumn(bbox) == 1 ? 486 : 930);
+      if (xMax <= xMin + 20 || yMax <= yMin + 12) continue;
+      out[candidate.index] = candidate.item.copyWith(
+        itemRegion: <int>[yMin, xMin, yMax, xMax],
+      );
+      filled += 1;
+    }
+  }
+
+  return _ItemRegionSynthesis(items: out, filled: filled);
+}
+
+bool _isBasicDrillNumberForSynthesis(TextbookVlmItem item) {
+  final number = item.number.trim();
+  if (item.isSetHeader) {
+    return _basicDrillRangeMatch(number) != null;
+  }
+  return RegExp(r'^\d{4}$').hasMatch(number);
+}
+
+RegExpMatch? _basicDrillRangeMatch(String number) {
+  return RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$')
+      .firstMatch(number.trim());
+}
+
+int _inferColumn(List<int> bbox) {
+  final centerX = (bbox[1] + bbox[3]) / 2;
+  return centerX >= 500 ? 2 : 1;
+}
+
+int _clamp01k(int value) {
+  if (value < 0) return 0;
+  if (value > 1000) return 1000;
+  return value;
+}
+
+String _appendDetectNote(String notes, String suffix) {
+  final trimmed = notes.trim();
+  if (suffix.trim().isEmpty || trimmed.contains(suffix)) return trimmed;
+  return trimmed.isEmpty ? suffix : '$trimmed; $suffix';
 }

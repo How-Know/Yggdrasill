@@ -2564,6 +2564,7 @@ Future<void> _openPrintDialogForPath(String path) async {
     path: path,
     channel: PrintRoutingChannel.todoSheet,
     duplexMode: PrintDuplexMode.twoSidedLongEdge,
+    preferredPaperSize: 'A4',
     debugSource: 'homework.todo_sheet',
   );
 }

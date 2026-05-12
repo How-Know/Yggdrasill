@@ -631,11 +631,16 @@ class _TextbookAuthoringStageDialogState
           );
           for (final it in res.items) {
             if (it.answerText.trim().isEmpty) continue;
-            final numberKey = textbookAnswerNumberKey(it.problemNumber);
-            if (numberKey.isEmpty || !remainingKeys.contains(numberKey)) {
+            final matchedExpectedNumbers = textbookAnswerMatchedExpectedNumbers(
+              detectedNumber: it.problemNumber,
+              expectedByKey: expectedByKey,
+              allowedKeys: remainingKeys,
+            );
+            if (matchedExpectedNumbers.isEmpty) {
               continue;
             }
             aggregated.add(it);
+            final numberKey = textbookAnswerNumberKey(it.problemNumber);
             pageByNumber.putIfAbsent(
               it.problemNumber,
               () => (rawPage: res.rawPage, displayPage: res.displayPage),
@@ -645,6 +650,19 @@ class _TextbookAuthoringStageDialogState
                 numberKey,
                 () => (rawPage: res.rawPage, displayPage: res.displayPage),
               );
+            }
+            for (final expectedNumber in matchedExpectedNumbers) {
+              final expectedKey = textbookAnswerNumberKey(expectedNumber);
+              pageByNumber.putIfAbsent(
+                expectedNumber,
+                () => (rawPage: res.rawPage, displayPage: res.displayPage),
+              );
+              if (expectedKey.isNotEmpty) {
+                pageByNumber.putIfAbsent(
+                  expectedKey,
+                  () => (rawPage: res.rawPage, displayPage: res.displayPage),
+                );
+              }
             }
             if (it.isImage && it.bbox != null) {
               final crop = await _cropAnswerImageFromPage(
@@ -657,9 +675,18 @@ class _TextbookAuthoringStageDialogState
                 if (numberKey.isNotEmpty) {
                   imageByNumber.putIfAbsent(numberKey, () => crop);
                 }
+                for (final expectedNumber in matchedExpectedNumbers) {
+                  final expectedKey = textbookAnswerNumberKey(expectedNumber);
+                  imageByNumber.putIfAbsent(expectedNumber, () => crop);
+                  if (expectedKey.isNotEmpty) {
+                    imageByNumber.putIfAbsent(expectedKey, () => crop);
+                  }
+                }
               }
             }
-            remainingKeys.remove(numberKey);
+            for (final expectedNumber in matchedExpectedNumbers) {
+              remainingKeys.remove(textbookAnswerNumberKey(expectedNumber));
+            }
           }
         } catch (e) {
           debugPrint('[stage2] vlm failed page=$page err=$e');
@@ -1187,22 +1214,23 @@ class _TextbookAuthoringStageDialogState
             ],
           );
           for (final it in res.items) {
-            final numberKey = textbookAnswerNumberKey(it.problemNumber);
-            final expectedNumber = expectedByKey[numberKey];
-            if (numberKey.isEmpty ||
-                expectedNumber == null ||
-                !remainingKeys.contains(numberKey)) {
-              continue;
+            for (final expectedNumber
+                in textbookSolutionRefMatchedExpectedNumbers(
+              detectedNumber: it.problemNumber,
+              expectedByKey: expectedByKey,
+              allowedKeys: remainingKeys,
+            )) {
+              final numberKey = textbookAnswerNumberKey(expectedNumber);
+              aggregated.putIfAbsent(
+                expectedNumber,
+                () => _SolutionRefWithPage(
+                  item: it,
+                  rawPage: res.rawPage,
+                  displayPage: res.displayPage,
+                ),
+              );
+              remainingKeys.remove(numberKey);
             }
-            aggregated.putIfAbsent(
-              expectedNumber,
-              () => _SolutionRefWithPage(
-                item: it,
-                rawPage: res.rawPage,
-                displayPage: res.displayPage,
-              ),
-            );
-            remainingKeys.remove(numberKey);
           }
         } catch (e) {
           debugPrint('[stage3] vlm failed page=$page err=$e');

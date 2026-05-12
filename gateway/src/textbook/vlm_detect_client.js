@@ -237,7 +237,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     const number = String(raw.number ?? '').trim();
     if (!number) continue;
     const label = String(raw.label ?? '').trim();
-    const isSet = Boolean(raw.is_set_header);
+    const inferredSetRange = parseBasicDrillRange(number);
+    const isSet = Boolean(raw.is_set_header) || Boolean(inferredSetRange);
     let setRange = null;
     if (raw.set_range && typeof raw.set_range === 'object') {
       const from = Number(raw.set_range.from);
@@ -245,6 +246,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       if (Number.isFinite(from) && Number.isFinite(to)) {
         setRange = { from, to };
       }
+    }
+    if (!setRange && inferredSetRange) {
+      setRange = inferredSetRange;
     }
     const colRaw = raw.column;
     const column =
@@ -277,8 +281,151 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     });
   }
   backfillMissingItemRegions(out);
+  backfillBasicDrillItemRegions(out);
   backfillMissingBboxes(out);
+  validateBasicDrillItems(out);
   return out;
+}
+
+function backfillBasicDrillItemRegions(result) {
+  if (
+    !result ||
+    result.page_kind === 'concept_page' ||
+    result.section !== 'basic_drill' ||
+    !Array.isArray(result.items) ||
+    result.items.length === 0 ||
+    result.items.every((item) => Array.isArray(item.item_region))
+  ) {
+    return;
+  }
+
+  const candidates = result.items.filter(
+    (item) =>
+      isBasicDrillNumber(String(item?.number || '').trim(), item?.is_set_header) &&
+      Array.isArray(item?.bbox),
+  );
+  if (candidates.length === 0) return;
+
+  const columns = new Map();
+  for (const item of candidates) {
+    const bbox = item.bbox;
+    const key = item.column === 1 || item.column === 2 ? item.column : inferColumn(bbox);
+    if (!columns.has(key)) columns.set(key, []);
+    columns.get(key).push(item);
+  }
+
+  let filled = 0;
+  for (const items of columns.values()) {
+    items.sort((a, b) => {
+      const dy = a.bbox[0] - b.bbox[0];
+      return Math.abs(dy) > 12 ? dy : a.bbox[1] - b.bbox[1];
+    });
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (Array.isArray(item.item_region)) continue;
+      const bbox = item.bbox;
+      const next = items[i + 1]?.bbox || null;
+      const yMin = clamp01k(Math.max(0, bbox[0] - 4));
+      const defaultBottom = clamp01k(Math.max(bbox[2] + 52, bbox[0] + 64));
+      const yMax = clamp01k(
+        next ? Math.max(yMin + 20, Math.min(next[0] - 6, defaultBottom)) : defaultBottom,
+      );
+      const xMin = clamp01k(bbox[3] + 8);
+      const xMax = clamp01k(inferColumn(bbox) === 1 ? 486 : 930);
+      if (xMax <= xMin + 20 || yMax <= yMin + 12) continue;
+      item.item_region = [yMin, xMin, yMax, xMax];
+      filled += 1;
+    }
+  }
+
+  if (filled > 0) {
+    const suffix = `basic_drill_synthesized_item_region=${filled}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+}
+
+function validateBasicDrillItems(result) {
+  if (
+    !result ||
+    result.section !== 'basic_drill' ||
+    result.page_kind === 'concept_page' ||
+    !Array.isArray(result.items) ||
+    result.items.length === 0
+  ) {
+    return;
+  }
+
+  const kept = [];
+  let dropped = 0;
+  for (const item of result.items) {
+    if (isValidBasicDrillItem(item)) {
+      kept.push(item);
+    } else {
+      dropped += 1;
+    }
+  }
+  if (dropped > 0) {
+    const suffix = `basic_drill_candidate_filtered=${dropped}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+  result.items = kept;
+  if (kept.length === 0) {
+    result.page_kind = 'concept_page';
+    const suffix = 'concept_page:auto_no_valid_basic_number';
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+}
+
+function isValidBasicDrillItem(item) {
+  const number = String(item?.number || '').trim();
+  if (!isBasicDrillNumber(number, item?.is_set_header)) return false;
+  if (String(item?.label || '').trim()) return false;
+
+  // A 기본다잡기는 "번호 왼쪽 + 본문 오른쪽"의 짧은 행 구조다. 번호 bbox와
+  // 본문 region이 이 관계를 전혀 만족하지 않으면 개념/예제 박스 오탐으로 본다.
+  if (!Array.isArray(item?.bbox) || !Array.isArray(item?.item_region)) {
+    return false;
+  }
+  const [byMin, bxMin, byMax, bxMax] = item.bbox.map((v) => Number(v));
+  const [ryMin, rxMin, ryMax, rxMax] = item.item_region.map((v) => Number(v));
+  if (
+    ![byMin, bxMin, byMax, bxMax, ryMin, rxMin, ryMax, rxMax].every((v) =>
+      Number.isFinite(v),
+    )
+  ) {
+    return false;
+  }
+  if (byMin >= byMax || bxMin >= bxMax || ryMin >= ryMax || rxMin >= rxMax) {
+    return false;
+  }
+  const regionHeight = ryMax - ryMin;
+  const numberCenterY = (byMin + byMax) / 2;
+  const rowYMin = ryMin - 80;
+  const rowYMax = ryMax + 80;
+  if (regionHeight > 320) return false;
+  const regionStartsAfterNumber = bxMin < rxMin && bxMax <= rxMin + 60;
+  const regionContainsNumber = rxMin <= bxMin + 8 && rxMax >= bxMax + 40;
+  if (!regionStartsAfterNumber && !regionContainsNumber) return false;
+  if (numberCenterY < rowYMin || numberCenterY > rowYMax) return false;
+  return true;
+}
+
+function isBasicDrillNumber(number, isSetHeader) {
+  if (isSetHeader) {
+    return Boolean(parseBasicDrillRange(number));
+  }
+  return /^\d{4}$/.test(number);
+}
+
+function parseBasicDrillRange(number) {
+  const match = String(number || '')
+    .trim()
+    .match(/^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$/);
+  if (!match) return null;
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return null;
+  return { from, to };
 }
 
 function normalizeContentGroup(raw) {
@@ -361,7 +508,7 @@ function backfillMissingBboxes(result) {
   if (!result || !Array.isArray(result.items) || result.items.length === 0) return;
   const canUseFallback =
     result.page_kind !== 'concept_page' &&
-    ['basic_drill', 'type_practice', 'mastery'].includes(result.section);
+    (result.section === 'type_practice' || result.section === 'mastery');
   if (!canUseFallback) return;
 
   let filled = 0;

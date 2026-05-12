@@ -361,7 +361,13 @@ class PrintRoutingService {
     return null;
   }
 
-  Future<({String driver, String port})?> _loadWindowsPrinterMeta(
+  Future<
+      ({
+        String driver,
+        String port,
+        String? hostAddress,
+        int? portNumber,
+      })?> _loadWindowsPrinterMeta(
       String printerName) async {
     if (!Platform.isWindows) return null;
     final escapedName = printerName.replaceAll("'", "''");
@@ -371,7 +377,7 @@ class PrintRoutingService {
         <String>[
           '-NoProfile',
           '-Command',
-          "\$p = Get-CimInstance -ClassName Win32_Printer | Where-Object { \$_.Name -eq '$escapedName' } | Select-Object -First 1; if (\$null -ne \$p) { Write-Output \"\$(\$p.DriverName)||\$(\$p.PortName)\" }",
+          "\$p = Get-CimInstance -ClassName Win32_Printer | Where-Object { \$_.Name -eq '$escapedName' } | Select-Object -First 1; if (\$null -ne \$p) { \$port = Get-PrinterPort -Name \$p.PortName -ErrorAction SilentlyContinue; \$host = ''; \$portNumber = ''; if (\$null -ne \$port) { \$host = [string]\$port.PrinterHostAddress; \$portNumber = [string]\$port.PortNumber }; Write-Output \"\$(\$p.DriverName)||\$(\$p.PortName)||\$host||\$portNumber\" }",
         ],
       );
       if (result.exitCode != 0) return null;
@@ -388,7 +394,14 @@ class PrintRoutingService {
       final driver = parts[0].trim();
       final port = parts[1].trim();
       if (driver.isEmpty || port.isEmpty) return null;
-      return (driver: driver, port: port);
+      final hostAddress = parts.length > 2 ? parts[2].trim() : '';
+      final portNumber = parts.length > 3 ? int.tryParse(parts[3].trim()) : null;
+      return (
+        driver: driver,
+        port: port,
+        hostAddress: hostAddress.isEmpty ? null : hostAddress,
+        portNumber: portNumber,
+      );
     } catch (_) {
       return null;
     }
@@ -525,6 +538,19 @@ class PrintRoutingService {
     return match?.group(1);
   }
 
+  String? _resolveRawTcpHostFromPrinterMeta(
+    ({
+      String driver,
+      String port,
+      String? hostAddress,
+      int? portNumber,
+    }) meta,
+  ) {
+    final host = (meta.hostAddress ?? '').trim();
+    if (host.isNotEmpty) return host;
+    return _extractIpFromPrinterPort(meta.port);
+  }
+
   String? _pjlDuplexCommands(PrintDuplexMode mode) {
     switch (mode) {
       case PrintDuplexMode.systemDefault:
@@ -576,7 +602,7 @@ class PrintRoutingService {
 
   Future<bool> _tryRawTcpPrint({
     required String target,
-    required String portIp,
+    required String portHost,
     required String debugSource,
     int tcpPort = 9100,
     PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
@@ -595,12 +621,12 @@ class PrintRoutingService {
       final paperLabel = _paperSizeLabel(preferredPaperSize);
       _printLog(
         debugSource,
-        'Try raw TCP print to $portIp:$tcpPort duplex=$duplexLabel paper=$paperLabel',
+        'Try raw TCP print to $portHost:$tcpPort duplex=$duplexLabel paper=$paperLabel',
       );
       final socket = await Socket.connect(
-        portIp,
+        portHost,
         tcpPort,
-        timeout: const Duration(seconds: 15),
+        timeout: const Duration(seconds: 5),
       );
 
       final pdfBytes = await file.readAsBytes();
@@ -744,17 +770,17 @@ class PrintRoutingService {
               duplexMode != PrintDuplexMode.systemDefault) {
             restoreDuplexMode =
                 await _loadWindowsPrinterDuplexMode(normalizedPrinter);
+            final applied = await _setWindowsPrinterDuplexMode(
+              printerName: normalizedPrinter,
+              mode: duplexMode,
+              debugSource: '$debugSource.duplex',
+            );
             if (restoreDuplexMode != null && restoreDuplexMode != duplexMode) {
-              final applied = await _setWindowsPrinterDuplexMode(
-                printerName: normalizedPrinter,
-                mode: duplexMode,
-                debugSource: '$debugSource.duplex',
-              );
               shouldRestoreDuplex = applied;
             } else {
               _printLog(
                 '$debugSource.duplex',
-                'Skip duplex override: current=${_duplexModeLabel(restoreDuplexMode ?? PrintDuplexMode.systemDefault)} requested=${_duplexModeLabel(duplexMode)}',
+                'Refreshed duplex override without restore: current=${_duplexModeLabel(restoreDuplexMode ?? PrintDuplexMode.systemDefault)} requested=${_duplexModeLabel(duplexMode)} applied=$applied',
               );
             }
           }
@@ -763,17 +789,19 @@ class PrintRoutingService {
             final requestedPaperToken =
                 _windowsPaperSizeToken(preferredPaperSize);
 
-            // For prints with specific paper size, try raw TCP first.
-            // Sends the PDF directly to the printer which respects the
-            // PDF's native page size, bypassing Acrobat's page scaling.
-            if (requestedPaperToken != null) {
+            // For prints with specific paper size or explicit duplex mode,
+            // try raw TCP first. This bypasses Acrobat/PrintTo, which can
+            // ignore the queue's current duplex setting on some drivers.
+            final shouldTryRawTcp = requestedPaperToken != null ||
+                duplexMode != PrintDuplexMode.systemDefault;
+            if (shouldTryRawTcp) {
               final tcpMeta = await _loadWindowsPrinterMeta(normalizedPrinter);
               if (tcpMeta != null) {
-                final portIp = _extractIpFromPrinterPort(tcpMeta.port);
-                if (portIp != null) {
+                final portHost = _resolveRawTcpHostFromPrinterMeta(tcpMeta);
+                if (portHost != null) {
                   final rawPrinted = await _tryRawTcpPrint(
                     target: target,
-                    portIp: portIp,
+                    portHost: portHost,
                     debugSource: debugSource,
                     duplexMode: duplexMode,
                     preferredPaperSize: preferredPaperSize,
@@ -781,10 +809,15 @@ class PrintRoutingService {
                   if (rawPrinted) {
                     _printLog(
                       debugSource,
-                      'Printed via raw TCP to $portIp:9100.',
+                      'Printed via raw TCP to $portHost:9100.',
                     );
                     return true;
                   }
+                } else {
+                  _printLog(
+                    debugSource,
+                    'Raw TCP skipped: no host/IP for port="${tcpMeta.port}".',
+                  );
                 }
               }
             }

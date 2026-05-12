@@ -21,6 +21,41 @@ String textbookAnswerNumberKey(String raw) {
   return numbers.first;
 }
 
+List<String> textbookAnswerMatchedExpectedNumbers({
+  required String detectedNumber,
+  required Map<String, String> expectedByKey,
+  Iterable<String>? allowedKeys,
+}) {
+  final allowed = allowedKeys?.toSet();
+  final detectedKey = textbookAnswerNumberKey(detectedNumber);
+  if (detectedKey.isEmpty) return const <String>[];
+  final exact = expectedByKey[detectedKey];
+  if (exact != null && (allowed == null || allowed.contains(detectedKey))) {
+    return <String>[exact];
+  }
+
+  final range = _answerNumberRange(detectedNumber);
+  if (range == null) return const <String>[];
+  final out = <String>[];
+  for (final entry in expectedByKey.entries) {
+    if (allowed != null && !allowed.contains(entry.key)) continue;
+    final n = int.tryParse(entry.key);
+    if (n == null || n < range.$1 || n > range.$2) continue;
+    out.add(entry.value);
+  }
+  return out;
+}
+
+(int, int)? _answerNumberRange(String raw) {
+  final match = RegExp(r'^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$')
+      .firstMatch(raw.trim());
+  if (match == null) return null;
+  final from = int.tryParse(match.group(1)!);
+  final to = int.tryParse(match.group(2)!);
+  if (from == null || to == null || from > to) return null;
+  return (from, to);
+}
+
 /// Thin client for the gateway's Stage-2 endpoints:
 /// - POST `/textbook/vlm/extract-answers` — per-page VLM extraction.
 /// - POST `/textbook/answers/batch-upsert` — persists 1:1 matched rows into
@@ -560,20 +595,21 @@ class TextbookAnswerMatchReport {
     final byNumber = <String, TextbookVlmAnswerItem>{};
     final unexpected = <TextbookVlmAnswerItem>[];
     for (final it in items) {
-      final rawKey = it.problemNumber.trim();
-      if (rawKey.isEmpty) continue;
-      final expectedKey = expectedSet.contains(rawKey)
-          ? rawKey
-          : expectedByKey[textbookAnswerNumberKey(rawKey)];
-      if (expectedKey == null || expectedKey.isEmpty) {
+      final matched = textbookAnswerMatchedExpectedNumbers(
+        detectedNumber: it.problemNumber,
+        expectedByKey: expectedByKey,
+      );
+      if (matched.isEmpty) {
         unexpected.add(it);
         continue;
       }
       // Keep the first non-empty answer; later duplicates win only if the
       // prior entry had an empty answer_text.
-      final prev = byNumber[expectedKey];
-      if (prev == null || prev.answerText.trim().isEmpty) {
-        byNumber[expectedKey] = it;
+      for (final expectedNumber in matched) {
+        final prev = byNumber[expectedNumber];
+        if (prev == null || prev.answerText.trim().isEmpty) {
+          byNumber[expectedNumber] = it;
+        }
       }
     }
     final missing = <String>[

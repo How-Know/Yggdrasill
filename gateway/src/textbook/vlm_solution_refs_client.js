@@ -176,11 +176,15 @@ function compactErrMsg(err) {
   return `${name}${String(err?.message || err).slice(0, 300)}`;
 }
 
-export function normalizeSolutionRefsResult(parsedJson) {
+export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
   const out = { items: [], notes: '' };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
   out.notes = String(parsedJson.notes || '').trim();
+  const expectedNumbers = Array.isArray(opts?.expectedNumbers)
+    ? opts.expectedNumbers.map((n) => String(n || '').trim()).filter(Boolean)
+    : [];
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
+  const seen = new Set();
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
     const problemNumber = String(raw.problem_number ?? '').trim();
@@ -188,13 +192,68 @@ export function normalizeSolutionRefsResult(parsedJson) {
     const numberRegion = parseBbox4(raw.number_region);
     if (!numberRegion) continue;
     const contentRegion = parseBbox4(raw.content_region);
-    out.items.push({
+    const base = {
       problem_number: problemNumber,
       number_region: numberRegion,
       content_region: contentRegion,
-    });
+    };
+    pushUniqueSolutionRef(out.items, seen, base);
+    for (const expanded of expandSolutionRefRange(problemNumber, expectedNumbers)) {
+      pushUniqueSolutionRef(out.items, seen, {
+        ...base,
+        problem_number: expanded,
+      });
+    }
   }
   return out;
+}
+
+function pushUniqueSolutionRef(items, seen, item) {
+  const key = normalizeProblemNumberKey(item.problem_number);
+  if (!key || seen.has(key)) return;
+  seen.add(key);
+  items.push(item);
+}
+
+function expandSolutionRefRange(problemNumber, expectedNumbers) {
+  const range = parseProblemNumberRange(problemNumber);
+  if (!range || expectedNumbers.length === 0) return [];
+  const out = [];
+  for (const expected of expectedNumbers) {
+    const n = parseSingleProblemNumber(expected);
+    if (n == null || n < range.from || n > range.to) continue;
+    out.push(expected);
+  }
+  return out;
+}
+
+function parseProblemNumberRange(input) {
+  const match = String(input || '')
+    .trim()
+    .match(/^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$/);
+  if (!match) return null;
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return null;
+  return { from, to };
+}
+
+function parseSingleProblemNumber(input) {
+  const text = String(input || '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeProblemNumberKey(input) {
+  const text = String(input || '').trim();
+  if (!text) return '';
+  const range = parseProblemNumberRange(text);
+  if (range) return `${range.from}-${range.to}`;
+  const match = text.match(/\d+/);
+  if (!match) return text.replace(/\s+/g, '');
+  const n = Number(match[0]);
+  return Number.isFinite(n) ? `${n}` : text.replace(/\s+/g, '');
 }
 
 function parseBbox4(arr) {

@@ -4957,40 +4957,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                       runSpacing: 8,
                       children: [
                         for (final type in kProblemQuestionIssueTypes)
-                          FilterChip(
-                            label: Text(type.label),
+                          _QuestionIssueTypeChip(
+                            label: type.label,
                             selected: selected.contains(type.key),
-                            showCheckmark: false,
-                            onSelected: submitting
-                                ? null
-                                : (value) {
-                                    setDialogState(() {
-                                      if (value) {
-                                        selected.add(type.key);
-                                      } else {
-                                        selected.remove(type.key);
-                                      }
-                                    });
-                                  },
-                            selectedColor: _rsAccent.withValues(alpha: 0.16),
-                            backgroundColor: _rsPanelBg,
-                            surfaceTintColor: Colors.transparent,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 6,
-                            ),
-                            side: BorderSide(
-                              color: selected.contains(type.key)
-                                  ? _rsAccent
-                                  : _rsBorder,
-                            ),
-                            labelStyle: TextStyle(
-                              color: selected.contains(type.key)
-                                  ? _rsAccent
-                                  : _rsTextSub,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
+                            enabled: !submitting,
+                            onSelected: (value) {
+                              setDialogState(() {
+                                if (value) {
+                                  selected.add(type.key);
+                                } else {
+                                  selected.remove(type.key);
+                                }
+                              });
+                            },
                           ),
                       ],
                     ),
@@ -5464,72 +5443,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Future<void> _openRawAnswerImageDialog(_RightSheetGradingCellVm cell) async {
     final url = cell.answerImageUrl.trim();
     if (url.isEmpty || !mounted) return;
-    await showDialog<void>(
-      context: _navigatorContext,
-      useRootNavigator: true,
-      builder: (ctx) => Dialog(
-        backgroundColor: _rsPanelBg,
-        insetPadding: const EdgeInsets.all(20),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: _rsBorder),
-        ),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${cell.displayQuestionLabel}번 이미지 정답',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: _rsText,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                      color: _rsTextSub,
-                      tooltip: '닫기',
-                    ),
-                  ],
-                ),
-              ),
-              Flexible(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      color: _rsFieldBg,
-                      child: InteractiveViewer(
-                        minScale: 0.5,
-                        maxScale: 6,
-                        child: Center(
-                          child: Image.network(
-                            url,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.high,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+    await _showTopOverlayDialog<void>(
+      builder: (dialogContext, closeDialog) => _RawAnswerImageZoomDialog(
+        title: '${cell.displayQuestionLabel}번 이미지 정답',
+        url: url,
+        onClose: closeDialog,
       ),
     );
   }
@@ -6439,6 +6357,197 @@ class _BookCardState extends State<_BookCard> {
         ),
       ),
     );
+  }
+}
+
+class _QuestionIssueTypeChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final bool enabled;
+  final ValueChanged<bool> onSelected;
+
+  const _QuestionIssueTypeChip({
+    required this.label,
+    required this.selected,
+    required this.enabled,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = selected ? const Color(0xFF1B6B63) : const Color(0xFF2A2A2A);
+    final borderColor =
+        selected ? _rsAccent.withValues(alpha: 0.7) : Colors.transparent;
+    final textColor = selected ? Colors.white : const Color(0xFFCDD5D5);
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.55,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: enabled ? () => onSelected(!selected) : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOutCubic,
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: borderColor),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: _rsAccent.withValues(alpha: 0.12),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ]
+                  : const <BoxShadow>[],
+            ),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.1,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RawAnswerImageZoomDialog extends StatefulWidget {
+  final String title;
+  final String url;
+  final VoidCallback onClose;
+
+  const _RawAnswerImageZoomDialog({
+    required this.title,
+    required this.url,
+    required this.onClose,
+  });
+
+  @override
+  State<_RawAnswerImageZoomDialog> createState() =>
+      _RawAnswerImageZoomDialogState();
+}
+
+class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
+  static const double _initialScale = 2.0;
+  late final TransformationController _controller;
+  bool _didSetInitialTransform = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TransformationController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _rsPanelBg,
+      insetPadding: const EdgeInsets.all(20),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _rsBorder),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _rsText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: widget.onClose,
+                    icon: const Icon(Icons.close_rounded),
+                    color: _rsTextSub,
+                    tooltip: '닫기',
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    color: _rsFieldBg,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        _setInitialCenteredTransform(constraints);
+                        return InteractiveViewer(
+                          transformationController: _controller,
+                          boundaryMargin: const EdgeInsets.all(320),
+                          minScale: 0.8,
+                          maxScale: 8,
+                          child: Center(
+                            child: Image.network(
+                              widget.url,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.high,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _setInitialCenteredTransform(BoxConstraints constraints) {
+    if (_didSetInitialTransform) return;
+    final width = constraints.maxWidth;
+    final height = constraints.maxHeight;
+    if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
+      return;
+    }
+    _didSetInitialTransform = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _controller.value = Matrix4.identity()
+        ..translate(
+          width * (1 - _initialScale) / 2,
+          height * (1 - _initialScale) / 2,
+        )
+        ..scale(_initialScale);
+    });
   }
 }
 

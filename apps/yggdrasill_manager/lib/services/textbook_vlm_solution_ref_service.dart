@@ -4,6 +4,43 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'textbook_vlm_answer_service.dart';
+
+List<String> textbookSolutionRefMatchedExpectedNumbers({
+  required String detectedNumber,
+  required Map<String, String> expectedByKey,
+  Iterable<String>? allowedKeys,
+}) {
+  final allowed = allowedKeys?.toSet();
+  final detectedKey = textbookAnswerNumberKey(detectedNumber);
+  if (detectedKey.isEmpty) return const <String>[];
+  final exact = expectedByKey[detectedKey];
+  if (exact != null && (allowed == null || allowed.contains(detectedKey))) {
+    return <String>[exact];
+  }
+
+  final range = _solutionRefRange(detectedNumber);
+  if (range == null) return const <String>[];
+  final out = <String>[];
+  for (final entry in expectedByKey.entries) {
+    if (allowed != null && !allowed.contains(entry.key)) continue;
+    final n = int.tryParse(entry.key);
+    if (n == null || n < range.$1 || n > range.$2) continue;
+    out.add(entry.value);
+  }
+  return out;
+}
+
+(int, int)? _solutionRefRange(String raw) {
+  final match = RegExp(r'^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$')
+      .firstMatch(raw.trim());
+  if (match == null) return null;
+  final from = int.tryParse(match.group(1)!);
+  final to = int.tryParse(match.group(2)!);
+  if (from == null || to == null || from > to) return null;
+  return (from, to);
+}
+
 /// Stage-3 client — talks to:
 /// - POST `/textbook/vlm/detect-solution-refs`  — per-page bbox detection.
 /// - POST `/textbook/solution-refs/batch-upsert` — writes
@@ -276,16 +313,25 @@ class TextbookSolutionRefMatchReport {
       for (final n in expectedNumbers)
         if (n.trim().isNotEmpty) n.trim(),
     };
+    final expectedByKey = <String, String>{
+      for (final n in expectedSet)
+        if (textbookAnswerNumberKey(n).isNotEmpty)
+          textbookAnswerNumberKey(n): n,
+    };
     final byNumber = <String, TextbookVlmSolutionRefItem>{};
     final unexpected = <TextbookVlmSolutionRefItem>[];
     for (final it in items) {
-      final key = it.problemNumber.trim();
-      if (key.isEmpty) continue;
-      if (!expectedSet.contains(key)) {
+      final matched = textbookSolutionRefMatchedExpectedNumbers(
+        detectedNumber: it.problemNumber,
+        expectedByKey: expectedByKey,
+      );
+      if (matched.isEmpty) {
         unexpected.add(it);
         continue;
       }
-      byNumber.putIfAbsent(key, () => it);
+      for (final expectedNumber in matched) {
+        byNumber.putIfAbsent(expectedNumber, () => it);
+      }
     }
     final missing = <String>[
       for (final n in expectedSet)
