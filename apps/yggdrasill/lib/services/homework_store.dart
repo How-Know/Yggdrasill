@@ -196,6 +196,7 @@ class HomeworkRecentTemplatePart {
   final String body;
   final Color color;
   final String? flowId;
+  final String? preferredFlowName;
   final String? testOriginFlowId;
   final String? type;
   final String? page;
@@ -220,6 +221,7 @@ class HomeworkRecentTemplatePart {
     required this.body,
     required this.color,
     this.flowId,
+    this.preferredFlowName,
     this.testOriginFlowId,
     this.type,
     this.page,
@@ -245,6 +247,7 @@ class HomeworkRecentTemplate {
   final String? sourceGroupId;
   final String title;
   final String? flowId;
+  final String? preferredFlowName;
   final List<HomeworkRecentTemplatePart> parts;
   final DateTime createdAt;
 
@@ -255,6 +258,7 @@ class HomeworkRecentTemplate {
     required this.sourceGroupId,
     required this.title,
     required this.flowId,
+    this.preferredFlowName,
     required this.parts,
     required this.createdAt,
   });
@@ -272,6 +276,16 @@ class HomeworkRecentTemplate {
   String get primaryGradeLabel {
     for (final part in parts) {
       final value = (part.gradeLabel ?? '').trim();
+      if (value.isNotEmpty) return value;
+    }
+    return '';
+  }
+
+  String get primaryPreferredFlowName {
+    final own = (preferredFlowName ?? '').trim();
+    if (own.isNotEmpty) return own;
+    for (final part in parts) {
+      final value = (part.preferredFlowName ?? '').trim();
       if (value.isNotEmpty) return value;
     }
     return '';
@@ -333,6 +347,16 @@ class HomeworkStore {
   Timer? _rtFallbackPollTimer;
   DateTime? _rtPollCursorUtc;
   bool _rtPollInFlight = false;
+
+  static final RegExp _uuidTextPattern = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  String? _uuidOrNull(String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return null;
+    return _uuidTextPattern.hasMatch(value) ? value : null;
+  }
 
   bool _isMissingDefaultSplitPartsError(Object error) {
     final message = error.toString().toLowerCase();
@@ -1572,6 +1596,76 @@ class HomeworkStore {
     );
   }
 
+  int? _timeLimitMinutesFromPreset(LearningProblemDocumentExportPreset preset) {
+    final raw = preset.timeLimitText.replaceAll(RegExp(r'\s+'), '');
+    if (raw.isEmpty) return null;
+    final match = RegExp(r'(\d+)').firstMatch(raw);
+    if (match == null) return null;
+    return _normalizePositiveInt(int.tryParse(match.group(1) ?? ''));
+  }
+
+  HomeworkRecentTemplate templateFromGeneratedAssignmentPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) {
+    final createdAt = preset.updatedAt ?? preset.createdAt ?? DateTime.now();
+    final title = preset.displayName.trim().isEmpty
+        ? '(제목 없음)'
+        : preset.displayName.trim();
+    final bookLabel = preset.assignmentBookLabel.trim().isNotEmpty
+        ? preset.assignmentBookLabel.trim()
+        : (preset.sourceDocumentName.trim().isNotEmpty
+            ? preset.sourceDocumentName.trim()
+            : '문제은행');
+    final gradeLabel = preset.assignmentGradeLabel.trim();
+    final courseLabel = preset.assignmentCourseLabel.trim();
+    final bookId = '${preset.renderConfig['assignmentBookId'] ?? ''}'.trim();
+    final preferredFlowName =
+        '${preset.renderConfig['assignmentFlowName'] ?? ''}'
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+    final metaParts = <String>[
+      if (bookLabel.isNotEmpty) bookLabel,
+      if (gradeLabel.isNotEmpty) gradeLabel,
+      if (courseLabel.isNotEmpty) courseLabel,
+      if (preset.selectedQuestionCount > 0) '${preset.selectedQuestionCount}문항',
+    ];
+    final body = metaParts.isEmpty ? title : metaParts.join(' · ');
+    final part = HomeworkRecentTemplatePart(
+      sourceItemId: 'pb-preset:${preset.id}',
+      learningTrackCode: 'PB',
+      title: title,
+      body: body,
+      color: const Color(0xFF33A373),
+      type: '문제은행 과제',
+      preferredFlowName: preferredFlowName.isEmpty ? null : preferredFlowName,
+      count: preset.selectedQuestionCount > 0
+          ? preset.selectedQuestionCount
+          : null,
+      timeLimitMinutes: _timeLimitMinutesFromPreset(preset),
+      pbPresetId: preset.id,
+      memo: preset.titlePageTopText,
+      content: body,
+      bookId: _uuidOrNull(bookId),
+      gradeLabel: gradeLabel.isNotEmpty
+          ? gradeLabel
+          : (courseLabel.isNotEmpty ? courseLabel : null),
+      sourceUnitLevel: 'problem_bank_assignment',
+      sourceUnitPath: bookLabel,
+      createdAt: createdAt,
+    );
+    return HomeworkRecentTemplate(
+      templateId: 'pb-preset:${preset.id}',
+      isGroup: false,
+      sourceStudentId: '',
+      sourceGroupId: null,
+      title: title,
+      flowId: null,
+      preferredFlowName: preferredFlowName.isEmpty ? null : preferredFlowName,
+      parts: <HomeworkRecentTemplatePart>[part],
+      createdAt: createdAt,
+    );
+  }
+
   DateTime _latestDate(DateTime? a, DateTime? b) {
     if (a == null) return b ?? DateTime.fromMillisecondsSinceEpoch(0);
     if (b == null) return a;
@@ -1973,7 +2067,7 @@ class HomeworkStore {
           'academy_id': academyId,
           'student_id': studentId,
           'title': item.title.trim().isEmpty ? '과제 그룹' : item.title.trim(),
-          'flow_id': item.flowId,
+          'flow_id': _uuidOrNull(item.flowId),
           if (_supportsLearningTrackColumn)
             'learning_track_code':
                 _normalizeLearningTrackCode(item.learningTrackCode),
@@ -2038,11 +2132,9 @@ class HomeworkStore {
         'title': it.title,
         'body': it.body,
         'color': it.color.value,
-        'flow_id': it.flowId,
+        'flow_id': _uuidOrNull(it.flowId),
         if (_supportsTestOriginFlowIdColumn)
-          'test_origin_flow_id': (it.testOriginFlowId ?? '').trim().isEmpty
-              ? null
-              : it.testOriginFlowId!.trim(),
+          'test_origin_flow_id': _uuidOrNull(it.testOriginFlowId),
         if (_supportsAssignmentCodeColumn)
           'assignment_code': _normalizeAssignmentCode(it.assignmentCode),
         if (_supportsLearningTrackColumn)
@@ -2053,12 +2145,10 @@ class HomeworkStore {
         'count': it.count,
         'time_limit_minutes': _normalizePositiveInt(it.timeLimitMinutes),
         if (_supportsPbPresetIdColumn)
-          'pb_preset_id': (it.pbPresetId ?? '').trim().isEmpty
-              ? null
-              : it.pbPresetId!.trim(),
+          'pb_preset_id': _uuidOrNull(it.pbPresetId),
         if (it.memo != null) 'memo': it.memo,
         'content': it.content,
-        'book_id': it.bookId,
+        'book_id': _uuidOrNull(it.bookId),
         'grade_label': it.gradeLabel,
         'source_unit_level': it.sourceUnitLevel,
         'source_unit_path': it.sourceUnitPath,
@@ -2214,7 +2304,7 @@ class HomeworkStore {
         'academy_id': academyId,
         'homework_item_id': item.id,
       });
-      final bookId = (item.bookId ?? '').trim();
+      final bookId = _uuidOrNull(item.bookId) ?? '';
       final gradeLabel = (item.gradeLabel ?? '').trim();
       if (bookId.isEmpty || gradeLabel.isEmpty || mappings.isEmpty) return;
 
@@ -2375,7 +2465,7 @@ class HomeworkStore {
     required HomeworkItem item,
   }) async {
     final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
-    final bookId = (item.bookId ?? '').trim();
+    final bookId = _uuidOrNull(item.bookId) ?? '';
     final gradeLabel = (item.gradeLabel ?? '').trim();
     if (bookId.isEmpty || gradeLabel.isEmpty) return;
     final supa = Supabase.instance.client;
@@ -2844,10 +2934,8 @@ class HomeworkStore {
       'title': item.title,
       'body': item.body,
       'color': item.color.value,
-      'flow_id': item.flowId ?? '',
-      'test_origin_flow_id': (item.testOriginFlowId ?? '').trim().isEmpty
-          ? null
-          : item.testOriginFlowId!.trim(),
+      'flow_id': _uuidOrNull(item.flowId),
+      'test_origin_flow_id': _uuidOrNull(item.testOriginFlowId),
       'learning_track_code':
           _normalizeLearningTrackCode(item.learningTrackCode),
       'assignment_code': _ensureAssignmentCodeForTrack(
@@ -2856,12 +2944,10 @@ class HomeworkStore {
       'page': item.page ?? '',
       'count': item.count,
       'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
-      'pb_preset_id': (item.pbPresetId ?? '').trim().isEmpty
-          ? null
-          : item.pbPresetId!.trim(),
+      'pb_preset_id': _uuidOrNull(item.pbPresetId),
       if (item.memo != null) 'memo': item.memo,
       'content': item.content ?? '',
-      'book_id': item.bookId ?? '',
+      'book_id': _uuidOrNull(item.bookId),
       'grade_label': item.gradeLabel ?? '',
       'source_unit_level': item.sourceUnitLevel ?? '',
       'source_unit_path': item.sourceUnitPath ?? '',
@@ -2913,7 +2999,7 @@ class HomeworkStore {
           : <String, dynamic>{
               'id': group.id,
               'title': group.title,
-              'flow_id': group.flowId ?? '',
+              'flow_id': _uuidOrNull(group.flowId),
               'learning_track_code':
                   _normalizeLearningTrackCode(group.learningTrackCode),
               'order_index': group.orderIndex,
@@ -4933,11 +5019,9 @@ class HomeworkStore {
         'title': item.title,
         'body': item.body,
         'color': item.color.value,
-        'flow_id': item.flowId,
+        'flow_id': _uuidOrNull(item.flowId),
         if (_supportsTestOriginFlowIdColumn)
-          'test_origin_flow_id': (item.testOriginFlowId ?? '').trim().isEmpty
-              ? null
-              : item.testOriginFlowId!.trim(),
+          'test_origin_flow_id': _uuidOrNull(item.testOriginFlowId),
         if (_supportsAssignmentCodeColumn)
           'assignment_code': _normalizeAssignmentCode(item.assignmentCode),
         if (_supportsLearningTrackColumn)
@@ -4948,12 +5032,10 @@ class HomeworkStore {
         'count': item.count,
         'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
         if (_supportsPbPresetIdColumn)
-          'pb_preset_id': (item.pbPresetId ?? '').trim().isEmpty
-              ? null
-              : item.pbPresetId!.trim(),
+          'pb_preset_id': _uuidOrNull(item.pbPresetId),
         if (item.memo != null) 'memo': item.memo,
         'content': item.content,
-        'book_id': item.bookId,
+        'book_id': _uuidOrNull(item.bookId),
         'grade_label': item.gradeLabel,
         'source_unit_level': item.sourceUnitLevel,
         'source_unit_path': item.sourceUnitPath,
@@ -5244,7 +5326,7 @@ class HomeworkStore {
           'academy_id': academyId,
           'student_id': studentId,
           'title': cleanedGroupTitle,
-          'flow_id': cleanedFlowId.isEmpty ? null : cleanedFlowId,
+          'flow_id': _uuidOrNull(cleanedFlowId),
           if (_supportsLearningTrackColumn)
             'learning_track_code': groupLearningTrackCode,
           'order_index': group.orderIndex,

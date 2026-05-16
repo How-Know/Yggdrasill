@@ -367,8 +367,7 @@ class PrintRoutingService {
         String port,
         String? hostAddress,
         int? portNumber,
-      })?> _loadWindowsPrinterMeta(
-      String printerName) async {
+      })?> _loadWindowsPrinterMeta(String printerName) async {
     if (!Platform.isWindows) return null;
     final escapedName = printerName.replaceAll("'", "''");
     try {
@@ -377,7 +376,7 @@ class PrintRoutingService {
         <String>[
           '-NoProfile',
           '-Command',
-          "\$p = Get-CimInstance -ClassName Win32_Printer | Where-Object { \$_.Name -eq '$escapedName' } | Select-Object -First 1; if (\$null -ne \$p) { \$port = Get-PrinterPort -Name \$p.PortName -ErrorAction SilentlyContinue; \$host = ''; \$portNumber = ''; if (\$null -ne \$port) { \$host = [string]\$port.PrinterHostAddress; \$portNumber = [string]\$port.PortNumber }; Write-Output \"\$(\$p.DriverName)||\$(\$p.PortName)||\$host||\$portNumber\" }",
+          "\$p = Get-CimInstance -ClassName Win32_Printer | Where-Object { \$_.Name -eq '$escapedName' } | Select-Object -First 1; if (\$null -ne \$p) { \$port = Get-PrinterPort -Name \$p.PortName -ErrorAction SilentlyContinue; \$hostAddress = ''; \$portNumber = ''; if (\$null -ne \$port) { \$hostAddress = [string]\$port.PrinterHostAddress; \$portNumber = [string]\$port.PortNumber }; Write-Output \"\$(\$p.DriverName)||\$(\$p.PortName)||\$hostAddress||\$portNumber\" }",
         ],
       );
       if (result.exitCode != 0) return null;
@@ -395,7 +394,8 @@ class PrintRoutingService {
       final port = parts[1].trim();
       if (driver.isEmpty || port.isEmpty) return null;
       final hostAddress = parts.length > 2 ? parts[2].trim() : '';
-      final portNumber = parts.length > 3 ? int.tryParse(parts[3].trim()) : null;
+      final portNumber =
+          parts.length > 3 ? int.tryParse(parts[3].trim()) : null;
       return (
         driver: driver,
         port: port,
@@ -433,8 +433,9 @@ class PrintRoutingService {
     }
 
     try {
-      final beforeJobCount = await _loadWindowsPrinterJobCount(normalizedPrinter)
-          .timeout(const Duration(seconds: 2), onTimeout: () => null);
+      final beforeJobCount =
+          await _loadWindowsPrinterJobCount(normalizedPrinter)
+              .timeout(const Duration(seconds: 2), onTimeout: () => null);
       final startedAt = DateTime.now();
       _printLog(
         debugSource,
@@ -547,7 +548,11 @@ class PrintRoutingService {
     }) meta,
   ) {
     final host = (meta.hostAddress ?? '').trim();
-    if (host.isNotEmpty) return host;
+    final hostIp = _extractIpFromPrinterPort(host);
+    if (hostIp != null) return hostIp;
+    if (host.isNotEmpty && !host.contains('System.Management.Automation')) {
+      return host;
+    }
     return _extractIpFromPrinterPort(meta.port);
   }
 

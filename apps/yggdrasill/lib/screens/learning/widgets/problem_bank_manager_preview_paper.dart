@@ -1794,6 +1794,13 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
   String _stemPreviewWithMarkers(LearningProblemQuestion q) {
     var out = _normalizePreviewMultiline(q.renderedStem);
     if (out.isEmpty) return '';
+    final commonStem = q.setCommonStem;
+    if (q.isIndependentSetItem && commonStem.isNotEmpty) {
+      out = out
+          .replaceFirst(RegExp('^\\s*${RegExp.escape(commonStem)}\\s*'), '')
+          .trim();
+      if (out.isEmpty) return '';
+    }
     out = out.replaceFirst(RegExp(r'^(\s*\[(문단|박스끝)\]\s*)+'), '');
     out = out.replaceFirst(RegExp(r'(\s*\[(문단|박스시작)\]\s*)+$'), '');
     final qn = q.questionNumber.trim();
@@ -1815,6 +1822,49 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
           markerNormalized.substring(0, lastMarker));
     }
     return _normalizePreviewMultiline(out);
+  }
+
+  Widget _buildIndependentSetCommonStemPanel(LearningProblemQuestion q) {
+    final commonStem = q.setCommonStem;
+    if (!q.isIndependentSetItem || commonStem.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(bottom: expanded ? 8 : 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: expanded ? 10 : 8,
+        vertical: expanded ? 8 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F1E8),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE1D3BD)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '공통 발문',
+            style: TextStyle(
+              color: const Color(0xFF7B4E13),
+              fontSize: expanded ? 11.5 : 10.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            commonStem,
+            style: TextStyle(
+              color: const Color(0xFF2D251A),
+              fontSize: expanded ? 13.2 : 12.4,
+              height: 1.42,
+              fontFamily: _previewKoreanFontFamily,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   String _stripLeadingQuestionNumberToken(String line, String questionNumber) {
@@ -1871,6 +1921,8 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
         final choiceAvailableWidth =
             math.max(120.0, constraints.maxWidth - numberingInset);
         final contentChildren = <Widget>[
+          if (q.isIndependentSetItem && q.setCommonStem.isNotEmpty)
+            _buildIndependentSetCommonStemPanel(q),
           ...stemBlocks,
           if (viewBlockLines.isNotEmpty) ...[
             _buildViewBlockPanel(

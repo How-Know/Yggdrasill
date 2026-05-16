@@ -15,6 +15,9 @@ class ProblemBankFilterBar extends StatelessWidget {
     required this.selectedSourceTypeCode,
     required this.sourceTypeLabels,
     required this.onSourceTypeChanged,
+    this.selectedPrivateMaterialKey = '',
+    this.privateMaterialOptions = const <DropdownMenuItem<String>>[],
+    this.onPrivateMaterialChanged,
     required this.isBusy,
   });
 
@@ -33,6 +36,9 @@ class ProblemBankFilterBar extends StatelessWidget {
   final String selectedSourceTypeCode;
   final Map<String, String> sourceTypeLabels;
   final ValueChanged<String?> onSourceTypeChanged;
+  final String selectedPrivateMaterialKey;
+  final List<DropdownMenuItem<String>> privateMaterialOptions;
+  final ValueChanged<String?>? onPrivateMaterialChanged;
 
   final bool isBusy;
 
@@ -146,6 +152,27 @@ class ProblemBankFilterBar extends StatelessWidget {
                     width: 190,
                   ),
                 ),
+                if (selectedSourceTypeCode == 'private_material') ...[
+                  const SizedBox(width: 12),
+                  _LabeledDropdown(
+                    label: '교재명',
+                    titleStyle: titleStyle,
+                    width: 260,
+                    child: _buildDropdown<String>(
+                      value: selectedPrivateMaterialKey,
+                      items: privateMaterialOptions.isEmpty
+                          ? const <DropdownMenuItem<String>>[
+                              DropdownMenuItem<String>(
+                                value: '',
+                                child: Text('교재 없음'),
+                              ),
+                            ]
+                          : privateMaterialOptions,
+                      onChanged: isBusy ? null : onPrivateMaterialChanged,
+                      width: 260,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

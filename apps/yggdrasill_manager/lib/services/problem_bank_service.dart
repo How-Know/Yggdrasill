@@ -214,6 +214,8 @@ class ProblemBankService {
     int? displayPageFrom,
     int? displayPageTo,
     int? bodyLinkId,
+    bool forceNewJob = false,
+    bool pageScoped = false,
   }) async {
     final link = await _loadTextbookBodyLink(
       academyId: academyId,
@@ -277,7 +279,8 @@ class ProblemBankService {
         existingJobId.isNotEmpty &&
         existingSourceVersion == pipelineSourceVersion &&
         existingStatus != 'failed' &&
-        existingStatus != 'cancelled') {
+        existingStatus != 'cancelled' &&
+        !forceNewJob) {
       return TextbookProblemBankExtractRunResult(
         documentId: existingDocId,
         extractJobId: existingJobId,
@@ -384,6 +387,13 @@ class ProblemBankService {
           'result_summary': <String, dynamic>{
             'engine': 'vlm_pdf_only',
             'textbook_scope': scope,
+            if (pageScoped) ...<String, dynamic>{
+              'textbook_page_scoped': true,
+              'raw_page_from': rawPageFrom,
+              'raw_page_to': rawPageTo,
+              'display_page_from': displayPageFrom,
+              'display_page_to': displayPageTo,
+            },
           },
         })
         .select('id,status')
@@ -418,6 +428,13 @@ class ProblemBankService {
         'error_message': '',
         'result_summary': <String, dynamic>{
           'textbook_scope': scope,
+          if (pageScoped) ...<String, dynamic>{
+            'textbook_page_scoped': true,
+            'raw_page_from': rawPageFrom,
+            'raw_page_to': rawPageTo,
+            'display_page_from': displayPageFrom,
+            'display_page_to': displayPageTo,
+          },
         },
       },
       onConflict: 'academy_id,book_id,grade_label,big_order,mid_order,sub_key',
@@ -504,6 +521,9 @@ class ProblemBankService {
   Map<String, dynamic> _buildClassificationColumns({
     String? curriculumCode,
     String? sourceTypeCode,
+    String? schoolLevel,
+    String? gradeKey,
+    String? courseKey,
     String? courseLabel,
     String? gradeLabel,
     dynamic examYear,
@@ -517,6 +537,9 @@ class ProblemBankService {
     return <String, dynamic>{
       'curriculum_code': _normalizeCurriculumCode(curriculumCode),
       'source_type_code': _normalizeSourceTypeCode(sourceTypeCode),
+      'school_level': (schoolLevel ?? '').trim(),
+      'grade_key': (gradeKey ?? '').trim(),
+      'course_key': (courseKey ?? '').trim(),
       'course_label': (courseLabel ?? '').trim(),
       'grade_label': (gradeLabel ?? '').trim(),
       'exam_year': _normalizeExamYear(examYear),
@@ -537,6 +560,9 @@ class ProblemBankService {
     return <String, dynamic>{
       'curriculum_code': '',
       'source_type_code': '',
+      'school_level': '',
+      'grade_key': '',
+      'course_key': '',
       'course_label': '',
       'grade_label': '',
       'exam_year': null,
@@ -1360,11 +1386,19 @@ class ProblemBankService {
       if (_isSyncedSavedSettingsRow(map)) continue;
       final courseLabel = '${map['course_label'] ?? ''}'.trim();
       final gradeLabel = '${map['grade_label'] ?? ''}'.trim();
-      if (!_syncedMatchesLevel(schoolLevel, courseLabel, gradeLabel)) continue;
+      if (!_syncedMatchesLevel(
+        schoolLevel,
+        courseLabel,
+        gradeLabel,
+        '${map['school_level'] ?? ''}'.trim(),
+      )) {
+        continue;
+      }
       if (!_syncedMatchesDetailedCourse(
         detailedCourse,
         courseLabel,
         gradeLabel,
+        '${map['course_key'] ?? ''}'.trim(),
       )) {
         continue;
       }
@@ -2126,6 +2160,9 @@ class ProblemBankService {
     String? status,
     String? curriculumCode,
     String? sourceTypeCode,
+    String? schoolLevel,
+    String? gradeKey,
+    String? courseKey,
     String? courseLabel,
     String? gradeLabel,
     int? examYear,
@@ -2143,6 +2180,9 @@ class ProblemBankService {
     };
     if (curriculumCode != null ||
         sourceTypeCode != null ||
+        schoolLevel != null ||
+        gradeKey != null ||
+        courseKey != null ||
         courseLabel != null ||
         gradeLabel != null ||
         examYear != null ||
@@ -2156,6 +2196,9 @@ class ProblemBankService {
         _buildClassificationColumns(
           curriculumCode: curriculumCode,
           sourceTypeCode: sourceTypeCode,
+          schoolLevel: schoolLevel,
+          gradeKey: gradeKey,
+          courseKey: courseKey,
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
           examYear: examYear,
@@ -2176,6 +2219,9 @@ class ProblemBankService {
     required String documentId,
     required String curriculumCode,
     required String sourceTypeCode,
+    String schoolLevel = '',
+    String gradeKey = '',
+    String courseKey = '',
     String courseLabel = '',
     String gradeLabel = '',
     int? examYear,
@@ -2192,6 +2238,9 @@ class ProblemBankService {
           ..._buildClassificationColumns(
             curriculumCode: curriculumCode,
             sourceTypeCode: sourceTypeCode,
+            schoolLevel: schoolLevel,
+            gradeKey: gradeKey,
+            courseKey: courseKey,
             courseLabel: courseLabel,
             gradeLabel: gradeLabel,
             examYear: examYear,
@@ -2257,6 +2306,9 @@ class ProblemBankService {
     Map<String, dynamic>? meta,
     String? curriculumCode,
     String? sourceTypeCode,
+    String? schoolLevel,
+    String? gradeKey,
+    String? courseKey,
     String? courseLabel,
     String? gradeLabel,
     int? examYear,
@@ -2327,6 +2379,9 @@ class ProblemBankService {
     };
     if (curriculumCode != null ||
         sourceTypeCode != null ||
+        schoolLevel != null ||
+        gradeKey != null ||
+        courseKey != null ||
         courseLabel != null ||
         gradeLabel != null ||
         examYear != null ||
@@ -2340,6 +2395,9 @@ class ProblemBankService {
         _buildClassificationColumns(
           curriculumCode: curriculumCode,
           sourceTypeCode: sourceTypeCode,
+          schoolLevel: schoolLevel,
+          gradeKey: gradeKey,
+          courseKey: courseKey,
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
           examYear: examYear,
@@ -3064,9 +3122,20 @@ List<String> _syncedSourceTypeCodesForUi(String uiSourceTypeCode) {
   }
 }
 
-bool _syncedMatchesLevel(String level, String courseLabel, String gradeLabel) {
+bool _syncedMatchesLevel(
+  String level,
+  String courseLabel,
+  String gradeLabel,
+  String schoolLevel,
+) {
   final safeLevel = level.trim();
   if (safeLevel.isEmpty || safeLevel == '전체') return true;
+  final normalizedSchoolLevel = schoolLevel.trim();
+  if (normalizedSchoolLevel.isNotEmpty) {
+    if (safeLevel == '초') return normalizedSchoolLevel == 'elementary';
+    if (safeLevel == '중') return normalizedSchoolLevel == 'middle';
+    if (safeLevel == '고') return normalizedSchoolLevel == 'high';
+  }
   final merged = '$courseLabel $gradeLabel'.replaceAll(' ', '');
   if (merged.isEmpty) return true;
   final hasExplicitLevel =
@@ -3082,9 +3151,19 @@ bool _syncedMatchesDetailedCourse(
   String detailedCourse,
   String courseLabel,
   String gradeLabel,
+  String courseKey,
 ) {
   final selected = detailedCourse.trim();
   if (selected.isEmpty || selected == '전체') return true;
+  final normalizedCourseKey = courseKey.trim();
+  if (normalizedCourseKey.isNotEmpty) {
+    final compactSelected = selected.replaceAll(' ', '');
+    if (_syncedCourseKeyLabels(normalizedCourseKey).any(
+      (label) => label.replaceAll(' ', '') == compactSelected,
+    )) {
+      return true;
+    }
+  }
   final merged = '$courseLabel $gradeLabel';
   if (merged.contains(selected)) return true;
   final compactMerged = merged.replaceAll(' ', '');
@@ -3097,6 +3176,39 @@ bool _syncedMatchesDetailedCourse(
     return true;
   }
   return false;
+}
+
+List<String> _syncedCourseKeyLabels(String courseKey) {
+  switch (courseKey.trim()) {
+    case 'M1-1':
+      return const <String>['1-1', '중1-1'];
+    case 'M1-2':
+      return const <String>['1-2', '중1-2'];
+    case 'M2-1':
+      return const <String>['2-1', '중2-1'];
+    case 'M2-2':
+      return const <String>['2-2', '중2-2'];
+    case 'M3-1':
+      return const <String>['3-1', '중3-1'];
+    case 'M3-2':
+      return const <String>['3-2', '중3-2'];
+    case 'H1-c1':
+      return const <String>['공통수학1', '고1'];
+    case 'H1-c2':
+      return const <String>['공통수학2', '고1'];
+    case 'H-algebra':
+      return const <String>['대수'];
+    case 'H-calc1':
+      return const <String>['미적분1'];
+    case 'H-probstats':
+      return const <String>['확률과 통계', '확률통계', '확통'];
+    case 'H-calc2':
+      return const <String>['미적분2'];
+    case 'H-geometry':
+      return const <String>['기하'];
+    default:
+      return <String>[courseKey.trim()];
+  }
 }
 
 bool _isSyncedSavedSettingsRow(Map<String, dynamic> row) {

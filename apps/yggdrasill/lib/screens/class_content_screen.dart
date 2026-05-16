@@ -1727,6 +1727,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         }
       }
     }
+    if (resolvedFlowId.trim().isEmpty) {
+      resolvedFlowId = await _resolveTemplatePreferredFlowId(
+        studentId: studentId,
+        template: template,
+      );
+      if (!context.mounted) return;
+    }
 
     final mode = await _askFavoriteIssueMode(
       context: context,
@@ -1750,6 +1757,23 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       context,
       '${student.name}에게 $modeLabel ${createdCount}개를 추가했어요.',
     );
+  }
+
+  Future<String> _resolveTemplatePreferredFlowId({
+    required String studentId,
+    required HomeworkRecentTemplate template,
+  }) async {
+    final preferredName =
+        StudentFlow.normalizeName(template.primaryPreferredFlowName);
+    if (preferredName.trim().isEmpty) return '';
+    final flows = await StudentFlowStore.instance.loadForStudent(studentId);
+    for (final flow in flows) {
+      if (!flow.enabled) continue;
+      if (StudentFlow.normalizeName(flow.name) == preferredName) {
+        return flow.id.trim();
+      }
+    }
+    return '';
   }
 
   Future<_FavoriteTemplateLinkStatus> _checkFavoriteTemplateLinkStatus({
@@ -4956,6 +4980,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       selectableGroupChildren: request.eligibleChildren,
       groupChildPrintableById: request.printableById,
       groupInitialSelectionById: request.initialSelectedById,
+      groupChildPageRangeById: request.childPageRangeById,
       assignmentByItemId: request.assignmentByItemId,
       preResolvedSourceByItemId: request.sourceByItemId,
     );
@@ -10144,6 +10169,7 @@ class _HomeworkGroupPrintRequest {
   final List<HomeworkItem> eligibleChildren;
   final Map<String, bool> printableById;
   final Map<String, bool> initialSelectedById;
+  final Map<String, String> childPageRangeById;
   final Map<String, HomeworkAssignmentDetail> assignmentByItemId;
   final Map<String, _ResolvedHomeworkPrintSource> sourceByItemId;
   final String? warning;
@@ -10156,6 +10182,7 @@ class _HomeworkGroupPrintRequest {
     required this.eligibleChildren,
     required this.printableById,
     required this.initialSelectedById,
+    this.childPageRangeById = const <String, String>{},
     required this.assignmentByItemId,
     required this.sourceByItemId,
     this.warning,
@@ -10582,10 +10609,6 @@ void _applyHomeworkTypePrintAfterSuccessfulPrint({
     latest.type = printType;
     HomeworkStore.instance.edit(studentId, latest);
   }
-}
-
-String _mergeGroupPageText(List<HomeworkItem> items) {
-  return mergeHomeworkPageRawStrings(items.map((e) => e.page));
 }
 
 List<HomeworkSplitPartInput> _parseSplitPartInputsFromRaw({
@@ -11063,62 +11086,22 @@ String _normalizePageRangeForPrint(String raw) {
   return normalized;
 }
 
-String _shiftNormalizedPageRangeForPdf(String normalizedRange, int pageOffset) {
-  final cleaned = normalizedRange.trim();
-  if (cleaned.isEmpty || pageOffset == 0) return cleaned;
-  final tokens = cleaned.split(',');
-  final out = <String>[];
-  for (final token in tokens) {
-    final t = token.trim();
-    if (t.isEmpty) continue;
-    if (t.contains('-')) {
-      final parts = t.split('-');
-      if (parts.length != 2) continue;
-      final s = int.tryParse(parts[0]);
-      final e = int.tryParse(parts[1]);
-      if (s == null || e == null) continue;
-      int a = s + pageOffset;
-      int b = e + pageOffset;
-      if (a <= 0 && b <= 0) continue;
-      if (a < 1) a = 1;
-      if (b < 1) b = 1;
-      if (a > b) {
-        final temp = a;
-        a = b;
-        b = temp;
-      }
-      out.add(a == b ? '$a' : '$a-$b');
-      continue;
-    }
-    final v = int.tryParse(t);
-    if (v == null) continue;
-    final shifted = v + pageOffset;
-    if (shifted <= 0) continue;
-    out.add('$shifted');
-  }
-  return out.join(',');
+Future<String> _homeworkPrintStoredPageRange(HomeworkItem hw) async {
+  return (hw.page ?? '').trim();
 }
 
-Future<int> _loadTextbookPageOffset({
-  required String bookId,
-  required String gradeLabel,
-}) async {
-  final bid = bookId.trim();
-  final gl = gradeLabel.trim();
-  if (bid.isEmpty || gl.isEmpty) return 0;
-  try {
-    final row = await DataManager.instance.loadTextbookMetadataPayload(
-      bookId: bid,
-      gradeLabel: gl,
-    );
-    final raw = row?['page_offset'];
-    if (raw is int) return raw;
-    if (raw is num) return raw.toInt();
-    if (raw is String) return int.tryParse(raw.trim()) ?? 0;
-    return 0;
-  } catch (_) {
-    return 0;
+Future<Map<String, String>> _homeworkPrintPageRangeByChildId(
+  List<HomeworkItem> items,
+) async {
+  final out = <String, String>{};
+  for (final item in items) {
+    out[item.id] = await _homeworkPrintStoredPageRange(item);
   }
+  return out;
+}
+
+String _mergeHomePrintPageRanges(Iterable<String?> ranges) {
+  return mergeHomeworkPageRawStrings(ranges);
 }
 
 List<int> _parsePageRange(String input, int pageCount) {
@@ -11225,6 +11208,61 @@ Size? _guessStandardFromSrcSize(Size src) {
   // ISO B5 (176×250mm = 499×709pt) → JIS B5
   if (near(short, 499) && near(long, 709)) return const Size(516, 729);
   return null;
+}
+
+String _paperSizeLabelFromPdfSize(Size src) {
+  final w = src.width;
+  final h = src.height;
+  final short = w < h ? w : h;
+  final long = w < h ? h : w;
+  bool near(double a, double b, {double tol = 14}) => (a - b).abs() <= tol;
+  if (near(short, 842) && near(long, 1191)) return 'A3';
+  if (near(short, 595) && near(long, 842)) return 'A4';
+  if (near(short, 420) && near(long, 595)) return 'A5';
+  if ((near(short, 729) && near(long, 1032)) ||
+      (near(short, 709) && near(long, 1001))) {
+    return 'B4';
+  }
+  if ((near(short, 516) && near(long, 729)) ||
+      (near(short, 499) && near(long, 709))) {
+    return 'B5';
+  }
+  if (near(short, 612) && near(long, 792)) return 'Letter';
+  if (near(short, 612) && near(long, 1008)) return 'Legal';
+  return '';
+}
+
+Future<String> _inferPreferredPaperSizeFromPdf({
+  required String inputPath,
+  required String pageRange,
+}) async {
+  final inPath = inputPath.trim();
+  if (inPath.isEmpty || !inPath.toLowerCase().endsWith('.pdf')) return '';
+  try {
+    final srcBytes = await File(inPath).readAsBytes();
+    final src = sf.PdfDocument(inputBytes: srcBytes);
+    try {
+      final pageCount = src.pages.count;
+      if (pageCount <= 0) return '';
+      final indices = _parsePageRange(pageRange, pageCount);
+      final effectiveIndices = indices.isEmpty
+          ? List<int>.generate(pageCount, (index) => index)
+          : indices;
+      String firstRecognized = '';
+      for (final i in effectiveIndices.take(24)) {
+        if (i < 0 || i >= pageCount) continue;
+        final label = _paperSizeLabelFromPdfSize(src.pages[i].size);
+        if (label.isEmpty) continue;
+        firstRecognized = firstRecognized.isEmpty ? label : firstRecognized;
+        if (label != 'A4') return label;
+      }
+      return firstRecognized;
+    } finally {
+      src.dispose();
+    }
+  } catch (_) {
+    return '';
+  }
 }
 
 Future<String?> _buildPdfForPrintRange({
@@ -11497,6 +11535,13 @@ String _preferredLiveReleaseExportJobIdForPrint({
 
 const String _kPrintPipelinePb = 'pb';
 const String _kPrintPipelineTextbook = 'textbook';
+const String _kNaesinLinkConfigKeyForPrint = 'naesinLinkKey';
+
+String _naesinLinkKeyForPrint(HomeworkItem hw) {
+  final sourceLevel = (hw.sourceUnitLevel ?? '').trim().toLowerCase();
+  if (sourceLevel != 'naesin') return '';
+  return (hw.sourceUnitPath ?? '').trim();
+}
 
 bool _isPbPrintTarget({
   required HomeworkItem hw,
@@ -11507,7 +11552,8 @@ bool _isPbPrintTarget({
   final exportJobId = (assignment?.releaseExportJobId ?? '').trim();
   return presetId.isNotEmpty ||
       liveReleaseId.isNotEmpty ||
-      exportJobId.isNotEmpty;
+      exportJobId.isNotEmpty ||
+      _naesinLinkKeyForPrint(hw).isNotEmpty;
 }
 
 bool _canCreatePbPrintFromTarget({
@@ -11533,6 +11579,30 @@ Future<String> _resolveAcademyIdForPrint() async {
     academyId = (await TenantService.instance.ensureActiveAcademy()).trim();
   }
   return academyId;
+}
+
+Future<LearningProblemDocumentExportPreset?> _resolveNaesinPresetForPrint({
+  required String academyId,
+  required String linkKey,
+  LearningProblemBankService? problemBankService,
+}) async {
+  final safeAcademyId = academyId.trim();
+  final safeLinkKey = linkKey.trim();
+  if (safeAcademyId.isEmpty || safeLinkKey.isEmpty) return null;
+  final pbService = problemBankService ?? LearningProblemBankService();
+  try {
+    final presets = await pbService.listExportPresets(
+      academyId: safeAcademyId,
+      limit: 500,
+    );
+    for (final preset in presets) {
+      final candidate =
+          '${preset.renderConfig[_kNaesinLinkConfigKeyForPrint] ?? preset.naesinLinkKey}'
+              .trim();
+      if (candidate == safeLinkKey) return preset;
+    }
+  } catch (_) {}
+  return null;
 }
 
 String _normalizePaperSizeForPrint(String raw) {
@@ -11721,6 +11791,14 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
       presetId = (liveRelease?.presetId ?? '').trim();
     } catch (_) {}
   }
+  if (presetId.isEmpty) {
+    final naesinPreset = await _resolveNaesinPresetForPrint(
+      academyId: safeAcademyId,
+      linkKey: _naesinLinkKeyForPrint(hw),
+      problemBankService: pbService,
+    );
+    presetId = (naesinPreset?.id ?? '').trim();
+  }
   if (presetId.isEmpty) return null;
 
   progressText?.value = '문제은행 프리셋 정보를 불러오는 중입니다...';
@@ -11758,6 +11836,20 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     'previewOnly': false,
   };
 
+  if (renderHash.isNotEmpty) {
+    try {
+      final reusableJob = await pbService.findReusableCompletedExport(
+        academyId: safeAcademyId,
+        renderHash: renderHash,
+        previewOnly: false,
+      );
+      if (reusableJob != null && reusableJob.id.trim().isNotEmpty) {
+        progressText?.value = '기존 문제은행 PDF를 재사용합니다...';
+        return reusableJob;
+      }
+    } catch (_) {}
+  }
+
   progressText?.value = '문제은행 인쇄 PDF 생성을 요청하는 중입니다...';
   final queuedJob = await pbService.createExportJob(
     academyId: safeAcademyId,
@@ -11776,6 +11868,7 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     initialJob: queuedJob,
     problemBankService: pbService,
     progressText: progressText,
+    maxAttempts: 24,
   );
   if (completedJob == null) return null;
 
@@ -11814,6 +11907,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
   if (safeAcademyId.isEmpty) return null;
 
   String preferredPaperSize = '';
+  String pbPresetId = (hw.pbPresetId ?? '').trim();
   LearningProblemLiveRelease? assignmentRelease;
   final liveReleaseId = (assignment?.liveReleaseId ?? '').trim();
   if (liveReleaseId.isNotEmpty) {
@@ -11823,6 +11917,9 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
         liveReleaseId: liveReleaseId,
       );
       preferredPaperSize = (assignmentRelease?.paperSize ?? '').trim();
+      if (pbPresetId.isEmpty) {
+        pbPresetId = (assignmentRelease?.presetId ?? '').trim();
+      }
     } catch (_) {
       assignmentRelease = null;
     }
@@ -11886,9 +11983,32 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
     );
   }
 
-  final pbPresetId = (hw.pbPresetId ?? '').trim().isNotEmpty
-      ? (hw.pbPresetId ?? '').trim()
-      : (assignmentRelease?.presetId ?? '').trim();
+  if (pbPresetId.isEmpty) {
+    final naesinPreset = await _resolveNaesinPresetForPrint(
+      academyId: safeAcademyId,
+      linkKey: _naesinLinkKeyForPrint(hw),
+      problemBankService: pbService,
+    );
+    pbPresetId = (naesinPreset?.id ?? '').trim();
+    if (preferredPaperSize.isEmpty) {
+      preferredPaperSize = (naesinPreset?.paperSize ?? '').trim();
+    }
+  }
+  if (pbPresetId.isNotEmpty && preferredPaperSize.isEmpty) {
+    try {
+      final preset = await pbService.getExportPresetById(
+        academyId: safeAcademyId,
+        presetId: pbPresetId,
+      );
+      preferredPaperSize = (preset?.paperSize ?? '').trim();
+    } catch (_) {}
+  }
+  if (pbPresetId.isNotEmpty) {
+    print(
+      '[PRINT][pb] preset="$pbPresetId" paper="$preferredPaperSize" '
+      'naesinLink="${_naesinLinkKeyForPrint(hw)}" liveRelease="$liveReleaseId"',
+    );
+  }
   if (pbPresetId.isNotEmpty) {
     try {
       final latestRelease = await pbService.getLatestLiveReleaseForPreset(
@@ -12107,6 +12227,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
   List<HomeworkItem> selectableChildren = const <HomeworkItem>[],
   Map<String, bool> childPrintableById = const <String, bool>{},
   Map<String, bool> initialChildSelectionById = const <String, bool>{},
+  Map<String, String> childPageRangeById = const <String, String>{},
 }) async {
   final controller = ImeAwareTextEditingController(text: initialRange);
   final contentScrollController = ScrollController();
@@ -12125,7 +12246,11 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
         .where((child) => selectedChildById[child.id] ?? false)
         .toList(growable: false);
     if (picked.isEmpty) return '';
-    return _normalizePageRangeForPrint(_mergeGroupPageText(picked));
+    return _normalizePageRangeForPrint(
+      _mergeHomePrintPageRanges(
+        picked.map((child) => childPageRangeById[child.id] ?? child.page),
+      ),
+    );
   }
 
   var duplexMode = PrintDuplexMode.twoSidedLongEdge;
@@ -12182,7 +12307,11 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                                   final child = selectableChildren[idx];
                                   final canPrint =
                                       childPrintableById[child.id] ?? true;
-                                  final pageText = (child.page ?? '').trim();
+                                  final pageText =
+                                      (childPageRangeById[child.id] ??
+                                              child.page ??
+                                              '')
+                                          .trim();
                                   final countText =
                                       (child.count != null && child.count! > 0)
                                           ? '${child.count}문항'
@@ -12625,18 +12754,20 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
   );
 
   final isPdf = printablePath.toLowerCase().endsWith('.pdf');
-  final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
-      ? await _loadTextbookPageOffset(
-          bookId: resolvedSource.bookId,
-          gradeLabel: resolvedSource.gradeLabel,
-        )
-      : 0;
   final selectedRange = confirmResult.pageRange;
   String pathToPrint = printablePath;
   final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
-  final rangeRaw = resolvedSource.isProblemBank
-      ? ''
-      : _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
+  final rangeRaw = resolvedSource.isProblemBank ? '' : rangeDisplay;
+  var effectivePaperSize = resolvedSource.preferredPaperSize.trim();
+  if (effectivePaperSize.isEmpty && isPdf) {
+    effectivePaperSize = await _inferPreferredPaperSizeFromPdf(
+      inputPath: printablePath,
+      pageRange: rangeRaw,
+    );
+    if (effectivePaperSize.isNotEmpty) {
+      print('[PRINT][paper] inferredPaper="$effectivePaperSize"');
+    }
+  }
 
   if (isPdf) {
     progressText?.value = rangeRaw.isEmpty
@@ -12646,7 +12777,7 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
       inputPath: printablePath,
       pageRange: rangeRaw,
       overlayMeta: overlayMeta,
-      preferredPaperSize: resolvedSource.preferredPaperSize,
+      preferredPaperSize: effectivePaperSize,
     );
     if (out == null || out.isEmpty) {
       return _HomeworkPrintRunResult(
@@ -12668,7 +12799,7 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
   progressText?.value = '프린터로 전송 중입니다...';
   final printJobSentToSpooler = await _openPrintDialogForPath(
     pathToPrint,
-    preferredPaperSize: resolvedSource.preferredPaperSize,
+    preferredPaperSize: effectivePaperSize,
     duplexMode: confirmResult.duplexMode,
   );
   if (printJobSentToSpooler) {
@@ -12707,8 +12838,9 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
       : await _loadActiveAssignmentByItemIdForPrint(studentId);
   final assignment = resolvedAssignments[hw.id.trim()];
   final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
-  final initialRangeRaw =
-      isPbTarget ? '' : (initialRangeOverride ?? hw.page ?? '');
+  final initialRangeRaw = isPbTarget
+      ? ''
+      : (initialRangeOverride ?? await _homeworkPrintStoredPageRange(hw));
   final selectedChildIds = selectableGroupChildren.isEmpty
       ? const <String>[]
       : selectableGroupChildren
@@ -12823,7 +12955,11 @@ Future<_HomeworkGroupPrintRequest> _buildHomeworkGroupPrintRequest({
   }
 
   final seed = defaultPrintableChildren.first;
-  final mergedPage = _mergeGroupPageText(defaultPrintableChildren);
+  final childPageRangeById =
+      await _homeworkPrintPageRangeByChildId(defaultPrintableChildren);
+  final mergedPage = _mergeHomePrintPageRanges(defaultPrintableChildren.map(
+    (child) => childPageRangeById[child.id] ?? child.page,
+  ));
   final mergedTitle = summary.title.trim().isNotEmpty
       ? summary.title.trim()
       : (group.title.trim().isNotEmpty
@@ -12841,6 +12977,7 @@ Future<_HomeworkGroupPrintRequest> _buildHomeworkGroupPrintRequest({
       for (final child in eligibleChildren)
         child.id: printableById[child.id] ?? false,
     },
+    childPageRangeById: childPageRangeById,
     assignmentByItemId: assignmentByItemId,
     sourceByItemId: sourceByItemId,
     warning: observedPipelineKinds.length > 1
@@ -12860,6 +12997,7 @@ Future<void> _handleWaitingChipLongPressPrint({
   List<HomeworkItem> selectableGroupChildren = const <HomeworkItem>[],
   Map<String, bool> groupChildPrintableById = const <String, bool>{},
   Map<String, bool> groupInitialSelectionById = const <String, bool>{},
+  Map<String, String> groupChildPageRangeById = const <String, String>{},
   Map<String, HomeworkAssignmentDetail> assignmentByItemId =
       const <String, HomeworkAssignmentDetail>{},
   Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
@@ -12890,8 +13028,9 @@ Future<void> _handleWaitingChipLongPressPrint({
 
   // ── Phase 2: show print confirm dialog immediately ──
   final isPdf = true;
-  final initialRangeRaw =
-      isPbTarget ? '' : (initialRangeOverride ?? (hw.page ?? ''));
+  final initialRangeRaw = isPbTarget
+      ? ''
+      : (initialRangeOverride ?? await _homeworkPrintStoredPageRange(hw));
   final initialRange = _normalizePageRangeForPrint(initialRangeRaw);
   final confirmResult = await _showHomeworkPrintConfirmDialog(
     context: context,
@@ -12903,6 +13042,7 @@ Future<void> _handleWaitingChipLongPressPrint({
     selectableChildren: selectableGroupChildren,
     childPrintableById: groupChildPrintableById,
     initialChildSelectionById: groupInitialSelectionById,
+    childPageRangeById: groupChildPageRangeById,
   );
   if (!context.mounted || confirmResult == null) return;
   if (selectableGroupChildren.isNotEmpty &&

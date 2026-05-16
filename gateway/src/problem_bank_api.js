@@ -157,6 +157,14 @@ function normalizePresetDisplayName(raw, fallback = '') {
   return value.slice(0, 120);
 }
 
+function normalizePresetKind(raw, fallback = 'settings') {
+  const value = String(raw || fallback || 'settings').trim().toLowerCase();
+  if (value === 'assignment' || value === 'generated_assignment' || value === 'homework') {
+    return 'assignment';
+  }
+  return 'settings';
+}
+
 function normalizeTemplateProfile(raw) {
   const s = String(raw || '').trim().toLowerCase();
   if (
@@ -697,7 +705,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v55_compact_subanswers';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v71_math_line_box_symmetry';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -722,6 +730,9 @@ const QUESTION_COPY_SELECT_COLUMNS = [
   'meta',
   'curriculum_code',
   'source_type_code',
+  'school_level',
+  'grade_key',
+  'course_key',
   'course_label',
   'grade_label',
   'exam_year',
@@ -959,6 +970,9 @@ async function ensureDocumentBelongs(academyId, documentId) {
         'meta',
         'curriculum_code',
         'source_type_code',
+        'school_level',
+        'grade_key',
+        'course_key',
         'course_label',
         'grade_label',
         'exam_year',
@@ -2684,6 +2698,14 @@ async function saveSettingsAsDocument(body, res) {
       questionModeByQuestionId: sourceQuestionModeByQuestionUid,
       questionScoreByQuestionId: sourceQuestionScoreByQuestionUid,
     };
+    const presetKind = normalizePresetKind(
+      body.presetKind || body.preset_kind || rawRenderConfig.presetKind,
+      'settings',
+    );
+    renderConfig.presetKind = presetKind;
+    if (presetKind === 'assignment') {
+      renderConfig.assignmentLibraryKind = 'generated_assignment';
+    }
     const presetDisplayName = normalizePresetDisplayName(
       rawDisplayName,
       String(sourceDoc.source_filename || '').trim() || '문제은행 프리셋',
@@ -2717,6 +2739,7 @@ async function saveSettingsAsDocument(body, res) {
         .update({
           source_document_id: sourceDocumentId,
           source_document_ids: sourceQuestionDocIds,
+          preset_kind: presetKind,
           render_config: renderConfig,
           selected_question_uids: selectedQuestionUidsOrdered,
           selected_question_ids: selectedQuestionIdsOrdered,
@@ -2741,6 +2764,7 @@ async function saveSettingsAsDocument(body, res) {
           source_document_id: sourceDocumentId,
           document_id: null,
           source_document_ids: sourceQuestionDocIds,
+          preset_kind: presetKind,
           render_config: renderConfig,
           selected_question_uids: selectedQuestionUidsOrdered,
           selected_question_ids: selectedQuestionIdsOrdered,
@@ -2793,6 +2817,7 @@ async function getDocumentExportPreset(documentId, url, res) {
     .from('pb_export_presets')
     .select('*')
     .eq('academy_id', academyId)
+    .eq('preset_kind', 'settings')
     .or(
       [
         `source_document_id.eq.${documentId}`,
@@ -2816,13 +2841,17 @@ async function listExportPresets(url, res) {
     return;
   }
   const limit = normalizeLimit(url.searchParams.get('limit'), 100, 500);
+  const presetKind = normalizePresetKind(
+    url.searchParams.get('presetKind') || url.searchParams.get('kind'),
+    'settings',
+  );
   const offsetRaw = Number.parseInt(
     String(url.searchParams.get('offset') || '0'),
     10,
   );
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
 
-  const { data: rows, error } = await supa
+  let query = supa
     .from('pb_export_presets')
     .select(
       [
@@ -2831,6 +2860,7 @@ async function listExportPresets(url, res) {
         'source_document_id',
         'source_document_ids',
         'document_id',
+        'preset_kind',
         'display_name',
         'render_config',
         'selected_question_uids',
@@ -2842,8 +2872,10 @@ async function listExportPresets(url, res) {
       ].join(','),
     )
     .eq('academy_id', academyId)
+    .eq('preset_kind', presetKind)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
+  const { data: rows, error } = await query;
   if (error) {
     sendJson(res, 500, { ok: false, error: `export_presets_list_failed:${error.message}` });
     return;
@@ -2912,6 +2944,8 @@ async function listExportPresets(url, res) {
       sourceDocumentId,
       sourceDocumentIds,
       documentId,
+      presetKind: normalizePresetKind(row?.preset_kind, 'settings'),
+      preset_kind: normalizePresetKind(row?.preset_kind, 'settings'),
       displayName: normalizePresetDisplayName(row?.display_name, fallbackName),
       sourceDocumentName:
         documentNameMap.get(sourceDocumentId)
@@ -3293,6 +3327,7 @@ async function previewQuestions(res, req) {
   const academyId = String(body?.academyId || '').trim();
   const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
   const layout = body?.layout || {};
+  const renderConfig = body?.renderConfig || {};
   const force = body?.force === true;
   const mathEngine = body?.mathEngine || 'xelatex';
 
@@ -3317,6 +3352,7 @@ async function previewQuestions(res, req) {
       questions: rows || [],
       academyId,
       layout,
+      renderConfig,
       supabaseClient: supa,
       force,
       mathEngine,
@@ -4757,6 +4793,8 @@ async function batchRenderThumbnails(res, req) {
         hidePreviewHeader: true,
         hideQuestionNumber: true,
         mathEngine: 'xelatex',
+        disableIndependentSetGrouping: true,
+        previewIndependentSetCommonStem: true,
         ...baseOptions,
         geometryOverride: previewGeometry,
       },

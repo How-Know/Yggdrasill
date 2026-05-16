@@ -10,6 +10,9 @@ class ProblemBankDocument {
     required this.updatedAt,
     required this.curriculumCode,
     required this.sourceTypeCode,
+    required this.schoolLevel,
+    required this.gradeKey,
+    required this.courseKey,
     required this.courseLabel,
     required this.gradeLabel,
     required this.semesterLabel,
@@ -37,6 +40,9 @@ class ProblemBankDocument {
   final DateTime? updatedAt;
   final String curriculumCode;
   final String sourceTypeCode;
+  final String schoolLevel;
+  final String gradeKey;
+  final String courseKey;
   final String courseLabel;
   final String gradeLabel;
   final int? examYear;
@@ -64,6 +70,9 @@ class ProblemBankDocument {
     final meta = _mapOrEmpty(map['meta']);
     final sourceRaw = _mapOrEmpty(meta['source_classification']);
     final naesin = _mapOrEmpty(sourceRaw['naesin']);
+    final textbookCourse = _mapOrEmpty(
+      sourceRaw['textbook_course'] ?? meta['textbook_course'],
+    );
     final privateMaterial = sourceRaw['private_material'] == true;
     final mockPast = sourceRaw['mock_past_exam'] == true;
     final schoolPast = sourceRaw['school_past_exam'] == true;
@@ -90,6 +99,12 @@ class ProblemBankDocument {
           '${map['source_type_code'] ?? fallbackSourceType}'.trim().isEmpty
               ? fallbackSourceType
               : '${map['source_type_code']}',
+      schoolLevel:
+          '${map['school_level'] ?? sourceRaw['school_level'] ?? ''}'.trim(),
+      gradeKey:
+          '${map['grade_key'] ?? textbookCourse['grade_key'] ?? ''}'.trim(),
+      courseKey:
+          '${map['course_key'] ?? textbookCourse['course_key'] ?? ''}'.trim(),
       courseLabel: '${map['course_label'] ?? ''}'.trim(),
       gradeLabel: '${map['grade_label'] ?? naesin['grade'] ?? ''}'.trim(),
       examYear: _intOrNull(map['exam_year']) ?? _intOrNull(naesin['year']),
@@ -337,6 +352,9 @@ class ProblemBankQuestion {
     required this.objectiveGenerated,
     required this.curriculumCode,
     required this.sourceTypeCode,
+    required this.schoolLevel,
+    required this.gradeKey,
+    required this.courseKey,
     required this.courseLabel,
     required this.gradeLabel,
     required this.semesterLabel,
@@ -377,6 +395,9 @@ class ProblemBankQuestion {
   final bool objectiveGenerated;
   final String curriculumCode;
   final String sourceTypeCode;
+  final String schoolLevel;
+  final String gradeKey;
+  final String courseKey;
   final String courseLabel;
   final String gradeLabel;
   final int? examYear;
@@ -487,6 +508,9 @@ class ProblemBankQuestion {
     List<String>? flags,
     String? curriculumCode,
     String? sourceTypeCode,
+    String? schoolLevel,
+    String? gradeKey,
+    String? courseKey,
     String? courseLabel,
     String? gradeLabel,
     int? examYear,
@@ -525,6 +549,9 @@ class ProblemBankQuestion {
       objectiveGenerated: objectiveGenerated ?? this.objectiveGenerated,
       curriculumCode: curriculumCode ?? this.curriculumCode,
       sourceTypeCode: sourceTypeCode ?? this.sourceTypeCode,
+      schoolLevel: schoolLevel ?? this.schoolLevel,
+      gradeKey: gradeKey ?? this.gradeKey,
+      courseKey: courseKey ?? this.courseKey,
       courseLabel: courseLabel ?? this.courseLabel,
       gradeLabel: gradeLabel ?? this.gradeLabel,
       examYear: examYear ?? this.examYear,
@@ -576,6 +603,9 @@ class ProblemBankQuestion {
         .toList(growable: false);
     final sourceRaw = _mapOrEmpty(meta['source_classification']);
     final naesin = _mapOrEmpty(sourceRaw['naesin']);
+    final textbookCourse = _mapOrEmpty(
+      sourceRaw['textbook_course'] ?? meta['textbook_course'],
+    );
     final privateMaterial = sourceRaw['private_material'] == true;
     final mockPast = sourceRaw['mock_past_exam'] == true;
     final schoolPast = sourceRaw['school_past_exam'] == true;
@@ -627,6 +657,12 @@ class ProblemBankQuestion {
           '${map['source_type_code'] ?? fallbackSourceType}'.trim().isEmpty
               ? fallbackSourceType
               : '${map['source_type_code']}',
+      schoolLevel:
+          '${map['school_level'] ?? sourceRaw['school_level'] ?? ''}'.trim(),
+      gradeKey:
+          '${map['grade_key'] ?? textbookCourse['grade_key'] ?? ''}'.trim(),
+      courseKey:
+          '${map['course_key'] ?? textbookCourse['course_key'] ?? ''}'.trim(),
       courseLabel: '${map['course_label'] ?? ''}'.trim(),
       gradeLabel: '${map['grade_label'] ?? naesin['grade'] ?? ''}'.trim(),
       examYear: _intOrNull(map['exam_year']) ?? _intOrNull(naesin['year']),
@@ -1040,6 +1076,27 @@ class AnswerPart {
 
 /// [ProblemBankQuestion] 편의 확장. `meta`에 저장된 세트형 관련 정보를 바로 읽는다.
 extension ProblemBankQuestionSetExtension on ProblemBankQuestion {
+  Map<String, dynamic> get setModel {
+    final raw = meta['set_model'];
+    if (raw is Map) {
+      return Map<String, dynamic>.from(
+        raw.map((key, value) => MapEntry('$key', value)),
+      );
+    }
+    return const <String, dynamic>{};
+  }
+
+  String get setType => '${setModel['set_type'] ?? ''}'.trim();
+
+  bool get isIndependentSetItem => setType == 'independent_set';
+
+  String get setCommonStem =>
+      '${setModel['common_stem'] ?? setModel['commonStem'] ?? ''}'.trim();
+
+  String get setItemLabel =>
+      '${setModel['item_label'] ?? setModel['itemLabel'] ?? questionNumber}'
+          .trim();
+
   /// 워커가 추출 단계에서 세트형으로 판정했는지 (`meta['is_set_question'] == true`).
   /// 모델 직접 저장 필드로 승격하지 않은 이유는 과거 데이터 호환이다.
   bool get isSetQuestion => meta['is_set_question'] == true;

@@ -563,6 +563,9 @@ function buildClassificationFromDocument(doc) {
     source_type_code: rawSourceType === ''
       ? ''
       : normalizeSourceTypeCode(rawSourceType, 'school_past'),
+    school_level: normalizeWhitespace(doc?.school_level || ''),
+    grade_key: normalizeWhitespace(doc?.grade_key || ''),
+    course_key: normalizeWhitespace(doc?.course_key || ''),
     course_label: normalizeWhitespace(doc?.course_label || ''),
     grade_label: normalizeWhitespace(
       doc?.grade_label || naesinRaw.grade || '',
@@ -623,6 +626,24 @@ function collectSetSubLabels(row) {
   return labels.length > 0 ? labels : [''];
 }
 
+function setModelOf(row) {
+  const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
+  return meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+}
+
+function commonStemOfSetRow(row) {
+  const setModel = setModelOf(row);
+  const modelCommon = normalizeWhitespace(setModel.common_stem || setModel.commonStem);
+  if (modelCommon) return modelCommon;
+  return String(row?.stem || '');
+}
+
+function setItemLabelOf(row, fallback = '') {
+  const setModel = setModelOf(row);
+  const label = normalizeWhitespace(setModel.item_label || setModel.itemLabel || fallback);
+  return label || fallback;
+}
+
 async function reconcileQuestionSetDeliveryUnits({
   academyId,
   documentId,
@@ -641,6 +662,113 @@ async function reconcileQuestionSetDeliveryUnits({
     let items = 0;
     let deliveryUnits = 0;
     const deliveryRows = [];
+    const independentGroups = new Map();
+    const groupedIndependentQuestionIds = new Set();
+
+    for (const row of allRows) {
+      const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
+      if (meta.is_set_question !== true) continue;
+      const setModel = setModelOf(row);
+      const setType = normalizePbSetType(setModel.set_type, { hasPdfSource, meta });
+      if (setType !== 'independent_set') continue;
+      const questionId = normalizeWhitespace(row?.id || '');
+      if (!questionId) continue;
+      const rawKey = normalizeWhitespace(setModel.set_key || setModel.setKey);
+      const commonStem = commonStemOfSetRow(row);
+      const setKey = rawKey || `independent:${normalizeWhitespace(row?.document_id || documentId)}:${normalizeWhitespace(commonStem).slice(0, 80)}`;
+      const group = independentGroups.get(setKey) || {
+        setKey,
+        commonStem,
+        rows: [],
+      };
+      if (!group.commonStem && commonStem) group.commonStem = commonStem;
+      group.rows.push(row);
+      independentGroups.set(setKey, group);
+    }
+
+    for (const group of independentGroups.values()) {
+      if (group.rows.length < 1) continue;
+      const first = group.rows[0];
+      const questionNumber = normalizeWhitespace(first?.question_number || '');
+      const questionUid = normalizeWhitespace(first?.question_uid || '');
+      const { data: setRow, error: setErr } = await supa
+        .from('pb_question_sets')
+        .insert({
+          academy_id: academyId,
+          source_document_id: documentId,
+          set_key: group.setKey,
+          set_type: 'independent_set',
+          common_stem: group.commonStem || '',
+          render_policy: {
+            version: 1,
+            mode: 'common_stem_with_selectable_items',
+          },
+          source_meta: {
+            question_id: normalizeWhitespace(first?.id || ''),
+            question_uid: questionUid,
+            question_number: questionNumber,
+            compatibility_row: false,
+          },
+        })
+        .select('id')
+        .single();
+      if (setErr || !setRow?.id) {
+        throw new Error(`pb_question_set_insert_failed:${setErr?.message || 'no_id'}`);
+      }
+      sets += 1;
+
+      const itemRows = group.rows.map((row, idx) => ({
+        academy_id: academyId,
+        set_id: setRow.id,
+        question_id: normalizeWhitespace(row?.id || ''),
+        question_uid: normalizeWhitespace(row?.question_uid || '') || null,
+        sub_label: setItemLabelOf(row, normalizeWhitespace(row?.question_number || '')),
+        item_order: idx + 1,
+        dependency_group_key: `item:${idx + 1}`,
+        item_role: 'item',
+        meta: {
+          compatibility_question_number: normalizeWhitespace(row?.question_number || ''),
+        },
+      }));
+      const { data: insertedItems, error: itemErr } = await supa
+        .from('pb_question_set_items')
+        .insert(itemRows)
+        .select('id,sub_label,item_order,dependency_group_key,question_id');
+      if (itemErr) {
+        throw new Error(`pb_question_set_items_insert_failed:${itemErr.message}`);
+      }
+      const realItems = Array.isArray(insertedItems) ? insertedItems : [];
+      items += realItems.length;
+
+      for (let idx = 0; idx < group.rows.length; idx += 1) {
+        const row = group.rows[idx];
+        const item = realItems[idx] || {};
+        const questionId = normalizeWhitespace(row?.id || '');
+        const questionUid = normalizeWhitespace(row?.question_uid || '');
+        groupedIndependentQuestionIds.add(questionId);
+        deliveryRows.push({
+          academy_id: academyId,
+          source_document_id: documentId,
+          set_id: setRow.id,
+          question_id: questionId,
+          delivery_key: `${documentId}:set:${setRow.id}:item:${item.id || idx + 1}`,
+          delivery_type: 'independent_item',
+          title: setItemLabelOf(row, normalizeWhitespace(row?.question_number || '')),
+          selectable: true,
+          item_refs: [{
+            set_item_id: item.id || null,
+            question_id: questionId,
+            question_uid: questionUid,
+            sub_label: setItemLabelOf(row, normalizeWhitespace(row?.question_number || '')),
+          }],
+          render_policy: { version: 1, mode: 'common_stem_plus_item' },
+          source_meta: {
+            set_type: 'independent_set',
+            question_number: normalizeWhitespace(row?.question_number || ''),
+          },
+        });
+      }
+    }
 
     for (const row of allRows) {
       const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
@@ -649,6 +777,7 @@ async function reconcileQuestionSetDeliveryUnits({
       const questionNumber = normalizeWhitespace(row?.question_number || '');
       const questionUid = normalizeWhitespace(row?.question_uid || '');
       if (!questionId) continue;
+      if (groupedIndependentQuestionIds.has(questionId)) continue;
 
       if (!isSet) {
         deliveryRows.push({
@@ -676,7 +805,7 @@ async function reconcileQuestionSetDeliveryUnits({
           source_document_id: documentId,
           set_key: setKey,
           set_type: setType,
-          common_stem: String(row?.stem || ''),
+          common_stem: commonStemOfSetRow(row),
           render_policy: {
             version: 1,
             mode: setType === 'independent_set'
@@ -4521,6 +4650,9 @@ function buildQuestionWritePayload({
     objective_generated: question.objective_generated === true,
     curriculum_code: classification.curriculum_code,
     source_type_code: classification.source_type_code,
+    school_level: classification.school_level,
+    grade_key: classification.grade_key,
+    course_key: classification.course_key,
     course_label: classification.course_label,
     grade_label: classification.grade_label,
     exam_year: classification.exam_year,
@@ -4762,6 +4894,9 @@ async function processOneJob(job) {
         'meta',
         'curriculum_code',
         'source_type_code',
+        'school_level',
+        'grade_key',
+        'course_key',
         'course_label',
         'grade_label',
         'exam_year',
@@ -5063,8 +5198,16 @@ async function processOneJob(job) {
   const { questions, stats } = built;
   const dualModeStats = dualModeResult.stats || {};
   const nowIso = new Date().toISOString();
+  const jobSummary =
+    job?.result_summary && typeof job.result_summary === 'object'
+      ? job.result_summary
+      : {};
   const targetQuestionIds = normalizeTargetQuestionIdsFromJob(job);
   const partialReextract = targetQuestionIds.length > 0;
+  const textbookPageScoped =
+    partialReextract === false &&
+    hasPdfSource &&
+    jobSummary.textbook_page_scoped === true;
   let figureJobsQueued = 0;
   let figureJobSeedError = '';
   let partialUpdatedCount = 0;
@@ -5188,6 +5331,53 @@ async function processOneJob(job) {
     }
     partialUpdatedCount = updateRows.length;
     partialUpdatedQuestionIds = updateRows.map((row) => row.id);
+  } else if (textbookPageScoped) {
+    const scopedQuestionNumbers = Array.from(
+      new Set(
+        questions
+          .map((q) => normalizeWhitespace(q?.question_number || ''))
+          .filter(Boolean),
+      ),
+    );
+    if (scopedQuestionNumbers.length === 0) {
+      throw new Error('page_scoped_extract_no_question_numbers');
+    }
+    const { error: scopedDeleteErr } = await supa
+      .from('pb_questions')
+      .delete()
+      .eq('academy_id', job.academy_id)
+      .eq('document_id', job.document_id)
+      .in('question_number', scopedQuestionNumbers);
+    if (scopedDeleteErr) {
+      throw new Error(`page_scoped_question_delete_failed:${scopedDeleteErr.message}`);
+    }
+    const insertedIds = [];
+    const chunkSize = 300;
+    for (let i = 0; i < questions.length; i += chunkSize) {
+      const chunk = questions.slice(i, i + chunkSize).map((q) =>
+        buildQuestionWritePayload({
+          question: q,
+          classification,
+          academyId: job.academy_id,
+          documentId: job.document_id,
+          extractJobId: job.id,
+          questionUid: consumeQuestionUidByQuestionNumber(q.question_number),
+        }),
+      );
+      const { data: inserted, error: insertErr } = await supa
+        .from('pb_questions')
+        .insert(chunk)
+        .select('id');
+      if (insertErr) {
+        throw new Error(`page_scoped_question_insert_failed:${insertErr.message}`);
+      }
+      for (const row of inserted || []) {
+        const id = normalizeWhitespace(row?.id || '');
+        if (id) insertedIds.push(id);
+      }
+    }
+    partialUpdatedCount = insertedIds.length;
+    partialUpdatedQuestionIds = insertedIds;
   } else {
     await supa.from('pb_questions').delete().eq('document_id', job.document_id);
     // 이 document 의 과거 figure_job 잔재 (queued / processing / succeeded / failed 모두)
@@ -5505,6 +5695,7 @@ async function processOneJob(job) {
     examProfileDetected: stats.examProfile,
     reviewThreshold: REVIEW_CONFIDENCE_THRESHOLD,
     partialReextract,
+    textbookPageScoped,
     partialTargetCount: targetQuestionIds.length,
     partialUpdatedCount,
     partialLowConfidenceCount,
@@ -5555,6 +5746,9 @@ async function processOneJob(job) {
       status: docStatus,
       curriculum_code: classification.curriculum_code,
       source_type_code: classification.source_type_code,
+      school_level: classification.school_level,
+      grade_key: classification.grade_key,
+      course_key: classification.course_key,
       course_label: classification.course_label,
       grade_label: classification.grade_label,
       exam_year: classification.exam_year,
@@ -5575,7 +5769,9 @@ async function processOneJob(job) {
   return {
     jobStatus,
     docStatus,
-    questionCount: partialReextract ? partialUpdatedCount : questions.length,
+    questionCount: partialReextract || textbookPageScoped
+      ? partialUpdatedCount
+      : questions.length,
     lowConfidenceCount: partialReextract
       ? partialLowConfidenceCount
       : stats.lowConfidenceCount,

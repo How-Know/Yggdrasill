@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 
 import '../../models/education_level.dart';
+import '../../models/student_flow.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
@@ -57,6 +58,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   String? _academyId;
   bool _isInitializing = true;
   bool _isLoadingSchools = false;
+  bool _isLoadingPrivateMaterialPages = false;
   bool _isLoadingQuestions = false;
   bool _isExporting = false;
   bool _isSavingExportLocally = false;
@@ -73,6 +75,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       const <LearningProblemDocumentSummary>[];
   int _sidebarRevision = 0;
   String? _selectedDocumentId;
+  List<_PrivateMaterialOption> _privateMaterialOptions =
+      const <_PrivateMaterialOption>[];
+  String _selectedPrivateMaterialKey = '';
+  List<ProblemBankPrivateMaterialBigNode> _privateMaterialUnits =
+      const <ProblemBankPrivateMaterialBigNode>[];
+  Set<String> _selectedPrivateMaterialPageKeys = <String>{};
+  String _privateMaterialEmptyMessage = '교재를 선택한 뒤 페이지를 체크해 주세요.';
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
@@ -238,7 +247,67 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       });
     }
     await _reloadSidebarDocuments();
+    if (_isPrivateMaterialSource) {
+      await _reloadPrivateMaterialPageTree();
+    }
     await _reloadQuestions(resetSelection: resetSelection);
+  }
+
+  bool get _isPrivateMaterialSource =>
+      _selectedSourceTypeCode == 'private_material';
+
+  _PrivateMaterialOption? get _selectedPrivateMaterialOption {
+    final key = _selectedPrivateMaterialKey.trim();
+    if (key.isEmpty) return null;
+    for (final option in _privateMaterialOptions) {
+      if (option.key == key) return option;
+    }
+    return null;
+  }
+
+  String _selectedPrivateMaterialDropdownValue() {
+    if (_privateMaterialOptions.isEmpty) return '';
+    if (_privateMaterialOptions
+        .any((m) => m.key == _selectedPrivateMaterialKey)) {
+      return _selectedPrivateMaterialKey;
+    }
+    return _privateMaterialOptions.first.key;
+  }
+
+  List<_PrivateMaterialOption> _buildPrivateMaterialOptions(
+    List<LearningProblemDocumentSummary> docs,
+  ) {
+    final byKey = <String, _PrivateMaterialOptionBuilder>{};
+    for (final doc in docs) {
+      final bookId = doc.textbookBookId.trim();
+      final key = bookId.isNotEmpty
+          ? 'book:$bookId|grade:${doc.gradeLabel.trim()}'
+          : 'doc:${doc.id}';
+      final builder = byKey.putIfAbsent(
+        key,
+        () => _PrivateMaterialOptionBuilder(
+          key: key,
+          bookId: bookId,
+          gradeLabel: doc.gradeLabel.trim(),
+          label: _privateMaterialLabelOf(doc),
+        ),
+      );
+      builder.documentIds.add(doc.id);
+      if (builder.label.trim().isEmpty) {
+        builder.label = _privateMaterialLabelOf(doc);
+      }
+    }
+    final options = byKey.values.map((b) => b.toOption()).toList();
+    options.sort((a, b) => a.label.compareTo(b.label));
+    return options;
+  }
+
+  String _privateMaterialLabelOf(LearningProblemDocumentSummary doc) {
+    final material = doc.materialName.trim();
+    if (material.isNotEmpty) return material;
+    final source = doc.sourceFilename.trim();
+    if (source.isNotEmpty) return source;
+    return doc.displayTitle;
   }
 
   Future<void> _reloadSidebarDocuments() async {
@@ -257,9 +326,28 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       if (!mounted) return;
       setState(() {
         _sidebarDocuments = docs;
-        if (_selectedDocumentId == null ||
-            !docs.any((d) => d.id == _selectedDocumentId)) {
-          _selectedDocumentId = docs.isNotEmpty ? docs.first.id : null;
+        if (_isPrivateMaterialSource) {
+          final options = _buildPrivateMaterialOptions(docs);
+          final previousMaterialKey = _selectedPrivateMaterialKey;
+          _privateMaterialOptions = options;
+          if (!options.any((m) => m.key == _selectedPrivateMaterialKey)) {
+            _selectedPrivateMaterialKey =
+                options.isNotEmpty ? options.first.key : '';
+          }
+          if (previousMaterialKey != _selectedPrivateMaterialKey) {
+            _selectedPrivateMaterialPageKeys = <String>{};
+            _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
+          }
+          _selectedDocumentId = null;
+        } else {
+          _privateMaterialOptions = const <_PrivateMaterialOption>[];
+          _selectedPrivateMaterialKey = '';
+          _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
+          _selectedPrivateMaterialPageKeys = <String>{};
+          if (_selectedDocumentId == null ||
+              !docs.any((d) => d.id == _selectedDocumentId)) {
+            _selectedDocumentId = docs.isNotEmpty ? docs.first.id : null;
+          }
         }
       });
     } catch (e) {
@@ -273,6 +361,268 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
   }
 
+  Future<void> _reloadPrivateMaterialPageTree() async {
+    final selected = _selectedPrivateMaterialOption;
+    if (!_isPrivateMaterialSource || selected == null) return;
+    if (selected.bookId.trim().isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
+        _selectedPrivateMaterialPageKeys = <String>{};
+        _privateMaterialEmptyMessage = '이 교재는 교재 단원 트리와 연결된 book_id가 없습니다.';
+      });
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _isLoadingPrivateMaterialPages = true;
+      });
+    }
+    try {
+      final metadataRow =
+          await DataManager.instance.loadTextbookMetadataPayload(
+        bookId: selected.bookId,
+        gradeLabel: selected.gradeLabel,
+      );
+      final questionLinkRows = await _service.loadQuestionLinkRowsForDocuments(
+        academyId: _academyId!,
+        documentIds: selected.documentIds,
+      );
+      if (!mounted) return;
+      final units = _buildPrivateMaterialUnitTreeFromMetadata(
+        _mapFromDynamic(metadataRow?['payload']),
+        questionLinkRows: questionLinkRows,
+      );
+      final existingPageKeys = _collectPrivateMaterialPageKeys(units);
+      setState(() {
+        _privateMaterialUnits = units;
+        _selectedPrivateMaterialPageKeys = _selectedPrivateMaterialPageKeys
+            .where(existingPageKeys.contains)
+            .toSet();
+        _privateMaterialEmptyMessage = metadataRow == null
+            ? '이 교재에 연결된 단원 메타데이터가 없습니다.'
+            : '선택한 교재 범위에 연결된 PB 문항이 없습니다.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
+        _selectedPrivateMaterialPageKeys = <String>{};
+        _privateMaterialEmptyMessage = '교재 단원 트리 조회 실패: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPrivateMaterialPages = false;
+        });
+      }
+    }
+  }
+
+  Set<String> _collectPrivateMaterialPageKeys(
+    List<ProblemBankPrivateMaterialBigNode> units,
+  ) {
+    return <String>{
+      for (final big in units)
+        for (final mid in big.mids)
+          for (final small in mid.smalls)
+            for (final page in small.pages) page.key,
+    };
+  }
+
+  List<ProblemBankPrivateMaterialBigNode>
+      _buildPrivateMaterialUnitTreeFromMetadata(
+    Map<String, dynamic> payload, {
+    required List<Map<String, dynamic>> questionLinkRows,
+  }) {
+    final questionsByPage =
+        _buildPrivateMaterialQuestionRefsByPage(questionLinkRows);
+    if (questionsByPage.isEmpty) {
+      return const <ProblemBankPrivateMaterialBigNode>[];
+    }
+    final unitsRaw = payload['units'];
+    if (unitsRaw is! List) return const <ProblemBankPrivateMaterialBigNode>[];
+
+    final bigBuilders = <String, _PrivateMaterialBigBuilder>{};
+    for (var bigIndex = 0; bigIndex < unitsRaw.length; bigIndex += 1) {
+      final bigMap = _mapFromDynamic(unitsRaw[bigIndex]);
+      if (bigMap.isEmpty) continue;
+      final bigOrder = _metadataOrderIndex(bigMap['order_index'], bigIndex);
+      final bigName = '${bigMap['name'] ?? ''}'.trim();
+      final big = bigBuilders.putIfAbsent(
+        '$bigOrder|$bigName',
+        () => _PrivateMaterialBigBuilder(
+          order: bigOrder,
+          title: bigName.isNotEmpty ? bigName : '대단원 ${bigOrder + 1}',
+        ),
+      );
+
+      final midsRaw = bigMap['middles'];
+      if (midsRaw is! List) continue;
+      for (var midIndex = 0; midIndex < midsRaw.length; midIndex += 1) {
+        final midMap = _mapFromDynamic(midsRaw[midIndex]);
+        if (midMap.isEmpty) continue;
+        final midOrder = _metadataOrderIndex(midMap['order_index'], midIndex);
+        final midName = '${midMap['name'] ?? ''}'.trim();
+        final mid = big.mids.putIfAbsent(
+          '$midOrder|$midName',
+          () => _PrivateMaterialMidBuilder(
+            order: midOrder,
+            title: midName.isNotEmpty ? midName : '중단원 ${midOrder + 1}',
+          ),
+        );
+
+        final smallsRaw = midMap['smalls'];
+        if (smallsRaw is! List) continue;
+        for (var smallIndex = 0;
+            smallIndex < smallsRaw.length;
+            smallIndex += 1) {
+          final smallMap = _mapFromDynamic(smallsRaw[smallIndex]);
+          if (smallMap.isEmpty) continue;
+          final smallOrder =
+              _metadataOrderIndex(smallMap['order_index'], smallIndex);
+          final subKey = _fallbackPrivateMaterialSubKey(
+            '${smallMap['sub_key'] ?? ''}',
+            smallOrder,
+          );
+          final smallName = '${smallMap['name'] ?? ''}'.trim();
+          final small = mid.smalls.putIfAbsent(
+            '$smallOrder|$subKey|$smallName',
+            () => _PrivateMaterialSmallBuilder(
+              order: smallOrder,
+              subKey: subKey,
+              title: smallName.isNotEmpty ? smallName : '소단원',
+            ),
+          );
+
+          final pages = _metadataPagesForSmall(smallMap);
+          final visiblePages = pages
+              .where((page) => questionsByPage.containsKey(page))
+              .toList(growable: false)
+            ..sort();
+          for (final pageNumber in visiblePages) {
+            final refs = questionsByPage[pageNumber] ?? const [];
+            if (refs.isEmpty) continue;
+            final page = small.pages.putIfAbsent(
+              '$bigOrder|$midOrder|$subKey|$pageNumber',
+              () => _PrivateMaterialPageBuilder(
+                key: '$bigOrder|$midOrder|$subKey|$pageNumber',
+                displayPage: pageNumber,
+                rawPage: pageNumber,
+              ),
+            );
+            for (final ref in refs) {
+              page.addQuestion(ref.questionUid, ref.problemNumber);
+            }
+          }
+        }
+      }
+    }
+
+    final bigs = bigBuilders.values.toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return bigs.map((b) => b.toNode()).where((b) => b.mids.isNotEmpty).toList();
+  }
+
+  Map<int, List<_PrivateMaterialPageQuestionRef>>
+      _buildPrivateMaterialQuestionRefsByPage(
+    List<Map<String, dynamic>> questionRows,
+  ) {
+    final out = <int, List<_PrivateMaterialPageQuestionRef>>{};
+    for (final row in questionRows) {
+      final questionUid = '${row['question_uid'] ?? row['id'] ?? ''}'.trim();
+      if (questionUid.isEmpty) continue;
+      final questionNumber = _normalizePrivateMaterialProblemNumber(
+        '${row['question_number'] ?? ''}',
+      );
+      final meta = _mapFromDynamic(row['meta']);
+      final vlmMeta = _mapFromDynamic(meta['vlm']);
+      final cropPageMeta = _mapFromDynamic(meta['textbook_crop_page']);
+      final pageCandidates = <int>{
+        if ((_intFromDynamic(row['source_page']) ?? 0) > 0)
+          _intFromDynamic(row['source_page'])!,
+        if ((_intFromDynamic(vlmMeta['source_page']) ?? 0) > 0)
+          _intFromDynamic(vlmMeta['source_page'])!,
+        if ((_intFromDynamic(cropPageMeta['display_page']) ?? 0) > 0)
+          _intFromDynamic(cropPageMeta['display_page'])!,
+        if ((_intFromDynamic(cropPageMeta['raw_page']) ?? 0) > 0)
+          _intFromDynamic(cropPageMeta['raw_page'])!,
+      };
+      if (pageCandidates.isEmpty) continue;
+      final sourceOrder = _intFromDynamic(row['source_order']) ?? 1 << 20;
+      for (final page in pageCandidates) {
+        final refs =
+            out.putIfAbsent(page, () => <_PrivateMaterialPageQuestionRef>[]);
+        if (refs.any((ref) => ref.questionUid == questionUid)) continue;
+        refs.add(
+          _PrivateMaterialPageQuestionRef(
+            questionUid: questionUid,
+            problemNumber: questionNumber,
+            insertionOrder: sourceOrder,
+          ),
+        );
+      }
+    }
+    return out;
+  }
+
+  Set<int> _metadataPagesForSmall(Map<String, dynamic> smallMap) {
+    final pages = <int>{};
+    final start = _intFromDynamic(smallMap['start_page']);
+    final end = _intFromDynamic(smallMap['end_page']);
+    if (start != null && end != null && start > 0 && end >= start) {
+      for (var page = start; page <= end; page += 1) {
+        pages.add(page);
+      }
+    } else if (start != null && start > 0) {
+      pages.add(start);
+    }
+    final pageCounts = smallMap['page_counts'];
+    if (pageCounts is Map) {
+      for (final key in pageCounts.keys) {
+        final page = _intFromDynamic(key);
+        if (page != null && page > 0) pages.add(page);
+      }
+    }
+    return pages;
+  }
+
+  int _metadataOrderIndex(dynamic value, int fallback) {
+    return _intFromDynamic(value) ?? fallback;
+  }
+
+  String _fallbackPrivateMaterialSubKey(String raw, int orderIndex) {
+    final trimmed = raw.trim();
+    if (trimmed.isNotEmpty) return trimmed;
+    if (orderIndex >= 0 && orderIndex < 26) {
+      return String.fromCharCode('A'.codeUnitAt(0) + orderIndex);
+    }
+    return '';
+  }
+
+  Map<String, dynamic> _mapFromDynamic(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) {
+      return raw.map((key, value) => MapEntry('$key', value));
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _normalizePrivateMaterialProblemNumber(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final match = RegExp(r'\d+').firstMatch(trimmed);
+    if (match == null) return trimmed;
+    return '${int.tryParse(match.group(0) ?? '') ?? match.group(0)}';
+  }
+
+  int? _intFromDynamic(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value');
+  }
+
   Future<void> _reloadQuestions({
     required bool resetSelection,
   }) async {
@@ -281,20 +631,31 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _isLoadingQuestions = true;
     });
     try {
-      final fetched = await _service.searchQuestions(
-        academyId: _academyId!,
-        curriculumCode: _selectedCurriculumCode,
-        schoolLevel: _selectedSchoolLevel,
-        detailedCourse: _selectedDetailedCourse,
-        sourceTypeCode: _selectedSourceTypeCode,
-        documentId: _selectedDocumentId,
-      );
-      final defaultSorted = _sortedQuestionsByDefaultOrder(fetched);
-      final scopeKey = _questionOrderScopeKey();
-      final questions = await _applyPersistedQuestionOrder(
-        defaultSorted,
-        scopeKey: scopeKey,
-      );
+      final List<LearningProblemQuestion> questions;
+      if (_isPrivateMaterialSource) {
+        final questionUids = _selectedPrivateMaterialQuestionUids();
+        questions = questionUids.isEmpty
+            ? const <LearningProblemQuestion>[]
+            : await _service.loadQuestionsByQuestionUids(
+                academyId: _academyId!,
+                questionUids: questionUids,
+              );
+      } else {
+        final fetched = await _service.searchQuestions(
+          academyId: _academyId!,
+          curriculumCode: _selectedCurriculumCode,
+          schoolLevel: _selectedSchoolLevel,
+          detailedCourse: _selectedDetailedCourse,
+          sourceTypeCode: _selectedSourceTypeCode,
+          documentId: _selectedDocumentId,
+        );
+        final defaultSorted = _sortedQuestionsByDefaultOrder(fetched);
+        final scopeKey = _questionOrderScopeKey();
+        questions = await _applyPersistedQuestionOrder(
+          defaultSorted,
+          scopeKey: scopeKey,
+        );
+      }
       if (!mounted) return;
       final aliveIds = questions.map((e) => e.id).toSet();
       final nextQuestionModes = <String, String>{};
@@ -349,6 +710,29 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
   }
 
+  List<String> _selectedPrivateMaterialQuestionUids() {
+    if (!_isPrivateMaterialSource || _selectedPrivateMaterialPageKeys.isEmpty) {
+      return const <String>[];
+    }
+    final out = <String>[];
+    final seen = <String>{};
+    for (final big in _privateMaterialUnits) {
+      for (final mid in big.mids) {
+        for (final small in mid.smalls) {
+          for (final page in small.pages) {
+            if (!_selectedPrivateMaterialPageKeys.contains(page.key)) continue;
+            for (final uid in page.questionUids) {
+              final safeUid = uid.trim();
+              if (safeUid.isEmpty || !seen.add(safeUid)) continue;
+              out.add(safeUid);
+            }
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   List<LearningProblemQuestion> _sortedQuestionsByDefaultOrder(
     List<LearningProblemQuestion> source,
   ) {
@@ -389,7 +773,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       enc(_selectedSchoolLevel),
       enc(_selectedDetailedCourse),
       enc(_selectedSourceTypeCode),
-      enc((_selectedDocumentId ?? '').trim()),
+      enc(_isPrivateMaterialSource
+          ? _selectedPrivateMaterialKey
+          : (_selectedDocumentId ?? '').trim()),
     ].join('|');
   }
 
@@ -614,14 +1000,49 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (value == null || value == _selectedSourceTypeCode) return;
     setState(() {
       _selectedSourceTypeCode = value;
+      _selectedPrivateMaterialKey = '';
+      _selectedPrivateMaterialPageKeys = <String>{};
+      _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
     });
     await _reloadSchoolsAndQuestions(resetSelection: true);
+  }
+
+  Future<void> _onPrivateMaterialChanged(String? value) async {
+    final next = (value ?? '').trim();
+    if (next == _selectedPrivateMaterialKey) return;
+    setState(() {
+      _selectedPrivateMaterialKey = next;
+      _selectedPrivateMaterialPageKeys = <String>{};
+      _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
+      _selectedQuestionIds.clear();
+      _showOnlySelectedQuestions = false;
+    });
+    await _reloadPrivateMaterialPageTree();
+    await _reloadQuestions(resetSelection: true);
   }
 
   Future<void> _onSidebarDocumentSelected(String documentId) async {
     if (documentId == _selectedDocumentId) return;
     setState(() {
       _selectedDocumentId = documentId;
+    });
+    await _reloadQuestions(resetSelection: true);
+  }
+
+  Future<void> _onPrivateMaterialPageToggled(
+    String pageKey,
+    bool selected,
+  ) async {
+    setState(() {
+      final next = Set<String>.from(_selectedPrivateMaterialPageKeys);
+      if (selected) {
+        next.add(pageKey);
+      } else {
+        next.remove(pageKey);
+      }
+      _selectedPrivateMaterialPageKeys = next;
+      _selectedQuestionIds.clear();
+      _showOnlySelectedQuestions = false;
     });
     await _reloadQuestions(resetSelection: true);
   }
@@ -700,6 +1121,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   void _requestQuestionOrderSave() {
     final academyId = _academyId;
+    if (_isPrivateMaterialSource) return;
     if (academyId == null || academyId.isEmpty || _questions.isEmpty) return;
     _queuedQuestionOrderSave = _QuestionOrderSaveRequest(
       academyId: academyId,
@@ -1062,6 +1484,34 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         return patch;
       }
 
+      Map<String, dynamic> buildGeneratedAssignmentMetadata(
+        List<LearningProblemQuestion> questions, {
+        String assignmentFlowName = '',
+      }) {
+        if (questions.isEmpty) return const <String, dynamic>{};
+        final first = questions.first;
+        final bookLabel = first.materialName.trim().isNotEmpty
+            ? first.materialName.trim()
+            : (first.schoolName.trim().isNotEmpty
+                ? first.schoolName.trim()
+                : first.documentId.trim());
+        final gradeLabel = first.gradeLabel.trim();
+        final courseLabel = first.courseLabel.trim();
+        return <String, dynamic>{
+          'presetKind': 'assignment',
+          'assignmentLibraryKind': 'generated_assignment',
+          'assignmentBookLabel': bookLabel,
+          'assignmentGradeLabel': gradeLabel,
+          'assignmentCourseLabel': courseLabel,
+          'assignmentSchoolName': first.schoolName.trim(),
+          'assignmentQuestionCount': questions.length,
+          if (assignmentFlowName.trim().isNotEmpty)
+            'assignmentFlowName': StudentFlow.normalizeName(
+              assignmentFlowName.trim(),
+            ),
+        };
+      }
+
       final academyId = _academyId;
       final selectedDocumentIds = selected
           .map((q) => q.documentId.trim())
@@ -1325,6 +1775,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         ),
         initialEditingPresetId: editingPresetId,
         initialEditingPresetName: editingPresetName,
+        assignmentFlowNames: StudentFlow.defaultNames,
         onRefreshRequested: (request) async {
           final nextSettings = _exportSettings.copyWith(
             includeAcademyLogo: request.includeAcademyLogo,
@@ -1560,6 +2011,67 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             );
           } catch (e) {
             _showSnack('세팅 저장 실패: $e');
+          }
+        },
+        onCreateAssignmentRequested: (request) async {
+          final academyId = _academyId;
+          if (academyId == null || academyId.isEmpty) {
+            _showSnack('학원 정보가 없어 과제 생성을 진행할 수 없습니다.');
+            return;
+          }
+          final orderedQuestionUids =
+              _selectedQuestionUidsInCurrentOrder(selected);
+          if (orderedQuestionUids.isEmpty) {
+            _showSnack('과제로 저장할 문항이 없습니다.');
+            return;
+          }
+          final sourceDocumentId = selected.first.documentId.trim();
+          if (sourceDocumentId.isEmpty) {
+            _showSnack('원본 문서 정보를 찾지 못했습니다.');
+            return;
+          }
+          setState(() {
+            _exportSettings = _exportSettings.copyWith(
+              includeAcademyLogo: request.includeAcademyLogo,
+              timeLimitText: request.timeLimitText.trim(),
+              titlePageTopText: request.titlePageTopText.trim().isEmpty
+                  ? kLearningDefaultTitlePageTopText
+                  : request.titlePageTopText.trim(),
+              includeAnswerSheet: request.includeAnswerSheet,
+              includeExplanation: request.includeExplanation,
+              includeQuestionScore: request.includeQuestionScore,
+              questionScoreByQuestionId: request.questionScoreByQuestionId,
+            );
+            _previewMathEngine = normalizeMathEngineValue(request.mathEngine);
+          });
+          final renderPatch = buildRenderPatch(request);
+          final renderConfig = <String, dynamic>{
+            ..._buildRenderConfigForSelection(selected),
+            ...renderPatch,
+            ...buildGeneratedAssignmentMetadata(
+              selected,
+              assignmentFlowName: request.assignmentFlowName,
+            ),
+          };
+          try {
+            final result = await _service.createGeneratedAssignmentPreset(
+              academyId: academyId,
+              sourceDocumentId: sourceDocumentId,
+              selectedQuestionUidsOrdered: orderedQuestionUids,
+              questionModeByQuestionUid: _selectedModeMapForQuestions(selected),
+              renderConfig: renderConfig,
+              templateProfile: _exportSettings.templateProfile,
+              paperSize: _exportSettings.paperLabel,
+              includeAnswerSheet: request.includeAnswerSheet,
+              includeExplanation: request.includeExplanation,
+              displayName: request.presetDisplayName.trim(),
+            );
+            final count = result.selectedQuestionUids.isNotEmpty
+                ? result.selectedQuestionUids.length
+                : orderedQuestionUids.length;
+            _showSnack('미리 만든 과제 생성 완료 ($count문항)');
+          } catch (e) {
+            _showSnack('과제 생성 실패: $e');
           }
         },
       );
@@ -1908,6 +2420,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     required String examTerm,
     required String school,
     required int year,
+    String cellLabel = '',
   }) {
     return NaesinExamContext.buildNaesinLinkKey(
       gradeKey: gradeKey,
@@ -1915,6 +2428,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       examTerm: examTerm,
       school: school,
       year: year,
+      cellLabel: cellLabel,
     );
   }
 
@@ -1927,13 +2441,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       examTerm: parsed.examTerm,
       school: parsed.school,
       year: parsed.year,
+      cellLabel: parsed.cellLabel,
     );
   }
 
   String _naesinLinkSummaryLabel(String rawKey) {
-    final parsed = _parseNaesinLinkKey(rawKey);
-    if (parsed == null) return '';
-    return '${parsed.school} · ${parsed.year} · ${parsed.courseKey} · ${parsed.examTerm}';
+    return NaesinExamContext.linkSummaryLabel(rawKey);
   }
 
   List<_NaesinGradeOption> _naesinGradeOptionsForLevel(String level) {
@@ -2440,8 +2953,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
           final fallbackSchool = _fallbackNaesinSchoolFromSelectedDocument();
           var selectedSchool = existing?.school ?? fallbackSchool;
-          if (!NaesinExamContext.middleSchools.contains(selectedSchool)) {
-            selectedSchool = NaesinExamContext.middleSchools.first;
+          var selectedCellLabel = existing?.cellLabel ?? preset.naesinCellLabel;
+          selectedCellLabel = NaesinExamContext.normalizeCellLabel(
+            selectedCellLabel,
+          );
+          var schoolOptions =
+              NaesinExamContext.schoolsForGradeKey(selectedGradeKey);
+          if (!schoolOptions.contains(selectedSchool)) {
+            selectedSchool = schoolOptions.first;
           }
           var selectedYear = existing?.year ?? _defaultNaesinYearByDate(now);
           if (!NaesinExamContext.linkYears.contains(selectedYear)) {
@@ -2451,6 +2970,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final nextLinkKey = await showDialog<String>(
             context: dialogContext,
             builder: (ctx) {
+              final cellNameController = TextEditingController(
+                text: selectedCellLabel,
+              );
               return StatefulBuilder(
                 builder: (context, setLinkState) {
                   const fieldTextStyle = TextStyle(
@@ -2490,6 +3012,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       _naesinCourseOptionsForGrade(selectedGradeKey);
                   if (!courseOptions.any((e) => e.key == selectedCourseKey)) {
                     selectedCourseKey = courseOptions.first.key;
+                  }
+                  schoolOptions =
+                      NaesinExamContext.schoolsForGradeKey(selectedGradeKey);
+                  if (!schoolOptions.contains(selectedSchool)) {
+                    selectedSchool = schoolOptions.first;
                   }
                   return AlertDialog(
                     backgroundColor: _rsBg,
@@ -2541,10 +3068,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                         ),
                                     ],
                                     onChanged: (value) {
-                                      if (value == null || value.isEmpty)
+                                      if (value == null || value.isEmpty) {
                                         return;
+                                      }
                                       setLinkState(() {
                                         selectedGradeKey = value;
+                                        schoolOptions = NaesinExamContext
+                                            .schoolsForGradeKey(
+                                          selectedGradeKey,
+                                        );
+                                        if (!schoolOptions
+                                            .contains(selectedSchool)) {
+                                          selectedSchool = schoolOptions.first;
+                                        }
                                       });
                                     },
                                   ),
@@ -2568,8 +3104,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                         ),
                                     ],
                                     onChanged: (value) {
-                                      if (value == null || value.isEmpty)
+                                      if (value == null || value.isEmpty) {
                                         return;
+                                      }
                                       setLinkState(() {
                                         selectedCourseKey = value;
                                       });
@@ -2600,8 +3137,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                         ),
                                     ],
                                     onChanged: (value) {
-                                      if (value == null || value.isEmpty)
+                                      if (value == null || value.isEmpty) {
                                         return;
+                                      }
                                       setLinkState(() {
                                         selectedExamTerm = value;
                                       });
@@ -2645,8 +3183,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                               style: fieldTextStyle,
                               iconEnabledColor: _rsTextMuted,
                               items: [
-                                for (final option
-                                    in NaesinExamContext.middleSchools)
+                                for (final option in schoolOptions)
                                   DropdownMenuItem<String>(
                                     value: option,
                                     child: Text(
@@ -2661,6 +3198,24 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                   selectedSchool = value;
                                 });
                               },
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: cellNameController,
+                              style: fieldTextStyle,
+                              decoration: fieldDecoration(
+                                selectedGradeKey.startsWith('H')
+                                    ? '셀 이름 (예: 수학1, 수학2)'
+                                    : '셀 이름 (선택)',
+                              ).copyWith(
+                                hintText: selectedGradeKey.startsWith('H')
+                                    ? '같은 시험에 여러 수학 시험이 있으면 입력'
+                                    : '비워두면 기존 단일 셀로 저장',
+                                hintStyle: const TextStyle(
+                                  color: _rsTextMuted,
+                                  fontSize: 11.5,
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -2684,6 +3239,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       ),
                       FilledButton(
                         onPressed: () {
+                          final cellLabel =
+                              NaesinExamContext.normalizeCellLabel(
+                            cellNameController.text,
+                          );
                           Navigator.of(ctx).pop(
                             _buildNaesinLinkKey(
                               gradeKey: selectedGradeKey,
@@ -2691,6 +3250,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                               examTerm: selectedExamTerm,
                               school: selectedSchool,
                               year: selectedYear,
+                              cellLabel: cellLabel,
                             ),
                           );
                         },
@@ -2711,10 +3271,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             isWorking = true;
           });
           try {
+            final parsedNextLink =
+                nextLinkKey.isEmpty ? null : _parseNaesinLinkKey(nextLinkKey);
             final updated = await _service.updateExportPresetNaesinLink(
               academyId: academyId,
               presetId: preset.id,
               naesinLinkKey: nextLinkKey.isEmpty ? null : nextLinkKey,
+              naesinCellLabel: parsedNextLink?.cellLabel,
             );
             if (updated != null) {
               final next = presets
@@ -2954,6 +3517,20 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     selectedSourceTypeCode: _selectedSourceTypeCode,
                     sourceTypeLabels: _sourceTypeLabels,
                     onSourceTypeChanged: _onSourceTypeChanged,
+                    selectedPrivateMaterialKey:
+                        _selectedPrivateMaterialDropdownValue(),
+                    privateMaterialOptions: _privateMaterialOptions
+                        .map(
+                          (m) => DropdownMenuItem<String>(
+                            value: m.key,
+                            child: Text(
+                              m.label,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onPrivateMaterialChanged: _onPrivateMaterialChanged,
                     isBusy: busy || exportBusy,
                   ),
                 ),
@@ -3145,7 +3722,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             documents: _sidebarDocuments,
                             selectedDocumentId: _selectedDocumentId,
                             onDocumentSelected: _onSidebarDocumentSelected,
-                            isLoading: _isLoadingSchools,
+                            isLoading: _isLoadingSchools ||
+                                _isLoadingPrivateMaterialPages,
+                            privateMaterialUnits: _privateMaterialUnits,
+                            selectedPrivateMaterialPageKeys:
+                                _selectedPrivateMaterialPageKeys,
+                            onPrivateMaterialPageToggled:
+                                _onPrivateMaterialPageToggled,
+                            privateMaterialTitle:
+                                _selectedPrivateMaterialOption?.label ?? '',
+                            privateMaterialEmptyMessage:
+                                _privateMaterialEmptyMessage,
                           ),
                         ),
                       ),
@@ -3225,11 +3812,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       );
     }
     if (_questions.isEmpty) {
-      return const Center(
+      final privateMessage = _privateMaterialQuestionEmptyMessage();
+      return Center(
         child: Text(
-          '조건에 맞는 문항이 없습니다.\n필터나 학교를 변경해 주세요.',
+          privateMessage ?? '조건에 맞는 문항이 없습니다.\n필터나 학교를 변경해 주세요.',
           textAlign: TextAlign.center,
-          style: TextStyle(
+          style: const TextStyle(
             color: _rsTextMuted,
             fontWeight: FontWeight.w700,
             height: 1.5,
@@ -3339,6 +3927,23 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       },
     );
   }
+
+  String? _privateMaterialQuestionEmptyMessage() {
+    if (!_isPrivateMaterialSource) return null;
+    if (_privateMaterialOptions.isEmpty) {
+      return '조건에 맞는 사설 교재가 없습니다.\n필터를 변경해 주세요.';
+    }
+    if (_selectedPrivateMaterialOption == null) {
+      return '교재명을 선택해 주세요.';
+    }
+    if (_privateMaterialUnits.isEmpty) {
+      return _privateMaterialEmptyMessage;
+    }
+    if (_selectedPrivateMaterialPageKeys.isEmpty) {
+      return '왼쪽 단원/페이지 트리에서 페이지를 선택해 주세요.';
+    }
+    return '선택한 페이지에 연결된 문항이 없습니다.';
+  }
 }
 
 class _NaesinLinkSelection {
@@ -3348,6 +3953,7 @@ class _NaesinLinkSelection {
     required this.examTerm,
     required this.school,
     required this.year,
+    this.cellLabel = '',
   });
 
   final String gradeKey;
@@ -3355,6 +3961,186 @@ class _NaesinLinkSelection {
   final String examTerm;
   final String school;
   final int year;
+  final String cellLabel;
+}
+
+class _PrivateMaterialOption {
+  const _PrivateMaterialOption({
+    required this.key,
+    required this.label,
+    required this.bookId,
+    required this.gradeLabel,
+    required this.documentIds,
+  });
+
+  final String key;
+  final String label;
+  final String bookId;
+  final String gradeLabel;
+  final List<String> documentIds;
+}
+
+class _PrivateMaterialOptionBuilder {
+  _PrivateMaterialOptionBuilder({
+    required this.key,
+    required this.bookId,
+    required this.gradeLabel,
+    required this.label,
+  });
+
+  final String key;
+  final String bookId;
+  final String gradeLabel;
+  String label;
+  final List<String> documentIds = <String>[];
+
+  _PrivateMaterialOption toOption() {
+    return _PrivateMaterialOption(
+      key: key,
+      label: label.trim().isEmpty ? '(교재명 없음)' : label.trim(),
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      documentIds: List<String>.unmodifiable(documentIds),
+    );
+  }
+}
+
+class _PrivateMaterialBigBuilder {
+  _PrivateMaterialBigBuilder({
+    required this.order,
+    required this.title,
+  });
+
+  final int order;
+  final String title;
+  final Map<String, _PrivateMaterialMidBuilder> mids =
+      <String, _PrivateMaterialMidBuilder>{};
+
+  ProblemBankPrivateMaterialBigNode toNode() {
+    final midNodes = mids.values.toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return ProblemBankPrivateMaterialBigNode(
+      title: title.trim().isEmpty ? '대단원' : title,
+      order: order,
+      mids: midNodes
+          .map((m) => m.toNode())
+          .where((m) => m.smalls.isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+}
+
+class _PrivateMaterialMidBuilder {
+  _PrivateMaterialMidBuilder({
+    required this.order,
+    required this.title,
+  });
+
+  final int order;
+  final String title;
+  final Map<String, _PrivateMaterialSmallBuilder> smalls =
+      <String, _PrivateMaterialSmallBuilder>{};
+
+  ProblemBankPrivateMaterialMidNode toNode() {
+    final smallNodes = smalls.values.toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return ProblemBankPrivateMaterialMidNode(
+      title: title.trim().isEmpty ? '중단원' : title,
+      order: order,
+      smalls: smallNodes
+          .map((s) => s.toNode())
+          .where((s) => s.pages.isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+}
+
+class _PrivateMaterialSmallBuilder {
+  _PrivateMaterialSmallBuilder({
+    required this.order,
+    required this.subKey,
+    required this.title,
+  });
+
+  final int order;
+  final String subKey;
+  final String title;
+  final Map<String, _PrivateMaterialPageBuilder> pages =
+      <String, _PrivateMaterialPageBuilder>{};
+
+  ProblemBankPrivateMaterialSmallNode toNode() {
+    final pageNodes = pages.values.toList()
+      ..sort((a, b) => a.displayPage.compareTo(b.displayPage));
+    return ProblemBankPrivateMaterialSmallNode(
+      title: title.trim().isEmpty ? '소단원' : title,
+      order: order,
+      subKey: subKey,
+      pages: pageNodes.map((p) => p.toNode()).toList(growable: false),
+    );
+  }
+}
+
+class _PrivateMaterialPageBuilder {
+  _PrivateMaterialPageBuilder({
+    required this.key,
+    required this.displayPage,
+    required this.rawPage,
+  });
+
+  final String key;
+  final int displayPage;
+  final int rawPage;
+  final List<_PrivateMaterialPageQuestionRef> _questions =
+      <_PrivateMaterialPageQuestionRef>[];
+
+  void addQuestion(String questionUid, String problemNumber) {
+    final safeUid = questionUid.trim();
+    if (safeUid.isEmpty || _questions.any((q) => q.questionUid == safeUid)) {
+      return;
+    }
+    _questions.add(
+      _PrivateMaterialPageQuestionRef(
+        questionUid: safeUid,
+        problemNumber: problemNumber,
+        insertionOrder: _questions.length,
+      ),
+    );
+  }
+
+  ProblemBankPrivateMaterialPageNode toNode() {
+    final sortedQuestions = List<_PrivateMaterialPageQuestionRef>.from(
+      _questions,
+    )..sort((a, b) {
+        final aNo = int.tryParse(a.problemNumber);
+        final bNo = int.tryParse(b.problemNumber);
+        if (aNo != null && bNo != null && aNo != bNo) {
+          return aNo.compareTo(bNo);
+        }
+        if (aNo != null && bNo == null) return -1;
+        if (aNo == null && bNo != null) return 1;
+        return a.insertionOrder.compareTo(b.insertionOrder);
+      });
+    return ProblemBankPrivateMaterialPageNode(
+      key: key,
+      displayPage: displayPage,
+      rawPage: rawPage,
+      questionUids: List<String>.unmodifiable(
+        sortedQuestions.map((q) => q.questionUid),
+      ),
+    );
+  }
+}
+
+class _PrivateMaterialPageQuestionRef {
+  const _PrivateMaterialPageQuestionRef({
+    required this.questionUid,
+    required this.problemNumber,
+    required this.insertionOrder,
+  });
+
+  final String questionUid;
+  final String problemNumber;
+  final int insertionOrder;
 }
 
 class _NaesinGradeOption {
@@ -3515,15 +4301,15 @@ class _PresetCardTile extends StatelessWidget {
                     ),
                   ],
                   const Spacer(),
-                  Row(
+                  const Row(
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.picture_as_pdf_outlined,
                         size: 13,
                         color: Color(0xFF7FB8A8),
                       ),
-                      const SizedBox(width: 4),
-                      const Text(
+                      SizedBox(width: 4),
+                      Text(
                         '탭하여 서버 PDF 미리보기',
                         style: TextStyle(
                           color: Color(0xFF7FB8A8),
@@ -3531,8 +4317,8 @@ class _PresetCardTile extends StatelessWidget {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const Spacer(),
-                      const Icon(
+                      Spacer(),
+                      Icon(
                         Icons.arrow_forward,
                         size: 14,
                         color: _textMuted,

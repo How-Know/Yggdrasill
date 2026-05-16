@@ -35,6 +35,7 @@ class ProblemBankPreviewRefreshRequest {
     this.presetIdToUpdate = '',
     this.mathEngine = 'xelatex',
     this.disableAutoLabels = false,
+    this.assignmentFlowName = '',
   });
 
   final String subjectTitleText;
@@ -60,6 +61,7 @@ class ProblemBankPreviewRefreshRequest {
   //   true 이면 서버는 columnLabelAnchors 에 들어있는 항목들만 사용하고
   //   mode 변화 기반 자동 라벨은 전혀 추가하지 않는다.
   final bool disableAutoLabels;
+  final String assignmentFlowName;
 
   ProblemBankPreviewRefreshRequest copyWith({
     String? subjectTitleText,
@@ -80,6 +82,7 @@ class ProblemBankPreviewRefreshRequest {
     String? presetIdToUpdate,
     String? mathEngine,
     bool? disableAutoLabels,
+    String? assignmentFlowName,
   }) {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: subjectTitleText ?? this.subjectTitleText,
@@ -102,6 +105,7 @@ class ProblemBankPreviewRefreshRequest {
       presetIdToUpdate: presetIdToUpdate ?? this.presetIdToUpdate,
       mathEngine: mathEngine ?? this.mathEngine,
       disableAutoLabels: disableAutoLabels ?? this.disableAutoLabels,
+      assignmentFlowName: assignmentFlowName ?? this.assignmentFlowName,
     );
   }
 }
@@ -155,6 +159,20 @@ typedef ProblemBankPreviewSaveSettingsCallback = Future<void> Function(
   ProblemBankPreviewRefreshRequest request,
 );
 
+typedef ProblemBankPreviewCreateAssignmentCallback = Future<void> Function(
+  ProblemBankPreviewRefreshRequest request,
+);
+
+class _AssignmentPromptResult {
+  const _AssignmentPromptResult({
+    required this.displayName,
+    required this.flowName,
+  });
+
+  final String displayName;
+  final String flowName;
+}
+
 class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   const ProblemBankExportServerPreviewDialog({
     super.key,
@@ -181,9 +199,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
     this.initialEditingPresetId = '',
     this.initialEditingPresetName = '',
+    this.assignmentFlowNames = const <String>[],
     this.onRefreshRequested,
     this.onGeneratePdfRequested,
     this.onSaveSettingsRequested,
+    this.onCreateAssignmentRequested,
   });
 
   final String pdfUrl;
@@ -211,9 +231,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   //   → UI 에서 "저장"(덮어쓰기) / "새 세팅으로 저장" 두 버튼을 노출하기 위한 신호.
   final String initialEditingPresetId;
   final String initialEditingPresetName;
+  final List<String> assignmentFlowNames;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
   final ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested;
   final ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested;
+  final ProblemBankPreviewCreateAssignmentCallback? onCreateAssignmentRequested;
 
   static Future<void> open(
     BuildContext context, {
@@ -245,9 +267,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
         const <ProblemBankPreviewQuestionScoreEntry>[],
     String initialEditingPresetId = '',
     String initialEditingPresetName = '',
+    List<String> assignmentFlowNames = const <String>[],
     ProblemBankPreviewRefreshCallback? onRefreshRequested,
     ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested,
     ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested,
+    ProblemBankPreviewCreateAssignmentCallback? onCreateAssignmentRequested,
   }) async {
     final size = MediaQuery.sizeOf(context);
     final maxWidth = (size.width - 24).clamp(1180.0, 2320.0).toDouble();
@@ -291,9 +315,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               questionScoreEntries: questionScoreEntries,
               initialEditingPresetId: initialEditingPresetId,
               initialEditingPresetName: initialEditingPresetName,
+              assignmentFlowNames: assignmentFlowNames,
               onRefreshRequested: onRefreshRequested,
               onGeneratePdfRequested: onGeneratePdfRequested,
               onSaveSettingsRequested: onSaveSettingsRequested,
+              onCreateAssignmentRequested: onCreateAssignmentRequested,
             ),
           ),
         );
@@ -347,6 +373,7 @@ class _ProblemBankExportServerPreviewDialogState
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
   bool _isSavingSettings = false;
+  bool _isCreatingAssignment = false;
   String _mathEngine = 'xelatex';
   String? _previewFailureMessage;
   String _lastPresetDisplayName = '';
@@ -1131,7 +1158,10 @@ class _ProblemBankExportServerPreviewDialogState
     }
     final maxPage = _computedPageColumnCounts.length;
     bool isValidSlot(int page, int columnIndex, int rowIndex) {
-      if (!(page >= 1 && page <= maxPage && columnIndex >= 0 && columnIndex <= 1)) {
+      if (!(page >= 1 &&
+          page <= maxPage &&
+          columnIndex >= 0 &&
+          columnIndex <= 1)) {
         return false;
       }
       if (rowIndex < 0) return false;
@@ -1139,7 +1169,8 @@ class _ProblemBankExportServerPreviewDialogState
         return false;
       }
       final pageCounts = _computedPageColumnCounts[page - 1];
-      final rowLimit = columnIndex < pageCounts.length ? pageCounts[columnIndex] : 0;
+      final rowLimit =
+          columnIndex < pageCounts.length ? pageCounts[columnIndex] : 0;
       return rowLimit > 0 && rowIndex < rowLimit;
     }
 
@@ -2051,6 +2082,152 @@ class _ProblemBankExportServerPreviewDialogState
     return normalized;
   }
 
+  String _defaultAssignmentDisplayName() {
+    final title =
+        _titlePageTopTextController.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final suffix =
+        '${now.year}${two(now.month)}${two(now.day)}_${two(now.hour)}${two(now.minute)}';
+    return title.isEmpty ? '미리 만든 과제 $suffix' : '$title 과제';
+  }
+
+  Future<_AssignmentPromptResult?> _askAssignmentDisplayName() async {
+    final controller =
+        TextEditingController(text: _defaultAssignmentDisplayName());
+    final flowNames = widget.assignmentFlowNames
+        .map((e) => e.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    final value = await showDialog<_AssignmentPromptResult>(
+      context: context,
+      builder: (ctx) {
+        var selectedFlowName = '';
+        return StatefulBuilder(
+          builder: (ctx, setPromptState) {
+            void submit() {
+              Navigator.of(ctx).pop(
+                _AssignmentPromptResult(
+                  displayName: controller.text.trim(),
+                  flowName: selectedFlowName.trim(),
+                ),
+              );
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF10171A),
+              title: const Text(
+                '과제 이름',
+                style: TextStyle(color: _textPrimary),
+              ),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      style: const TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      decoration: const InputDecoration(
+                        hintText: '예: 경북고 공통수학1 21번 과제',
+                      ),
+                      onSubmitted: (_) => submit(),
+                    ),
+                    if (flowNames.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      const Text(
+                        '드롭 시 사용할 플로우',
+                        style: TextStyle(
+                          color: _textMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('지정 안 함'),
+                            selected: selectedFlowName.isEmpty,
+                            onSelected: (_) {
+                              setPromptState(() {
+                                selectedFlowName = '';
+                              });
+                            },
+                          ),
+                          for (final flowName in flowNames)
+                            ChoiceChip(
+                              label: Text(flowName),
+                              selected: selectedFlowName == flowName,
+                              onSelected: (_) {
+                                setPromptState(() {
+                                  selectedFlowName = flowName;
+                                });
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: submit,
+                  child: const Text('과제 생성'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    controller.dispose();
+    final normalized =
+        (value?.displayName ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return null;
+    return _AssignmentPromptResult(
+      displayName: normalized,
+      flowName: (value?.flowName ?? '').replaceAll(RegExp(r'\s+'), ' ').trim(),
+    );
+  }
+
+  Future<void> _createAssignmentPreset() async {
+    final callback = widget.onCreateAssignmentRequested;
+    if (callback == null || _isCreatingAssignment || _isRefreshing) return;
+    final assignmentPrompt = await _askAssignmentDisplayName();
+    if (assignmentPrompt == null) return;
+    setState(() {
+      _isCreatingAssignment = true;
+    });
+    try {
+      final payload = _buildRequestPayload().copyWith(
+        presetDisplayName: assignmentPrompt.displayName,
+        presetIdToUpdate: '',
+        assignmentFlowName: assignmentPrompt.flowName,
+      );
+      await callback(payload);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingAssignment = false;
+        });
+      }
+    }
+  }
+
   /// 현재 편집 중인 프리셋(프리셋 카드에서 진입한 경우)에 덮어쓰기 저장.
   ///   - 이름 프롬프트 없이 기존 display_name 을 그대로 재사용한다.
   ///   - `_editingPresetId` 가 비어 있으면 호출되지 않도록 UI 에서 버튼을 비활성화한다.
@@ -2121,9 +2298,48 @@ class _ProblemBankExportServerPreviewDialogState
   /// 오른쪽 옵션 패널 하단의 저장 버튼 영역.
   ///   - 프리셋 카드에서 진입한 경우(`_editingPresetId` 가 non-empty): '저장' + '새 세팅으로 저장' 두 버튼.
   ///   - 일반 미리보기에서 진입한 경우: '세팅 저장' 단일 버튼(= save-as-new).
+  Widget _buildCreateAssignmentButton() {
+    final hasCallback = widget.onCreateAssignmentRequested != null;
+    final busy = _isSavingSettings ||
+        _isGeneratingPdf ||
+        _isCreatingAssignment ||
+        _isRefreshing;
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: hasCallback && !busy ? _createAssignmentPreset : null,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF24422D),
+          foregroundColor: const Color(0xFFD8F7DA),
+          disabledBackgroundColor: const Color(0xFF18281E),
+          disabledForegroundColor: const Color(0xFF86A98B),
+          minimumSize: const Size.fromHeight(42),
+          shape: const StadiumBorder(),
+        ),
+        icon: _isCreatingAssignment
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.assignment_add, size: 18),
+        label: const Text(
+          '과제 생성',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSaveSettingsButtons() {
     final hasCallback = widget.onSaveSettingsRequested != null;
-    final busy = _isSavingSettings || _isGeneratingPdf || _isRefreshing;
+    final busy = _isSavingSettings ||
+        _isGeneratingPdf ||
+        _isCreatingAssignment ||
+        _isRefreshing;
     final canSave = hasCallback && !busy;
     final editingLabel = _editingPresetName.trim().isEmpty
         ? '현재 프리셋'
@@ -3587,6 +3803,8 @@ class _ProblemBankExportServerPreviewDialogState
                     ),
                   ),
                   const SizedBox(height: 12),
+                  _buildCreateAssignmentButton(),
+                  const SizedBox(height: 8),
                   _buildSaveSettingsButtons(),
                   const SizedBox(height: 8),
                   SizedBox(
@@ -3595,7 +3813,8 @@ class _ProblemBankExportServerPreviewDialogState
                       onPressed: (widget.onGeneratePdfRequested == null ||
                               _isGeneratingPdf ||
                               _isRefreshing ||
-                              _isSavingSettings)
+                              _isSavingSettings ||
+                              _isCreatingAssignment)
                           ? null
                           : _generatePdf,
                       style: FilledButton.styleFrom(

@@ -26,9 +26,16 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       overflow: visible;
       padding-left: 0 !important;
       text-indent: 0 !important;
+      font-size: calc((var(--stem-size-pt) - 0.5) * 1pt);
     }
     .q-num { display: none; }
     .q-stem { white-space: normal; text-indent: 0 !important; }
+    .stem-line.stem-line-display-math {
+      display: block;
+      margin: calc(var(--line-height-pt) * 0.09 * 1pt) 0 calc(var(--line-height-pt) * 0.225 * 1pt);
+      padding-left: 2.55em;
+      line-height: 2.3;
+    }
     .lc-line {
       display: inline;
       line-height: var(--lc-line-normal);
@@ -270,6 +277,8 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .figure-inline-block .figure-img { max-width: 100%; height: auto; }
     .figure-inline-block.figure-anchor-left { text-align: left; }
     .figure-inline-block.figure-anchor-right { text-align: right; }
+    .figure-inline-block.figure-pos-inline-left { float: left; margin: 0 0.5em 0.5em 0; clear: left; text-align: left; }
+    .figure-inline-block.figure-pos-inline-right { float: right; margin: 0 0 0.5em 0.5em; clear: right; text-align: right; }
     .figure-inline-block.figure-group-horizontal { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item { flex-shrink: 0; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item .figure-img { width: 100%; }

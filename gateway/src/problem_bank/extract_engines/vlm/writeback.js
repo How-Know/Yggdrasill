@@ -62,20 +62,26 @@ function normalizeAnswerSurfaceText(input) {
   return normalizeCompactFractionCommands(out).replace(/\s+/g, ' ').trim();
 }
 
+function normalizeEmptyBracketSpacing(input) {
+  return String(input ?? '')
+    .replace(/\(\s*\)/g, '([공백:2])')
+    .replace(/\[\s*\]/g, '[[공백:2]]');
+}
+
 export function normalizeVlmQuestion(vlmQ) {
   if (!vlmQ || typeof vlmQ !== 'object') return vlmQ;
   const out = { ...vlmQ };
-  out.stem = normalizeMathDelimiters(out.stem);
+  out.stem = normalizeEmptyBracketSpacing(normalizeMathDelimiters(out.stem));
   if (Array.isArray(out.choices)) {
     out.choices = out.choices.map((c) => ({
       ...c,
-      text: normalizeMathDelimiters(c?.text),
+      text: normalizeEmptyBracketSpacing(normalizeMathDelimiters(c?.text)),
     }));
   }
   if (Array.isArray(out.sub_questions)) {
     out.sub_questions = out.sub_questions.map((sq) => ({
       ...sq,
-      text: normalizeMathDelimiters(sq?.text),
+      text: normalizeEmptyBracketSpacing(normalizeMathDelimiters(sq?.text)),
     }));
   }
   if (out.answer && typeof out.answer === 'object') {
@@ -87,7 +93,7 @@ export function normalizeVlmQuestion(vlmQ) {
     if (Array.isArray(a.parts)) {
       a.parts = a.parts.map((p) => ({
         ...p,
-        value: normalizeMathDelimiters(p?.value),
+        value: normalizeEmptyBracketSpacing(normalizeMathDelimiters(p?.value)),
       }));
     }
     out.answer = a;
@@ -386,9 +392,23 @@ export function expectedObjectiveAnswerCount(vlmQ) {
 }
 
 // VLM 의 은닉 sub_questions 를 stem 본문에 마커와 함께 복원.
-export function buildStemWithSubQuestions(vlmQ, existingFigureSlots) {
+export function buildStemWithSubQuestions(vlmQ, existingFigureSlots, {
+  independentSetItemOnly = false,
+} = {}) {
   const baseStem = String(vlmQ.stem || '').trim();
   const subs = Array.isArray(vlmQ.sub_questions) ? vlmQ.sub_questions : [];
+  if (independentSetItemOnly && subs.length === 1) {
+    const text = String(subs[0]?.text || '').trim();
+    const pieces = [];
+    if (text) pieces.push(text);
+    if (existingFigureSlots > 0) {
+      pieces.push('[문단]');
+      pieces.push(
+        Array.from({ length: existingFigureSlots }, () => '[그림]').join(' '),
+      );
+    }
+    return pieces.join('\n');
+  }
   const pieces = [];
   if (baseStem) pieces.push(baseStem);
 
@@ -445,6 +465,10 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     : isSet
       ? 'dependent_set'
       : '';
+  const isIndependentSet = isSet && setType === 'independent_set';
+  const commonStem = isIndependentSet ? String(vlmQ?.stem || '').trim() : '';
+  const subs = Array.isArray(vlmQ?.sub_questions) ? vlmQ.sub_questions : [];
+  const independentSetItemOnly = isIndependentSet && subs.length === 1;
   const qType = isSet
     ? '주관식'
     : opts.keepTypeFromDb && existingType
@@ -462,7 +486,9 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
       ? 0
       : existingFigureSlots;
   const stemWithFigures = normalizeBlankFigureMarkers(
-    buildStemWithSubQuestions(vlmQ, preserveExistingFigureSlots),
+    buildStemWithSubQuestions(vlmQ, preserveExistingFigureSlots, {
+      independentSetItemOnly,
+    }),
     rawVlmFigures,
   );
 
@@ -574,7 +600,6 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   //   (UI 의 scorePartsFromMetaRaw 와 같은 기준으로 필터링.)
   // - 하나라도 유효하면 meta.score_parts 를 구성하고, meta.score_point 는
   //   그 합으로 동기화 (매니저 UI 의 "세트형 총점 = score_parts 합" 계약과 일치).
-  const subs = Array.isArray(vlmQ?.sub_questions) ? vlmQ.sub_questions : [];
   const rawScoreParts = [];
   if (isSet && subs.length > 0) {
     for (let i = 0; i < subs.length; i += 1) {
@@ -629,6 +654,13 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
             version: 1,
             set_type: setType || 'dependent_set',
             set_key: String(vlmQ?.set_key || vlmQ?.question_number || '').trim(),
+            ...(commonStem ? { common_stem: commonStem } : {}),
+            ...(independentSetItemOnly
+              ? {
+                  item_label: String(subs[0]?.label || '').trim(),
+                  item_order: 1,
+                }
+              : {}),
             delivery_policy:
               setType === 'independent_set'
                 ? 'independent_items_with_common_stem'

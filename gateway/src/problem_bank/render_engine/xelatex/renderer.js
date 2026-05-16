@@ -37,6 +37,30 @@ function materializeDataUrlLogo(dataUrl, workDir) {
   }
 }
 
+async function normalizeFigureAssetForXeLatex(bytes) {
+  try {
+    const meta = await sharp(bytes, { failOn: 'none' }).metadata();
+    const width = Number(meta.width || 0);
+    const height = Number(meta.height || 0);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return { bytes, ext: '', mimeType: '' };
+    }
+    const stripHeight = Math.max(1, Math.min(3, Math.round(height * 0.004)));
+    const bottomWhiteStrip = Buffer.from(
+      `<svg width="${width}" height="${stripHeight}" xmlns="http://www.w3.org/2000/svg">`
+      + '<rect width="100%" height="100%" fill="#fff"/></svg>',
+    );
+    const normalized = await sharp(bytes, { failOn: 'none' })
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .composite([{ input: bottomWhiteStrip, left: 0, top: height - stripHeight }])
+      .png({ compressionLevel: 9, adaptiveFiltering: true })
+      .toBuffer();
+    return { bytes: normalized, ext: 'png', mimeType: 'image/png' };
+  } catch (_) {
+    return { bytes, ext: '', mimeType: '' };
+  }
+}
+
 const XELATEX_TIMEOUT_MS = 30_000;
 
 async function waitForFile(filePath, timeoutMs = 3000) {
@@ -171,11 +195,15 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
             .from(bucket)
             .download(storagePath);
           if (error || !data) continue;
-          const ext = (asset.mime_type || 'image/png').split('/').pop() || 'png';
+          const downloadedBytes = Buffer.from(await data.arrayBuffer());
+          const normalizedFigure = await normalizeFigureAssetForXeLatex(downloadedBytes);
+          const ext = normalizedFigure.ext
+            || (asset.mime_type || 'image/png').split('/').pop()
+            || 'png';
           const qid = q.id || q.question_uid || randomUUID();
           const filename = `${set.prefix}-${qid}-${asset.figure_index || 0}.${ext}`;
           const filePath = path.join(workDir, filename);
-          fs.writeFileSync(filePath, Buffer.from(await data.arrayBuffer()));
+          fs.writeFileSync(filePath, normalizedFigure.bytes);
           ordinal += 1;
           const figIdx = Number.parseInt(String(asset?.figure_index ?? ''), 10);
           const assetKey = Number.isFinite(figIdx) && figIdx > 0
@@ -191,7 +219,7 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
             itemId: String(asset?.item_id || '').trim(),
             figureIndex: Number.isFinite(figIdx) && figIdx > 0 ? figIdx : ordinal,
             ordinal,
-            mimeType: asset.mime_type || 'image/png',
+            mimeType: normalizedFigure.mimeType || asset.mime_type || 'image/png',
           });
           appliedCount += 1;
         } catch (_) {
@@ -453,6 +481,7 @@ export async function renderQuestionWithXeLatex({
   deviceScaleFactor = 3,
   fontFamily,
   fontBold,
+  renderConfig,
 }) {
   await ensureInstalled();
 
@@ -463,7 +492,13 @@ export async function renderQuestionWithXeLatex({
   const pdfPath = path.join(workDir, 'question.pdf');
 
   try {
-    const texSource = buildTexSource(question, { fontFamily, fontBold });
+    const texSource = buildTexSource(question, {
+      fontFamily,
+      fontBold,
+      previewIndependentSetCommonStem:
+        renderConfig?.previewIndependentSetCommonStem === true
+        || renderConfig?.preview_independent_set_common_stem === true,
+    });
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
 
@@ -690,6 +725,12 @@ export async function renderPdfWithXeLatex({
       columnLabelAnchors: Array.isArray(renderConfig?.columnLabelAnchors)
         ? renderConfig.columnLabelAnchors
         : [],
+      disableIndependentSetGrouping:
+        renderConfig?.disableIndependentSetGrouping === true ||
+        renderConfig?.disable_independent_set_grouping === true,
+      previewIndependentSetCommonStem:
+        renderConfig?.previewIndependentSetCommonStem === true ||
+        renderConfig?.preview_independent_set_common_stem === true,
       reviewPdf: renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true,
       // 새로고침/PDF 생성 경로에서 auto 라벨 생성을 전면 중단.
       disableAutoLabels: renderConfig?.disableAutoLabels === true,

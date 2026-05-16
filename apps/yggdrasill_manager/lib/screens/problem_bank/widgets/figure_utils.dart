@@ -2,26 +2,26 @@ import '../problem_bank_models.dart';
 
 const double figureScaleMin = 0.3;
 const double figureScaleMax = 2.2;
-const double figureWidthEmMin = 5.0;
+const double figureWidthEmMin = 2.0;
 const double figureWidthEmMax = 30.0;
 const double figureWidthEmDefault = 15.5;
 const double defaultStemSizePt = 11.0;
 const double defaultMaxHeightPt = 170.0;
 
 const List<String> figurePositionOptions = <String>[
-  'below-stem',
-  'inline-right',
-  'inline-left',
-  'between-stem-choices',
-  'above-choices',
+  'align-left',
+  'align-right',
+  'center',
+  'wrap-left',
+  'wrap-right',
 ];
 
 const Map<String, String> figurePositionLabels = <String, String>{
-  'below-stem': '본문 아래',
-  'inline-right': '본문 오른쪽',
-  'inline-left': '본문 왼쪽',
-  'between-stem-choices': '본문-보기 사이',
-  'above-choices': '보기 위',
+  'align-left': '왼쪽 정렬',
+  'align-right': '오른쪽 정렬',
+  'center': '가운데',
+  'wrap-left': '왼쪽 어울림',
+  'wrap-right': '오른쪽 어울림',
 };
 
 List<Map<String, dynamic>> figureAssetsOf(ProblemBankQuestion q) {
@@ -105,8 +105,7 @@ Map<String, double> figureRenderScaleMapOf(ProblemBankQuestion q) {
   raw.forEach((key, value) {
     final safeKey = '$key'.trim();
     if (safeKey.isEmpty) return;
-    final parsed =
-        value is num ? value.toDouble() : double.tryParse('$value');
+    final parsed = value is num ? value.toDouble() : double.tryParse('$value');
     if (parsed == null || !parsed.isFinite) return;
     out[safeKey] = normalizeFigureScale(parsed);
   });

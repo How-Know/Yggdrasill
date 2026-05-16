@@ -68,6 +68,8 @@ function sanitizeLatexControlChars(value) {
 // safety net 으로 속성 변형도 strip/split 대상에 포함해 속성이 LaTeX 본문에 새어
 // 나가지 않도록 한다.
 const PARAGRAPH_MARKER_RE = /\[문단(?::[^\]]*)?\]/g;
+const MATH_LINE_BREAK_MARKER_RE = /\[수식줄바꿈(?::([^\]]*))?\]/gi;
+const MATH_DISPLAY_LINE_MARKER_RE = /\[(?:수식제시|수식제시줄|displaymath|mathline)\]/gi;
 const BOX_ALIGN_MARKER_RE = /^\s*\[(?:정렬|align)\s*:\s*(왼쪽|좌측|left|가운데|중앙|center|오른쪽|우측|right)\]\s*$/i;
 const BOGI_MARKER_RE = /\[박스시작\]|\[박스끝\]/g;
 const BOX_PARAGRAPH_BREAK = '__PB_BOX_PARAGRAPH_BREAK__';
@@ -171,6 +173,8 @@ const BOGI_ITEM_RE =
 function stripMarkers(text) {
   return String(text || '')
     .replace(PARAGRAPH_MARKER_RE, ' ')
+    .replace(MATH_LINE_BREAK_MARKER_RE, ' ')
+    .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
     .replace(BOGI_MARKER_RE, '');
 }
 
@@ -451,6 +455,22 @@ function normalizeMathSegment(mathContent) {
   return out;
 }
 
+function shouldSymmetrizeTallMathChunk(mathContent) {
+  const src = String(mathContent || '');
+  if (!src || src.includes('\\mtsymmathbox')) return false;
+  return (
+    /\\sqrt\b/.test(src) ||
+    /\\left\\\{/.test(src) ||
+    /\\begin\{array\}/.test(src)
+  );
+}
+
+function symmetrizeTallMathChunk(mathContent) {
+  const src = String(mathContent || '').trim();
+  if (!shouldSymmetrizeTallMathChunk(src)) return src;
+  return `\\mtsymmathbox{${src}}`;
+}
+
 /**
  * `[공백:N]` 마커를 `\hspace*{Nem}` 로 치환.
  *   - star 버전(`\hspace*`) 을 써서 줄 시작/끝에서도 collapse 되지 않도록 보장.
@@ -459,6 +479,13 @@ function normalizeMathSegment(mathContent) {
 function spaceMarkerToTex(amount) {
   const n = Number.isFinite(amount) ? amount : 1;
   return `\\hspace*{${n}em}`;
+}
+
+function normalizeBlankParenthesisSpaceMarkers(input) {
+  return String(input || '')
+    .replace(/\(\s*\[공백:3\]\s*\)/g, '([공백:1.5])')
+    .replace(/（\s*\[공백:3\]\s*）/g, '（[공백:1.5]）')
+    .replace(/\[\s*\[공백:3\]\s*\]/g, '[[공백:1.5]]');
 }
 
 function normalizeBlankBoxNotation(input) {
@@ -486,7 +513,7 @@ function bogiLabelFullTex(labelTex) {
  * 분리해 처리하면 rendering hint 가 안전하게 LaTeX 공간 명령으로 치환된다.
  */
 function smartTexLine(text, equations) {
-  const raw = String(text ?? '');
+  const raw = normalizeBlankParenthesisSpaceMarkers(text);
   if (!raw) return '';
 
   if (raw.includes(RIGHT_TAIL_MARKER)) {
@@ -680,7 +707,7 @@ function smartTexLineCore(text, equations) {
       // 콤마+공백으로 렌더한 뒤 다시 math 로 진입한다. (`x, y` → `$x$, $y$`)
       const mathChunks = splitMathAtTopLevelCommaSpace(math);
       const rendered = mathChunks
-        .map((chunk) => `$\\displaystyle ${chunk}$`)
+        .map((chunk) => `$\\displaystyle ${symmetrizeTallMathChunk(chunk)}$`)
         .join(', ');
       return `${leadSp}${rendered}${trailSp}`;
     })
@@ -718,13 +745,74 @@ function splitAtSubQuestionMarkers(sub) {
   return pieces;
 }
 
+function normalizeMathLineBreakAlign(value) {
+  const raw = String(value || '오른쪽').trim().toLowerCase();
+  if (raw === '가운데' || raw === '중앙' || raw === 'center' || raw === 'middle') return 'center';
+  if (raw === '왼쪽' || raw === '좌측' || raw === 'left') return 'left';
+  return 'right';
+}
+
+function splitByMathLineBreakMarkers(input) {
+  const src = String(input || '');
+  MATH_LINE_BREAK_MARKER_RE.lastIndex = 0;
+  if (!src.match(MATH_LINE_BREAK_MARKER_RE)) return [{ text: src, align: null }];
+  MATH_LINE_BREAK_MARKER_RE.lastIndex = 0;
+  const out = [];
+  let cursor = 0;
+  let pendingAlign = null;
+  let match;
+  while ((match = MATH_LINE_BREAK_MARKER_RE.exec(src)) !== null) {
+    out.push({
+      text: src.slice(cursor, match.index),
+      align: pendingAlign,
+    });
+    pendingAlign = normalizeMathLineBreakAlign(match[1]);
+    cursor = match.index + match[0].length;
+  }
+  out.push({
+    text: src.slice(cursor),
+    align: pendingAlign,
+  });
+  return out.filter((part) => part.text.trim() || part.align !== null);
+}
+
+function renderMathLineBreakContinuation(text, align, equations) {
+  const body = smartTexLine(text, equations);
+  if (!body.trim()) return '';
+  if (align === 'center') return `\\noindent\\makebox[\\linewidth][c]{${body}}\\par`;
+  if (align === 'left') return `\\noindent ${body}\\par`;
+  return `\\noindent\\hfill ${body}\\par`;
+}
+
+function hasMathDisplayLineMarker(text) {
+  MATH_DISPLAY_LINE_MARKER_RE.lastIndex = 0;
+  return MATH_DISPLAY_LINE_MARKER_RE.test(String(text || ''));
+}
+
+function stripMathDisplayLineMarker(text) {
+  MATH_DISPLAY_LINE_MARKER_RE.lastIndex = 0;
+  return String(text || '').replace(MATH_DISPLAY_LINE_MARKER_RE, ' ');
+}
+
+function renderDisplayMathStemLine(sub, equations, firstPrefix = '') {
+  const source = stripMathDisplayLineMarker(sub).trim();
+  const body = smartTexLine(source, equations);
+  if (!body.trim()) return '';
+  const prefix = firstPrefix ? `${firstPrefix}\\hspace*{0.4em}` : '';
+  return `{\\setstretch{2.30}\\lineskiplimit=0.55em\\lineskip=0.85em\\par\\vspace{0.09\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.225\\baselineskip}}`;
+}
+
+function texHasTallFraction(tex) {
+  return /\\(?:dfrac|frac|tfrac)\b/.test(String(tex || ''));
+}
+
 /**
  * 본문 텍스트 라인 하나에 대해 대화형/세트형 하위문항 패턴을 감지해
  * 2번째 줄부터 들여쓰기(hangindent) 되도록 LaTeX 을 생성한다.
  * hangindent 는 paragraph 단위로만 유효하므로, 결과 말미에 반드시 \par 을 넣어
  * 그룹/마진이 닫히기 전에 현재 paragraph 의 line-break 가 결정되도록 한다.
  */
-function renderStemTextLine(sub, equations) {
+function renderStemTextLine(sub, equations, firstPrefix = '') {
   // 사용자 요청 23차: 문항 본문(stem text) 줄간격을 본문 기본(\setstretch{1.7}) 대비
   //   10% 축소하여 `\setstretch{1.53}` (=1.7×0.9) 로 조판한다.
   //   → 보기박스/조건박스/그림/표/5지선다형 보기는 별도 경로로 조판되므로 영향 없음
@@ -739,13 +827,55 @@ function renderStemTextLine(sub, equations) {
   //   (choice 영역의 `\lineskip=1.2em` 과 유사한 접근, 값은 보수적으로 0.6em 로 설정해
   //    일반 본문 행간까지 과도하게 늘어나지 않도록.)
   const STEM_STRETCH = '1.53';
-  const wrapStem = (inner) => `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.6em${inner}\\par}`;
+  const wrapStem = (inner, { tallFraction = false } = {}) => {
+    const fractionPad = tallFraction ? '\\par\\vspace{0.10\\baselineskip}' : '';
+    const fractionTail = tallFraction ? '\\vspace{0.10\\baselineskip}' : '';
+    return `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.6em${fractionPad}${inner}\\par${fractionTail}}`;
+  };
+  const renderManualMathLineBreak = (source, manualFirstPrefix = '') => {
+    const pieces = splitByMathLineBreakMarkers(source);
+    if (pieces.length <= 1) return '';
+    const lines = [];
+    const first = pieces[0];
+    const firstTex = smartTexLine(first.text, equations);
+    const firstBody = `${manualFirstPrefix}${firstTex}`;
+    if (manualFirstPrefix || firstTex.trim()) {
+      lines.push(`\\noindent ${firstBody}\\par`);
+    }
+    for (let idx = 1; idx < pieces.length; idx += 1) {
+      const rendered = renderMathLineBreakContinuation(
+        pieces[idx].text,
+        pieces[idx].align || 'right',
+        equations,
+      );
+      if (rendered) lines.push(rendered);
+    }
+    const renderedLines = lines.join('\\nobreak\\vspace{0.05em}\n');
+    return lines.length > 0
+      ? wrapStem(renderedLines, { tallFraction: texHasTallFraction(renderedLines) })
+      : '';
+  };
   // 세트형 하위문항 (1), (2), ...
   const subQ = sub.match(/^\((\d+)\)\s+(.*)$/);
   if (subQ) {
     const labelTex = `(${subQ[1]})\\ `;
+    if (subQ[2].includes('[수식줄바꿈')) {
+      return renderManualMathLineBreak(subQ[2], labelTex);
+    }
+    if (hasMathDisplayLineMarker(subQ[2])) {
+      return renderDisplayMathStemLine(subQ[2], equations, labelTex);
+    }
     const restTex = smartTexLine(subQ[2], equations);
-    return wrapStem(`{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`);
+    return wrapStem(
+      `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`,
+      { tallFraction: texHasTallFraction(restTex) },
+    );
+  }
+  if (sub.includes('[수식줄바꿈')) {
+    return renderManualMathLineBreak(sub, firstPrefix);
+  }
+  if (hasMathDisplayLineMarker(sub)) {
+    return renderDisplayMathStemLine(sub, equations, firstPrefix);
   }
   // 대화형 "이름 : 내용" (이름은 12자 이내).
   const dialogue = sub.match(/^([^:\n]{1,12}?)\s*:\s+(.*)$/);
@@ -756,10 +886,16 @@ function renderStemTextLine(sub, equations) {
       const nameTex = smartTexLine(namePart, equations);
       const restTex = smartTexLine(rest, equations);
       const labelTex = `${nameTex}\\ :\\ `;
-      return wrapStem(`{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`);
+      return wrapStem(
+        `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`,
+        { tallFraction: texHasTallFraction(restTex) },
+      );
     }
   }
-  return wrapStem(smartTexLine(sub, equations));
+  const bodyTex = smartTexLine(sub, equations);
+  return wrapStem(`${firstPrefix}${bodyTex}`, {
+    tallFraction: texHasTallFraction(bodyTex),
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1940,9 +2076,9 @@ function paperGeometry(paper) {
 function assignmentPaperGeometry(paper) {
   const p = String(paper || 'B4').toUpperCase();
   const vmargins = 'top=26.5mm,bottom=20mm,headheight=54pt,headsep=17pt';
-  if (p === 'A4') return `a4paper,hmargin=14mm,${vmargins}`;
-  if (p === 'A3') return `a3paper,hmargin=14mm,${vmargins}`;
-  return `b4paper,hmargin=14mm,${vmargins}`;
+  if (p === 'A4') return `a4paper,hmargin=11.34mm,${vmargins}`;
+  if (p === 'A3') return `a3paper,hmargin=11.34mm,${vmargins}`;
+  return `b4paper,hmargin=11.34mm,${vmargins}`;
 }
 
 function fontSpecDirective(fontPath, fontFamily, fontBold) {
@@ -2050,6 +2186,11 @@ function buildPreamble({
   const docClassOpts = isMock ? `${size}pt,twoside` : `${size}pt`;
   lines.push(`\\documentclass[${docClassOpts}]{article}`);
   lines.push(`\\usepackage[${geom}]{geometry}`);
+  // geometry 의 \newgeometry / \restoregeometry 는 내부에서 \clearpage 를 호출한다.
+  // 문항 페이지 루프가 이미 page break 를 제어하므로, 제목페이지 geometry 전환 시
+  // 내부 \clearpage 만 억제해 빈 페이지가 끼지 않도록 한다.
+  lines.push('\\newcommand{\\YggNewGeometryNoClear}[1]{\\let\\YggSavedClearpage\\clearpage\\let\\clearpage\\relax\\newgeometry{#1}\\let\\clearpage\\YggSavedClearpage}');
+  lines.push('\\newcommand{\\YggRestoreGeometryNoClear}{\\let\\YggSavedClearpage\\clearpage\\let\\clearpage\\relax\\restoregeometry\\let\\clearpage\\YggSavedClearpage}');
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
   // ─── \dfrac / \frac / \tfrac 재정의: ht/dp 를 대칭화하여 "분수 때문에 늘어난 수직 여유" 를 위·아래 반반씩 분배 ───
@@ -2077,6 +2218,8 @@ function buildPreamble({
   lines.push(`\\renewcommand{\\frac}[2]{${symFrac('origfrac')}}`);
   lines.push('\\let\\origtfrac\\tfrac');
   lines.push(`\\renewcommand{\\tfrac}[2]{${symFrac('origtfrac')}}`);
+  lines.push('\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}');
+  lines.push('\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}');
   lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
   // 어절 중간에서 줄바꿈 금지: kotex 가 기본 설정한 ICU 한국어 줄바꿈 로케일을
@@ -2105,6 +2248,8 @@ function buildPreamble({
   lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
   lines.push('\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}');
   lines.push('\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}');
+  // 독립세트 렌더러는 preview/batch 문서에서도 같은 번호 스타일 매크로를 사용한다.
+  lines.push('\\providecommand{\\questionnumber}[1]{\\textbf{#1}}');
   lines.push('\\usepackage{fancyhdr}');
   lines.push('\\usepackage{setspace}');
   lines.push('\\usepackage[most]{tcolorbox}');
@@ -2166,7 +2311,7 @@ function buildPreamble({
     : '';
   const assignmentHeaderLogoGraphic = '';
   const assignmentTitleLogoGraphic = logoEnabled
-    ? `\\raisebox{-4pt}[0pt][0pt]{\\includegraphics[height=4.8em,keepaspectratio]{${logoPathTex}}}`
+    ? `\\raisebox{\\dimexpr 1.29375\\mockTitleLead/2-\\height/2\\relax}[0pt][0pt]{\\includegraphics[height=4.332em,keepaspectratio]{${logoPathTex}}}`
     : '';
   const safeAcademyName = escapeLatexText(String(academyName || '').trim());
   const safeAssignmentFooterTitle = escapeLatexText(String(titlePageTopText || '').trim());
@@ -2215,9 +2360,7 @@ function buildPreamble({
     + `\\makebox[0pt][r]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}`
     + `\\makebox[0pt][r]{\\raisebox{1.37pt}[0pt][0pt]{${titleFormBoxSpec}}}`
     + '}';
-  const assignmentTitleRightHeaderSpec = '{'
-    + (logoEnabled ? `\\makebox[0pt][r]{${assignmentTitleLogoGraphic}}` : '')
-    + '}';
+  const assignmentTitleRightHeaderSpec = '{}';
   const titleTopScale = isAssignmentProfile ? '1.0692' : '1.1';
   const titleMainScale = isAssignmentProfile ? '1.29375' : '1.452';
 
@@ -2377,6 +2520,9 @@ function buildPreamble({
       + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em\\mockTitlePageMain}}%');
     lines.push(isAssignmentProfile ? '      }%' : '    }%');
     if (isAssignmentProfile) {
+      if (logoEnabled) {
+        lines.push(`      \\hfill ${assignmentTitleLogoGraphic}%`);
+      }
       lines.push('    }%');
     }
     lines.push('  }%');
@@ -2533,9 +2679,13 @@ function buildPreamble({
     //   - 일반 페이지는 \mockLayRuleY 를 사용하므로 이 값은 무관.
     lines.push('  \\setlength{\\mockLayVRuleStartY}{\\mockLayTopY}%');
     lines.push('  \\addtolength{\\mockLayVRuleStartY}{-\\mockHeaderBoxHeight}%');
-    // 사용자 요청 15차: 직전 변경에서 제목페이지 디바이더/슬롯 시작점이 과도하게 위로 올라가
-    //   상단 여백이 부족해졌으므로, 제목페이지 전용 offset 을 14pt 로 되돌린다.
-    lines.push('  \\addtolength{\\mockLayVRuleStartY}{14pt}%');
+    // 제목페이지 디바이더 offset.
+    //   과제형은 슬롯 자체를 위로 당기면 첫 페이지 본문이 다음 페이지로 밀릴 수 있어,
+    //   슬롯 시작점 대신 디바이더 위치만 조정한다. TikZ north-west shift 좌표계 기준
+    //   offset 을 낮추면 실제 디바이더가 아래로 내려가므로, 일반 페이지 gap 에 맞춘다.
+    lines.push(isAssignmentProfile
+      ? '  \\addtolength{\\mockLayVRuleStartY}{10.7pt}%'
+      : '  \\addtolength{\\mockLayVRuleStartY}{14pt}%');
 
     lines.push('  \\begin{tikzpicture}[remember picture,overlay]%');
     // 상단 header rule 과 세로 단구분선이 '한 점' 에서 만나도록 공유 y 좌표 사용.
@@ -2552,7 +2702,7 @@ function buildPreamble({
     //      (디바이더↔페이지라벨 하단 간격 ≈ 11.85pt → 8.85pt, 약 25% 감소.)
     //   수학영역/홀수형 박스는 위 raisebox 보정으로 3pt 함께 상승.
     lines.push(isAssignmentProfile
-      ? '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+12pt}%'
+      ? '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+20pt}%'
       : '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
     // 상단 header rule + 세로 단구분선.
     //   - 일반 페이지  : 가로선 y = \mockLayRuleY        / 세로선 시작 y = \mockLayRuleY.
@@ -2778,6 +2928,77 @@ function formatQuestionNumberForDisplay(raw, format = 'source') {
   return `${value.slice(0, m.index)}${padded}${value.slice((m.index || 0) + m[0].length)}`;
 }
 
+function formatIndependentSetHeaderLabelLatex(group) {
+  const explicit = String(group?.header_label || group?.headerLabel || '').trim();
+  if (explicit) return explicit;
+  const items = Array.isArray(group?.items) ? group.items : [];
+  const labels = items
+    .map((item) => formatQuestionNumberForDisplay(item?.question_number || '', 'source'))
+    .filter(Boolean);
+  if (labels.length === 0) return '';
+  const nums = labels.map((label) => Number.parseInt(String(label).replace(/\D/g, ''), 10));
+  const continuous = nums.length === labels.length
+    && nums.every((n) => Number.isFinite(n))
+    && nums.every((n, idx) => idx === 0 || n === nums[idx - 1] + 1);
+  if (continuous && labels.length > 1) return `[${labels[0]}~${labels[labels.length - 1]}]`;
+  return `[${labels.join(', ')}]`;
+}
+
+function renderIndependentSetGroupLatex(group, {
+  showQuestionNumber = true,
+  questionNumberPlacement = 'inline',
+  questionNumberFormat = 'source',
+  stemSizePt = 11,
+  aboveNumberFontPtOverride = null,
+} = {}) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  const commonStem = String(group?.common_stem || group?.commonStem || '').trim();
+  if (!commonStem || items.length === 0) {
+    return items.map((item) => renderOneQuestion(item, {
+      showQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+      stemSizePt,
+      aboveNumberFontPtOverride,
+    })).join('\n');
+  }
+  const equations = items.flatMap((item) => Array.isArray(item?.equations) ? item.equations : []);
+  const headerLabel = formatIndependentSetHeaderLabelLatex(group);
+  const lines = [];
+  const commonFontSizePt = Math.max(7, Number(stemSizePt) || 11);
+  const commonLeadPt = Math.max(commonFontSizePt * 1.18, commonFontSizePt + 1).toFixed(2);
+  lines.push('\\begingroup');
+  lines.push(`\\fontsize{${commonFontSizePt.toFixed(2)}pt}{${commonLeadPt}pt}\\selectfont`);
+  const header = showQuestionNumber && headerLabel
+    ? `\\questionnumber{${escapeLatexText(headerLabel)}}~`
+    : '';
+  const commonStemLines = commonStem.replace(/\r/g, '').split('\n');
+  let renderedAnyCommonLine = false;
+  for (const rawLine of commonStemLines) {
+    const line = String(rawLine || '').trim();
+    if (!line) continue;
+    lines.push(renderStemTextLine(line, equations, renderedAnyCommonLine ? '' : header));
+    renderedAnyCommonLine = true;
+  }
+  lines.push('\\vspace{\\baselineskip}');
+  for (let itemIdx = 0; itemIdx < items.length; itemIdx += 1) {
+    const item = items[itemIdx];
+    if (itemIdx > 0) lines.push('\\vspace{\\baselineskip}');
+    // 하위 독립 문항도 표/그림/보기 마커를 가질 수 있으므로 일반 문항 렌더 경로를 탄다.
+    // 단순 smartTexLine 으로 처리하면 raw tabular preamble 이 수식 정규화되어 깨진다.
+    lines.push(renderOneQuestion(item, {
+      showQuestionNumber,
+      questionNumberPlacement: 'inline',
+      questionNumberFormat,
+      stemSizePt,
+      aboveNumberFontPtOverride,
+      inlineNumberFontPtOverride: stemSizePt,
+    }));
+  }
+  lines.push('\\endgroup');
+  return lines.join('\n');
+}
+
 function renderOneQuestion(question, {
   sectionLabel,
   showQuestionNumber = true,
@@ -2801,7 +3022,18 @@ function renderOneQuestion(question, {
   // 문항이 그려지는 페이지의 칼럼 수(1 | 2). 5지선다 레이아웃 선택 시 셀 폭 대비 선택지 길이
   // 비율을 바르게 평가하기 위해 필요. mock/csat 모드는 항상 2단.
   layoutColumns = 1,
+  aboveNumberFontPtOverride = null,
+  inlineNumberFontPtOverride = null,
 } = {}) {
+  if (question?.__render_kind === 'independent_set_group') {
+    return renderIndependentSetGroupLatex(question, {
+      showQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+      stemSizePt,
+      aboveNumberFontPtOverride,
+    });
+  }
   // DB 에 form feed(^^L) 같은 제어문자가 박혀 저장된 경우(과거 VLM 파이프라인 버그)
   // 렌더 시점에서 한 번 더 복구해서 XeLaTeX 컴파일 실패를 막는다.
   // 새 추출은 vlm/client.js 에서 이미 정리되므로 이 단계는 no-op 이 된다.
@@ -2811,8 +3043,13 @@ function renderOneQuestion(question, {
   const qNum = question?.question_number || question?.questionNumber || '';
   const qNumDisplay = formatQuestionNumberForDisplay(qNum, questionNumberFormat);
   const numberAbove = showQuestionNumber && questionNumberPlacement === 'above';
-  const aboveNumberFontPt = ((Number(stemSizePt || 11) + 1) * 1.21).toFixed(2);
-  const aboveNumberLeadPt = (((Number(stemSizePt || 11) + 1) * 1.21) * 1.08).toFixed(2);
+  const computedAboveNumberFontPt = (Number(stemSizePt || 11) + 1) * 1.21;
+  const aboveNumberFontPt = (
+    Number.isFinite(Number(aboveNumberFontPtOverride)) && Number(aboveNumberFontPtOverride) > 0
+      ? Number(aboveNumberFontPtOverride)
+      : computedAboveNumberFontPt
+  ).toFixed(2);
+  const aboveNumberLeadPt = (Number(aboveNumberFontPt) * 1.08).toFixed(2);
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
@@ -2988,12 +3225,25 @@ function renderOneQuestion(question, {
     };
   }
 
+  function safeFigureOffsetX(layout) {
+    const raw = Number.isFinite(layout?.offsetXEm) ? Number(layout.offsetXEm) : 0;
+    const anchor = String(layout?.anchor || 'center').toLowerCase();
+    const position = String(layout?.position || '').toLowerCase();
+    if (anchor === 'left' || position === 'inline-left') {
+      return Math.max(0, raw);
+    }
+    if (anchor === 'right' || position === 'inline-right') {
+      return Math.min(0, raw);
+    }
+    return raw;
+  }
+
   function renderFigureLatex(i) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
     const layout = layoutForIndex(i) || {};
     const anchor = String(layout.anchor || 'center').toLowerCase();
-    const offsetX = Number.isFinite(layout.offsetXEm) ? Number(layout.offsetXEm) : 0;
+    const offsetX = safeFigureOffsetX(layout);
     const offsetY = Number.isFinite(layout.offsetYEm) ? Number(layout.offsetYEm) : 0;
     const hOffset = Math.abs(offsetX) > 1e-3 ? `\\hspace*{${offsetX.toFixed(2)}em}` : '';
     const vOffsetPre = offsetY > 1e-3 ? `\\vspace*{${offsetY.toFixed(2)}em}` : '';
@@ -3009,6 +3259,74 @@ function renderOneQuestion(question, {
     const pre = vOffsetPre ? `\n${vOffsetPre}` : '';
     const post = vOffsetPost ? `\n${vOffsetPost}` : '';
     return `${pre}\n${body}${post}\n`;
+  }
+
+  function resolveFigureIndexForSegment(sIdx, segText) {
+    const tokenMatch = String(segText || '').match(/\[\[PB_FIG_([^\]]+)\]\]/);
+    if (tokenMatch) {
+      const id = String(tokenMatch[1] || '').trim();
+      const resolved = itemIdToLocalIdx.get(id);
+      figIdx += 1;
+      if (Number.isInteger(resolved)) return resolved;
+    }
+    while (emittedFigIdxs.has(figIdx)) figIdx += 1;
+    const resolved = figIdx;
+    figIdx += 1;
+    return resolved;
+  }
+
+  function renderTextSegmentInlineLatex(seg) {
+    const lines = Array.isArray(seg?.lines) ? seg.lines : [];
+    const out = [];
+    let pendingEmpty = 0;
+    for (const rawLine of lines) {
+      const raw = String(rawLine || '');
+      if (SUBQ_MARKER_LINE_RE.test(raw)) {
+        if (out.length > 0) out.push('\\par');
+        pendingEmpty = 0;
+        continue;
+      }
+      const stripped = raw.replace(PARAGRAPH_MARKER_RE, '').trim();
+      if (!stripped) {
+        const matches = raw.match(PARAGRAPH_MARKER_RE);
+        pendingEmpty += matches ? matches.length : 1;
+        continue;
+      }
+      const subLines = raw.split(PARAGRAPH_MARKER_RE);
+      for (const subRaw of subLines) {
+        const sub = subRaw.trim();
+        if (!sub) {
+          pendingEmpty += 1;
+          continue;
+        }
+        if (out.length > 0 || pendingEmpty > 0) {
+          out.push('\\par');
+          if (pendingEmpty > 0) {
+            out.push(`\\vspace{${(0.4 * pendingEmpty).toFixed(2)}em}`);
+          }
+        }
+        pendingEmpty = 0;
+        const rendered = renderStemTextLine(sub, equations);
+        if (rendered.trim()) out.push(rendered);
+      }
+    }
+    return out.join('\n');
+  }
+
+  function renderInlineFigureWithTextLatex(i, textSeg, position) {
+    const expr = figureIncludeExpr(i);
+    if (!expr) return '';
+    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    if (!text) return renderFigureLatex(i);
+    const gap = '0.90em';
+    const figWidth = expr.widthExpr;
+    const textWidth = `\\dimexpr\\linewidth-${figWidth}-${gap}\\relax`;
+    const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${expr.include}\\end{minipage}`;
+    const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
+    if (position === 'inline-right') {
+      return `\\par\\noindent${textBox}\\hspace{${gap}}${figBox}\\par\n`;
+    }
+    return `\\par\\noindent${figBox}\\hspace{${gap}}${textBox}\\par\n`;
   }
 
   // 그룹(가로 배치) 전체를 한 줄 minipage 묶음으로 방출.
@@ -3109,6 +3427,9 @@ function renderOneQuestion(question, {
   const parts = [];
 
   parts.push('\\begingroup');
+  const questionFontSizePt = Math.max(7, Number(stemSizePt) || 11);
+  const questionLeadPt = Math.max(questionFontSizePt * 1.18, questionFontSizePt + 1).toFixed(2);
+  parts.push(`\\fontsize{${questionFontSizePt.toFixed(2)}pt}{${questionLeadPt}pt}\\selectfont`);
   // minipage/multicols 내부에서도 자간이 늘어나지 않도록 raggedright 의 파라미터를 명시.
   parts.push('\\rightskip=0pt plus 1fil\\relax');
   parts.push('\\parfillskip=0pt plus 1fil\\relax');
@@ -3193,8 +3514,15 @@ function renderOneQuestion(question, {
     // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut(짝 slot 라벨박스 \vphantom)
     // 을 여기서 소비해 라벨박스와 동일 ht 를 가지도록 한다.
     const strut = sectionLabel ? '' : firstLineStrut;
+    const inlineNumberFontPt = Number(inlineNumberFontPtOverride);
+    const inlineNumberLeadPt = Number.isFinite(inlineNumberFontPt) && inlineNumberFontPt > 0
+      ? (inlineNumberFontPt * 1.08).toFixed(2)
+      : '';
+    const inlineNumberTex = Number.isFinite(inlineNumberFontPt) && inlineNumberFontPt > 0
+      ? `{\\fontsize{${inlineNumberFontPt.toFixed(2)}pt}{${inlineNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}.}`
+      : `\\textbf{${escapeLatexText(String(qNumDisplay))}.}`;
     parts.push(
-      `\\noindent\\hspace{-1em}${strut}\\textbf{${escapeLatexText(String(qNumDisplay))}.}\\enspace`,
+      `\\noindent\\hspace{-1em}${strut}${inlineNumberTex}\\enspace`,
     );
   } else if (!sectionLabel && firstLineStrut) {
     parts.push(`\\noindent${firstLineStrut}`);
@@ -3496,7 +3824,32 @@ function renderOneQuestion(question, {
       //   - figIdxConsumedByGroup 에 포함된 마커(그룹의 2번째 이후 멤버)는 replaceFigureMarkers
       //     가 빈 문자열을 반환 → 이 경우 현재 seg 에서는 아무것도 push 하지 않는다
       //     (그룹 대표 figure seg 가 이미 본체를 방출했기 때문).
-      const rendered = replaceFigureMarkers(seg.lines[0] || '[그림]');
+      const segText = seg.lines[0] || '[그림]';
+      const inlineIdx = figMarkerCountUpTo(sIdx);
+      const inlineLayout = layoutForIndex(inlineIdx) || {};
+      const inlinePosition = String(inlineLayout.position || '').trim();
+      const nextSeg = segments[sIdx + 1];
+      if (
+        (inlinePosition === 'inline-left' || inlinePosition === 'inline-right')
+        && nextSeg?.type === 'text'
+        && figureSegWillEmit(sIdx)
+      ) {
+        const i = resolveFigureIndexForSegment(sIdx, segText);
+        if (!figIdxConsumedByGroup.has(i)) {
+          emittedFigIdxs.add(i);
+          const renderedInline = renderInlineFigureWithTextLatex(
+            i,
+            nextSeg,
+            inlinePosition,
+          );
+          if (renderedInline && renderedInline.trim()) {
+            parts.push(renderedInline);
+            sIdx += 1;
+            continue;
+          }
+        }
+      }
+      const rendered = replaceFigureMarkers(segText);
       if (rendered && rendered.trim()) {
         parts.push(rendered);
       }
@@ -3622,6 +3975,7 @@ export function buildTexSource(question, options = {}) {
     fontFamily = 'Malgun Gothic',
     fontBold = 'Malgun Gothic Bold',
     stemSizePt = 12,
+    previewIndependentSetCommonStem = false,
   } = options;
 
   const lines = [
@@ -3649,6 +4003,7 @@ export function buildTexSource(question, options = {}) {
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
+    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
@@ -3672,7 +4027,10 @@ export function buildTexSource(question, options = {}) {
     '\\lineskiplimit=0.4em\\lineskip=1.2em',
   ];
 
-  return lines.join('\n') + '\n' + renderOneQuestion(question, { stemSizePt }) + '\n\\end{document}\n';
+  const renderQuestion = previewIndependentSetCommonStem === true
+    ? wrapIndependentSetQuestionsForSinglePreview([question])[0]
+    : question;
+  return lines.join('\n') + '\n' + renderOneQuestion(renderQuestion, { stemSizePt }) + '\n\\end{document}\n';
 }
 
 function splitAnswerRenderLines(answer) {
@@ -3783,6 +4141,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
+    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
@@ -3819,6 +4178,85 @@ function parsePositiveInt(raw, fallback) {
   return parsed;
 }
 
+function independentSetRenderKey(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object'
+    ? meta.delivery_unit
+    : {};
+  const model = meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+  const deliveryType = String(delivery.delivery_type || '').trim();
+  const modelType = String(model.set_type || '').trim();
+  const commonStem = String(
+    delivery.common_stem || model.common_stem || model.commonStem || '',
+  ).trim();
+  if (!commonStem) return null;
+  if (deliveryType !== 'independent_item' && modelType !== 'independent_set') return null;
+  const key = String(
+    delivery.set_id || delivery.set_key || model.set_key || model.setKey || '',
+  ).trim();
+  return key ? { key, commonStem } : null;
+}
+
+function groupIndependentSetQuestionsForRender(questions) {
+  const source = Array.isArray(questions) ? questions : [];
+  const out = [];
+  for (const question of source) {
+    const info = independentSetRenderKey(question);
+    const last = out[out.length - 1];
+    if (info && last?.__render_kind === 'independent_set_group' && last.set_key === info.key) {
+      last.items.push(question);
+      continue;
+    }
+    if (info) {
+      out.push({
+        __render_kind: 'independent_set_group',
+        set_key: info.key,
+        common_stem: info.commonStem,
+        items: [question],
+        question_type: question?.question_type || '주관식',
+        mode: question?.mode || question?.questionMode || question?.export_mode || question?.exportMode,
+      });
+      continue;
+    }
+    out.push(question);
+  }
+  return out;
+}
+
+function wrapIndependentSetQuestionsForSinglePreview(questions) {
+  const source = Array.isArray(questions) ? questions : [];
+  return source.map((question) => {
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object'
+      ? meta.delivery_unit
+      : {};
+    const model = meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+    const deliveryType = String(delivery.delivery_type || '').trim();
+    const modelType = String(model.set_type || '').trim();
+    const commonStem = String(
+      delivery.common_stem || model.common_stem || model.commonStem || '',
+    ).trim();
+    if (!commonStem) return question;
+    if (deliveryType !== 'independent_item' && modelType !== 'independent_set') return question;
+    return {
+      __render_kind: 'independent_set_group',
+      set_key: String(
+        delivery.set_id
+          || delivery.set_key
+          || model.set_key
+          || model.setKey
+          || question?.question_uid
+          || question?.id
+          || '',
+      ).trim(),
+      common_stem: commonStem,
+      items: [question],
+      question_type: question?.question_type || '주관식',
+      mode: question?.mode || question?.questionMode || question?.export_mode || question?.exportMode,
+    };
+  });
+}
+
 function chunkQuestionsForMockGrid(questions, questionsPerPage) {
   const list = Array.isArray(questions) ? questions : [];
   const size = Math.max(1, parsePositiveInt(questionsPerPage, 4));
@@ -3840,6 +4278,26 @@ function estimateAssignmentSlotFillRatio(question) {
   );
   if (Number.isFinite(explicit) && explicit > 0) {
     return explicit > 1 ? explicit / 100 : explicit;
+  }
+  if (question?.__render_kind === 'independent_set_group') {
+    const commonStem = String(question.common_stem || question.commonStem || '').trim();
+    const commonLines = commonStem
+      ? commonStem
+        .replace(/\[(?:문단(?::[^\]]*)?|박스시작|박스끝)\]/g, '')
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 34)), 0)
+      : 0;
+    const items = Array.isArray(question.items) ? question.items : [];
+    const itemLines = items.reduce((sum, item) => (
+      sum + Math.max(2.0, estimateAssignmentSlotFillRatio(item) * 22)
+    ), 0);
+    // renderIndependentSetGroupLatex inserts one blank baseline after the common stem
+    // and between each independent item, so reserve that vertical space here too.
+    const gapLines = items.length > 0 ? items.length : 0;
+    const estimatedLines = 1.2 + commonLines + itemLines + gapLines;
+    return estimatedLines / 22;
   }
   const stem = String(question?.stem || '');
   const compactLines = stem
@@ -3934,6 +4392,7 @@ function renderMockSlotColumnBody(
     questionNumberPlacement = 'inline',
     questionNumberFormat = 'source',
     stemSizePt = 11,
+    aboveNumberFontPtOverride = null,
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
     // 짝슬롯(row-pair) 동기화 파생 데이터. 길이는 slotCount 와 동일해야 한다.
@@ -3960,6 +4419,7 @@ function renderMockSlotColumnBody(
         questionNumberPlacement,
         questionNumberFormat,
         stemSizePt,
+        aboveNumberFontPtOverride,
         includeQuestionScore,
         questionScoreByQuestionId,
         sectionLabel: sectionLabels[i] || null,
@@ -4083,8 +4543,10 @@ function renderMockGridPageLatex(
     questionNumberFormat = 'source',
     isFirstPage = false,
     stemSizePt = 11,
+    aboveNumberFontPtOverride = null,
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
+    isAssignmentProfile = false,
     titleHeader = null, // { titleTop, title, subtitle } (null = 일반 페이지)
     // 페이지 내 문항별 sectionLabel. 길이 = pageQuestions.length. 각 원소는 string | null.
     sectionLabels = [],
@@ -4240,6 +4702,7 @@ function renderMockGridPageLatex(
       questionNumberPlacement,
       questionNumberFormat,
       stemSizePt,
+      aboveNumberFontPtOverride,
       includeQuestionScore,
       questionScoreByQuestionId,
       sectionLabels: leftLabels,
@@ -4256,6 +4719,7 @@ function renderMockGridPageLatex(
       questionNumberPlacement,
       questionNumberFormat,
       stemSizePt,
+      aboveNumberFontPtOverride,
       includeQuestionScore,
       questionScoreByQuestionId,
       sectionLabels: rightLabels,
@@ -4296,8 +4760,13 @@ function renderMockGridPageLatex(
   }
 
   // --- 일반/첫 페이지 경로: 좌/우 minipage 직접 배치. ---
-  //   이전 버전의 '\vspace*{8pt}' 는 제거 → 사용자 요청대로 슬롯을 '20pt 더 올림'.
-  //   (overlay 가로선과 슬롯 첫 줄 사이는 fancyhdr 의 \headsep 기본값에 의존.)
+  //   mock/csat 일반 페이지도 [t] minipage 의 첫 baseline/글자 높이 때문에 실제 문항번호
+  //   ink top 이 가로선보다 크게 내려가 보인다. PDF 실측 기준 -8pt 는 약 35pt gap,
+  //   -28pt 는 약 15pt gap 으로 선과 겹치지 않는 자연 여백만 남긴다.
+  //   과제형은 별도 A4 레이아웃 보정값을 유지한다.
+  const preColumnsVspace = titleHeader
+    ? ''
+    : (isAssignmentProfile ? '\\vspace*{-34.6pt}' : '\\vspace*{-28pt}');
   const heightCalc = isFirstPage
     ? '\\setlength{\\mockColumnHeight}{\\dimexpr\\pagegoal-\\pagetotal-4pt\\relax}'
     : '\\setlength{\\mockColumnHeight}{\\textheight}';
@@ -4307,6 +4776,7 @@ function renderMockGridPageLatex(
     '\\setlength{\\mockSlotGap}{8pt}',
     heightCalc,
     '\\ifdim\\mockColumnHeight<180pt\\setlength{\\mockColumnHeight}{180pt}\\fi',
+    preColumnsVspace,
     `\\setlength{\\mockLeftSlotHeight}{\\dimexpr(\\mockColumnHeight-${leftGapExpr})/${safeLeftSlots}\\relax}`,
     `\\setlength{\\mockRightSlotHeight}{\\dimexpr(\\mockColumnHeight-${rightGapExpr})/${safeRightSlots}\\relax}`,
     buildColumnsBlock('\\mockColumnHeight', '\\mockLeftSlotHeight', '\\mockRightSlotHeight'),
@@ -4885,6 +5355,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     //   - auto     : 서버 기본 생성. 클라이언트가 payload 에 포함해 보내면 그대로 그려진다.
     //   - suppressed : 사용자가 × 로 '제거' 한 slot. 이 slot 에는 auto 라벨도 출력하지 않는다.
     columnLabelAnchors = [],
+    disableIndependentSetGrouping = false,
+    previewIndependentSetCommonStem = false,
     reviewPdf = false,
     // 클라이언트(Flutter) 가 '새로고침' / 'PDF 생성' 경로에서 true 로 넘겨주는 플래그.
     //   true 이면 모드 전환 기반 자동 라벨 생성(예: '5지선다형') 을 전면 중단하고,
@@ -4894,6 +5366,13 @@ export function buildDocumentTexSource(questions, options = {}) {
   } = options;
 
   const logoEnabled = includeAcademyLogo && !!academyLogoPath;
+  const isAssignmentProfile = profile === 'assignment';
+  const effectiveStemSizePt = isAssignmentProfile
+    ? Math.max(8, Number(fontSize || 11) - 1.5)
+    : Math.max(8, Number(fontSize || 11) - 0.5);
+  const assignmentAboveNumberFontPt = isAssignmentProfile
+    ? Math.max(8, ((Number(fontSize || 11) + 1) * 1.21) - 1.5)
+    : null;
 
   const preamble = buildPreamble({
     paper, fontFamily, fontBold, fontRegularPath, fontSize,
@@ -4909,10 +5388,23 @@ export function buildDocumentTexSource(questions, options = {}) {
 
   const parts = [preamble];
   parts.push('\\begin{document}');
+  if (isAssignmentProfile) {
+    const leadPt = Math.max(effectiveStemSizePt * 1.18, effectiveStemSizePt + 1).toFixed(2);
+    parts.push(`\\fontsize{${effectiveStemSizePt.toFixed(2)}pt}{${leadPt}pt}\\selectfont`);
+  }
   parts.push('\\raggedright');
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
 
   const qList = Array.isArray(questions) ? questions : [];
+  const visualQList = (profile === 'review_compact' || reviewPdf === true)
+    ? qList
+    : (isAssignmentProfile
+        ? (disableIndependentSetGrouping === true
+            ? (previewIndependentSetCommonStem === true
+                ? wrapIndependentSetQuestionsForSinglePreview(qList)
+                : qList)
+            : groupIndependentSetQuestionsForRender(qList))
+        : qList);
   if (profile === 'review_compact' || reviewPdf === true) {
     const resolveReviewAnswer = (q) => {
       const exp = String(q?.export_answer || '').trim();
@@ -4950,7 +5442,6 @@ export function buildDocumentTexSource(questions, options = {}) {
     return parts.join('\n');
   }
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
-  const isAssignmentProfile = profile === 'assignment';
   const isMock = isMockExamProfile || isAssignmentProfile;
   const effectiveLayoutMeta = layoutMeta && typeof layoutMeta === 'object' ? layoutMeta : null;
   let lastMode = null;
@@ -5016,19 +5507,19 @@ export function buildDocumentTexSource(questions, options = {}) {
       pages = [];
       let cursor = 0;
       let pageNo = 0;
-      while (cursor < qList.length) {
+      while (cursor < visualQList.length) {
         const ov = overrides[pageNo];
         const perPage = ov ? (ov.left + ov.right) : qPerPage;
-        pages.push(qList.slice(cursor, cursor + perPage));
+        pages.push(visualQList.slice(cursor, cursor + perPage));
         cursor += perPage;
         pageNo += 1;
       }
     } else if (isAssignmentProfile && qPerPage === 4) {
-      const assignmentPlan = chunkQuestionsForAssignmentGrid(qList);
+      const assignmentPlan = chunkQuestionsForAssignmentGrid(visualQList);
       pages = assignmentPlan.pages;
       assignmentPageColumnCounts = assignmentPlan.pageColumnCounts;
     } else {
-      pages = chunkQuestionsForMockGrid(qList, qPerPage);
+      pages = chunkQuestionsForMockGrid(visualQList, qPerPage);
     }
 
     // mock 경로 전체에 걸쳐 sectionLabel 결정을 위한 "직전 문항 mode".
@@ -5057,8 +5548,9 @@ export function buildDocumentTexSource(questions, options = {}) {
     //   body_top/디바이더/슬롯만 선형으로 하향된다.
     const titleTopMm = isAssignmentProfile ? '36.81mm' : '52.59mm';
     const titleHeadSepPt = isAssignmentProfile ? '27.08pt' : '38.68pt';
+    const titleHMargin = isAssignmentProfile ? '11.34mm' : '14mm';
     const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
-      + `,hmargin=14mm,top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
+      + `,hmargin=${titleHMargin},top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
     // 직전 페이지가 제목페이지였는지 기록 (일반 페이지 진입 시 \restoregeometry 삽입용).
     let activeTitleGeom = false;
     const autoColumnLabelAnchors = [];
@@ -5132,15 +5624,19 @@ export function buildDocumentTexSource(questions, options = {}) {
     for (let i = 0; i < pages.length; i += 1) {
       const pageNo = i + 1;
       const titleHeader = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
-      if (i > 0) parts.push('\\newpage\n');
       // 페이지 진입 시 제목페이지 플래그 명시 설정 — shipout overlay 가 세로선
       //   시작 y 를 결정하는 근거. renderMockGridPageLatex 내부에서 true 를 set 하지만
       //   '일반 페이지' 에선 명시적으로 false 로 리셋해야 직전 제목페이지 상태가
       //   이월되지 않는다.
       if (titleHeader) {
+        if (i > 0 && activeTitleGeom) {
+          parts.push('\\newpage\n');
+        } else if (i > 0) {
+          parts.push('\\newpage\n');
+        }
         // 제목페이지 진입: geometry 를 headheight 확장 버전으로 전환.
         if (!activeTitleGeom) {
-          parts.push(`\\newgeometry{${titleGeom}}`);
+          parts.push(`\\YggNewGeometryNoClear{${titleGeom}}`);
           activeTitleGeom = true;
         }
         // `\fancyhead[C]` vbox 가 참조할 글로벌 매크로에 부제/타이틀 텍스트 세팅.
@@ -5155,8 +5651,11 @@ export function buildDocumentTexSource(questions, options = {}) {
       } else {
         // 일반 페이지: 직전이 제목페이지였다면 geometry 를 원복.
         if (activeTitleGeom) {
-          parts.push('\\restoregeometry');
+          parts.push('\\newpage\n');
+          parts.push('\\YggRestoreGeometryNoClear');
           activeTitleGeom = false;
+        } else if (i > 0) {
+          parts.push('\\newpage\n');
         }
         parts.push('\\AtBeginShipoutNext{\\global\\mocktitlepagefalse}');
         if (i === 0 && logoEnabled && !includeCoverPage) {
@@ -5237,9 +5736,11 @@ export function buildDocumentTexSource(questions, options = {}) {
           questionNumberPlacement,
           questionNumberFormat,
           isFirstPage: i === 0 && !titleHeader,
-          stemSizePt: fontSize,
+          stemSizePt: effectiveStemSizePt,
+          aboveNumberFontPtOverride: assignmentAboveNumberFontPt,
           includeQuestionScore,
           questionScoreByQuestionId,
+          isAssignmentProfile,
           titleHeader,
           sectionLabels: pageLabels,
           pageMacroPrefix: toPageMacroPrefix(i),
@@ -5268,11 +5769,11 @@ export function buildDocumentTexSource(questions, options = {}) {
     const chunkSimplePages = columns >= 2 && simplePerPage > 0 && simplePerPage < 99;
     const simplePages = [];
     if (chunkSimplePages) {
-      for (let start = 0; start < qList.length; start += simplePerPage) {
-        simplePages.push(qList.slice(start, start + simplePerPage));
+      for (let start = 0; start < visualQList.length; start += simplePerPage) {
+        simplePages.push(visualQList.slice(start, start + simplePerPage));
       }
     } else {
-      simplePages.push(qList);
+      simplePages.push(visualQList);
     }
 
     for (let pageIdx = 0; pageIdx < simplePages.length; pageIdx += 1) {
@@ -5316,7 +5817,8 @@ export function buildDocumentTexSource(questions, options = {}) {
             questionNumberPlacement,
             questionNumberFormat,
             mode: qMode,
-            stemSizePt: fontSize,
+            stemSizePt: effectiveStemSizePt,
+            aboveNumberFontPtOverride: assignmentAboveNumberFontPt,
             includeQuestionScore,
             questionScoreByQuestionId,
             layoutColumns: columns,

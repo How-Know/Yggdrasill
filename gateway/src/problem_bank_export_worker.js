@@ -55,7 +55,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v55_compact_subanswers';
+const RENDER_CONFIG_VERSION = 'pb_render_v71_math_line_box_symmetry';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -3820,6 +3820,25 @@ async function fetchQuestionsForJob(job, renderConfig) {
     }
     const byId = new Map((unitRows || []).map((row) => [String(row.id || ''), row]));
     deliveryUnits = selectedDeliveryUnitIds.map((id) => byId.get(id)).filter(Boolean);
+    const setIds = Array.from(new Set(
+      deliveryUnits.map((unit) => String(unit.set_id || '').trim()).filter(Boolean),
+    ));
+    let setsById = new Map();
+    if (setIds.length > 0) {
+      const { data: setRows, error: setErr } = await supa
+        .from('pb_question_sets')
+        .select('id,set_key,set_type,common_stem,render_policy,source_meta')
+        .eq('academy_id', academyId)
+        .in('id', setIds);
+      if (setErr) {
+        throw new Error(`delivery_set_fetch_failed:${setErr.message}`);
+      }
+      setsById = new Map((setRows || []).map((row) => [String(row.id || ''), row]));
+    }
+    deliveryUnits = deliveryUnits.map((unit) => ({
+      ...unit,
+      set_row: setsById.get(String(unit.set_id || '')) || null,
+    }));
     deliveryQuestionIds = Array.from(new Set(
       deliveryUnits
         .map((unit) => String(unit.question_id || '').trim())
@@ -3922,6 +3941,9 @@ async function fetchQuestionsForJob(job, renderConfig) {
           delivery_unit: {
             id: String(unit.id || ''),
             set_id: String(unit.set_id || ''),
+            set_key: String(unit.set_row?.set_key || ''),
+            set_type: String(unit.set_row?.set_type || ''),
+            common_stem: String(unit.set_row?.common_stem || ''),
             delivery_key: String(unit.delivery_key || ''),
             delivery_type: String(unit.delivery_type || ''),
             title: String(unit.title || ''),

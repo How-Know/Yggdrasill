@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/problem_bank_service.dart';
+import '../../services/textbook_course_catalog.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'problem_bank_models.dart';
 import 'widgets/figure_compare_dialog.dart';
@@ -74,17 +75,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     'solution_content_error': '해설/풀이 오류',
     'classification_error': '문항 범위/분류 오류',
   };
-  static const List<String> _courseLabelOptions = <String>[
+  static const List<String> _schoolLevelOptions = <String>[
     '',
-    '중등',
-    '고등',
-    '공통',
+    'middle',
+    'high',
   ];
-  static const Map<String, String> _courseLabelLabels = <String, String>{
+  static const Map<String, String> _schoolLevelLabels = <String, String>{
     '': '미선택',
-    '중등': '중등',
-    '고등': '고등',
-    '공통': '공통',
+    'middle': '중등',
+    'high': '고등',
   };
 
   final ProblemBankService _service = ProblemBankService();
@@ -148,6 +147,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _needsPublish = false;
   String _selectedCurriculumCode = 'rev_2022';
   String _selectedSourceTypeCode = 'school_past';
+  String _selectedSchoolLevel = '';
   String _selectedCourseLabel = '';
   String _sourceSemester = '1학기';
   String _sourceExamTerm = '';
@@ -423,9 +423,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     _selectedSourceTypeCode = _sourceTypeLabels.containsKey(sourceTypeCode)
         ? sourceTypeCode
         : fallbackSourceType;
-    _selectedCourseLabel = _courseLabelOptions.contains(doc?.courseLabel)
-        ? (doc?.courseLabel ?? '')
-        : '';
+    _selectedSchoolLevel = _resolveSchoolLevel(
+      schoolLevel: doc?.schoolLevel,
+      gradeKey: doc?.gradeKey,
+      courseKey: doc?.courseKey,
+      gradeLabel: doc?.gradeLabel,
+      courseLabel: doc?.courseLabel,
+    );
+    _selectedCourseLabel = _resolveCourseLabel(
+      courseLabel: doc?.courseLabel,
+      courseKey: doc?.courseKey,
+    );
 
     _sourceYearCtrl.text =
         doc?.examYear?.toString() ?? '${naesin['year'] ?? ''}'.trim();
@@ -452,6 +460,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   void _resetSourceMetaForm({bool markDirty = false}) {
     _selectedCurriculumCode = 'rev_2022';
     _selectedSourceTypeCode = 'school_past';
+    _selectedSchoolLevel = '';
     _selectedCourseLabel = '';
     _sourceYearCtrl.clear();
     _sourceSchoolCtrl.clear();
@@ -465,14 +474,42 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   Map<String, dynamic> _buildSourceClassificationMeta() {
     final isPrivate = _isPrivateSource;
+    final schoolLevel = _selectedSchoolLevel.trim();
+    final gradeLabel = _sourceGradeCtrl.text.trim();
+    final courseLabel = _resolvedCourseLabel();
+    final gradeKey = _resolvedGradeKey(
+      schoolLevel: schoolLevel,
+      gradeLabel: gradeLabel,
+      courseLabel: courseLabel,
+    );
+    final courseKey = _resolvedCourseKey(
+      schoolLevel: schoolLevel,
+      gradeLabel: gradeLabel,
+      courseLabel: courseLabel,
+    );
+    final textbookCourse = textbookCourseByLabel(courseLabel);
     return <String, dynamic>{
       'private_material': isPrivate,
       'school_past_exam': _selectedSourceTypeCode == 'school_past',
       'mock_past_exam': _selectedSourceTypeCode == 'mock_past',
+      'school_level': schoolLevel,
+      'grade_key': gradeKey,
+      'course_key': courseKey,
+      'course_label': courseLabel,
+      if (textbookCourse != null || courseKey.isNotEmpty)
+        'textbook_course': <String, dynamic>{
+          'grade_key': gradeKey,
+          'course_key': courseKey,
+          'course_label': courseLabel,
+        },
       'naesin': <String, dynamic>{
         'year': _sourceYearCtrl.text.trim(),
         'school_name': _sourceSchoolCtrl.text.trim(),
-        'grade': _sourceGradeCtrl.text.trim(),
+        'grade': gradeLabel,
+        'school_level': schoolLevel,
+        'grade_key': gradeKey,
+        'course_key': courseKey,
+        'course_label': courseLabel,
         'semester': _sourceSemester,
         'exam_term': _sourceExamTerm,
       },
@@ -493,6 +530,127 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     setState(() {
       _dirtyDocumentMeta = true;
     });
+  }
+
+  String _resolveSchoolLevel({
+    String? schoolLevel,
+    String? gradeKey,
+    String? courseKey,
+    String? gradeLabel,
+    String? courseLabel,
+  }) {
+    final explicit = (schoolLevel ?? '').trim();
+    if (_schoolLevelLabels.containsKey(explicit) && explicit.isNotEmpty) {
+      return explicit;
+    }
+    final merged =
+        '${gradeKey ?? ''} ${courseKey ?? ''} ${gradeLabel ?? ''} ${courseLabel ?? ''}'
+            .replaceAll(' ', '');
+    if (merged.contains('고') ||
+        merged.startsWith('H') ||
+        merged.contains('공통수학') ||
+        merged.contains('대수') ||
+        merged.contains('미적분') ||
+        merged.contains('확률') ||
+        merged.contains('기하')) {
+      return 'high';
+    }
+    if (merged.contains('중') ||
+        merged.startsWith('M') ||
+        RegExp(r'^[1-3]-[12]$').hasMatch(merged)) {
+      return 'middle';
+    }
+    return '';
+  }
+
+  String _resolveCourseLabel({String? courseLabel, String? courseKey}) {
+    final label = (courseLabel ?? '').trim();
+    if (label.isNotEmpty) return label;
+    final option = textbookCourseByKey(courseKey);
+    return option?.label ?? '';
+  }
+
+  String _resolvedCourseLabel() {
+    final selected = _selectedCourseLabel.trim();
+    if (selected.isNotEmpty) return selected;
+    if (_selectedSchoolLevel == 'middle') {
+      final grade = RegExp(r'[1-3]').firstMatch(_sourceGradeCtrl.text.trim());
+      if (grade != null) {
+        final semester = _sourceSemester == '2학기' ? '2' : '1';
+        return '${grade.group(0)}-$semester';
+      }
+    }
+    return '';
+  }
+
+  String _resolvedGradeKey({
+    required String schoolLevel,
+    required String gradeLabel,
+    required String courseLabel,
+  }) {
+    final grade = RegExp(r'[1-3]').firstMatch(gradeLabel.trim())?.group(0);
+    if (schoolLevel == 'middle') {
+      if (grade != null) return 'M$grade';
+      final option = textbookCourseByLabel(courseLabel);
+      return option?.gradeKey ?? '';
+    }
+    if (schoolLevel == 'high') {
+      if (grade != null) return 'H$grade';
+      final option = textbookCourseByLabel(courseLabel);
+      return option?.gradeKey ?? '';
+    }
+    return '';
+  }
+
+  String _resolvedCourseKey({
+    required String schoolLevel,
+    required String gradeLabel,
+    required String courseLabel,
+  }) {
+    final option = textbookCourseByLabel(courseLabel);
+    if (option != null) return option.courseKey;
+    if (schoolLevel == 'middle') {
+      final grade = RegExp(r'[1-3]').firstMatch(gradeLabel.trim())?.group(0);
+      if (grade == null) return '';
+      final semester = _sourceSemester == '2학기' ? '2' : '1';
+      return 'M$grade-$semester';
+    }
+    if (schoolLevel == 'high' && gradeLabel.contains('1')) {
+      return _sourceSemester == '2학기' ? 'H1-c2' : 'H1-c1';
+    }
+    return '';
+  }
+
+  List<String> _courseLabelDropdownValues() {
+    final selected = _selectedCourseLabel.trim();
+    final filtered = kTextbookCourseOptions.where((option) {
+      if (_selectedSchoolLevel == 'middle') {
+        return option.gradeKey.startsWith('M');
+      }
+      if (_selectedSchoolLevel == 'high') {
+        return option.gradeKey.startsWith('H');
+      }
+      return true;
+    });
+    final values = <String>{
+      '',
+      ...filtered.map((option) => option.label),
+      if (selected.isNotEmpty) selected,
+    };
+    return values.toList(growable: false);
+  }
+
+  Map<String, String> _courseLabelDisplayLabels() {
+    final selected = _selectedCourseLabel.trim();
+    return <String, String>{
+      '': '미선택',
+      for (final option in kTextbookCourseOptions)
+        option.label: option.gradeKey.startsWith('H')
+            ? '고등 · ${option.label}'
+            : option.displayLabel,
+      if (selected.isNotEmpty && textbookCourseByLabel(selected) == null)
+        selected: selected,
+    };
   }
 
   List<Map<String, dynamic>> _figureAssetsOf(ProblemBankQuestion q) {
@@ -663,26 +821,68 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   static const double _figureScaleMin = 0.3;
   static const double _figureScaleMax = 2.2;
-  static const double _figureWidthEmMin = 5.0;
+  static const double _figureWidthEmMin = 2.0;
   static const double _figureWidthEmMax = 30.0;
   static const double _figureWidthEmDefault = 15.5;
   static const double _defaultStemSizePt = 11.0;
   static const double _defaultMaxHeightPt = 170.0;
 
   static const List<String> _figurePositionOptions = <String>[
-    'below-stem',
-    'inline-right',
-    'inline-left',
-    'between-stem-choices',
-    'above-choices',
+    'align-left',
+    'align-right',
+    'center',
+    'wrap-left',
+    'wrap-right',
   ];
   static const Map<String, String> _figurePositionLabels = <String, String>{
-    'below-stem': '본문 아래',
-    'inline-right': '본문 오른쪽',
-    'inline-left': '본문 왼쪽',
-    'between-stem-choices': '본문-보기 사이',
-    'above-choices': '보기 위',
+    'align-left': '왼쪽 정렬',
+    'align-right': '오른쪽 정렬',
+    'center': '가운데',
+    'wrap-left': '왼쪽 어울림',
+    'wrap-right': '오른쪽 어울림',
   };
+
+  static String _figureArrangementFromPositionAnchor(
+    String position,
+    String anchor,
+  ) {
+    final pos = position.trim().toLowerCase();
+    final anc = anchor.trim().toLowerCase();
+    if (_figurePositionOptions.contains(pos)) return pos;
+    if (pos == 'inline-left') return 'wrap-left';
+    if (pos == 'inline-right') return 'wrap-right';
+    if (anc == 'left') return 'align-left';
+    if (anc == 'right') return 'align-right';
+    return 'center';
+  }
+
+  static String _figureLayoutPositionForArrangement(String arrangement) {
+    switch (arrangement.trim().toLowerCase()) {
+      case 'wrap-left':
+      case 'inline-left':
+        return 'inline-left';
+      case 'wrap-right':
+      case 'inline-right':
+        return 'inline-right';
+      default:
+        return 'below-stem';
+    }
+  }
+
+  static String _figureLayoutAnchorForArrangement(String arrangement) {
+    switch (arrangement.trim().toLowerCase()) {
+      case 'align-left':
+      case 'wrap-left':
+      case 'inline-left':
+        return 'left';
+      case 'align-right':
+      case 'wrap-right':
+      case 'inline-right':
+        return 'right';
+      default:
+        return 'center';
+    }
+  }
 
   double _scaleToWidthEm(double scale) {
     final safeScale = scale.clamp(_figureScaleMin, _figureScaleMax);
@@ -820,13 +1020,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final key = e.key.trim();
       if (key.isEmpty) continue;
       final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
-      final pos = positionMap?[key] ?? 'below-stem';
+      final arrangement = positionMap?[key] ?? _figurePositionOptions[2];
+      final pos = _figureLayoutPositionForArrangement(arrangement);
+      final anchor = _figureLayoutAnchorForArrangement(arrangement);
       final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
       items.add(<String, dynamic>{
         'assetKey': key,
         'widthEm': (wEm * 10).roundToDouble() / 10.0,
         'position': pos,
-        'anchor': 'center',
+        'anchor': anchor,
         'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
         'offsetYEm': 0,
       });
@@ -2475,7 +2677,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             : payload.sourceName.trim(),
         curriculumCode: _selectedCurriculumCode,
         sourceTypeCode: _selectedSourceTypeCode,
-        courseLabel: _selectedCourseLabel,
+        courseLabel: _resolvedCourseLabel(),
         gradeLabel: _sourceGradeCtrl.text.trim(),
         examYear: _sourceExamYearValue(),
         semesterLabel: _sourceSemester,
@@ -2762,13 +2964,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('학년을 입력해주세요.', error: true);
       return;
     }
+    if (_isSchoolPastSource && _selectedSchoolLevel.trim().isEmpty) {
+      _showSnack('내신 기출은 학교급을 선택해주세요.', error: true);
+      return;
+    }
+    if (_selectedSchoolLevel == 'high' && _selectedCourseLabel.trim().isEmpty) {
+      _showSnack('고등 내신 기출은 과목을 선택해주세요.', error: true);
+      return;
+    }
     final dirtyIds = _dirtyQuestionIds.toList(growable: false);
     final doc = _activeDocument;
     final academyId = _academyId;
     final curriculumCode = _selectedCurriculumCode;
     final sourceTypeCode = _selectedSourceTypeCode;
-    final courseLabel = _selectedCourseLabel;
+    final schoolLevel = _selectedSchoolLevel;
     final gradeLabel = _sourceGradeCtrl.text.trim();
+    final courseLabel = _resolvedCourseLabel();
+    final gradeKey = _resolvedGradeKey(
+      schoolLevel: schoolLevel,
+      gradeLabel: gradeLabel,
+      courseLabel: courseLabel,
+    );
+    final courseKey = _resolvedCourseKey(
+      schoolLevel: schoolLevel,
+      gradeLabel: gradeLabel,
+      courseLabel: courseLabel,
+    );
     final examYear = _sourceExamYearValue();
     final semesterLabel = _sourceSemester;
     final examTermLabel = _sourceExamTerm;
@@ -2818,6 +3039,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           equations: q.equations,
           curriculumCode: curriculumCode,
           sourceTypeCode: sourceTypeCode,
+          schoolLevel: schoolLevel,
+          gradeKey: gradeKey,
+          courseKey: courseKey,
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
           examYear: examYear,
@@ -2845,6 +3069,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           status: 'ready',
           curriculumCode: curriculumCode,
           sourceTypeCode: sourceTypeCode,
+          schoolLevel: schoolLevel,
+          gradeKey: gradeKey,
+          courseKey: courseKey,
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
           examYear: examYear,
@@ -2863,6 +3090,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           documentId: doc.id,
           curriculumCode: curriculumCode,
           sourceTypeCode: sourceTypeCode,
+          schoolLevel: schoolLevel,
+          gradeKey: gradeKey,
+          courseKey: courseKey,
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
           examYear: examYear,
@@ -4892,10 +5122,35 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           SizedBox(
             width: double.infinity,
             child: _buildDropdownField(
-              label: '과정',
+              label: '학교급',
+              value: _selectedSchoolLevel,
+              values: _schoolLevelOptions,
+              displayLabels: _schoolLevelLabels,
+              onChanged: (v) {
+                setState(() {
+                  _selectedSchoolLevel = v;
+                  final selectedCourse = _selectedCourseLabel.trim();
+                  final option = textbookCourseByLabel(selectedCourse);
+                  final keepCourse = option == null ||
+                      (v == 'middle' && option.gradeKey.startsWith('M')) ||
+                      (v == 'high' && option.gradeKey.startsWith('H')) ||
+                      v.isEmpty;
+                  if (!keepCourse) {
+                    _selectedCourseLabel = '';
+                  }
+                });
+                _markDocumentMetaDirty();
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: _buildDropdownField(
+              label: '과목',
               value: _selectedCourseLabel,
-              values: _courseLabelOptions,
-              displayLabels: _courseLabelLabels,
+              values: _courseLabelDropdownValues(),
+              displayLabels: _courseLabelDisplayLabels(),
               onChanged: (v) {
                 setState(() {
                   _selectedCourseLabel = v;
@@ -5592,7 +5847,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     bool forceMathTokenWrap = false,
     bool compactFractions = true,
   }) {
-    final input = _preserveKoreanSentenceSpacingForPreview(raw);
+    final input = _preserveKoreanSentenceSpacingForPreview(
+      raw.replaceAllMapped(RegExp(r'\[공백:([0-9]+(?:\.[0-9]+)?)\]'), (match) {
+        final amount = double.tryParse(match.group(1) ?? '') ?? 1;
+        final count = amount.clamp(1, 20).round();
+        return ' ' * count;
+      }),
+    );
     if (input.trim().isEmpty) return '';
     final protected = StringBuffer();
     var protectedCursor = 0;
@@ -5795,7 +6056,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ) &&
         (q.isSetQuestion ||
             (q.answerParts?.isNotEmpty ?? false) ||
-            (q.scoreParts?.isNotEmpty ?? false));
+            (q.scoreParts?.isNotEmpty ?? false)) &&
+        !q.isIndependentSetItem;
     if (isSet) {
       return _buildSetScoreSummary(q);
     }
@@ -5980,7 +6242,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: _accent.withOpacity(0.14),
+                      color: _accent.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: _accent),
                     ),
@@ -6104,7 +6366,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 SizedBox(
                   width: 60,
                   child: TextFormField(
-                    key: ValueKey('score-sub-${i}-${entries[i].sub}'),
+                    key: ValueKey('score-sub-$i-${entries[i].sub}'),
                     initialValue: entries[i].sub,
                     style: const TextStyle(color: _text, fontSize: 13),
                     decoration: _answerInputDecoration(hint: '예: 1'),
@@ -6618,7 +6880,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 파트별로 value 만 위생화하고 "(sub) value" 형태로 조립해 반환한다.
     final parts = _isAutoTypeBadgeSuppressed(q, _autoTypeBadgeSetQuestion)
         ? null
-        : q.answerParts;
+        : q.isIndependentSetItem
+            ? null
+            : q.answerParts;
     if (parts != null && parts.isNotEmpty) {
       final directRaw = q.subjectiveAnswer.isNotEmpty
           ? q.subjectiveAnswer
@@ -8166,6 +8430,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _stemPreviewWithMarkers(ProblemBankQuestion q) {
     var out = _normalizePreviewMultiline(q.renderedStem);
     if (out.isEmpty) return '';
+    final commonStem = q.setCommonStem;
+    if (q.isIndependentSetItem && commonStem.isNotEmpty) {
+      out = out
+          .replaceFirst(RegExp('^\\s*${RegExp.escape(commonStem)}\\s*'), '')
+          .trim();
+      if (out.isEmpty) return '';
+    }
     if (_isImageChoiceQuestion(q)) {
       return _normalizePreviewMultiline(_stripImageChoiceFigureMarkers(out));
     }
@@ -8193,6 +8464,52 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           markerNormalized.substring(0, lastMarker));
     }
     return _normalizePreviewMultiline(out);
+  }
+
+  Widget _buildIndependentSetCommonStemPanel(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+  }) {
+    final commonStem = q.setCommonStem;
+    if (!q.isIndependentSetItem || commonStem.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(bottom: expanded ? 8 : 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: expanded ? 10 : 8,
+        vertical: expanded ? 8 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F1E8),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE1D3BD)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '공통 발문',
+            style: TextStyle(
+              color: const Color(0xFF7B4E13),
+              fontSize: expanded ? 11.5 : 10.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            commonStem,
+            style: TextStyle(
+              color: const Color(0xFF2D251A),
+              fontSize: expanded ? 13.2 : 12.4,
+              height: 1.42,
+              fontFamily: _previewKoreanFontFamily,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   double _stemToChoiceGap({required bool expanded}) {
@@ -8250,6 +8567,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         final choiceAvailableWidth =
             math.max(120.0, constraints.maxWidth - numberingInset);
         final contentChildren = <Widget>[
+          if (q.isIndependentSetItem && q.setCommonStem.isNotEmpty)
+            _buildIndependentSetCommonStemPanel(q, expanded: expanded),
           ...stemBlocks,
           if (viewBlockLines.isNotEmpty) ...[
             _buildViewBlockPanel(
@@ -8712,13 +9031,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final key = e.key.trim();
       if (key.isEmpty) continue;
       final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
-      final pos = positionMap?[key] ?? 'below-stem';
+      final arrangement = positionMap?[key] ?? _figurePositionOptions[2];
+      final pos = _figureLayoutPositionForArrangement(arrangement);
+      final anchor = _figureLayoutAnchorForArrangement(arrangement);
       final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
       items.add(<String, dynamic>{
         'assetKey': key,
         'widthEm': (wEm * 10).roundToDouble() / 10.0,
         'position': pos,
-        'anchor': 'center',
+        'anchor': anchor,
         'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
         'offsetYEm': 0,
       });
@@ -9294,7 +9615,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       draftMap[key] = _figureWidthEmDefault;
                     }
                     for (final key in positionMap.keys) {
-                      positionMap[key] = 'below-stem';
+                      positionMap[key] = 'center';
                     }
                     for (final key in offsetXMap.keys) {
                       offsetXMap[key] = 0.0;
@@ -9887,7 +10208,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         if (layoutItem != null) {
           draftMap[key] = (layoutItem['widthEm'] as num?)?.toDouble() ??
               _figureWidthEmDefault;
-          positionMap[key] = '${layoutItem['position'] ?? 'below-stem'}'.trim();
+          positionMap[key] = _figureArrangementFromPositionAnchor(
+            '${layoutItem['position'] ?? 'below-stem'}',
+            '${layoutItem['anchor'] ?? 'center'}',
+          );
           final rawOffsetX =
               double.tryParse('${layoutItem['offsetXEm'] ?? ''}');
           offsetXMap[key] = (rawOffsetX ?? 0.0).clamp(-8.0, 8.0).toDouble();
@@ -9895,14 +10219,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           final scale = scaleMap[key] ??
               _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
           draftMap[key] = _scaleToWidthEm(scale);
-          positionMap[key] = 'below-stem';
+          positionMap[key] = 'center';
           offsetXMap[key] = 0.0;
         }
       } else {
         final scale = scaleMap[key] ??
             _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
         draftMap[key] = _scaleToWidthEm(scale);
-        positionMap[key] = 'below-stem';
+        positionMap[key] = 'center';
         offsetXMap[key] = 0.0;
       }
       labels[key] = label;
@@ -9995,7 +10319,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           final key = draftMap.keys.elementAt(i);
           final widthEm = draftMap[key] ?? _figureWidthEmDefault;
           final label = labels[key] ?? '그림 ${i + 1}';
-          final position = positionMap[key] ?? 'below-stem';
+          final position = positionMap[key] ?? 'center';
           final offsetX = (offsetXMap[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
           final previewUrl = previewUrls[key] ?? '';
           return Container(
@@ -10101,7 +10425,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 Row(
                   children: [
                     const Text(
-                      '위치',
+                      '배치',
                       style: TextStyle(
                         color: _textSub,
                         fontSize: 11.4,
@@ -10113,7 +10437,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       child: DropdownButton<String>(
                         value: _figurePositionOptions.contains(position)
                             ? position
-                            : 'below-stem',
+                            : 'center',
                         isExpanded: true,
                         isDense: true,
                         style: const TextStyle(
@@ -10133,6 +10457,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           if (v == null) return;
                           setLocalState(() {
                             positionMap[key] = v;
+                            offsetXMap[key] = 0.0;
                           });
                           onSettingChanged?.call();
                         },
@@ -10183,8 +10508,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   /// 외부에는 등장 순서대로 `표 1 / 표 2 / ...` 라벨을 단다.
   List<TableScaleEntry> _parseTableEntries(ProblemBankQuestion q) {
     final stem = q.stem;
-    if (stem.isEmpty && !_isBlankChoiceQuestion(q))
+    if (stem.isEmpty && !_isBlankChoiceQuestion(q)) {
       return const <TableScaleEntry>[];
+    }
     final lines = stem.split('\n');
     final entries = <_PartialTableEntry>[];
     var structIdx = 0;
@@ -10478,7 +10804,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           question,
           _autoTypeBadgeSetQuestion,
         ) &&
-        (question.isSetQuestion || initialParts.isNotEmpty);
+        (question.isSetQuestion || initialParts.isNotEmpty) &&
+        !question.isIndependentSetItem;
     final hasAnswerFigures = _orderedAnswerFigureAssetsOf(question).isNotEmpty;
     var answerFigureWidthEm = _answerFigureWidthEm(question, 0);
 
@@ -10532,7 +10859,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     selected: isSetMode,
                     showCheckmark: false,
                     backgroundColor: _field,
-                    selectedColor: _accent.withOpacity(0.14),
+                    selectedColor: _accent.withValues(alpha: 0.14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                       side: BorderSide(
@@ -11946,6 +12273,237 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     await _loadDocumentContext(selectedId);
   }
 
+  Future<void> _openMarkerSyntaxDialog() async {
+    if (!mounted) return;
+
+    Widget markerTile({
+      required IconData icon,
+      required String title,
+      required String syntax,
+      required String description,
+      String example = '',
+      String caution = '',
+    }) {
+      return Container(
+        decoration: BoxDecoration(
+          color: _field,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _border),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: _accent, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: _text,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    syntax,
+                    style: const TextStyle(
+                      color: Color(0xFFD6F5E2),
+                      fontFamily: 'Consolas',
+                      fontSize: 12.5,
+                      height: 1.25,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    description,
+                    style: const TextStyle(
+                      color: _textSub,
+                      fontSize: 12.5,
+                      height: 1.35,
+                    ),
+                  ),
+                  if (example.trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    SelectableText(
+                      example,
+                      style: const TextStyle(
+                        color: Color(0xFFB9D7FF),
+                        fontFamily: 'Consolas',
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                  if (caution.trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      caution,
+                      style: const TextStyle(
+                        color: Color(0xFFFFDFA6),
+                        fontSize: 12,
+                        height: 1.35,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: _panel,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: _border),
+          ),
+          title: const Text(
+            '문제은행 수동 마커 문법',
+            style: TextStyle(color: _text, fontWeight: FontWeight.w900),
+          ),
+          content: SizedBox(
+            width: 760,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '검수 편집의 stem/choice/answer 텍스트에 직접 입력할 수 있는 마커입니다. '
+                    '마커는 렌더러가 소비하며, 최종 PDF에는 마커 글자가 출력되지 않습니다.',
+                    style:
+                        TextStyle(color: _textSub, fontSize: 13, height: 1.4),
+                  ),
+                  const SizedBox(height: 14),
+                  markerTile(
+                    icon: Icons.functions_rounded,
+                    title: '수식 제시줄',
+                    syntax: '[수식제시]\n[수식제시줄]\n[displaymath]\n[mathline]',
+                    description:
+                        'PDF 원문에서 실제로 별도 줄로 들여쓰기된 수식 제시줄일 때, 그 줄 맨 앞에 붙입니다.',
+                    example: '[수식제시] 20 = 3 + 17 = 7 + 13',
+                    caution: '중요: 자동 감지는 하지 않습니다. 이 마커가 있는 줄에만 제시줄 스타일이 적용됩니다.',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.keyboard_return_rounded,
+                    title: '수식 수동 줄바꿈',
+                    syntax: '[수식줄바꿈:오른쪽]\n[수식줄바꿈:가운데]\n[수식줄바꿈:왼쪽]',
+                    description:
+                        '긴 수식에서 사용자가 줄바꿈 위치를 직접 지정합니다. 마커 뒤의 수식 조각은 지정한 정렬로 다음 줄에 배치됩니다.',
+                    example: 'f(x)=x^3+2x^2[수식줄바꿈:오른쪽]+3x+4',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.format_align_left_rounded,
+                    title: '문단/정렬',
+                    syntax: '[문단]\n[문단:왼쪽]\n[문단:가운데]\n[문단:오른쪽]',
+                    description:
+                        '문단을 나누거나 해당 줄의 정렬을 지정합니다. 가운데/오른쪽 정렬은 원문 문단 정렬을 수동 보정할 때 사용합니다.',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.format_align_center_rounded,
+                    title: '박스 내부 라인 정렬',
+                    syntax:
+                        '[정렬:왼쪽]\n[정렬:가운데]\n[정렬:오른쪽]\n[align:left]\n[align:center]\n[align:right]',
+                    description:
+                        '보기/조건 박스 안에서 특정 줄 정렬을 강제로 지정합니다. 마커는 단독 줄로 넣습니다.',
+                    example: '[정렬:가운데]\n a+b+c=0',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.space_bar_rounded,
+                    title: '고정폭 공백',
+                    syntax: '[공백:N]',
+                    description:
+                        '렌더 단계에서 사라지지 않는 N em 폭 공백입니다. N은 0.1~20 사이 숫자로 사용합니다.',
+                    example: 'A[공백:1.5]B\n([공백:1.5])',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.format_underlined_rounded,
+                    title: '밑줄',
+                    syntax: '[밑줄]내용[/밑줄]',
+                    description: '지정한 구간에 밑줄을 적용합니다.',
+                    example: '[밑줄]서로 다른 두 소수[/밑줄]',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.image_outlined,
+                    title: '그림/도형 자리',
+                    syntax: '[그림]\n[도형]\n[도표]',
+                    description: '본문 중간에 그림, 도형, 복잡한 표 이미지가 들어갈 위치를 표시합니다.',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.table_chart_outlined,
+                    title: '표 LaTeX 블록',
+                    syntax:
+                        '[표시작]\n\\\\begin{tabular}{|c|c|}\n\\\\hline\n... \\\\\\\\\n\\\\hline\n\\\\end{tabular}\n[표끝]',
+                    description:
+                        '단순 표를 LaTeX tabular로 직접 재현할 때 사용합니다. 복잡한 병합/대각선 표는 [그림]으로 처리합니다.',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.grid_on_rounded,
+                    title: '구조화 표',
+                    syntax: '[표행]\n[표셀]\n셀 내용\n[표셀]\n셀 내용',
+                    description:
+                        '박스 안의 단순 표를 행/셀 단위로 적을 때 사용합니다. 새 행은 [표행], 새 셀은 [표셀]로 시작합니다.',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.fact_check_outlined,
+                    title: '보기/조건 박스',
+                    syntax:
+                        '[보기시작]\nㄱ. ...\nㄴ. ...\n[보기끝]\n\n[박스시작]\n조건 또는 규칙\n[박스끝]',
+                    description:
+                        '<보기> 박스는 [보기시작]/[보기끝], 일반 조건/규칙 박스는 [박스시작]/[박스끝]을 사용합니다.',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.keyboard_tab_rounded,
+                    title: '우측 꼬리',
+                    syntax: '[우측꼬리]',
+                    description:
+                        '한 줄의 앞부분은 왼쪽, 마커 뒤 내용은 오른쪽 끝에 붙입니다. 짧은 보조 조건을 우측 정렬할 때 사용합니다.',
+                    example: '다음을 구하시오.[우측꼬리][4점]',
+                  ),
+                  const SizedBox(height: 10),
+                  markerTile(
+                    icon: Icons.account_tree_outlined,
+                    title: '세트형 소문항 경계',
+                    syntax: '[소문항1]\n[소문항2]',
+                    description:
+                        '세트형 문항에서 하위 문항 시작 위치를 분리합니다. 마커는 반드시 단독 줄로 둡니다.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('닫기'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<bool> _hardDeleteSyncedDocument(ProblemBankDocument doc) async {
     final academyId = _academyId;
     if (academyId == null || academyId.trim().isEmpty) {
@@ -12623,6 +13181,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       accentColor: _accent,
                     ),
                     const Spacer(),
+                    OutlinedButton.icon(
+                      onPressed: _openMarkerSyntaxDialog,
+                      icon: const Icon(Icons.code_rounded, size: 16),
+                      label: const Text('마커 목록'),
+                    ),
+                    const SizedBox(width: 8),
                     FilledButton.icon(
                       onPressed: (_isResetting || _academyId == null)
                           ? null

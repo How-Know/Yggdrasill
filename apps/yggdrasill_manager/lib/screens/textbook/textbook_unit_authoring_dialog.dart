@@ -137,6 +137,7 @@ class _TextbookUnitAuthoringDialogState
   int _batchDone = 0;
   int _batchTotal = 0;
   String _batchStatus = '';
+  bool _runProblemExtractionAfterStage1 = true;
 
   // Single-selection for the corner-handle editor. Null ⇒ no handles drawn.
   String? _selectedProblemKey;
@@ -1384,15 +1385,21 @@ class _TextbookUnitAuthoringDialogState
     return '$bigName/$midName/${sub.preset.displayName}';
   }
 
-  Future<void> _startPdfOnlyExtractForFocus(_SubFocus focus) async {
+  Future<void> _startPdfOnlyExtractForFocus(
+    _SubFocus focus, {
+    int? displayStartOverride,
+    int? displayEndOverride,
+    bool forceNewJob = false,
+    bool pageScoped = false,
+  }) async {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
     final sub = mid.subs.firstWhere(
       (s) => s.preset.key == focus.subKey,
       orElse: () => mid.subs.first,
     );
-    final displayStart = _positiveInt(sub.startCtrl.text);
-    final displayEnd = _positiveInt(sub.endCtrl.text);
+    final displayStart = displayStartOverride ?? _positiveInt(sub.startCtrl.text);
+    final displayEnd = displayEndOverride ?? _positiveInt(sub.endCtrl.text);
     final rawStart =
         displayStart == null ? null : _rawPageForDisplayPage(displayStart);
     final rawEnd =
@@ -1413,11 +1420,104 @@ class _TextbookUnitAuthoringDialogState
       displayPageFrom: displayStart,
       displayPageTo: displayEnd,
       bodyLinkId: widget.linkId,
+      forceNewJob: forceNewJob,
+      pageScoped: pageScoped,
     );
     if (!mounted) return;
     setState(() {
       _pbExtractStatusBySub[_stateKeyFor(focus)] = 'queued';
     });
+  }
+
+  Future<void> _promptAndStartProblemExtraction(_SubFocus focus) async {
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    final startCtrl = TextEditingController(text: sub.startCtrl.text.trim());
+    final endCtrl = TextEditingController(text: sub.endCtrl.text.trim());
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: _kPanel,
+          title: const Text(
+            '문항추출 실행',
+            style: TextStyle(color: _kText, fontWeight: FontWeight.w800),
+          ),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '저장된 크롭 정보를 기준으로 문제은행 문항추출을 큐에 넣습니다. 특정 페이지만 다시 추출하려면 범위를 조정하세요.',
+                  style: TextStyle(color: _kTextSub, fontSize: 12, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _textInput(
+                        startCtrl,
+                        hint: '시작 페이지',
+                        dense: true,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _textInput(
+                        endCtrl,
+                        hint: '끝 페이지',
+                        dense: true,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: _kAccent),
+              child: const Text('실행'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+    final displayStart = _positiveInt(startCtrl.text);
+    final displayEnd = _positiveInt(endCtrl.text);
+    if (displayStart == null || displayEnd == null || displayEnd < displayStart) {
+      _toast('문항추출 페이지 범위를 확인하세요', error: true);
+      return;
+    }
+    try {
+      await _startPdfOnlyExtractForFocus(
+        focus,
+        displayStartOverride: displayStart,
+        displayEndOverride: displayEnd,
+        forceNewJob: true,
+        pageScoped: true,
+      );
+      _toast('${_subFocusLabel(focus)} 문항추출을 큐에 넣었습니다');
+      unawaited(_loadPbExtractRuns());
+    } catch (e) {
+      _toast('문항추출 시작 실패: $e', error: true);
+    }
   }
 
   // ------------------------------------------------------------ next stage
@@ -1464,9 +1564,11 @@ class _TextbookUnitAuthoringDialogState
       }
       allSeeds.addAll(seeds);
       scopes.add(_stageScopeFor(focus));
-      unawaited(_startPdfOnlyExtractForFocus(focus).catchError((Object e) {
-        debugPrint('[textbook-pb-extract] start failed: $e');
-      }));
+      if (_runProblemExtractionAfterStage1) {
+        unawaited(_startPdfOnlyExtractForFocus(focus).catchError((Object e) {
+          debugPrint('[textbook-pb-extract] start failed: $e');
+        }));
+      }
     }
     final first = targets.first;
     final big = _bigUnits[first.bigIndex];
@@ -2375,6 +2477,16 @@ class _TextbookUnitAuthoringDialogState
             const SizedBox(height: 14),
             Row(
               children: [
+                _ProblemExtractCheckbox(
+                  value: _runProblemExtractionAfterStage1,
+                  enabled: !_batchRunning,
+                  onChanged: (value) {
+                    setState(() {
+                      _runProblemExtractionAfterStage1 = value;
+                    });
+                  },
+                ),
+                const SizedBox(width: 10),
                 if (totalReady > 0 && !_batchRunning)
                   FilledButton.icon(
                     onPressed: () => _saveTargetsAndOpenStage(selected),
@@ -2453,6 +2565,17 @@ class _TextbookUnitAuthoringDialogState
     final selectedCount = _selectedBatchFocuses().length;
     final runSelection = selectedCount > 0;
     final canRunAnalysis = runSelection ? !_batchRunning : readyRange;
+    final savedCropCount =
+        _stageStatusBySub[_stateKeyFor(focus)]?.bodyDone ?? 0;
+    final canRunProblemExtract = savedCropCount > 0 &&
+        !state.running &&
+        !state.uploading &&
+        !_batchRunning;
+    final pbStatus = _pbExtractStatusBySub[_stateKeyFor(focus)] ?? '';
+    final problemExtractLabel =
+        pbStatus == 'completed' || pbStatus == 'review_required'
+            ? '문항 재추출'
+            : '문항추출';
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -2483,6 +2606,16 @@ class _TextbookUnitAuthoringDialogState
                 style: const TextStyle(color: _kAccent, fontSize: 11),
               ),
             ),
+          _ProblemExtractCheckbox(
+            value: _runProblemExtractionAfterStage1,
+            enabled: !state.running && !state.uploading && !_batchRunning,
+            onChanged: (value) {
+              setState(() {
+                _runProblemExtractionAfterStage1 = value;
+              });
+            },
+          ),
+          const SizedBox(width: 6),
           if (state.running)
             OutlinedButton.icon(
               onPressed: () => _cancelFocused(focus),
@@ -2520,6 +2653,20 @@ class _TextbookUnitAuthoringDialogState
               icon: const Icon(Icons.play_arrow, size: 16),
               label: Text(runSelection ? '선택 분석 ($selectedCount)' : '분석 시작'),
               style: FilledButton.styleFrom(backgroundColor: _kAccent),
+            ),
+            const SizedBox(width: 6),
+            OutlinedButton.icon(
+              onPressed: canRunProblemExtract
+                  ? () => _promptAndStartProblemExtraction(focus)
+                  : null,
+              icon: const Icon(Icons.auto_awesome, size: 14, color: _kInfo),
+              label: Text(
+                problemExtractLabel,
+                style: const TextStyle(color: _kInfo, fontSize: 12),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFF2A3E5A)),
+              ),
             ),
           ],
           const SizedBox(width: 6),
@@ -3347,6 +3494,50 @@ class _InfoTag extends StatelessWidget {
           color: danger ? const Color(0xFFE68A8A) : Colors.white,
           fontSize: 11,
           fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProblemExtractCheckbox extends StatelessWidget {
+  const _ProblemExtractCheckbox({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: value
+          ? 'Stage 1 저장 후 문제은행 문항추출도 자동으로 큐에 넣습니다.'
+          : '문항번호와 크롭만 저장하고 문제은행 문항추출은 나중에 실행합니다.',
+      child: InkWell(
+        onTap: enabled ? () => onChanged(!value) : null,
+        borderRadius: BorderRadius.circular(4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Checkbox(
+              value: value,
+              onChanged: enabled ? (v) => onChanged(v == true) : null,
+              visualDensity: VisualDensity.compact,
+              side: const BorderSide(color: Color(0xFFB3B3B3)),
+            ),
+            const Text(
+              '문항추출',
+              style: TextStyle(
+                color: Color(0xFFB3B3B3),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
       ),
     );

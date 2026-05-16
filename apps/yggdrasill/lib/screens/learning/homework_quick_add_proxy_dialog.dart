@@ -173,16 +173,6 @@ class HomeworkQuickAddProxyDialogState
   static const double _kNaesinGridLabelToCellsGap = 8;
   static const Color _kNaesinLinkedActiveCellColor = Color(0xFF282828);
   static const String _kTestFlowName = '테스트';
-  static const List<String> _kNaesinSchools = <String>[
-    '경신중',
-    '능인중',
-    '대륜중',
-    '동도중',
-    '소선여중',
-    '오성중',
-    '정화중',
-    '황금중',
-  ];
 
   String _testSource = _kTestSourceNaesin;
   bool _useNaesinSource = false;
@@ -193,6 +183,7 @@ class HomeworkQuickAddProxyDialogState
   String _naesinCourseKey = '';
   String _naesinExamTerm = '';
   String _naesinStudentSchool = '';
+  bool _naesinStandaloneMode = false;
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
   final HomeworkTestGradingResultService _gradingResultService =
@@ -205,6 +196,9 @@ class HomeworkQuickAddProxyDialogState
   bool _loadingNaesinLinkedCellKeys = false;
 
   bool get _isChildAddMode => widget.childAddMode;
+
+  List<String> get _naesinSchools =>
+      NaesinExamContext.schoolsForGradeKey(_naesinGradeKey);
 
   String? get _lockedBookIdentity {
     final bookId = (widget.lockedBookId ?? '').trim();
@@ -497,13 +491,6 @@ class HomeworkQuickAddProxyDialogState
     return ((questionCount + perPage - 1) / perPage).floor();
   }
 
-  String _naesinDraftLinkKeyForCell({
-    required String school,
-    required int year,
-  }) {
-    return '$_kNaesinDraftLinkPrefix|${_buildNaesinLinkKeyForCell(school: school, year: year)}';
-  }
-
   bool _hasNaesinDraftItems() {
     for (final item in _draftGroupItems) {
       final key = (item.linkedBookKey ?? '').trim();
@@ -514,6 +501,32 @@ class HomeworkQuickAddProxyDialogState
 
   bool _shouldShowNaesinPanel() {
     return _useNaesinSource && _testSource == _kTestSourceNaesin;
+  }
+
+  Future<void> _enterNaesinStandaloneMode(String testFlowId) async {
+    final previousFlowId = _isTestFlowId(_flowId) ? null : _flowId.trim();
+    setState(() {
+      _naesinStandaloneMode = true;
+      _showGroupPanel = false;
+      _useNaesinSource = true;
+      _useCustomSource = false;
+      _testSource = _kTestSourceNaesin;
+      _testOriginFlowId = previousFlowId;
+      _flowId = testFlowId;
+      _selectedLinkedBookKey = null;
+      _linkedHomeworkType = '프린트';
+      _type = '프린트';
+      _manualPageMode = false;
+      _units = const <_BigUnitSelectionNode>[];
+      _expandedLeftMidSmallsKey = null;
+      _draftGroupItems.clear();
+    });
+    if (_naesinGradeKey.isEmpty ||
+        _naesinCourseKey.isEmpty ||
+        _naesinExamTerm.isEmpty) {
+      _initNaesinFilterDefaults();
+    }
+    await _handleFlowChanged(forceNoBookSelection: true);
   }
 
   StudentWithInfo? _studentInfoForDialog() {
@@ -561,31 +574,55 @@ class HomeworkQuickAddProxyDialogState
     _naesinCourseKey = courseOptions.first.key;
   }
 
-  String _buildNaesinLinkKeyForCell({
+  List<_NaesinLinkedCellOption> _naesinLinkedOptionsForSchoolYear({
     required String school,
     required int year,
   }) {
-    return NaesinExamContext.buildNaesinLinkKey(
-      gradeKey: _naesinGradeKey,
-      courseKey: _naesinCourseKey,
-      examTerm: _naesinExamTerm,
-      school: school,
-      year: year,
-    );
+    final out = <_NaesinLinkedCellOption>[];
+    for (final key in _naesinLinkedCellKeys) {
+      final parsed = NaesinExamContext.parseNaesinLinkKey(key);
+      if (parsed == null) continue;
+      if (parsed.gradeKey != _naesinGradeKey ||
+          parsed.courseKey != _naesinCourseKey ||
+          parsed.examTerm != _naesinExamTerm ||
+          parsed.school != school ||
+          parsed.year != year) {
+        continue;
+      }
+      out.add(
+        _NaesinLinkedCellOption(
+          linkKey: key,
+          cellLabel: parsed.cellLabel,
+          status: _naesinCellStatusByLinkKey[key],
+        ),
+      );
+    }
+    out.sort((a, b) {
+      if (a.cellLabel.isEmpty && b.cellLabel.isNotEmpty) return -1;
+      if (a.cellLabel.isNotEmpty && b.cellLabel.isEmpty) return 1;
+      return a.cellLabel.compareTo(b.cellLabel);
+    });
+    return out;
   }
 
-  bool _isNaesinLinkedCellActive({
-    required String school,
-    required int year,
-  }) {
-    if (_naesinGradeKey.isEmpty ||
-        _naesinCourseKey.isEmpty ||
-        _naesinExamTerm.isEmpty) {
-      return false;
+  int _naesinGridSlotCountForYear(int year) {
+    final schools = _naesinSchools;
+    var maxCount = 1;
+    for (final school in schools) {
+      maxCount = math.max(
+        maxCount,
+        _naesinLinkedOptionsForSchoolYear(school: school, year: year).length,
+      );
     }
-    return _naesinLinkedCellKeys.contains(
-      _buildNaesinLinkKeyForCell(school: school, year: year),
-    );
+    return maxCount;
+  }
+
+  int _naesinGridVisualRowCount() {
+    var count = 0;
+    for (final year in _kNaesinYears) {
+      count += _naesinGridSlotCountForYear(year);
+    }
+    return math.max(1, count);
   }
 
   DateTime _naesinStatusTimestampOfHomework(HomeworkItem item) {
@@ -797,14 +834,22 @@ class HomeworkQuickAddProxyDialogState
   Future<void> _onNaesinStatusCellTapped({
     required String school,
     required int year,
-    required bool linkedActive,
+    required String linkKey,
   }) async {
-    if (!linkedActive) {
+    final normalizedLinkKey = linkKey.trim();
+    if (normalizedLinkKey.isEmpty) {
       _showDialogSnackBar('연결된 내신 셀만 과제로 추가할 수 있습니다.');
       return;
     }
-    final draftLinkKey =
-        _naesinDraftLinkKeyForCell(school: school, year: year).trim();
+    final parsedLink = NaesinExamContext.parseNaesinLinkKey(normalizedLinkKey);
+    if (parsedLink == null) {
+      _showDialogSnackBar('내신 셀 연결 정보를 확인하지 못했습니다.');
+      return;
+    }
+    final draftLinkKey = '$_kNaesinDraftLinkPrefix|$normalizedLinkKey';
+    if (_naesinStandaloneMode && _draftGroupItems.isNotEmpty) {
+      setState(() => _draftGroupItems.clear());
+    }
     if (_draftGroupItems.isNotEmpty) {
       final firstDraftKey = (_draftGroupItems.first.linkedBookKey ?? '').trim();
       if (_hasNaesinDraftItems()) {
@@ -817,8 +862,7 @@ class HomeworkQuickAddProxyDialogState
         return;
       }
     }
-    final linkKey = _buildNaesinLinkKeyForCell(school: school, year: year);
-    final autoValues = _naesinAutoValuesByCellKey[linkKey];
+    final autoValues = _naesinAutoValuesByCellKey[normalizedLinkKey];
     final pageInput = _page.text.trim();
     final countInput = _parsePositiveIntText(_count.text);
     final autoPageCount = autoValues?.questionPageCount ?? 0;
@@ -844,6 +888,7 @@ class HomeworkQuickAddProxyDialogState
       '학년: ${_naesinGradeYearLabel(_naesinGradeKey)}',
       '과정: ${_naesinCourseLabel(_naesinCourseKey)}',
       '시험: $_naesinExamTerm',
+      if (parsedLink.cellLabel.isNotEmpty) '셀: ${parsedLink.cellLabel}',
     ].join('\n');
 
     // 자동 추출값은 가운데 입력필드에도 반영해 사용자가 즉시 수정할 수 있게 한다.
@@ -891,7 +936,7 @@ class HomeworkQuickAddProxyDialogState
       bookId: '',
       gradeLabel: '',
       sourceUnitLevel: 'naesin',
-      sourceUnitPath: linkKey,
+      sourceUnitPath: normalizedLinkKey,
       unitMappings: const <Map<String, dynamic>>[],
       title: title,
       page: page,
@@ -905,9 +950,32 @@ class HomeworkQuickAddProxyDialogState
       testMode: true,
       testOriginFlowId: _currentTestOriginFlowId(),
       pbPresetId: autoValues?.presetId,
-      naesinLinkKey: linkKey,
+      naesinLinkKey: normalizedLinkKey,
       naesinGroupTitle: groupTitle,
     );
+    if (_naesinStandaloneMode) {
+      final compactPage = _normalizePageTextCompact(draftItem.page);
+      final outputItem = compactPage == draftItem.page
+          ? draftItem
+          : draftItem.copyWith(
+              page: compactPage,
+              body: _composeBodyValues(
+                page: compactPage,
+                count: draftItem.count,
+                content: draftItem.content,
+                timeLimitMinutes: draftItem.timeLimitMinutes,
+              ),
+            );
+      Navigator.pop(context, {
+        'studentId': widget.studentId,
+        'groupMode': true,
+        'groupTitle': groupTitle,
+        'flowId': _flowId,
+        'action': 'add',
+        'items': [outputItem.toJson()],
+      });
+      return;
+    }
     setState(() {
       _draftGroupItems.add(draftItem);
       _applyDraftBlockedStateToUnits(
@@ -1103,16 +1171,12 @@ class HomeworkQuickAddProxyDialogState
         gradeLabel: linked.gradeLabel,
       );
       if (!mounted) return;
-      final pageOffset = _toInt(row?['page_offset']) ?? 0;
       final parsed = _parseSelectionUnits(row?['payload']);
       final problemRows = await DataManager.instance.loadTextbookProblemRegions(
         bookId: linked.bookId,
         gradeLabel: linked.gradeLabel,
       );
-      final problemRegions = _parseTextbookProblemRegions(
-        problemRows,
-        pageOffset: pageOffset,
-      );
+      final problemRegions = _parseTextbookProblemRegions(problemRows);
       _applyProblemRegionCountsToUnits(parsed, problemRegions);
       try {
         await HomeworkStore.instance.loadAll();
@@ -1167,11 +1231,6 @@ class HomeworkQuickAddProxyDialogState
         setState(() => _loadingMetadata = false);
       }
     }
-  }
-
-  int _toDisplayPage(int raw, int pageOffset) {
-    final adjusted = raw - pageOffset;
-    return adjusted > 0 ? adjusted : raw;
   }
 
   List<_BigUnitSelectionNode> _parseSelectionUnits(dynamic payload) {
@@ -1278,14 +1337,12 @@ class HomeworkQuickAddProxyDialogState
   }
 
   List<_TextbookProblemRegion> _parseTextbookProblemRegions(
-    List<Map<String, dynamic>> rows, {
-    required int pageOffset,
-  }) {
+    List<Map<String, dynamic>> rows,
+  ) {
     final out = <_TextbookProblemRegion>[];
     for (final row in rows) {
       final rawPage = _toInt(row['raw_page']);
-      final displayPage = _toInt(row['display_page']) ??
-          (rawPage == null ? null : _toDisplayPage(rawPage, pageOffset));
+      final displayPage = _toInt(row['display_page']) ?? rawPage;
       final problemNumber = '${row['problem_number'] ?? ''}'.trim();
       final id = '${row['id'] ?? ''}'.trim();
       if (displayPage == null || problemNumber.isEmpty) continue;
@@ -3205,6 +3262,7 @@ class HomeworkQuickAddProxyDialogState
         'smallName': s.smallName,
         'startPage': s.startPage,
         'endPage': s.endPage,
+        'pageCoordinate': 'display',
         'pageCount': pageCount,
         'pageCounts': s.pageCounts.isNotEmpty
             ? Map<String, int>.fromEntries(
@@ -3292,6 +3350,7 @@ class HomeworkQuickAddProxyDialogState
         ),
         'startPage': pages.isEmpty ? null : pages.reduce(math.min),
         'endPage': pages.isEmpty ? null : pages.reduce(math.max),
+        'pageCoordinate': 'display',
         'pageCount': selected.length,
         'problemCount': selected.length,
         'problemNumbers': selected.map((e) => e.problemNumber).toList(),
@@ -5729,7 +5788,9 @@ class HomeworkQuickAddProxyDialogState
 
     final selectedBook = _selectedLinkedBook;
     if (selectedBook == null) {
-      _showDialogSnackBar('하위 과제를 1개 이상 추가하세요.');
+      _showDialogSnackBar(
+        _naesinStandaloneMode ? '기출 셀을 선택하세요.' : '하위 과제를 1개 이상 추가하세요.',
+      );
       return;
     }
 
@@ -5851,11 +5912,15 @@ class HomeworkQuickAddProxyDialogState
     required String school,
     required int year,
     required bool highlightedSchool,
-    required bool linkedActive,
-    required _NaesinCellStatus? cellStatus,
-    required VoidCallback onTap,
+    required String cellLabel,
+    required List<_NaesinLinkedCellOption> options,
     double cellSize = _kNaesinGridCellSize,
   }) {
+    final linkedActive = options.isNotEmpty;
+    final cellStatus = options.isNotEmpty ? options.first.status : null;
+    final displayCellLabel =
+        options.isNotEmpty ? options.first.cellLabel.trim() : cellLabel.trim();
+    final hasCellLabel = displayCellLabel.isNotEmpty;
     final hasIssued = cellStatus?.issuedAt != null;
     final isCompleted = cellStatus?.isCompleted == true;
     final isEnded = (cellStatus?.isEnded == true) || isCompleted;
@@ -5879,7 +5944,10 @@ class HomeworkQuickAddProxyDialogState
             : (highlightedSchool
                 ? const Color(0x1A33A373)
                 : const Color(0xFF151C21)));
-    final tooltipLines = <String>['$school · $year'];
+    final tooltipLines = <String>[
+      '$school · $year',
+      if (hasCellLabel) displayCellLabel,
+    ];
     if (cellStatus?.firstIssuedAt != null) {
       tooltipLines.add(
           '처음 내준 시각 ${_formatNaesinIssuedDateTime(cellStatus!.firstIssuedAt!)}');
@@ -5896,13 +5964,66 @@ class HomeworkQuickAddProxyDialogState
     if (hasScore) {
       tooltipLines.add('점수 $scoreLabel');
     }
+    final singleTap = options.isNotEmpty
+        ? () => _onNaesinStatusCellTapped(
+              school: school,
+              year: year,
+              linkKey: options.first.linkKey,
+            )
+        : null;
+    final child = hasCellLabel || displayText.isNotEmpty
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (hasCellLabel)
+                    Text(
+                      displayCellLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1.05,
+                      ),
+                    ),
+                  if (hasCellLabel && displayText.isNotEmpty)
+                    const SizedBox(height: 3),
+                  if (displayText.isNotEmpty)
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        displayText,
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: isCompleted
+                              ? const Color(0xFFE4F8EC)
+                              : (isEnded ? kDlgText : kDlgTextSub),
+                          fontWeight:
+                              hasScore ? FontWeight.w800 : FontWeight.w700,
+                          fontSize: hasScore ? 12 : 10.8,
+                          letterSpacing: hasScore ? 0.2 : 0.1,
+                          height: 1.0,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          )
+        : null;
     return Tooltip(
       message: tooltipLines.join('\n'),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
+          onTap: singleTap,
           child: Container(
             width: cellSize,
             height: cellSize,
@@ -5911,29 +6032,7 @@ class HomeworkQuickAddProxyDialogState
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: borderColor),
             ),
-            child: displayText.isEmpty
-                ? null
-                : Center(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          displayText,
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: isCompleted
-                                ? const Color(0xFFE4F8EC)
-                                : (isEnded ? kDlgText : kDlgTextSub),
-                            fontWeight:
-                                hasScore ? FontWeight.w800 : FontWeight.w700,
-                            fontSize: hasScore ? 12 : 10.8,
-                            letterSpacing: hasScore ? 0.2 : 0.1,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+            child: child,
           ),
         ),
       ),
@@ -5948,51 +6047,76 @@ class HomeworkQuickAddProxyDialogState
     required bool isLast,
   }) {
     final studentSchool = _naesinStudentSchool;
+    final schools = _naesinSchools;
+    final optionsBySchool = <String, List<_NaesinLinkedCellOption>>{
+      for (final school in schools)
+        school: _naesinLinkedOptionsForSchoolYear(school: school, year: year),
+    };
+    final slotCount = math.max(
+      1,
+      optionsBySchool.values.fold<int>(
+        0,
+        (maxCount, options) => math.max(maxCount, options.length),
+      ),
+    );
     return Padding(
-      padding: EdgeInsets.fromLTRB(6, 0, 6, isLast ? 0 : rowGap),
-      child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: _kNaesinGridYearLabelWidth,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                '$year',
-                textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: kDlgTextSub,
-                  fontSize: 13.2,
-                  fontWeight: FontWeight.w700,
-                ),
+          for (var slot = 0; slot < slotCount; slot++)
+            Padding(
+              padding: EdgeInsets.only(
+                bottom: slot == slotCount - 1 && isLast ? 0 : rowGap,
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: _kNaesinGridYearLabelWidth,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: slot == 0
+                          ? Text(
+                              '$year',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                color: kDlgTextSub,
+                                fontSize: 13.2,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                  const SizedBox(width: _kNaesinGridLabelToCellsGap),
+                  for (var i = 0; i < schools.length; i++) ...[
+                    (() {
+                      final school = schools[i];
+                      final highlightedSchool =
+                          studentSchool.isNotEmpty && studentSchool == school;
+                      final options = optionsBySchool[school] ??
+                          const <_NaesinLinkedCellOption>[];
+                      if (slot >= options.length && slot > 0) {
+                        return SizedBox(width: cellSize, height: cellSize);
+                      }
+                      final option =
+                          slot < options.length ? options[slot] : null;
+                      return _buildNaesinStatusCell(
+                        school: school,
+                        year: year,
+                        highlightedSchool: highlightedSchool,
+                        cellLabel: option?.cellLabel ?? '',
+                        options: option == null
+                            ? const <_NaesinLinkedCellOption>[]
+                            : <_NaesinLinkedCellOption>[option],
+                        cellSize: cellSize,
+                      );
+                    })(),
+                    if (i < schools.length - 1) SizedBox(width: cellGap),
+                  ],
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: _kNaesinGridLabelToCellsGap),
-          for (var i = 0; i < _kNaesinSchools.length; i++) ...[
-            (() {
-              final school = _kNaesinSchools[i];
-              final highlightedSchool =
-                  studentSchool.isNotEmpty && studentSchool == school;
-              final linkKey =
-                  _buildNaesinLinkKeyForCell(school: school, year: year);
-              final linkedActive =
-                  _isNaesinLinkedCellActive(school: school, year: year);
-              return _buildNaesinStatusCell(
-                school: school,
-                year: year,
-                highlightedSchool: highlightedSchool,
-                linkedActive: linkedActive,
-                cellStatus: _naesinCellStatusByLinkKey[linkKey],
-                onTap: () => _onNaesinStatusCellTapped(
-                  school: school,
-                  year: year,
-                  linkedActive: linkedActive,
-                ),
-                cellSize: cellSize,
-              );
-            })(),
-            if (i < _kNaesinSchools.length - 1) SizedBox(width: cellGap),
-          ],
         ],
       ),
     );
@@ -6001,13 +6125,14 @@ class HomeworkQuickAddProxyDialogState
   Widget _buildNaesinSchoolYearGrid() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final schoolCount = _kNaesinSchools.length;
+        final schools = _naesinSchools;
+        final columnCount = schools.length;
         const headerTop = 10.0;
         const headerBottom = 8.0;
         const headerRowHeight = 18.0;
         const dividerHeight = 1.0;
         const bodyTop = 8.0;
-        final rowCount = _kNaesinYears.length;
+        final rowCount = _naesinGridVisualRowCount();
         final availableWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : double.infinity;
@@ -6035,29 +6160,35 @@ class HomeworkQuickAddProxyDialogState
               )
             : double.infinity;
 
-        final widthCellSize = gridWidth.isFinite
-            ? ((gridWidth - (schoolCount - 1) * _kNaesinGridMinCellGap) /
-                    schoolCount)
-                .clamp(_kNaesinGridMinCellSize, double.infinity)
+        final widthCellSize = gridWidth.isFinite && columnCount > 0
+            ? ((gridWidth - (columnCount - 1) * _kNaesinGridMinCellGap) /
+                    columnCount)
+                .clamp(_kNaesinGridMinCellSize, _kNaesinGridCellSize)
                 .toDouble()
             : _kNaesinGridCellSize;
         final heightCellSize = bodyHeight.isFinite
             ? ((bodyHeight - (rowCount - 1) * _kNaesinGridMinRowGap) / rowCount)
-                .clamp(_kNaesinGridMinCellSize, double.infinity)
+                .clamp(_kNaesinGridMinCellSize, _kNaesinGridCellSize)
                 .toDouble()
             : _kNaesinGridCellSize;
         final cellSize = math.min(widthCellSize, heightCellSize);
-        final cellGap = gridWidth.isFinite && schoolCount > 1
-            ? math.max(
-                0.0,
-                (gridWidth - schoolCount * cellSize) / (schoolCount - 1),
-              )
+        final cellGap = gridWidth.isFinite && columnCount > 1
+            ? math
+                .max(
+                  0.0,
+                  (gridWidth - columnCount * cellSize) / (columnCount - 1),
+                )
+                .clamp(0.0, _kNaesinGridCellGap)
+                .toDouble()
             : _kNaesinGridCellGap;
         final rowGap = bodyHeight.isFinite && rowCount > 1
-            ? math.max(
-                0.0,
-                (bodyHeight - rowCount * cellSize) / (rowCount - 1),
-              )
+            ? math
+                .max(
+                  0.0,
+                  (bodyHeight - rowCount * cellSize) / (rowCount - 1),
+                )
+                .clamp(0.0, _kNaesinGridCellGap)
+                .toDouble()
             : _kNaesinGridCellGap;
 
         return Column(
@@ -6083,18 +6214,18 @@ class HomeworkQuickAddProxyDialogState
                     ),
                   ),
                   const SizedBox(width: _kNaesinGridLabelToCellsGap),
-                  for (var i = 0; i < _kNaesinSchools.length; i++) ...[
+                  for (var i = 0; i < schools.length; i++) ...[
                     SizedBox(
                       width: cellSize,
                       child: Center(
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            _kNaesinSchools[i],
+                            schools[i],
                             maxLines: 1,
                             style: TextStyle(
                               color: _naesinStudentSchool.isNotEmpty &&
-                                      _naesinStudentSchool == _kNaesinSchools[i]
+                                      _naesinStudentSchool == schools[i]
                                   ? kDlgAccent
                                   : kDlgTextSub,
                               fontWeight: FontWeight.w700,
@@ -6104,8 +6235,7 @@ class HomeworkQuickAddProxyDialogState
                         ),
                       ),
                     ),
-                    if (i < _kNaesinSchools.length - 1)
-                      SizedBox(width: cellGap),
+                    if (i < schools.length - 1) SizedBox(width: cellGap),
                   ],
                 ],
               ),
@@ -6254,6 +6384,18 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Widget _buildNaesinStandalonePanel() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kDlgPanelBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: _buildNaesinRangePanel(),
+    );
+  }
+
   Widget _buildFlowBookPicker() {
     if (_loadingAllFlowTextbooks) {
       return const Column(
@@ -6387,48 +6529,11 @@ class HomeworkQuickAddProxyDialogState
               enabled: canSelectNaesinSource,
               onTap: () async {
                 if (!canSelectNaesinSource) return;
-                if (_useNaesinSource) {
-                  if (hasDraftItems) return;
-                  final restoreFlowId = (_testOriginFlowId ?? '').trim();
-                  setState(() {
-                    _useNaesinSource = false;
-                    _useCustomSource = false;
-                    _flowId =
-                        restoreFlowId.isNotEmpty ? restoreFlowId : _flowId;
-                    _testOriginFlowId = null;
-                    _selectedLinkedBookKey = null;
-                    _manualPageMode = false;
-                    _units = const <_BigUnitSelectionNode>[];
-                    _expandedLeftMidSmallsKey = null;
-                  });
-                  await _handleFlowChanged(forceNoBookSelection: true);
-                  return;
-                }
                 if (hasDraftItems && !_hasNaesinDraftItems()) {
                   _showDialogSnackBar('교재 과제와 내신 과제는 같은 그룹에 섞어 추가할 수 없습니다.');
                   return;
                 }
-                final previousFlowId =
-                    _isTestFlowId(_flowId) ? null : _flowId.trim();
-                setState(() {
-                  _useNaesinSource = true;
-                  _useCustomSource = false;
-                  _testSource = _kTestSourceNaesin;
-                  _testOriginFlowId = previousFlowId;
-                  _flowId = testFlow.id;
-                  _selectedLinkedBookKey = null;
-                  _linkedHomeworkType = '프린트';
-                  _type = '프린트';
-                  _manualPageMode = false;
-                  _units = const <_BigUnitSelectionNode>[];
-                  _expandedLeftMidSmallsKey = null;
-                });
-                if (_naesinGradeKey.isEmpty ||
-                    _naesinCourseKey.isEmpty ||
-                    _naesinExamTerm.isEmpty) {
-                  _initNaesinFilterDefaults();
-                }
-                await _handleFlowChanged(forceNoBookSelection: true);
+                await _enterNaesinStandaloneMode(testFlow.id);
               },
             ),
             _buildPickerChip(
@@ -6526,9 +6631,9 @@ class HomeworkQuickAddProxyDialogState
       return _buildNaesinRangePanel();
     }
     if (waitingSelectedBook) {
-      return Column(
+      return const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
+        children: [
           YggDialogSectionHeader(
             icon: Icons.account_tree_outlined,
             title: '범위 선택',
@@ -6696,6 +6801,7 @@ class HomeworkQuickAddProxyDialogState
     final selectedBook = _selectedLinkedBook;
     final hasBookSelection = _selectedLinkedBookKey != null;
     final showNaesinPanel = _shouldShowNaesinPanel();
+    final showNaesinStandalone = _naesinStandaloneMode && showNaesinPanel;
     final showBody = _useCustomSource || hasBookSelection || showNaesinPanel;
     final waitingSelectedBook =
         _loadingFlowTextbooks && hasBookSelection && selectedBook == null;
@@ -6708,6 +6814,7 @@ class HomeworkQuickAddProxyDialogState
     const compactDialogWidth = 656.0;
     const naesinDialogMinWidth = 720.0;
     const naesinBodyHeight = 720.0;
+    final naesinGridColumnCount = _naesinSchools.length;
     final double baseDialogWidth = (hasBookSelection
             ? (_showGroupPanel ? 1460.0 : 1180.0)
             : (showNaesinPanel
@@ -6716,8 +6823,8 @@ class HomeworkQuickAddProxyDialogState
         0.9;
     final naesinGridContentWidth = _kNaesinGridYearLabelWidth +
         _kNaesinGridLabelToCellsGap +
-        _kNaesinSchools.length * _kNaesinGridCellSize +
-        (_kNaesinSchools.length - 1) * _kNaesinGridCellGap +
+        naesinGridColumnCount * _kNaesinGridCellSize +
+        math.max(0, naesinGridColumnCount - 1) * _kNaesinGridCellGap +
         72;
     final double targetDialogWidth = showNaesinPanel && !_showGroupPanel
         ? math.max(
@@ -6725,12 +6832,21 @@ class HomeworkQuickAddProxyDialogState
             naesinGridContentWidth,
           )
         : baseDialogWidth;
+    final visualNaesinRows = _naesinGridVisualRowCount();
+    final standaloneNaesinBodyHeight =
+        (visualNaesinRows * (_kNaesinGridCellSize + _kNaesinGridCellGap)) + 166;
     final double bodyHeight = showNaesinPanel
-        ? naesinBodyHeight
+        ? (showNaesinStandalone
+            ? standaloneNaesinBodyHeight
+                .clamp(360.0, naesinBodyHeight)
+                .toDouble()
+            : naesinBodyHeight)
         : (hasBookSelection ? 620 : (_useCustomSource ? 620 : 0));
-    final double targetDialogHeight = showBody
-        ? math.min(maxDialogHeight, bodyHeight + 360)
-        : math.min(maxDialogHeight, 620);
+    final double targetDialogHeight = showNaesinStandalone
+        ? math.min(maxDialogHeight, bodyHeight + 76)
+        : (showBody
+            ? math.min(maxDialogHeight, bodyHeight + 360)
+            : math.min(maxDialogHeight, 620));
 
     final Widget groupPanel = Expanded(
       flex: 2,
@@ -6889,6 +7005,18 @@ class HomeworkQuickAddProxyDialogState
     }
 
     Widget primaryActions() {
+      if (showNaesinStandalone) {
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, null),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+          ],
+        );
+      }
       return Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -6898,7 +7026,7 @@ class HomeworkQuickAddProxyDialogState
             child: const Text('취소'),
           ),
           const SizedBox(width: 8),
-          if (!_isChildAddMode) ...[
+          if (!_isChildAddMode && !showNaesinStandalone) ...[
             OutlinedButton(
               onPressed: () => _submit(action: 'reserve'),
               style: OutlinedButton.styleFrom(
@@ -6951,6 +7079,17 @@ class HomeworkQuickAddProxyDialogState
     }
 
     Widget dialogContent() {
+      if (showNaesinStandalone) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: _buildNaesinStandalonePanel()),
+            const SizedBox(height: 12),
+            primaryActions(),
+            const SizedBox(height: dialogBottomPadding),
+          ],
+        );
+      }
       if (hasBookSelection) {
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7009,7 +7148,9 @@ class HomeworkQuickAddProxyDialogState
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: Text(
-        _isChildAddMode ? '하위 과제 추가' : '과제 추가',
+        showNaesinStandalone
+            ? '기출 선택'
+            : (_isChildAddMode ? '하위 과제 추가' : '과제 추가'),
         style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
       ),
       content: AnimatedContainer(
@@ -7022,6 +7163,18 @@ class HomeworkQuickAddProxyDialogState
       contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
     );
   }
+}
+
+class _NaesinLinkedCellOption {
+  const _NaesinLinkedCellOption({
+    required this.linkKey,
+    required this.cellLabel,
+    required this.status,
+  });
+
+  final String linkKey;
+  final String cellLabel;
+  final _NaesinCellStatus? status;
 }
 
 class _NaesinPresetAutoValues {

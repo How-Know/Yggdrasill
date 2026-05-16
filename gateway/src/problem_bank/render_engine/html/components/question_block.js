@@ -31,6 +31,8 @@ import { resolveFigureLayout } from '../../utils/figure_layout.js';
 // 속성부는 applyInlineAlignmentMarkers 가 stemLineAligns 로 옮긴 뒤
 // plain `[문단]` 으로 정규화하지만, safety net 으로 여기서도 속성 변형을 매칭한다.
 const STRUCTURAL_STRIP = /\[문단(?::[^\]]*)?\]/g;
+const MATH_LINE_BREAK_MARKER_RE = /\[수식줄바꿈(?::([^\]]*))?\]/gi;
+const MATH_DISPLAY_LINE_MARKER_RE = /\[(?:수식제시|수식제시줄|displaymath|mathline)\]/gi;
 const BOX_START = /\[박스시작\]/;
 const BOX_END = /\[박스끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
@@ -59,11 +61,48 @@ const PARAGRAPH_MARKER_LINE_RE = /^\s*\[문단(?::[^\]]*)?\]\s*$/;
 function cleanLine(line) {
   return line
     .replace(STRUCTURAL_STRIP, ' ')
+    .replace(MATH_LINE_BREAK_MARKER_RE, ' ')
+    .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
     .replace(BOX_START, '')
     .replace(BOX_END, '')
     .replace(FIGURE_MARKER_RE, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function hasMathDisplayLineMarker(text) {
+  MATH_DISPLAY_LINE_MARKER_RE.lastIndex = 0;
+  return MATH_DISPLAY_LINE_MARKER_RE.test(String(text || ''));
+}
+
+function stripMathDisplayLineMarker(text) {
+  MATH_DISPLAY_LINE_MARKER_RE.lastIndex = 0;
+  return String(text || '').replace(MATH_DISPLAY_LINE_MARKER_RE, ' ');
+}
+
+function normalizeMathLineBreakAlign(value) {
+  const raw = String(value || '오른쪽').trim().toLowerCase();
+  if (raw === '가운데' || raw === '중앙' || raw === 'center' || raw === 'middle') return 'center';
+  if (raw === '왼쪽' || raw === '좌측' || raw === 'left') return 'left';
+  return 'right';
+}
+
+function splitByMathLineBreakMarkers(input) {
+  const src = String(input || '');
+  MATH_LINE_BREAK_MARKER_RE.lastIndex = 0;
+  if (!src.match(MATH_LINE_BREAK_MARKER_RE)) return [{ text: src, align: null }];
+  MATH_LINE_BREAK_MARKER_RE.lastIndex = 0;
+  const out = [];
+  let cursor = 0;
+  let pendingAlign = null;
+  let match;
+  while ((match = MATH_LINE_BREAK_MARKER_RE.exec(src)) !== null) {
+    out.push({ text: src.slice(cursor, match.index), align: pendingAlign });
+    pendingAlign = normalizeMathLineBreakAlign(match[1]);
+    cursor = match.index + match[0].length;
+  }
+  out.push({ text: src.slice(cursor), align: pendingAlign });
+  return out.filter((part) => part.text.trim() || part.align !== null);
 }
 
 /**
@@ -107,7 +146,7 @@ function buildSingleFigureHtml(url, layoutItem) {
   const position = layoutItem?.position || 'below-stem';
   const posClass = `figure-pos-${position}`;
   const anchorClass = `figure-anchor-${anchor}`;
-  const offsetX = Number.isFinite(layoutItem?.offsetXEm) ? layoutItem.offsetXEm : 0;
+  const offsetX = safeFigureOffsetX(layoutItem);
   const offsetStyle = Math.abs(offsetX) > 1e-3 ? `transform:translateX(${offsetX}em);` : '';
   const widthStyle = w
     ? `width:${w}em;max-width:100%;${offsetStyle}`
@@ -117,6 +156,15 @@ function buildSingleFigureHtml(url, layoutItem) {
     + `</div>`;
 }
 
+function safeFigureOffsetX(layoutItem) {
+  const raw = Number.isFinite(layoutItem?.offsetXEm) ? Number(layoutItem.offsetXEm) : 0;
+  const anchor = String(layoutItem?.anchor || 'center').toLowerCase();
+  const position = String(layoutItem?.position || '').toLowerCase();
+  if (anchor === 'left' || position === 'inline-left') return Math.max(0, raw);
+  if (anchor === 'right' || position === 'inline-right') return Math.min(0, raw);
+  return raw;
+}
+
 function buildGroupFigureHtml(members, dataUrls, layoutItems, gapEm) {
   const innerHtml = members
     .map((idx) => {
@@ -124,7 +172,7 @@ function buildGroupFigureHtml(members, dataUrls, layoutItems, gapEm) {
       if (!url) return '';
       const item = layoutItems ? layoutItems[idx] : null;
       const w = item?.widthEm;
-      const offsetX = Number.isFinite(item?.offsetXEm) ? item.offsetXEm : 0;
+      const offsetX = safeFigureOffsetX(item);
       const offsetStyle = Math.abs(offsetX) > 1e-3
         ? `transform:translateX(${offsetX}em);`
         : '';
@@ -453,6 +501,7 @@ function countFigureMarkers(stem) {
 function cleanLineKeepingPlaceholders(line) {
   return line
     .replace(STRUCTURAL_STRIP, ' ')
+    .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
     .replace(BOX_START, '')
     .replace(BOX_END, '')
     .replace(/\s+/g, ' ')
@@ -496,9 +545,11 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
   const consumedFigIdxs = new Set();
 
   const prepareLine = (rawLine) => {
+    const displayMarkerPrefix = hasMathDisplayLineMarker(rawLine) ? '[수식제시] ' : '';
     if (hasInlineFigures) {
       let line = rawLine
         .replace(STRUCTURAL_STRIP, ' ')
+        .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
         .replace(BOX_START, '')
         .replace(BOX_END, '');
       const result = replaceMarkersWithPlaceholders(
@@ -508,9 +559,11 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
         consumedFigIdxs,
       );
       figureCounter = result.nextPosIdx;
-      return result.text.replace(/\s+/g, ' ').trim();
+      const cleaned = result.text.replace(/\s+/g, ' ').trim();
+      return cleaned ? `${displayMarkerPrefix}${cleaned}`.trim() : '';
     }
-    return cleanLine(rawLine);
+    const cleaned = cleanLine(rawLine);
+    return cleaned ? `${displayMarkerPrefix}${cleaned}`.trim() : '';
   };
 
   const flushInline = () => {
@@ -535,6 +588,34 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
     for (const entry of inlineBuffer) {
       const align = normalizeLineAlign(entry?.align);
       const text = String(entry?.text || '');
+      if (hasMathDisplayLineMarker(text)) {
+        flushLeftRun();
+        const one = renderOneLine(
+          stripMathDisplayLineMarker(text),
+          mathRenderer,
+          equations,
+          opts,
+        );
+        if (!one?.html) continue;
+        if (one.hasFraction) hasFraction = true;
+        htmlParts.push(`<div class="stem-line stem-line-display-math">${one.html}</div>`);
+        continue;
+      }
+      if (text.includes('[수식줄바꿈')) {
+        flushLeftRun();
+        const manualParts = splitByMathLineBreakMarkers(text);
+        for (let idx = 0; idx < manualParts.length; idx += 1) {
+          const part = manualParts[idx];
+          if (!part.text.trim()) continue;
+          const partAlign = idx === 0 ? align : (part.align || 'right');
+          const one = renderOneLine(part.text, mathRenderer, equations, opts);
+          if (!one?.html) continue;
+          if (one.hasFraction) hasFraction = true;
+          const alignClass = partAlign === 'left' ? '' : ` stem-line-${partAlign}`;
+          htmlParts.push(`<div class="stem-line${alignClass}">${one.html}</div>`);
+        }
+        continue;
+      }
       if (align === 'left') {
         leftRun.push({ text });
         continue;
@@ -668,7 +749,7 @@ function renderFigures(question, { stemSizePt = 11, skipCount = 0 } = {}) {
     const innerHtml = memberEntries
       .map((e) => {
         const w = e.item.widthEm;
-        const offsetX = Number.isFinite(e.item.offsetXEm) ? e.item.offsetXEm : 0;
+        const offsetX = safeFigureOffsetX(e.item);
         const offsetStyle = Math.abs(offsetX) > 1e-3
           ? `transform:translateX(${offsetX}em);`
           : '';
@@ -687,7 +768,7 @@ function renderFigures(question, { stemSizePt = 11, skipCount = 0 } = {}) {
     const { url, item } = entry;
     const posClass = `figure-pos-${item.position}`;
     const anchorClass = `figure-anchor-${item.anchor}`;
-    const offsetX = Number.isFinite(item.offsetXEm) ? item.offsetXEm : 0;
+    const offsetX = safeFigureOffsetX(item);
     const offsetStyle = Math.abs(offsetX) > 1e-3 ? `transform:translateX(${offsetX}em);` : '';
     const widthStyle = `width:${item.widthEm}em;max-width:100%;${offsetStyle}`;
     parts.push(
@@ -932,6 +1013,76 @@ export function renderQuestionBlock(
       <div class="q-stem">${showQuestionNumber && !numberAbove ? `<span class="q-num">${escapeHtml(displayNumber)}.</span> ` : ''}${stemHtml}</div>
       ${figureHtml}
       ${choiceHtml}
+    </article>
+  `;
+}
+
+function formatIndependentSetHeaderLabel(group) {
+  const explicit = String(group?.header_label || group?.headerLabel || '').trim();
+  if (explicit) return explicit;
+  const items = Array.isArray(group?.items) ? group.items : [];
+  const labels = items
+    .map((item) => formatQuestionNumberForDisplay(item?.question_number || '', 'source'))
+    .filter(Boolean);
+  if (labels.length === 0) return '';
+  const nums = labels.map((label) => Number.parseInt(String(label).replace(/\D/g, ''), 10));
+  const continuous = nums.length === labels.length
+    && nums.every((n) => Number.isFinite(n))
+    && nums.every((n, idx) => idx === 0 || n === nums[idx - 1] + 1);
+  if (continuous && labels.length > 1) return `[${labels[0]}~${labels[labels.length - 1]}]`;
+  return `[${labels.join(', ')}]`;
+}
+
+export function renderIndependentSetGroupBlock(
+  group,
+  mathRenderer,
+  {
+    stemSizePt = 11,
+    showQuestionNumber = true,
+    questionNumberFormat = 'source',
+    debugDots = false,
+  } = {},
+) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  const commonStem = String(group?.common_stem || group?.commonStem || '').trim();
+  if (!commonStem || items.length === 0) {
+    return items
+      .map((item) => renderQuestionBlock(item, mathRenderer, {
+        stemSizePt,
+        showQuestionNumber,
+        questionNumberFormat,
+        debugDots,
+      }))
+      .join('');
+  }
+  const equations = [];
+  for (const item of items) {
+    if (Array.isArray(item?.equations)) equations.push(...item.equations);
+  }
+  const common = renderStemWithBoxes(commonStem, mathRenderer, equations, {
+    debugDots,
+  });
+  const headerLabel = formatIndependentSetHeaderLabel(group);
+  const itemHtml = items.map((item) => {
+    const number = formatQuestionNumberForDisplay(item?.question_number || '', questionNumberFormat);
+    const normalizedAlign = applyInlineAlignmentMarkers(item?.stem || '', []);
+    const stem = renderStemWithBoxes(
+      normalizedAlign.stem,
+      mathRenderer,
+      Array.isArray(item?.equations) ? item.equations : [],
+      {
+        dataUrls: Array.isArray(item?.figure_data_urls) ? item.figure_data_urls : [],
+        figureItemIds: Array.isArray(item?.figure_item_ids) ? item.figure_item_ids : [],
+        stemLineAligns: normalizedAlign.stemLineAligns,
+        debugDots,
+      },
+    );
+    return `<div class="independent-set-item">${number ? `<span class="q-num">${escapeHtml(number)}.</span> ` : ''}<span class="independent-set-item-stem">${stem.stemHtml}</span></div>`;
+  }).join('');
+  return `
+    <article class="question independent-set-group">
+      <div class="q-stem independent-set-common">${showQuestionNumber && headerLabel ? `<span class="q-num">${escapeHtml(headerLabel)}</span> ` : ''}${common.stemHtml}</div>
+      <div class="independent-set-items">${itemHtml}</div>
     </article>
   `;
 }

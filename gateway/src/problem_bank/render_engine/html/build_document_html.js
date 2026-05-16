@@ -1,4 +1,7 @@
-import { renderQuestionBlock } from './components/question_block.js';
+import {
+  renderIndependentSetGroupBlock,
+  renderQuestionBlock,
+} from './components/question_block.js';
 import { composeLineV1 } from './line_composer.js';
 import { buildSlotPlan } from './slot_plan.js';
 import { escapeHtml, normalizeMathLatex, isFractionLatex } from '../utils/text.js';
@@ -142,11 +145,28 @@ function buildStyles({
       break-inside: avoid;
       margin-bottom: calc(var(--question-gap-pt) * 1pt);
       overflow: visible;
+      font-size: calc((var(--stem-size-pt) - 0.5) * 1pt);
+    }
+    .independent-set-group {
+      padding-left: 0;
+      text-indent: 0;
+    }
+    .independent-set-common {
+      margin-bottom: calc(var(--line-height-pt) * 0.25 * 1pt);
+    }
+    .independent-set-items {
+      margin-top: calc(var(--line-height-pt) * 0.2 * 1pt);
+      padding-left: 1.2em;
+    }
+    .independent-set-item {
+      margin: calc(var(--line-height-pt) * 0.15 * 1pt) 0;
+      text-indent: -1.2em;
+      padding-left: 1.2em;
     }
     .q-num {
       font-family: "YggQNum", "YggMain", serif;
       font-weight: 700;
-      font-size: calc((var(--stem-size-pt) + 1) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 0.5) * 1pt);
       -webkit-text-stroke: 0.3pt currentColor;
       display: inline;
       line-height: 1;
@@ -157,7 +177,7 @@ function buildStyles({
     .q-num-above {
       font-family: "YggQNum", "YggMain", serif;
       font-weight: 700;
-      font-size: calc((var(--stem-size-pt) + 1) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 0.5) * 1pt);
       -webkit-text-stroke: 0.3pt currentColor;
       line-height: 1;
       text-indent: 0;
@@ -165,7 +185,7 @@ function buildStyles({
       white-space: nowrap;
     }
     body.profile-assignment .q-num-above {
-      font-size: calc((var(--stem-size-pt) + 1) * 1.21 * 1pt);
+      font-size: calc(((var(--stem-size-pt) + 1) * 1.21 - 0.5) * 1pt);
       margin-bottom: 0.6pt;
     }
     .q-stem {
@@ -193,6 +213,11 @@ function buildStyles({
     .stem-line.stem-line-center { text-align: center; }
     .stem-line.stem-line-right { text-align: right; }
     .stem-line.stem-line-justify { text-align: justify; }
+    .stem-line.stem-line-display-math {
+      margin: calc(var(--line-height-pt) * 0.09 * 1pt) 0 calc(var(--line-height-pt) * 0.225 * 1pt);
+      padding-left: 2.55em;
+      line-height: 2.3;
+    }
     .debug-first {
       display: inline;
       position: relative;
@@ -495,6 +520,8 @@ function buildStyles({
     .figure-inline-block .figure-img { max-width: 100%; height: auto; }
     .figure-inline-block.figure-anchor-left { text-align: left; }
     .figure-inline-block.figure-anchor-right { text-align: right; }
+    .figure-inline-block.figure-pos-inline-left { float: left; margin: 0 0.5em 0.5em 0; clear: left; text-align: left; }
+    .figure-inline-block.figure-pos-inline-right { float: right; margin: 0 0 0.5em 0.5em; clear: right; text-align: right; }
     .figure-inline-block.figure-group-horizontal { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item { flex-shrink: 0; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item .figure-img { width: 100%; }
@@ -1921,6 +1948,51 @@ function buildQuestionChunks({
   };
 }
 
+function independentSetRenderKey(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object'
+    ? meta.delivery_unit
+    : {};
+  const model = meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+  const deliveryType = String(delivery.delivery_type || '').trim();
+  const modelType = String(model.set_type || '').trim();
+  const commonStem = String(
+    delivery.common_stem || model.common_stem || model.commonStem || '',
+  ).trim();
+  if (!commonStem) return null;
+  if (deliveryType !== 'independent_item' && modelType !== 'independent_set') return null;
+  const key = String(
+    delivery.set_id || delivery.set_key || model.set_key || model.setKey || '',
+  ).trim();
+  return key ? { key, commonStem } : null;
+}
+
+function groupIndependentSetQuestionsForRender(questions) {
+  const source = Array.isArray(questions) ? questions : [];
+  const out = [];
+  for (const question of source) {
+    const info = independentSetRenderKey(question);
+    const last = out[out.length - 1];
+    if (info && last?.__render_kind === 'independent_set_group' && last.set_key === info.key) {
+      last.items.push(question);
+      continue;
+    }
+    if (info) {
+      out.push({
+        __render_kind: 'independent_set_group',
+        set_key: info.key,
+        common_stem: info.commonStem,
+        items: [question],
+        question_type: question?.question_type || '주관식',
+        mode: question?.mode || question?.questionMode || question?.export_mode || question?.exportMode,
+      });
+      continue;
+    }
+    out.push(question);
+  }
+  return out;
+}
+
 function normalizeTitlePageIndices(rawIndices, pageCount) {
   const maxPage = Number.isFinite(pageCount)
     ? Math.max(1, Number(pageCount))
@@ -2138,16 +2210,24 @@ export function buildDocumentHtml({
     : {};
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
-  const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, {
-    stemSizePt,
-    includeQuestionScore,
-    questionScoreByQuestionId: scoreMap,
-    showQuestionNumber: !hideQuestionNumber,
-    questionNumberPlacement,
-    questionNumberFormat,
-    debugDots,
-  }));
   const isReviewCompact = profile === 'review_compact' || layout?.reviewPdf === true;
+  const renderQuestions = isReviewCompact
+    ? (questions || [])
+    : groupIndependentSetQuestionsForRender(questions || []);
+  const allQ = renderQuestions.map((q) => {
+    const renderOpts = {
+      stemSizePt,
+      includeQuestionScore,
+      questionScoreByQuestionId: scoreMap,
+      showQuestionNumber: !hideQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+      debugDots,
+    };
+    return q?.__render_kind === 'independent_set_group'
+      ? renderIndependentSetGroupBlock(q, mathRenderer, renderOpts)
+      : renderQuestionBlock(q, mathRenderer, renderOpts);
+  });
   if (isReviewCompact) {
     const reviewHtml = renderReviewCompactHtml({
       questions,
@@ -2479,7 +2559,7 @@ export function buildDocumentHtml({
     `;
   };
   const chunkPlan = buildQuestionChunks({
-    questions,
+    questions: renderQuestions,
     renderedQuestions: allQ,
     perPage,
     columns,

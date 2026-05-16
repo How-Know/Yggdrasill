@@ -43,6 +43,16 @@ class _OverviewNaesinCellStatus {
   final String scoreLabel;
 }
 
+class _OverviewNaesinCellOption {
+  const _OverviewNaesinCellOption({
+    required this.cellLabel,
+    required this.status,
+  });
+
+  final String cellLabel;
+  final _OverviewNaesinCellStatus? status;
+}
+
 class _HomeworkOverviewNaesinPastExamPanelState
     extends State<HomeworkOverviewNaesinPastExamPanel> {
   static const String _kTestSourceNaesin = 'naesin';
@@ -55,16 +65,6 @@ class _HomeworkOverviewNaesinPastExamPanelState
   static const double _kNaesinGridCellGap = 12;
   static const double _kNaesinGridLabelToCellsGap = 12;
   static const Color _kNaesinLinkedActiveCellColor = Color(0xFF282828);
-  static const List<String> _kNaesinSchools = <String>[
-    '경신중',
-    '능인중',
-    '대륜중',
-    '동도중',
-    '소선여중',
-    '오성중',
-    '정화중',
-    '황금중',
-  ];
 
   final ScrollController _hScroll = ScrollController();
   final LearningProblemBankService _problemBankService =
@@ -80,6 +80,9 @@ class _HomeworkOverviewNaesinPastExamPanelState
   final Set<String> _linkedKeys = <String>{};
   final Map<String, _OverviewNaesinCellStatus> _statusByLinkKey = {};
   bool _loading = false;
+
+  List<String> get _naesinSchools =>
+      NaesinExamContext.schoolsForGradeKey(_naesinGradeKey);
 
   @override
   void initState() {
@@ -113,23 +116,34 @@ class _HomeworkOverviewNaesinPastExamPanelState
     _naesinStudentSchool = (info?.student.school ?? '').trim();
   }
 
-  String _linkKeyForCell({required String school, required int year}) {
-    return NaesinExamContext.buildNaesinLinkKey(
-      gradeKey: _naesinGradeKey,
-      courseKey: _naesinCourseKey,
-      examTerm: _naesinExamTerm,
-      school: school,
-      year: year,
-    );
-  }
-
-  bool _isLinked({required String school, required int year}) {
-    if (_naesinGradeKey.isEmpty ||
-        _naesinCourseKey.isEmpty ||
-        _naesinExamTerm.isEmpty) {
-      return false;
+  List<_OverviewNaesinCellOption> _optionsForSchoolYear({
+    required String school,
+    required int year,
+  }) {
+    final out = <_OverviewNaesinCellOption>[];
+    for (final key in _linkedKeys) {
+      final parsed = NaesinExamContext.parseNaesinLinkKey(key);
+      if (parsed == null) continue;
+      if (parsed.gradeKey != _naesinGradeKey ||
+          parsed.courseKey != _naesinCourseKey ||
+          parsed.examTerm != _naesinExamTerm ||
+          parsed.school != school ||
+          parsed.year != year) {
+        continue;
+      }
+      out.add(
+        _OverviewNaesinCellOption(
+          cellLabel: parsed.cellLabel,
+          status: _statusByLinkKey[key],
+        ),
+      );
     }
-    return _linkedKeys.contains(_linkKeyForCell(school: school, year: year));
+    out.sort((a, b) {
+      if (a.cellLabel.isEmpty && b.cellLabel.isNotEmpty) return -1;
+      if (a.cellLabel.isNotEmpty && b.cellLabel.isEmpty) return 1;
+      return a.cellLabel.compareTo(b.cellLabel);
+    });
+    return out;
   }
 
   DateTime _statusTs(HomeworkItem item) {
@@ -327,7 +341,7 @@ class _HomeworkOverviewNaesinPastExamPanelState
   }
 
   double _gridMinWidth() {
-    final n = _kNaesinSchools.length;
+    final n = _naesinSchools.length;
     if (n <= 0) {
       return _kNaesinGridSchoolLabelWidth + _kNaesinGridLabelToCellsGap + 40;
     }
@@ -402,9 +416,14 @@ class _HomeworkOverviewNaesinPastExamPanelState
     required String school,
     required int year,
     required bool highlightedSchool,
-    required bool linkedActive,
-    required _OverviewNaesinCellStatus? cellStatus,
+    required String cellLabel,
+    required List<_OverviewNaesinCellOption> options,
   }) {
+    final linkedActive = options.isNotEmpty;
+    final cellStatus = options.isNotEmpty ? options.first.status : null;
+    final displayCellLabel =
+        options.isNotEmpty ? options.first.cellLabel.trim() : cellLabel.trim();
+    final hasCellLabel = displayCellLabel.isNotEmpty;
     final hasIssued = cellStatus?.issuedAt != null;
     final isCompleted = cellStatus?.isCompleted == true;
     final isEnded = (cellStatus?.isEnded == true) || isCompleted;
@@ -428,7 +447,10 @@ class _HomeworkOverviewNaesinPastExamPanelState
             : (highlightedSchool
                 ? const Color(0x1A33A373)
                 : const Color(0xFF151C21)));
-    final tooltipLines = <String>['$school · $year'];
+    final tooltipLines = <String>[
+      '$school · $year',
+      if (hasCellLabel) displayCellLabel,
+    ];
     if (cellStatus?.firstIssuedAt != null) {
       tooltipLines.add(
         '처음 내준 시각 ${_fmtIssuedDateTime(cellStatus!.firstIssuedAt!)}',
@@ -465,29 +487,56 @@ class _HomeworkOverviewNaesinPastExamPanelState
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: borderColor),
             ),
-            child: displayText.isEmpty
-                ? null
-                : Center(
+            child: hasCellLabel || displayText.isNotEmpty
+                ? Center(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          displayText,
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: isCompleted
-                                ? const Color(0xFFE4F8EC)
-                                : (isEnded ? kDlgText : kDlgTextSub),
-                            fontWeight:
-                                hasScore ? FontWeight.w800 : FontWeight.w700,
-                            fontSize: hasScore ? 12 : 10.8,
-                            letterSpacing: hasScore ? 0.2 : 0.1,
-                          ),
-                        ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 3,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (hasCellLabel)
+                            Text(
+                              displayCellLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                height: 1.05,
+                              ),
+                            ),
+                          if (hasCellLabel && displayText.isNotEmpty)
+                            const SizedBox(height: 3),
+                          if (displayText.isNotEmpty)
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                displayText,
+                                maxLines: 1,
+                                style: TextStyle(
+                                  color: isCompleted
+                                      ? const Color(0xFFE4F8EC)
+                                      : (isEnded ? kDlgText : kDlgTextSub),
+                                  fontWeight: hasScore
+                                      ? FontWeight.w800
+                                      : FontWeight.w700,
+                                  fontSize: hasScore ? 12 : 10.8,
+                                  letterSpacing: hasScore ? 0.2 : 0.1,
+                                  height: 1.0,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                  ),
+                  )
+                : null,
           ),
         ),
       ),
@@ -495,6 +544,7 @@ class _HomeworkOverviewNaesinPastExamPanelState
   }
 
   Widget _headerRow() {
+    final schools = _naesinSchools;
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
       child: Row(
@@ -515,12 +565,12 @@ class _HomeworkOverviewNaesinPastExamPanelState
             ),
           ),
           SizedBox(width: _kNaesinGridLabelToCellsGap),
-          for (var i = 0; i < _kNaesinSchools.length; i++) ...[
+          for (var i = 0; i < schools.length; i++) ...[
             SizedBox(
               width: _kNaesinGridCellSize,
               child: Center(
                 child: Text(
-                  _kNaesinSchools[i],
+                  schools[i],
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -533,8 +583,7 @@ class _HomeworkOverviewNaesinPastExamPanelState
                 ),
               ),
             ),
-            if (i < _kNaesinSchools.length - 1)
-              SizedBox(width: _kNaesinGridCellGap),
+            if (i < schools.length - 1) SizedBox(width: _kNaesinGridCellGap),
           ],
         ],
       ),
@@ -542,44 +591,79 @@ class _HomeworkOverviewNaesinPastExamPanelState
   }
 
   Widget _yearRow(int year, String studentSchool) {
+    final schools = _naesinSchools;
+    final optionsBySchool = <String, List<_OverviewNaesinCellOption>>{
+      for (final school in schools)
+        school: _optionsForSchoolYear(school: school, year: year),
+    };
+    final slotCount = math.max(
+      1,
+      optionsBySchool.values.fold<int>(
+        0,
+        (maxCount, options) => math.max(maxCount, options.length),
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 9),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: _kNaesinGridSchoolLabelWidth,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                '$year',
-                textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: kDlgTextSub,
-                  fontSize: 13.2,
-                  fontWeight: FontWeight.w600,
-                ),
+          for (var slot = 0; slot < slotCount; slot++)
+            Padding(
+              padding: EdgeInsets.only(
+                bottom: slot == slotCount - 1 ? 0 : _kNaesinGridCellGap,
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: _kNaesinGridSchoolLabelWidth,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: slot == 0
+                          ? Text(
+                              '$year',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                color: kDlgTextSub,
+                                fontSize: 13.2,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                  SizedBox(width: _kNaesinGridLabelToCellsGap),
+                  for (var i = 0; i < schools.length; i++) ...[
+                    () {
+                      final school = schools[i];
+                      final highlighted =
+                          studentSchool.isNotEmpty && studentSchool == school;
+                      final options = optionsBySchool[school] ??
+                          const <_OverviewNaesinCellOption>[];
+                      if (slot >= options.length && slot > 0) {
+                        return const SizedBox(
+                          width: _kNaesinGridCellSize,
+                          height: _kNaesinGridCellSize,
+                        );
+                      }
+                      final option =
+                          slot < options.length ? options[slot] : null;
+                      return _statusCell(
+                        school: school,
+                        year: year,
+                        highlightedSchool: highlighted,
+                        cellLabel: option?.cellLabel ?? '',
+                        options: option == null
+                            ? const <_OverviewNaesinCellOption>[]
+                            : <_OverviewNaesinCellOption>[option],
+                      );
+                    }(),
+                    if (i < schools.length - 1)
+                      SizedBox(width: _kNaesinGridCellGap),
+                  ],
+                ],
               ),
             ),
-          ),
-          SizedBox(width: _kNaesinGridLabelToCellsGap),
-          for (var i = 0; i < _kNaesinSchools.length; i++) ...[
-            () {
-              final school = _kNaesinSchools[i];
-              final highlighted =
-                  studentSchool.isNotEmpty && studentSchool == school;
-              final linkKey = _linkKeyForCell(school: school, year: year);
-              final linked = _isLinked(school: school, year: year);
-              return _statusCell(
-                school: school,
-                year: year,
-                highlightedSchool: highlighted,
-                linkedActive: linked,
-                cellStatus: _statusByLinkKey[linkKey],
-              );
-            }(),
-            if (i < _kNaesinSchools.length - 1)
-              SizedBox(width: _kNaesinGridCellGap),
-          ],
         ],
       ),
     );

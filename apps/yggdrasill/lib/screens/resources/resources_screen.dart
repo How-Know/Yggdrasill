@@ -7073,7 +7073,6 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
   bool _unitLoading = false;
   String? _unitErrorText;
   List<_PrintBigUnitNode> _units = const <_PrintBigUnitNode>[];
-  int _pageOffset = 0;
   bool _unitMode = false;
   String? _expandedBigKey;
   String? _expandedMidKey;
@@ -7116,12 +7115,10 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
         bookId: bookId,
         gradeLabel: gradeLabel,
       );
-      final pageOffset = _toInt(row?['page_offset']) ?? 0;
-      final units = _parseUnits(row?['payload'], pageOffset: pageOffset);
+      final units = _parseUnits(row?['payload']);
       if (!mounted) return;
       setState(() {
         _units = units;
-        _pageOffset = pageOffset;
         _unitMode = units.isNotEmpty;
         _unitLoading = false;
       });
@@ -7134,20 +7131,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
     }
   }
 
-  int _toDisplayPage(int raw, int pageOffset) {
-    final adjusted = raw - pageOffset;
-    return adjusted > 0 ? adjusted : raw;
-  }
-
-  int? _toDisplayPageNullable(int? raw, int pageOffset) {
-    if (raw == null) return null;
-    return _toDisplayPage(raw, pageOffset);
-  }
-
-  List<_PrintBigUnitNode> _parseUnits(
-    dynamic payload, {
-    int pageOffset = 0,
-  }) {
+  List<_PrintBigUnitNode> _parseUnits(dynamic payload) {
     if (payload is! Map) return const <_PrintBigUnitNode>[];
     final unitsRaw = payload['units'];
     if (unitsRaw is! List) return const <_PrintBigUnitNode>[];
@@ -7196,10 +7180,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                       ? (s['name'] as String).trim()
                       : '소단원',
                   orderIndex: _orderIndex(s['order_index']),
-                  startPage: _toDisplayPageNullable(
-                      _toInt(s['start_page']), pageOffset),
-                  endPage:
-                      _toDisplayPageNullable(_toInt(s['end_page']), pageOffset),
+                  startPage: _toInt(s['start_page']),
+                  endPage: _toInt(s['end_page']),
                 ),
               );
             }
@@ -7327,8 +7309,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
       end = t;
     }
     for (int p = start; p <= end; p++) {
-      final adjusted = p + _pageOffset;
-      if (adjusted > 0) out.add(adjusted);
+      if (p > 0) out.add(p);
     }
     return out;
   }
@@ -7431,16 +7412,6 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_pageOffset != 0)
-            Text(
-              '페이지 오프셋 ${_pageOffset >= 0 ? '+' : ''}$_pageOffset 적용',
-              style: const TextStyle(
-                color: _rsTextSub,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          if (_pageOffset != 0) const SizedBox(height: 6),
           if (selectedRange.isNotEmpty)
             Text(
               '선택 페이지: $selectedRange',

@@ -49,16 +49,46 @@ class NaesinExamContext {
     switch (level) {
       case EducationLevel.high:
         return const <NaesinGradeOption>[
-          NaesinGradeOption(key: 'H1', label: '고1', level: EducationLevel.high, grade: 1),
-          NaesinGradeOption(key: 'H2', label: '고2', level: EducationLevel.high, grade: 2),
-          NaesinGradeOption(key: 'H3', label: '고3', level: EducationLevel.high, grade: 3),
+          NaesinGradeOption(
+            key: 'H1',
+            label: '고1',
+            level: EducationLevel.high,
+            grade: 1,
+          ),
+          NaesinGradeOption(
+            key: 'H2',
+            label: '고2',
+            level: EducationLevel.high,
+            grade: 2,
+          ),
+          NaesinGradeOption(
+            key: 'H3',
+            label: '고3',
+            level: EducationLevel.high,
+            grade: 3,
+          ),
         ];
       case EducationLevel.middle:
       case EducationLevel.elementary:
         return const <NaesinGradeOption>[
-          NaesinGradeOption(key: 'M1', label: '중1', level: EducationLevel.middle, grade: 1),
-          NaesinGradeOption(key: 'M2', label: '중2', level: EducationLevel.middle, grade: 2),
-          NaesinGradeOption(key: 'M3', label: '중3', level: EducationLevel.middle, grade: 3),
+          NaesinGradeOption(
+            key: 'M1',
+            label: '중1',
+            level: EducationLevel.middle,
+            grade: 1,
+          ),
+          NaesinGradeOption(
+            key: 'M2',
+            label: '중2',
+            level: EducationLevel.middle,
+            grade: 2,
+          ),
+          NaesinGradeOption(
+            key: 'M3',
+            label: '중3',
+            level: EducationLevel.middle,
+            grade: 3,
+          ),
         ];
     }
   }
@@ -125,7 +155,8 @@ class NaesinExamContext {
     final rawGrade = student?.grade ?? 1;
     final safeGrade = rawGrade.clamp(1, 3);
     final semester = defaultSemesterByDate(now);
-    final gradeKey = level == EducationLevel.high ? 'H$safeGrade' : 'M$safeGrade';
+    final gradeKey =
+        level == EducationLevel.high ? 'H$safeGrade' : 'M$safeGrade';
     final courseKey = switch (gradeKey) {
       'M1' => semester == 1 ? 'M1-1' : 'M1-2',
       'M2' => semester == 1 ? 'M2-1' : 'M2-2',
@@ -142,20 +173,28 @@ class NaesinExamContext {
     required String examTerm,
     required String school,
     required int year,
+    String cellLabel = '',
   }) {
-    return '$gradeKey|$courseKey|$examTerm|$school|$year';
+    final normalizedCellLabel = normalizeCellLabel(cellLabel);
+    final base = '$gradeKey|$courseKey|$examTerm|$school|$year';
+    return normalizedCellLabel.isEmpty ? base : '$base|$normalizedCellLabel';
+  }
+
+  static String normalizeCellLabel(String raw) {
+    return raw.replaceAll('|', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
   static NaesinLinkSelection? parseNaesinLinkKey(String raw) {
     final normalized = raw.trim();
     if (normalized.isEmpty) return null;
     final parts = normalized.split('|');
-    if (parts.length != 5) return null;
+    if (parts.length != 5 && parts.length != 6) return null;
     final g = parts[0].trim();
     final c = parts[1].trim();
     final t = parts[2].trim();
     final s = parts[3].trim();
     final y = int.tryParse(parts[4].trim());
+    final cellLabel = parts.length >= 6 ? normalizeCellLabel(parts[5]) : '';
     if (g.isEmpty || c.isEmpty || t.isEmpty || s.isEmpty || y == null) {
       return null;
     }
@@ -165,7 +204,17 @@ class NaesinExamContext {
       examTerm: t,
       school: s,
       year: y,
+      cellLabel: cellLabel,
     );
+  }
+
+  static String linkSummaryLabel(String rawKey) {
+    final parsed = parseNaesinLinkKey(rawKey);
+    if (parsed == null) return '';
+    final course = courseLabel(parsed.courseKey);
+    final base =
+        '${parsed.school} · ${parsed.year} · $course · ${parsed.examTerm}';
+    return parsed.cellLabel.isEmpty ? base : '$base · ${parsed.cellLabel}';
   }
 
   static List<String> schoolsForGradeKey(String gradeKey) {
@@ -203,6 +252,7 @@ class NaesinLinkSelection {
   final String examTerm;
   final String school;
   final int year;
+  final String cellLabel;
 
   const NaesinLinkSelection({
     required this.gradeKey,
@@ -210,5 +260,6 @@ class NaesinLinkSelection {
     required this.examTerm,
     required this.school,
     required this.year,
+    this.cellLabel = '',
   });
 }

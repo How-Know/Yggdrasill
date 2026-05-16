@@ -769,6 +769,7 @@ export async function renderQuestionPreview({
   boldPath,
   qnumFontPath,
   layout,
+  renderConfig,
   supabaseClient,
   viewportWidth = 400,
   deviceScaleFactor = 3,
@@ -782,6 +783,7 @@ export async function renderQuestionPreview({
       question,
       viewportWidth,
       deviceScaleFactor,
+      renderConfig,
     });
     return { pngBuffer, html: texSource, mathEngine };
   }

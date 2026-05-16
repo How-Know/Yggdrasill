@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -66,6 +67,9 @@ class LearningProblemQuestion {
     required this.sourceOrder,
     required this.curriculumCode,
     required this.sourceTypeCode,
+    required this.schoolLevel,
+    required this.gradeKey,
+    required this.courseKey,
     required this.courseLabel,
     required this.gradeLabel,
     required this.examYear,
@@ -99,6 +103,9 @@ class LearningProblemQuestion {
   final int sourceOrder;
   final String curriculumCode;
   final String sourceTypeCode;
+  final String schoolLevel;
+  final String gradeKey;
+  final String courseKey;
   final String courseLabel;
   final String gradeLabel;
   final int? examYear;
@@ -125,6 +132,31 @@ class LearningProblemQuestion {
 
   String get stableQuestionKey =>
       questionUid.trim().isNotEmpty ? questionUid.trim() : id.trim();
+
+  Map<String, dynamic> get setModel {
+    final raw = meta['set_model'];
+    if (raw is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(raw.map((k, v) => MapEntry('$k', v)));
+  }
+
+  Map<String, dynamic> get deliveryUnit {
+    final raw = meta['delivery_unit'];
+    if (raw is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(raw.map((k, v) => MapEntry('$k', v)));
+  }
+
+  String get setType =>
+      '${setModel['set_type'] ?? setModel['setType'] ?? ''}'.trim();
+
+  bool get isIndependentSetItem =>
+      setType == 'independent_set' ||
+      '${deliveryUnit['delivery_type'] ?? deliveryUnit['deliveryType'] ?? ''}'
+              .trim() ==
+          'independent_item';
+
+  String get setCommonStem =>
+      '${deliveryUnit['common_stem'] ?? deliveryUnit['commonStem'] ?? setModel['common_stem'] ?? setModel['commonStem'] ?? ''}'
+          .trim();
 
   LearningProblemQuestion copyWith({
     String? questionType,
@@ -155,6 +187,9 @@ class LearningProblemQuestion {
       sourceOrder: sourceOrder,
       curriculumCode: curriculumCode,
       sourceTypeCode: sourceTypeCode,
+      schoolLevel: schoolLevel,
+      gradeKey: gradeKey,
+      courseKey: courseKey,
       courseLabel: courseLabel,
       gradeLabel: gradeLabel,
       examYear: examYear,
@@ -259,6 +294,9 @@ class LearningProblemQuestion {
       sourceOrder: _intOrZero(map['source_order']),
       curriculumCode: '${map['curriculum_code'] ?? ''}',
       sourceTypeCode: '${map['source_type_code'] ?? ''}',
+      schoolLevel: '${map['school_level'] ?? ''}',
+      gradeKey: '${map['grade_key'] ?? ''}',
+      courseKey: '${map['course_key'] ?? ''}',
       courseLabel: '${map['course_label'] ?? ''}',
       gradeLabel: '${map['grade_label'] ?? ''}',
       examYear: _intOrNull(map['exam_year']),
@@ -310,8 +348,14 @@ class LearningProblemDocumentSummary {
     required this.id,
     required this.schoolName,
     required this.sourceFilename,
+    required this.schoolLevel,
+    required this.gradeKey,
+    required this.courseKey,
     required this.courseLabel,
     required this.gradeLabel,
+    required this.publisherName,
+    required this.materialName,
+    required this.meta,
     this.examYear,
     this.semesterLabel = '',
     this.examTermLabel = '',
@@ -321,19 +365,35 @@ class LearningProblemDocumentSummary {
   final String id;
   final String schoolName;
   final String sourceFilename;
+  final String schoolLevel;
+  final String gradeKey;
+  final String courseKey;
   final String courseLabel;
   final String gradeLabel;
+  final String publisherName;
+  final String materialName;
+  final Map<String, dynamic> meta;
   final int? examYear;
   final String semesterLabel;
   final String examTermLabel;
   final DateTime? updatedAt;
 
   String get displayTitle {
+    final material = materialName.trim();
+    if (material.isNotEmpty) return material;
     final name = sourceFilename.trim();
     if (name.isNotEmpty) return name;
     final raw = id.trim();
     if (raw.length <= 12) return raw.isEmpty ? '(문서)' : raw;
     return '${raw.substring(0, 12)}…';
+  }
+
+  String get textbookBookId {
+    final scope = _mapOrEmpty(meta['textbook_scope'] ?? meta['textbookScope']);
+    final raw = '${scope['book_id'] ?? scope['bookId'] ?? ''}'.trim();
+    if (raw.isNotEmpty) return raw;
+    final direct = '${meta['book_id'] ?? meta['bookId'] ?? ''}'.trim();
+    return direct;
   }
 
   /// 트리에서 학교/연도를 따로 쓰므로 행 부제는 과정·학년·시험 메타 중심.
@@ -560,9 +620,11 @@ class LearningProblemDocumentExportPreset {
     required this.sourceDocumentId,
     required this.sourceDocumentIds,
     required this.documentId,
+    required this.presetKind,
     required this.displayName,
     required this.sourceDocumentName,
     required this.documentName,
+    required this.storedPaperSize,
     required this.renderConfig,
     required this.selectedQuestionUids,
     required this.selectedQuestionCount,
@@ -581,9 +643,11 @@ class LearningProblemDocumentExportPreset {
   final String sourceDocumentId;
   final List<String> sourceDocumentIds;
   final String documentId;
+  final String presetKind;
   final String displayName;
   final String sourceDocumentName;
   final String documentName;
+  final String storedPaperSize;
   final Map<String, dynamic> renderConfig;
   final List<String> selectedQuestionUids;
   final int selectedQuestionCount;
@@ -598,8 +662,22 @@ class LearningProblemDocumentExportPreset {
 
   String get templateProfile =>
       '${renderConfig['templateProfile'] ?? ''}'.trim();
-  String get paperSize => '${renderConfig['paperSize'] ?? ''}'.trim();
+  String get paperSize {
+    final fromConfig = '${renderConfig['paperSize'] ?? ''}'.trim();
+    return fromConfig.isNotEmpty ? fromConfig : storedPaperSize.trim();
+  }
+
   String get naesinLinkKey => '${renderConfig['naesinLinkKey'] ?? ''}'.trim();
+  String get naesinCellLabel =>
+      '${renderConfig['naesinCellLabel'] ?? ''}'.trim();
+  bool get isGeneratedAssignment => presetKind == 'assignment';
+  String get assignmentBookLabel =>
+      '${renderConfig['assignmentBookLabel'] ?? renderConfig['assignmentBookName'] ?? sourceDocumentName}'
+          .trim();
+  String get assignmentGradeLabel =>
+      '${renderConfig['assignmentGradeLabel'] ?? ''}'.trim();
+  String get assignmentCourseLabel =>
+      '${renderConfig['assignmentCourseLabel'] ?? ''}'.trim();
   List<String> get selectedQuestionIds => selectedQuestionUids;
   Map<String, String> get questionModeByQuestionId => questionModeByQuestionUid;
   Map<String, double> get questionScoreByQuestionId =>
@@ -670,6 +748,15 @@ class LearningProblemDocumentExportPreset {
     );
     final sourceDocumentId =
         '${map['source_document_id'] ?? map['sourceDocumentId'] ?? ''}'.trim();
+    final rawPresetKind =
+        '${map['preset_kind'] ?? map['presetKind'] ?? renderConfig['presetKind'] ?? ''}'
+            .trim()
+            .toLowerCase();
+    final presetKind = rawPresetKind == 'assignment' ||
+            rawPresetKind == 'generated_assignment' ||
+            rawPresetKind == 'homework'
+        ? 'assignment'
+        : 'settings';
     final resolvedSourceDocumentIds = sourceDocumentIds.isNotEmpty
         ? sourceDocumentIds
         : (sourceDocumentId.isNotEmpty
@@ -689,9 +776,11 @@ class LearningProblemDocumentExportPreset {
       sourceDocumentId: sourceDocumentId,
       sourceDocumentIds: resolvedSourceDocumentIds,
       documentId: '${map['document_id'] ?? map['documentId'] ?? ''}'.trim(),
+      presetKind: presetKind,
       displayName: fallbackDisplayName,
       sourceDocumentName: sourceDocumentName,
       documentName: documentName,
+      storedPaperSize: '${map['paper_size'] ?? map['paperSize'] ?? ''}'.trim(),
       renderConfig: renderConfig,
       selectedQuestionUids: selectedQuestionUids,
       selectedQuestionCount: selectedQuestionCount,
@@ -820,6 +909,19 @@ class LearningProblemBankService {
                     defaultValue: ''))
             .trim();
 
+  static final StreamController<void> generatedAssignmentChanged =
+      StreamController<void>.broadcast();
+
+  static String normalizePresetKind(String raw) {
+    final value = raw.trim().toLowerCase();
+    if (value == 'assignment' ||
+        value == 'generated_assignment' ||
+        value == 'homework') {
+      return 'assignment';
+    }
+    return 'settings';
+  }
+
   static String _resolveGatewayUrl(String? explicit) {
     if (explicit != null && explicit.trim().isNotEmpty) {
       return explicit.trim();
@@ -924,7 +1026,7 @@ class LearningProblemBankService {
     final rows = await _client
         .from('pb_documents')
         .select(
-          'id,school_name,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at,exam_year,semester_label,exam_term_label',
+          'id,school_name,publisher_name,material_name,school_level,grade_key,course_key,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at,exam_year,semester_label,exam_term_label',
         )
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
@@ -940,8 +1042,18 @@ class LearningProblemBankService {
       if (docId.isEmpty) continue;
       final courseLabel = '${row['course_label'] ?? ''}'.trim();
       final gradeLabel = '${row['grade_label'] ?? ''}'.trim();
-      if (!_matchesLevel(schoolLevel, courseLabel, gradeLabel)) continue;
-      if (!_matchesDetailedCourse(detailedCourse, courseLabel, gradeLabel)) {
+      final rowSchoolLevel = '${row['school_level'] ?? ''}'.trim();
+      final courseKey = '${row['course_key'] ?? ''}'.trim();
+      if (!_matchesLevel(
+          schoolLevel, courseLabel, gradeLabel, rowSchoolLevel)) {
+        continue;
+      }
+      if (!_matchesDetailedCourse(
+        detailedCourse,
+        courseLabel,
+        gradeLabel,
+        courseKey,
+      )) {
         continue;
       }
       list.add(
@@ -949,8 +1061,14 @@ class LearningProblemBankService {
           id: docId,
           schoolName: '${row['school_name'] ?? ''}'.trim(),
           sourceFilename: '${row['source_filename'] ?? ''}'.trim(),
+          schoolLevel: rowSchoolLevel,
+          gradeKey: '${row['grade_key'] ?? ''}'.trim(),
+          courseKey: courseKey,
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
+          publisherName: '${row['publisher_name'] ?? ''}'.trim(),
+          materialName: '${row['material_name'] ?? ''}'.trim(),
+          meta: _mapOrEmpty(row['meta']),
           examYear: _intOrNull(row['exam_year']),
           semesterLabel: '${row['semester_label'] ?? ''}'.trim(),
           examTermLabel: '${row['exam_term_label'] ?? ''}'.trim(),
@@ -1011,7 +1129,7 @@ class LearningProblemBankService {
     final readyDocRows = await _client
         .from('pb_documents')
         .select(
-          'id,source_filename,school_name,course_label,grade_label,curriculum_code,source_type_code,meta',
+          'id,source_filename,school_name,school_level,grade_key,course_key,course_label,grade_label,curriculum_code,source_type_code,meta',
         )
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
@@ -1037,10 +1155,20 @@ class LearningProblemBankService {
       }
       final courseLabel = '${row['course_label'] ?? ''}'.trim();
       final gradeLabel = '${row['grade_label'] ?? ''}'.trim();
-      if (!_matchesLevel(schoolLevel, courseLabel, gradeLabel)) {
+      if (!_matchesLevel(
+        schoolLevel,
+        courseLabel,
+        gradeLabel,
+        '${row['school_level'] ?? ''}'.trim(),
+      )) {
         continue;
       }
-      if (!_matchesDetailedCourse(detailedCourse, courseLabel, gradeLabel)) {
+      if (!_matchesDetailedCourse(
+        detailedCourse,
+        courseLabel,
+        gradeLabel,
+        '${row['course_key'] ?? ''}'.trim(),
+      )) {
         continue;
       }
       readyDocIds.add(docId);
@@ -1076,6 +1204,9 @@ class LearningProblemBankService {
               'source_order',
               'curriculum_code',
               'source_type_code',
+              'school_level',
+              'grade_key',
+              'course_key',
               'course_label',
               'grade_label',
               'exam_year',
@@ -1125,10 +1256,20 @@ class LearningProblemBankService {
       if (!readyDocIds.contains(documentId)) return false;
       final courseLabel = '${row['course_label'] ?? ''}'.trim();
       final gradeLabel = '${row['grade_label'] ?? ''}'.trim();
-      if (!_matchesLevel(schoolLevel, courseLabel, gradeLabel)) {
+      if (!_matchesLevel(
+        schoolLevel,
+        courseLabel,
+        gradeLabel,
+        '${row['school_level'] ?? ''}'.trim(),
+      )) {
         return false;
       }
-      if (!_matchesDetailedCourse(detailedCourse, courseLabel, gradeLabel)) {
+      if (!_matchesDetailedCourse(
+        detailedCourse,
+        courseLabel,
+        gradeLabel,
+        '${row['course_key'] ?? ''}'.trim(),
+      )) {
         return false;
       }
       return true;
@@ -1171,7 +1312,7 @@ class LearningProblemBankService {
         'question_type,stem,choices,objective_choices,allow_objective,'
         'allow_subjective,objective_answer_key,subjective_answer,reviewer_notes,'
         'equations,source_page,source_order,curriculum_code,source_type_code,'
-        'course_label,grade_label,exam_year,semester_label,exam_term_label,'
+        'school_level,grade_key,course_key,course_label,grade_label,exam_year,semester_label,exam_term_label,'
         'school_name,publisher_name,material_name,confidence,figure_refs,meta,'
         'created_at';
     final byUid = <String, Map<String, dynamic>>{};
@@ -1256,6 +1397,38 @@ class LearningProblemBankService {
     return out;
   }
 
+  Future<List<Map<String, dynamic>>> loadQuestionLinkRowsForDocuments({
+    required String academyId,
+    required Iterable<String> documentIds,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safeDocumentIds = documentIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (safeAcademyId.isEmpty || safeDocumentIds.isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+
+    final out = <Map<String, dynamic>>[];
+    for (final chunk in _chunkStrings(safeDocumentIds, 250)) {
+      final rows = await _client
+          .from('pb_questions')
+          .select(
+            'id,question_uid,document_id,question_number,source_page,source_order,meta',
+          )
+          .eq('academy_id', safeAcademyId)
+          .inFilter('document_id', chunk)
+          .order('source_order');
+      for (final raw in _listOrEmpty(rows)) {
+        final row = _mapOrEmpty(raw);
+        if (row.isNotEmpty) out.add(row);
+      }
+    }
+    return out;
+  }
+
   Future<Map<String, int>> loadQuestionOrders({
     required String academyId,
     required String scopeKey,
@@ -1326,6 +1499,7 @@ class LearningProblemBankService {
     required bool includeExplanation,
     String displayName = '',
     String presetId = '',
+    String presetKind = 'settings',
   }) async {
     if (!hasGateway) {
       throw Exception('세팅 저장은 게이트웨이 연결이 필요합니다.');
@@ -1344,6 +1518,7 @@ class LearningProblemBankService {
       modeMap[uid] = mode;
     }
     final safePresetId = presetId.trim();
+    final safePresetKind = normalizePresetKind(presetKind);
     final payload = await _gatewayPost(
       '/pb/documents/save-settings',
       body: <String, dynamic>{
@@ -1358,21 +1533,29 @@ class LearningProblemBankService {
         'includeAnswerSheet': includeAnswerSheet,
         'includeExplanation': includeExplanation,
         'displayName': displayName.trim(),
+        'presetKind': safePresetKind,
         if (safePresetId.isNotEmpty) 'presetId': safePresetId,
       },
     );
-    return LearningProblemSavedSettingsDocumentResult.fromGatewayResponse(
+    final result =
+        LearningProblemSavedSettingsDocumentResult.fromGatewayResponse(
       payload,
     );
+    if (safePresetKind == 'assignment') {
+      generatedAssignmentChanged.add(null);
+    }
+    return result;
   }
 
   Future<List<LearningProblemDocumentExportPreset>> listExportPresets({
     required String academyId,
     int limit = 120,
     int offset = 0,
+    String presetKind = 'settings',
   }) async {
     final safeLimit = limit.clamp(1, 500).toInt();
     final safeOffset = offset < 0 ? 0 : offset;
+    final safePresetKind = normalizePresetKind(presetKind);
     if (hasGateway) {
       final json = await _gatewayGet(
         '/pb/export-presets',
@@ -1380,6 +1563,7 @@ class LearningProblemBankService {
           'academyId': academyId,
           'limit': '$safeLimit',
           'offset': '$safeOffset',
+          'presetKind': safePresetKind,
         },
       );
       return _listOrEmpty(json['presets'])
@@ -1393,6 +1577,7 @@ class LearningProblemBankService {
         .from('pb_export_presets')
         .select('*')
         .eq('academy_id', academyId)
+        .eq('preset_kind', safePresetKind)
         .order('created_at', ascending: false)
         .range(safeOffset, safeOffset + safeLimit - 1);
     final rawMaps = (rows as List<dynamic>)
@@ -1453,6 +1638,52 @@ class LearningProblemBankService {
         .toList(growable: false);
   }
 
+  Future<LearningProblemSavedSettingsDocumentResult>
+      createGeneratedAssignmentPreset({
+    required String academyId,
+    required String sourceDocumentId,
+    required List<String> selectedQuestionUidsOrdered,
+    required Map<String, String> questionModeByQuestionUid,
+    required Map<String, dynamic> renderConfig,
+    required String templateProfile,
+    required String paperSize,
+    required bool includeAnswerSheet,
+    required bool includeExplanation,
+    required String displayName,
+  }) {
+    return saveExportSettingsAsDocument(
+      academyId: academyId,
+      sourceDocumentId: sourceDocumentId,
+      selectedQuestionUidsOrdered: selectedQuestionUidsOrdered,
+      questionModeByQuestionUid: questionModeByQuestionUid,
+      renderConfig: <String, dynamic>{
+        ...renderConfig,
+        'presetKind': 'assignment',
+        'assignmentLibraryKind': 'generated_assignment',
+      },
+      templateProfile: templateProfile,
+      paperSize: paperSize,
+      includeAnswerSheet: includeAnswerSheet,
+      includeExplanation: includeExplanation,
+      displayName: displayName,
+      presetKind: 'assignment',
+    );
+  }
+
+  Future<List<LearningProblemDocumentExportPreset>>
+      listGeneratedAssignmentPresets({
+    required String academyId,
+    int limit = 120,
+    int offset = 0,
+  }) {
+    return listExportPresets(
+      academyId: academyId,
+      limit: limit,
+      offset: offset,
+      presetKind: 'assignment',
+    );
+  }
+
   Future<LearningProblemDocumentExportPreset?> renameExportPreset({
     required String academyId,
     required String presetId,
@@ -1493,6 +1724,7 @@ class LearningProblemBankService {
     required String academyId,
     required String presetId,
     String? naesinLinkKey,
+    String? naesinCellLabel,
   }) async {
     final safePresetId = presetId.trim();
     if (safePresetId.isEmpty) {
@@ -1518,10 +1750,20 @@ class LearningProblemBankService {
           : current['renderConfig'],
     );
     final nextRenderConfig = <String, dynamic>{...currentRenderConfig};
+    final safeCellLabel = (naesinCellLabel ?? '')
+        .replaceAll('|', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     if (safeLinkKey.isEmpty) {
       nextRenderConfig.remove('naesinLinkKey');
+      nextRenderConfig.remove('naesinCellLabel');
     } else {
       nextRenderConfig['naesinLinkKey'] = safeLinkKey;
+      if (safeCellLabel.isEmpty) {
+        nextRenderConfig.remove('naesinCellLabel');
+      } else {
+        nextRenderConfig['naesinCellLabel'] = safeCellLabel;
+      }
     }
     dynamic updated;
     try {
@@ -1590,7 +1832,7 @@ class LearningProblemBankService {
     final safePresetId = presetId.trim();
     if (safeAcademyId.isEmpty || safePresetId.isEmpty) return null;
     final normalizedRenderConfig = renderConfig.map(
-      (key, value) => MapEntry('$key', value),
+      (key, value) => MapEntry(key, value),
     );
     final existing = await _client
         .from('pb_export_presets')
@@ -1671,6 +1913,7 @@ class LearningProblemBankService {
           .from('pb_export_presets')
           .select('*')
           .eq('academy_id', academyId)
+          .eq('preset_kind', 'settings')
           .or(
             'source_document_id.eq.$documentId,source_document_ids.cs.{$documentId}',
           )
@@ -2605,9 +2848,20 @@ class LearningProblemBankService {
   }
 }
 
-bool _matchesLevel(String level, String courseLabel, String gradeLabel) {
+bool _matchesLevel(
+  String level,
+  String courseLabel,
+  String gradeLabel,
+  String schoolLevel,
+) {
   final safeLevel = level.trim();
   if (safeLevel.isEmpty || safeLevel == '전체') return true;
+  final normalizedSchoolLevel = schoolLevel.trim();
+  if (normalizedSchoolLevel.isNotEmpty) {
+    if (safeLevel == '초') return normalizedSchoolLevel == 'elementary';
+    if (safeLevel == '중') return normalizedSchoolLevel == 'middle';
+    if (safeLevel == '고') return normalizedSchoolLevel == 'high';
+  }
   final merged = '$courseLabel $gradeLabel'.replaceAll(' ', '');
   if (merged.isEmpty) return true;
   final hasExplicitLevel =
@@ -2623,9 +2877,19 @@ bool _matchesDetailedCourse(
   String detailedCourse,
   String courseLabel,
   String gradeLabel,
+  String courseKey,
 ) {
   final selected = detailedCourse.trim();
   if (selected.isEmpty || selected == '전체') return true;
+  final normalizedCourseKey = courseKey.trim();
+  if (normalizedCourseKey.isNotEmpty) {
+    final compactSelected = selected.replaceAll(' ', '');
+    if (_courseKeyLabels(normalizedCourseKey).any(
+      (label) => label.replaceAll(' ', '') == compactSelected,
+    )) {
+      return true;
+    }
+  }
   final merged = '$courseLabel $gradeLabel';
   if (merged.contains(selected)) return true;
   final compactMerged = merged.replaceAll(' ', '');
@@ -2638,6 +2902,39 @@ bool _matchesDetailedCourse(
     return true;
   }
   return false;
+}
+
+List<String> _courseKeyLabels(String courseKey) {
+  switch (courseKey.trim()) {
+    case 'M1-1':
+      return const <String>['1-1', '중1-1'];
+    case 'M1-2':
+      return const <String>['1-2', '중1-2'];
+    case 'M2-1':
+      return const <String>['2-1', '중2-1'];
+    case 'M2-2':
+      return const <String>['2-2', '중2-2'];
+    case 'M3-1':
+      return const <String>['3-1', '중3-1'];
+    case 'M3-2':
+      return const <String>['3-2', '중3-2'];
+    case 'H1-c1':
+      return const <String>['공통수학1', '고1'];
+    case 'H1-c2':
+      return const <String>['공통수학2', '고1'];
+    case 'H-algebra':
+      return const <String>['대수'];
+    case 'H-calc1':
+      return const <String>['미적분1'];
+    case 'H-probstats':
+      return const <String>['확률과 통계', '확률통계', '확통'];
+    case 'H-calc2':
+      return const <String>['미적분2'];
+    case 'H-geometry':
+      return const <String>['기하'];
+    default:
+      return <String>[courseKey.trim()];
+  }
 }
 
 bool _isSavedSettingsDocumentRow(Map<String, dynamic> row) {

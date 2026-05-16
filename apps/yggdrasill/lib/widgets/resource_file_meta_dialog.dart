@@ -40,13 +40,13 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
   bool _loading = false;
   String? _errorText;
   List<_BigUnitNode> _units = const <_BigUnitNode>[];
-  Map<String, _SmallUnitStats> _statsBySmallKey = const <String, _SmallUnitStats>{};
+  Map<String, _SmallUnitStats> _statsBySmallKey =
+      const <String, _SmallUnitStats>{};
 
   // Problem regions (textbook_problem_crops) grouped by raw page number.
   bool _regionsLoading = false;
   String? _regionsErrorText;
   List<TextbookProblemRegion> _regions = const <TextbookProblemRegion>[];
-  int _pageOffset = 0;
 
   bool get _isTextbook => (widget.categoryLabel ?? '').trim() == '교재';
   bool get _hasBookId => (widget.bookId ?? '').trim().isNotEmpty;
@@ -72,19 +72,6 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
         bookId: widget.bookId!.trim(),
         gradeLabel: _hasGradeLabel ? widget.gradeLabel!.trim() : null,
       );
-      // Pull the page_offset so we can show printed page numbers in the
-      // page-group headers instead of the raw PDF page index.
-      int offset = 0;
-      if (_hasGradeLabel) {
-        final payloadRow =
-            await DataManager.instance.loadTextbookMetadataPayload(
-          bookId: widget.bookId!.trim(),
-          gradeLabel: widget.gradeLabel!.trim(),
-        );
-        final rawOffset = payloadRow?['page_offset'];
-        if (rawOffset is int) offset = rawOffset;
-        if (rawOffset is num) offset = rawOffset.toInt();
-      }
       final regions = <TextbookProblemRegion>[];
       for (final row in rows) {
         final r = TextbookProblemRegion.fromRow(row);
@@ -93,15 +80,13 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
       if (!mounted) return;
       setState(() {
         _regions = regions;
-        _pageOffset = offset;
         _regionsLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _regionsLoading = false;
-        _regionsErrorText =
-            '문항 영역을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.';
+        _regionsErrorText = '문항 영역을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.';
       });
     }
   }
@@ -147,7 +132,8 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
-    units.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+    units.sort((a, b) =>
+        _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
 
     final out = <_BigUnitNode>[];
     for (final u in units) {
@@ -163,7 +149,8 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
             .whereType<Map>()
             .map((e) => Map<String, dynamic>.from(e))
             .toList();
-        mids.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+        mids.sort((a, b) => _orderIndex(a['order_index'])
+            .compareTo(_orderIndex(b['order_index'])));
         for (final m in mids) {
           final mid = _MidUnitNode(
             name: (m['name'] as String?)?.trim().isNotEmpty == true
@@ -177,7 +164,8 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
                 .whereType<Map>()
                 .map((e) => Map<String, dynamic>.from(e))
                 .toList();
-            smalls.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+            smalls.sort((a, b) => _orderIndex(a['order_index'])
+                .compareTo(_orderIndex(b['order_index'])));
             for (final s in smalls) {
               mid.smalls.add(
                 _SmallUnitNode(
@@ -199,7 +187,8 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
     return out;
   }
 
-  Map<String, _SmallUnitStats> _parseSmallStats(List<Map<String, dynamic>> rows) {
+  Map<String, _SmallUnitStats> _parseSmallStats(
+      List<Map<String, dynamic>> rows) {
     final out = <String, _SmallUnitStats>{};
     for (final row in rows) {
       final big = _toInt(row['big_order']);
@@ -263,7 +252,9 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
       if (small.startPage == small.endPage) return 'p.${small.startPage}';
       return 'p.${small.startPage}-${small.endPage}';
     }
-    return small.startPage != null ? 'p.${small.startPage}' : 'p.${small.endPage}';
+    return small.startPage != null
+        ? 'p.${small.startPage}'
+        : 'p.${small.endPage}';
   }
 
   Widget _buildInfoPanel({required List<Widget> children}) {
@@ -520,7 +511,8 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
                     if ((widget.description ?? '').trim().isNotEmpty)
                       _MetaRow(label: '설명', value: widget.description!.trim()),
                     if ((widget.categoryLabel ?? '').trim().isNotEmpty)
-                      _MetaRow(label: '분류', value: widget.categoryLabel!.trim()),
+                      _MetaRow(
+                          label: '분류', value: widget.categoryLabel!.trim()),
                     if ((widget.parentLabel ?? '').trim().isNotEmpty)
                       _MetaRow(label: '폴더', value: widget.parentLabel!.trim()),
                   ],
@@ -540,7 +532,9 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
                     ),
                     _MetaRow(
                       label: '링크',
-                      value: widget.linkCount == null ? '-' : '${widget.linkCount}개',
+                      value: widget.linkCount == null
+                          ? '-'
+                          : '${widget.linkCount}개',
                     ),
                     _MetaRow(label: '표지', value: widget.hasCover ? '있음' : '없음'),
                     _MetaRow(label: '아이콘', value: widget.hasIcon ? '있음' : '없음'),
@@ -667,10 +661,8 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
     required int rawPage,
     required List<TextbookProblemRegion> regions,
   }) {
-    final displayPage = rawPage - _pageOffset;
     final headerParts = <String>[
       'p$rawPage',
-      if (displayPage != rawPage && displayPage > 0) '본문 p$displayPage',
       '${regions.length}문항',
     ];
     return Container(
@@ -731,12 +723,10 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
     final text = r.isSetHeader
         ? '${r.setFrom ?? '?'}~${r.setTo ?? '?'}'
         : r.problemNumber;
-    final bg = r.isSetHeader
-        ? const Color(0x332D2419)
-        : const Color(0x221B2430);
-    final fg = r.isSetHeader
-        ? const Color(0xFFEAB968)
-        : const Color(0xFF7AA9E6);
+    final bg =
+        r.isSetHeader ? const Color(0x332D2419) : const Color(0x221B2430);
+    final fg =
+        r.isSetHeader ? const Color(0xFFEAB968) : const Color(0xFF7AA9E6);
     return Tooltip(
       message: [
         if (r.section != null && r.section!.isNotEmpty) r.section!,

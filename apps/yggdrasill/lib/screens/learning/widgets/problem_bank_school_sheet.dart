@@ -12,6 +12,11 @@ class ProblemBankSchoolSheet extends StatefulWidget {
     required this.selectedDocumentId,
     required this.onDocumentSelected,
     required this.isLoading,
+    this.privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[],
+    this.selectedPrivateMaterialPageKeys = const <String>{},
+    this.onPrivateMaterialPageToggled,
+    this.privateMaterialTitle = '',
+    this.privateMaterialEmptyMessage = '교재를 선택한 뒤 페이지를 체크해 주세요.',
   });
 
   /// 필터 등으로 문서 목록이 갱신될 때마다 증가 — 펼침 상태 초기화용.
@@ -21,6 +26,12 @@ class ProblemBankSchoolSheet extends StatefulWidget {
   final String? selectedDocumentId;
   final ValueChanged<String> onDocumentSelected;
   final bool isLoading;
+  final List<ProblemBankPrivateMaterialBigNode> privateMaterialUnits;
+  final Set<String> selectedPrivateMaterialPageKeys;
+  final void Function(String pageKey, bool selected)?
+      onPrivateMaterialPageToggled;
+  final String privateMaterialTitle;
+  final String privateMaterialEmptyMessage;
 
   @override
   State<ProblemBankSchoolSheet> createState() => _ProblemBankSchoolSheetState();
@@ -90,8 +101,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
 
   static Map<String, Map<String, List<LearningProblemDocumentSummary>>>
       _groupBySchoolThenYear(List<LearningProblemDocumentSummary> docs) {
-    final out =
-        <String, Map<String, List<LearningProblemDocumentSummary>>>{};
+    final out = <String, Map<String, List<LearningProblemDocumentSummary>>>{};
     for (final d in docs) {
       final school = _schoolLabel(d);
       final year = _yearLabel(d);
@@ -147,20 +157,37 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '추출 문서',
-                  style: TextStyle(
+                Text(
+                  widget.selectedSourceTypeCode == 'private_material'
+                      ? '교재 단원'
+                      : '추출 문서',
+                  style: const TextStyle(
                     color: _text,
                     fontWeight: FontWeight.w800,
                     fontSize: 15,
                   ),
                 ),
-                if (widget.selectedSourceTypeCode != 'school_past') ...[
+                if (widget.selectedSourceTypeCode == 'private_material') ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.privateMaterialTitle.trim().isNotEmpty
+                        ? widget.privateMaterialTitle.trim()
+                        : '교재명 드롭다운에서 교재를 선택하세요.',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: const Color(0xFF9FB3B3).withValues(alpha: 0.95),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      height: 1.35,
+                    ),
+                  ),
+                ] else if (widget.selectedSourceTypeCode != 'school_past') ...[
                   const SizedBox(height: 6),
                   Text(
                     '학교·연도 폴더는 내신 기출 출처에서만 사용됩니다.',
                     style: TextStyle(
-                      color: const Color(0xFF9FB3B3).withOpacity(0.95),
+                      color: const Color(0xFF9FB3B3).withValues(alpha: 0.95),
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       height: 1.35,
@@ -182,6 +209,9 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
     if (widget.isLoading) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
+    if (widget.selectedSourceTypeCode == 'private_material') {
+      return _buildPrivateMaterialPageTree();
+    }
     if (widget.documents.isEmpty) {
       return const Center(
         child: Padding(
@@ -202,6 +232,154 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       return _buildSchoolPastTree(context);
     }
     return _buildFlatList(context);
+  }
+
+  Widget _buildPrivateMaterialPageTree() {
+    if (widget.privateMaterialUnits.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Text(
+            widget.privateMaterialEmptyMessage,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF9FB3B3),
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
+      itemCount: widget.privateMaterialUnits.length,
+      itemBuilder: (context, bigIndex) {
+        final big = widget.privateMaterialUnits[bigIndex];
+        return Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            initiallyExpanded: bigIndex == 0,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 6),
+            childrenPadding: const EdgeInsets.only(left: 8, bottom: 6),
+            iconColor: const Color(0xFF8AA5A5),
+            collapsedIconColor: const Color(0xFF8AA5A5),
+            title: Text(
+              big.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFB8C9C9),
+                fontWeight: FontWeight.w800,
+                fontSize: 13.2,
+                height: 1.2,
+              ),
+            ),
+            children: [
+              for (final mid in big.mids) _buildPrivateMidNode(mid),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPrivateMidNode(ProblemBankPrivateMaterialMidNode mid) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        tilePadding: const EdgeInsets.only(left: 8, right: 4),
+        childrenPadding: const EdgeInsets.only(left: 10, bottom: 4),
+        iconColor: const Color(0xFF8AA5A5),
+        collapsedIconColor: const Color(0xFF8AA5A5),
+        title: Text(
+          mid.title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFFAFC2C2),
+            fontWeight: FontWeight.w800,
+            fontSize: 12.4,
+          ),
+        ),
+        children: [
+          for (final small in mid.smalls) _buildPrivateSmallNode(small),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPrivateSmallNode(ProblemBankPrivateMaterialSmallNode small) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 4, 3),
+            child: Text(
+              small.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF8FAAAA),
+                fontWeight: FontWeight.w700,
+                fontSize: 11.6,
+              ),
+            ),
+          ),
+          for (final page in small.pages) _buildPrivatePageTile(page),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPrivatePageTile(ProblemBankPrivateMaterialPageNode page) {
+    final selected = widget.selectedPrivateMaterialPageKeys.contains(page.key);
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: widget.onPrivateMaterialPageToggled == null
+          ? null
+          : () => widget.onPrivateMaterialPageToggled!(page.key, !selected),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          children: [
+            Checkbox(
+              value: selected,
+              visualDensity: VisualDensity.compact,
+              side: const BorderSide(color: Color(0xFF5E7777)),
+              activeColor: const Color(0xFF1A6B5E),
+              onChanged: widget.onPrivateMaterialPageToggled == null
+                  ? null
+                  : (v) =>
+                      widget.onPrivateMaterialPageToggled!(page.key, v == true),
+            ),
+            Expanded(
+              child: Text(
+                '${page.displayPage}쪽',
+                style: TextStyle(
+                  color: selected
+                      ? const Color(0xFFD6ECEA)
+                      : const Color(0xFF9FB3B3),
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  fontSize: 12.2,
+                ),
+              ),
+            ),
+            Text(
+              '${page.questionCount}문항',
+              style: const TextStyle(
+                color: Color(0xFF6F8585),
+                fontWeight: FontWeight.w700,
+                fontSize: 10.8,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildFlatList(BuildContext context) {
@@ -393,8 +571,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                       color: selected
                           ? const Color(0xFFD6ECEA)
                           : const Color(0xFF9FB3B3),
-                      fontWeight:
-                          selected ? FontWeight.w800 : FontWeight.w600,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                       fontSize: 13,
                       height: 1.25,
                     ),
@@ -423,4 +600,58 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       ),
     );
   }
+}
+
+class ProblemBankPrivateMaterialBigNode {
+  const ProblemBankPrivateMaterialBigNode({
+    required this.title,
+    required this.order,
+    required this.mids,
+  });
+
+  final String title;
+  final int order;
+  final List<ProblemBankPrivateMaterialMidNode> mids;
+}
+
+class ProblemBankPrivateMaterialMidNode {
+  const ProblemBankPrivateMaterialMidNode({
+    required this.title,
+    required this.order,
+    required this.smalls,
+  });
+
+  final String title;
+  final int order;
+  final List<ProblemBankPrivateMaterialSmallNode> smalls;
+}
+
+class ProblemBankPrivateMaterialSmallNode {
+  const ProblemBankPrivateMaterialSmallNode({
+    required this.title,
+    required this.order,
+    required this.subKey,
+    required this.pages,
+  });
+
+  final String title;
+  final int order;
+  final String subKey;
+  final List<ProblemBankPrivateMaterialPageNode> pages;
+}
+
+class ProblemBankPrivateMaterialPageNode {
+  const ProblemBankPrivateMaterialPageNode({
+    required this.key,
+    required this.displayPage,
+    required this.rawPage,
+    required this.questionUids,
+  });
+
+  final String key;
+  final int displayPage;
+  final int rawPage;
+  final List<String> questionUids;
+
+  int get questionCount => questionUids.length;
 }

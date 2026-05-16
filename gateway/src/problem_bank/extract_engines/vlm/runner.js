@@ -12,6 +12,7 @@
 // 이미 가진 공통 코드로 처리하도록 맡긴다. 즉 이 runner 는 "파서 교체 판" 역할만 함.
 
 import { PDFDocument } from 'pdf-lib';
+import { createHash } from 'node:crypto';
 import { callGeminiWithPdf } from './client.js';
 import { normalizeVlmQuestion, buildRowUpdate } from './writeback.js';
 
@@ -34,6 +35,204 @@ function parsePositiveInt(v) {
 function problemNumberKey(v) {
   const n = Number.parseInt(String(v ?? '').trim(), 10);
   return Number.isFinite(n) && n > 0 ? String(n) : '';
+}
+
+function stableShortHash(value) {
+  return createHash('sha1').update(String(value || '')).digest('hex').slice(0, 12);
+}
+
+function textbookSubKey(textbookScope) {
+  return compact(textbookScope?.sub_key || textbookScope?.subKey).toUpperCase();
+}
+
+function stripStructuralPreviewMarkers(lines) {
+  return lines.filter((line) => {
+    const s = compact(line);
+    if (!s) return false;
+    return !/^\[(?:문단|박스시작|박스끝)\]$/.test(s);
+  });
+}
+
+function splitRepeatedIndependentCommonStem(stem) {
+  const rawLines = String(stem || '').split(/\r?\n/);
+  const lines = stripStructuralPreviewMarkers(rawLines);
+  if (lines.length < 2) return null;
+  const first = compact(lines[0]);
+  if (!first) return null;
+  const looksLikeCommonPrompt =
+    /(?:다음|아래|보기).*(?:나타내시오|구하시오|답하시오|쓰시오|계산하시오|완성하시오|고르시오|서술하시오)\.?$/.test(first) ||
+    /(?:거듭제곱|제곱근|인수분해|소인수분해|식|값).*(?:나타내시오|구하시오|답하시오|쓰시오)\.?$/.test(first);
+  if (!looksLikeCommonPrompt) return null;
+  const rest = lines.slice(1).join('\n').trim();
+  if (!rest) return null;
+  return { commonStem: first, itemStem: rest };
+}
+
+function normalizeSetHeaderRange(crop) {
+  const headerNumber = compact(crop?.problem_number);
+  let from = Number.parseInt(String(crop?.set_from ?? ''), 10);
+  let to = Number.parseInt(String(crop?.set_to ?? ''), 10);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    const match = headerNumber.match(/(\d+)\s*[~\-\u2013\u2014\u301c]\s*(\d+)/);
+    if (match) {
+      from = Number.parseInt(match[1], 10);
+      to = Number.parseInt(match[2], 10);
+    }
+  }
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to < from) {
+    return null;
+  }
+  return {
+    from,
+    to,
+    headerNumber,
+    rawPage: Number.isFinite(Number(crop?.raw_page)) ? Number(crop.raw_page) : null,
+    displayPage: Number.isFinite(Number(crop?.display_page)) ? Number(crop.display_page) : null,
+  };
+}
+
+function emptyTextbookCropIndex() {
+  return { byNumber: new Map(), setHeaderRanges: [] };
+}
+
+function normalizeIndependentSetPayloadQuestions(
+  payloadQuestions,
+  textbookScope,
+  setHeaderRanges = [],
+) {
+  const rows = Array.isArray(payloadQuestions) ? payloadQuestions : [];
+  const isBasicDrill = textbookSubKey(textbookScope) === 'A';
+  if (!isBasicDrill || rows.length < 1) return rows;
+
+  const candidates = rows.map((row) => {
+    const split = splitRepeatedIndependentCommonStem(row?.stem);
+    return { row, split };
+  });
+
+  let i = 0;
+  while (i < candidates.length) {
+    const split = candidates[i].split;
+    if (!split) {
+      i += 1;
+      continue;
+    }
+    let j = i + 1;
+    while (
+      j < candidates.length &&
+      candidates[j].split &&
+      candidates[j].split.commonStem === split.commonStem
+    ) {
+      j += 1;
+    }
+    const groupSize = j - i;
+    if (groupSize >= 2) {
+      const scopeKey = [
+        textbookScope?.book_id || textbookScope?.bookId || '',
+        textbookScope?.grade_label || textbookScope?.gradeLabel || '',
+        textbookScope?.big_order ?? textbookScope?.bigOrder ?? '',
+        textbookScope?.mid_order ?? textbookScope?.midOrder ?? '',
+        textbookScope?.sub_key || textbookScope?.subKey || '',
+      ].join(':');
+      const setKey = `independent:${stableShortHash(`${scopeKey}:${split.commonStem}:${i}`)}`;
+      for (let k = i; k < j; k += 1) {
+        const { row, split: oneSplit } = candidates[k];
+        const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+        row.stem = oneSplit.itemStem;
+        row.meta = {
+          ...prevMeta,
+          is_set_question: true,
+          set_model: {
+            ...(prevMeta.set_model && typeof prevMeta.set_model === 'object'
+              ? prevMeta.set_model
+              : {}),
+            version: 1,
+            set_type: 'independent_set',
+            set_key: setKey,
+            common_stem: split.commonStem,
+            item_label: String(row.question_number || '').trim(),
+            item_order: k - i + 1,
+            delivery_policy: 'independent_items_with_common_stem',
+          },
+        };
+      }
+    }
+    i = j;
+  }
+
+  const rangeByQuestionKey = new Map();
+  const scopeKey = [
+    textbookScope?.book_id || textbookScope?.bookId || '',
+    textbookScope?.grade_label || textbookScope?.gradeLabel || '',
+    textbookScope?.big_order ?? textbookScope?.bigOrder ?? '',
+    textbookScope?.mid_order ?? textbookScope?.midOrder ?? '',
+    textbookScope?.sub_key || textbookScope?.subKey || '',
+  ].join(':');
+  for (const range of Array.isArray(setHeaderRanges) ? setHeaderRanges : []) {
+    const from = Number(range?.from);
+    const to = Number(range?.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) continue;
+    const rangeKey = compact(range?.headerNumber) || `${from}-${to}`;
+    const setKey = `textbook:${stableShortHash(`${scopeKey}:${rangeKey}:${from}:${to}`)}`;
+    for (let n = from; n <= to; n += 1) {
+      rangeByQuestionKey.set(String(n), { ...range, setKey, itemOrder: n - from + 1 });
+    }
+  }
+
+  if (rangeByQuestionKey.size > 0) {
+    const commonBySetKey = new Map();
+    const commonByHeaderSetKey = new Map();
+    for (const row of rows) {
+      const setModel = row?.meta?.set_model && typeof row.meta.set_model === 'object'
+        ? row.meta.set_model
+        : {};
+      const setKey = compact(setModel.set_key || setModel.setKey);
+      const common = compact(setModel.common_stem || setModel.commonStem);
+      if (setKey && common && !commonBySetKey.has(setKey)) {
+        commonBySetKey.set(setKey, common);
+      }
+      const range = rangeByQuestionKey.get(problemNumberKey(row?.question_number));
+      if (range && common && !commonByHeaderSetKey.has(range.setKey)) {
+        commonByHeaderSetKey.set(range.setKey, common);
+      }
+    }
+    for (const row of rows) {
+      const qKey = problemNumberKey(row?.question_number);
+      const range = rangeByQuestionKey.get(qKey);
+      if (!range) continue;
+      const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+      const prevSet = prevMeta.set_model && typeof prevMeta.set_model === 'object'
+        ? prevMeta.set_model
+        : {};
+      const commonStem = compact(prevSet.common_stem || prevSet.commonStem)
+        || commonBySetKey.get(range.setKey)
+        || commonByHeaderSetKey.get(range.setKey)
+        || '';
+      const nextFlags = Array.from(new Set([
+        ...(Array.isArray(row.flags) ? row.flags : []),
+        ...(!commonStem ? ['independent_set_common_stem_missing'] : []),
+      ]));
+      row.flags = nextFlags;
+      row.meta = {
+        ...prevMeta,
+        is_set_question: true,
+        set_model: {
+          ...prevSet,
+          version: 1,
+          set_type: 'independent_set',
+          set_key: range.setKey,
+          ...(commonStem ? { common_stem: commonStem } : {}),
+          item_label: String(row.question_number || '').trim(),
+          item_order: range.itemOrder,
+          delivery_policy: 'independent_items_with_common_stem',
+          source: 'textbook_problem_crops.set_header',
+          header_number: range.headerNumber || `${range.from}-${range.to}`,
+          range_from: range.from,
+          range_to: range.to,
+        },
+      };
+    }
+  }
+  return rows;
 }
 
 function expectedQuestionKeys(numbers) {
@@ -496,7 +695,9 @@ async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log
 }
 
 async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = null }) {
-  if (!supa || !textbookScope || typeof textbookScope !== 'object') return new Map();
+  if (!supa || !textbookScope || typeof textbookScope !== 'object') {
+    return emptyTextbookCropIndex();
+  }
   const bookId = compact(textbookScope.book_id || textbookScope.bookId);
   const gradeLabel = compact(textbookScope.grade_label || textbookScope.gradeLabel);
   const subKey = compact(textbookScope.sub_key || textbookScope.subKey);
@@ -510,12 +711,12 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
     !Number.isFinite(bigOrder) ||
     !Number.isFinite(midOrder)
   ) {
-    return new Map();
+    return emptyTextbookCropIndex();
   }
   try {
     const { data: crops, error } = await supa
       .from('textbook_problem_crops')
-      .select('problem_number,raw_page,display_page,is_set_header')
+      .select('problem_number,raw_page,display_page,is_set_header,set_from,set_to,item_region_1k')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
@@ -531,11 +732,16 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
           subKey,
         });
       }
-      return new Map();
+      return emptyTextbookCropIndex();
     }
     const out = new Map();
+    const setHeaderRanges = [];
     for (const crop of crops) {
-      if (crop?.is_set_header === true) continue;
+      if (crop?.is_set_header === true) {
+        const range = normalizeSetHeaderRange(crop);
+        if (range) setHeaderRanges.push(range);
+        continue;
+      }
       const key = problemNumberKey(crop?.problem_number);
       const rawPage = Number(crop?.raw_page);
       if (!key || !Number.isFinite(rawPage) || rawPage <= 0) continue;
@@ -550,16 +756,22 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
     if (typeof log === 'function') {
       log('vlm_textbook_crop_page_loaded', {
         cropPageCount: out.size,
+        setHeaderRangeCount: setHeaderRanges.length,
       });
     }
-    return out;
+    setHeaderRanges.sort((a, b) => {
+      const pageDelta = Number(a.rawPage || 0) - Number(b.rawPage || 0);
+      if (pageDelta !== 0) return pageDelta;
+      return Number(a.from || 0) - Number(b.from || 0);
+    });
+    return { byNumber: out, setHeaderRanges };
   } catch (err) {
     if (typeof log === 'function') {
       log('vlm_textbook_crop_page_skip', {
         reason: compact(err?.message || err),
       });
     }
-    return new Map();
+    return emptyTextbookCropIndex();
   }
 }
 
@@ -776,12 +988,18 @@ export async function runVlmExtraction({
     textbookScope,
   });
 
-  const cropPagesByNumber = await fetchTextbookCropPages({
+  const cropIndex = await fetchTextbookCropPages({
     supa,
     academyId: job.academy_id,
     textbookScope,
     log,
   });
+  const cropPagesByNumber = cropIndex.byNumber instanceof Map
+    ? cropIndex.byNumber
+    : new Map();
+  const setHeaderRanges = Array.isArray(cropIndex.setHeaderRanges)
+    ? cropIndex.setHeaderRanges
+    : [];
   for (const input of pdfInputs.inputs) {
     input.expectedQuestionNumbers = expectedQuestionNumbersForInput(
       cropPagesByNumber,
@@ -875,7 +1093,7 @@ export async function runVlmExtraction({
   });
 
   let lowConfidenceCount = 0;
-  const payloadQuestions = ordered.map((vlmQ, idx) => {
+  const payloadQuestionsRaw = ordered.map((vlmQ, idx) => {
     const qKey = problemNumberKey(vlmQ?.question_number);
     const existingRow = qKey ? existingByNum.get(qKey) || null : null;
     let enrichedVlmQ = qKey
@@ -908,6 +1126,11 @@ export async function runVlmExtraction({
     }
     return payload;
   });
+  const payloadQuestions = normalizeIndependentSetPayloadQuestions(
+    payloadQuestionsRaw,
+    textbookScope,
+    setHeaderRanges,
+  );
 
   const stats = {
     circledChoices: payloadQuestions.filter(

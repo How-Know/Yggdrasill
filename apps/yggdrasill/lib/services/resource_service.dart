@@ -689,6 +689,30 @@ class ResourceService {
   }
 
   // ======== FLOW <-> TEXTBOOK LINKS ========
+  bool _metadataPayloadHasUnits(dynamic payload) {
+    final units = payload is Map ? payload['units'] : null;
+    return units is List && units.isNotEmpty;
+  }
+
+  Future<Set<String>> _loadTextbookMetadataKeysWithUnits({
+    required SupabaseClient supa,
+    required String academyId,
+  }) async {
+    final rows = await supa
+        .from('textbook_metadata')
+        .select('book_id,grade_label,payload')
+        .eq('academy_id', academyId);
+    final keys = <String>{};
+    for (final row in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+      final bookId = (row['book_id'] as String?)?.trim() ?? '';
+      final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
+      if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+      if (!_metadataPayloadHasUnits(row['payload'])) continue;
+      keys.add('$bookId|$gradeLabel');
+    }
+    return keys;
+  }
+
   Future<List<Map<String, dynamic>>> loadTextbooksWithMetadata() async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -697,7 +721,7 @@ class ResourceService {
 
       final metadataRows = await supa
           .from('textbook_metadata')
-          .select('book_id,grade_label,page_offset,payload')
+          .select('book_id,grade_label,payload')
           .eq('academy_id', academyId);
 
       final textbookFiles = await loadResourceFilesForCategory('textbook');
@@ -719,16 +743,12 @@ class ResourceService {
         if (file == null) continue;
 
         final payload = row['payload'];
-        final pageOffset = _asInt(row['page_offset']);
-        final bool hasPayload = payload is Map && payload.isNotEmpty;
-        final bool hasMetadata = hasPayload || pageOffset != null;
-        if (!hasMetadata) continue;
+        if (!_metadataPayloadHasUnits(payload)) continue;
 
         out.add({
           'book_id': bookId,
           'book_name': (file['name'] as String?)?.trim() ?? '(이름 없음)',
           'grade_label': gradeLabel,
-          'page_offset': pageOffset,
           'payload': payload,
         });
       }
@@ -756,6 +776,10 @@ class ResourceService {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
+      final validMetadataKeys = await _loadTextbookMetadataKeysWithUnits(
+        supa: supa,
+        academyId: academyId,
+      );
       try {
         final rows = await supa
             .from('flow_textbook_links')
@@ -769,6 +793,7 @@ class ResourceService {
           final bookId = (row['book_id'] as String?) ?? '';
           final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
           if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+          if (!validMetadataKeys.contains('$bookId|$gradeLabel')) continue;
           final info = row['resource_files'];
           final file = info is Map
               ? Map<String, dynamic>.from(info)
@@ -805,6 +830,7 @@ class ResourceService {
           final bookId = (row['book_id'] as String?) ?? '';
           final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
           if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+          if (!validMetadataKeys.contains('$bookId|$gradeLabel')) continue;
           out.add({
             'book_id': bookId,
             'grade_label': gradeLabel,
@@ -867,7 +893,7 @@ class ResourceService {
       final supa = Supabase.instance.client;
       final row = await supa
           .from('textbook_metadata')
-          .select('page_offset,payload,textbook_type')
+          .select('payload,textbook_type')
           .match({
         'academy_id': academyId,
         'book_id': bookId,

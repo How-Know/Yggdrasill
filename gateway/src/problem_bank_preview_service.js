@@ -26,7 +26,7 @@ const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv55_table_font_diamond_spacing';
+const PREVIEW_STYLE_VERSION = 'pv74_math_line_box_symmetry';
 const DEBUG_MATH_DOTS = process.env.PB_DEBUG_MATH_DOTS === '1';
 
 function repoAssetPath(...segments) {
@@ -65,7 +65,7 @@ function getDefaultFontPaths() {
   };
 }
 
-function questionContentHash(question, mathEngine) {
+function questionContentHash(question, mathEngine, renderConfig = {}) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const stemLineAligns = Array.isArray(meta.stem_line_aligns)
     ? meta.stem_line_aligns
@@ -87,9 +87,14 @@ function questionContentHash(question, mathEngine) {
     meta_figure_render_scale: meta.figure_render_scale ?? null,
     meta_table_scales: meta.table_scales || null,
     meta_table_scale_default: meta.table_scale_default || null,
+    meta_set_model: meta.set_model || null,
+    meta_delivery_unit: meta.delivery_unit || null,
     meta_choice_layout: meta.choice_layout || null,
     meta_is_image_choice_question: meta.is_image_choice_question || null,
     meta_image_choice_layout: meta.image_choice_layout || null,
+    preview_independent_set_common_stem:
+      renderConfig?.previewIndependentSetCommonStem === true
+      || renderConfig?.preview_independent_set_common_stem === true,
   });
   return createHash('sha256').update(payload).digest('hex').slice(0, 16);
 }
@@ -113,6 +118,7 @@ export async function generateQuestionPreviews({
   questions,
   academyId,
   layout,
+  renderConfig,
   supabaseClient,
   force = false,
   mathEngine,
@@ -132,7 +138,7 @@ export async function generateQuestionPreviews({
       continue;
     }
 
-    const hash = questionContentHash(question, mathEngine);
+    const hash = questionContentHash(question, mathEngine, renderConfig || {});
     const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
 
     if (!force) {
@@ -157,6 +163,7 @@ export async function generateQuestionPreviews({
         boldPath: fontPaths.boldPath,
         qnumFontPath: fontPaths.qnumFontPath,
         layout: layout || {},
+        renderConfig: renderConfig || {},
         supabaseClient,
         viewportWidth: PREVIEW_VIEWPORT_WIDTH,
         deviceScaleFactor: PREVIEW_DPR,

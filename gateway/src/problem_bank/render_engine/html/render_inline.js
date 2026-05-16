@@ -10,6 +10,13 @@ const MATH_EXCEPTION_RE = /^[,?.]+$/;
 const BOGAGI_RE = /^<보기>$/;
 const RIGHT_TAIL_MARKER = '[우측꼬리]';
 
+function normalizeBlankParenthesisSpaceMarkers(input) {
+  return String(input ?? '')
+    .replace(/\(\s*\[공백:3\]\s*\)/g, '([공백:1.5])')
+    .replace(/（\s*\[공백:3\]\s*）/g, '（[공백:1.5]）')
+    .replace(/\[\s*\[공백:3\]\s*\]/g, '[[공백:1.5]]');
+}
+
 function debugDotHtml() {
   return '<span class="math-debug-dot dot-forced"></span>';
 }
@@ -53,7 +60,7 @@ function stretchParenthesizedFractionTokens(tokens) {
  * @param {{ debugDots?: boolean }} [opts]
  */
 export function renderInlineMixedContent(input, mathRenderer, equations, opts) {
-  const src = String(input ?? '');
+  const src = normalizeBlankParenthesisSpaceMarkers(input);
   if (src.includes(RIGHT_TAIL_MARKER)) {
     const markerIdx = src.indexOf(RIGHT_TAIL_MARKER);
     const left = renderInlineMixedContent(src.slice(0, markerIdx), mathRenderer, equations, opts);
