@@ -512,7 +512,7 @@ function bogiLabelFullTex(labelTex) {
  * 세그먼트를 끊어서 math 모드로 잘못 분류되거나 사라질 수 있다. 최상단에서 미리
  * 분리해 처리하면 rendering hint 가 안전하게 LaTeX 공간 명령으로 치환된다.
  */
-function smartTexLine(text, equations) {
+function smartTexLine(text, equations, options = {}) {
   const raw = normalizeBlankParenthesisSpaceMarkers(text);
   if (!raw) return '';
 
@@ -531,11 +531,11 @@ function smartTexLine(text, equations) {
     const rendered = [];
     for (const piece of pieces) {
       if (piece.type === 'underline') {
-        const inner = smartTexLine(piece.value, equations);
+        const inner = smartTexLine(piece.value, equations, options);
         if (inner) rendered.push(`\\uline{${inner}}`);
         continue;
       }
-      const tex = smartTexLine(piece.value, equations);
+      const tex = smartTexLine(piece.value, equations, options);
       if (tex) rendered.push(tex);
     }
     return rendered.join('');
@@ -543,7 +543,7 @@ function smartTexLine(text, equations) {
 
   // 공백 마커가 없는 일반 경로: 기존 동작과 완전히 동일.
   if (!raw.includes('[공백:')) {
-    return smartTexLineCore(raw, equations);
+    return smartTexLineCore(raw, equations, options);
   }
 
   const pieces = splitBySpaceMarkers(raw);
@@ -553,7 +553,7 @@ function smartTexLine(text, equations) {
       parts.push(spaceMarkerToTex(piece.amount));
       continue;
     }
-    const tex = smartTexLineCore(piece.value, equations);
+    const tex = smartTexLineCore(piece.value, equations, options);
     if (tex) parts.push(tex);
   }
   return parts.join('');
@@ -655,7 +655,9 @@ function normalizeLiteralEscapedNewlines(input) {
   return out.replace(/[ \t]{2,}/g, ' ');
 }
 
-function smartTexLineCore(text, equations) {
+const VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX = 34;
+
+function smartTexLineCore(text, equations, options = {}) {
   // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
   const clean = normalizeBlankBoxNotation(
     normalizeLiteralEscapedNewlines(stripMathDelimiters(stripMarkers(text))).trim(),
@@ -691,9 +693,14 @@ function smartTexLineCore(text, equations) {
     parts.push({ type: 'math', value: body });
   }
 
+  const enableVisualLineTallMathPad = options?.visualLineTallMathPad === true;
+  let accumulatedVisualLength = 0;
   const result = parts
     .map((seg) => {
-      if (seg.type === 'text') return escapeLatexText(seg.value);
+      if (seg.type === 'text') {
+        accumulatedVisualLength += visualLength(seg.value);
+        return escapeLatexText(seg.value);
+      }
 
       const raw = seg.value;
       const leadSp = /^\s/.test(raw) ? ' ' : '';
@@ -702,6 +709,9 @@ function smartTexLineCore(text, equations) {
       if (!math) return (leadSp || trailSp) ? ' ' : '';
       math = applyEquationLookup(math, lookup);
       math = normalizeMathSegment(math);
+      const addVisualLinePad = enableVisualLineTallMathPad
+        && accumulatedVisualLength >= VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX
+        && texHasTallInlineMath(math);
       // 최상위 깊이의 ", "는 math mode 안에서 좁게 붙어서, 한글 띄어쓰기 폭과
       // 맞지 않는다. 괄호/대괄호/중괄호 밖 `, `는 math를 빠져나와 text mode
       // 콤마+공백으로 렌더한 뒤 다시 math 로 진입한다. (`x, y` → `$x$, $y$`)
@@ -709,7 +719,8 @@ function smartTexLineCore(text, equations) {
       const rendered = mathChunks
         .map((chunk) => `$\\displaystyle ${symmetrizeTallMathChunk(chunk)}$`)
         .join(', ');
-      return `${leadSp}${rendered}${trailSp}`;
+      accumulatedVisualLength += visualLength(math);
+      return `${leadSp}${addVisualLinePad ? '\\mtvisuallinetallpad{}' : ''}${rendered}${trailSp}`;
     })
     .join('');
 
@@ -830,6 +841,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   //    일반 본문 행간까지 과도하게 늘어나지 않도록.)
   const STEM_STRETCH = '1.53';
   const allowTallMathTopPad = options?.allowTallMathTopPad === true;
+  const stemTexOptions = { visualLineTallMathPad: true };
   const wrapStem = (inner, { tallMath = false } = {}) => {
     const tallMathTopPad = allowTallMathTopPad && tallMath
       ? '\\par\\vspace{0.10\\baselineskip}'
@@ -841,7 +853,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     if (pieces.length <= 1) return '';
     const lines = [];
     const first = pieces[0];
-    const firstTex = smartTexLine(first.text, equations);
+    const firstTex = smartTexLine(first.text, equations, stemTexOptions);
     const firstBody = `${manualFirstPrefix}${firstTex}`;
     if (manualFirstPrefix || firstTex.trim()) {
       lines.push(`\\noindent ${firstBody}\\par`);
@@ -867,7 +879,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     if (hasMathDisplayLineMarker(subQ[2])) {
       return renderDisplayMathStemLine(subQ[2], equations, labelTex);
     }
-    const restTex = smartTexLine(subQ[2], equations);
+    const restTex = smartTexLine(subQ[2], equations, stemTexOptions);
     return wrapStem(
       `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`,
       { tallMath: texHasTallInlineMath(restTex) },
@@ -885,8 +897,8 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     const namePart = dialogue[1].trim();
     const rest = dialogue[2];
     if (namePart) {
-      const nameTex = smartTexLine(namePart, equations);
-      const restTex = smartTexLine(rest, equations);
+      const nameTex = smartTexLine(namePart, equations, stemTexOptions);
+      const restTex = smartTexLine(rest, equations, stemTexOptions);
       const labelTex = `${nameTex}\\ :\\ `;
       return wrapStem(
         `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`,
@@ -894,7 +906,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
       );
     }
   }
-  const bodyTex = smartTexLine(sub, equations);
+  const bodyTex = smartTexLine(sub, equations, stemTexOptions);
   return wrapStem(`${firstPrefix}${bodyTex}`, {
     tallMath: texHasTallInlineMath(bodyTex),
   });
@@ -2232,6 +2244,7 @@ function buildPreamble({
   lines.push(`\\renewcommand{\\tfrac}[2]{${symFrac('origtfrac')}}`);
   lines.push('\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}');
   lines.push('\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}');
+  lines.push('\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}');
   lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
   // 어절 중간에서 줄바꿈 금지: kotex 가 기본 설정한 ICU 한국어 줄바꿈 로케일을
@@ -4045,6 +4058,7 @@ export function buildTexSource(question, options = {}) {
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
     '\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
+    '\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
@@ -4186,6 +4200,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
     '\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
+    '\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),

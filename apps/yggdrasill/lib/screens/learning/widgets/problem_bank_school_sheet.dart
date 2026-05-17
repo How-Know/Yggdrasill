@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
@@ -15,6 +16,7 @@ class ProblemBankSchoolSheet extends StatefulWidget {
     this.privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[],
     this.selectedPrivateMaterialPageKeys = const <String>{},
     this.onPrivateMaterialPageToggled,
+    this.onPrivateMaterialPageKeysToggled,
     this.privateMaterialTitle = '',
     this.privateMaterialEmptyMessage = '교재를 선택한 뒤 페이지를 체크해 주세요.',
   });
@@ -30,6 +32,8 @@ class ProblemBankSchoolSheet extends StatefulWidget {
   final Set<String> selectedPrivateMaterialPageKeys;
   final void Function(String pageKey, bool selected)?
       onPrivateMaterialPageToggled;
+  final void Function(Iterable<String> pageKeys, bool selected)?
+      onPrivateMaterialPageKeysToggled;
   final String privateMaterialTitle;
   final String privateMaterialEmptyMessage;
 
@@ -47,6 +51,11 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
 
   final Set<String> _expandedSchools = <String>{};
   final Set<String> _expandedYearBuckets = <String>{};
+  bool _privatePageDragActive = false;
+  bool _privatePageDragSelectMode = true;
+  bool _privatePageSuppressNextTap = false;
+  Set<String> _privatePageDragBaseKeys = <String>{};
+  final Set<String> _privatePageDragKeys = <String>{};
 
   @override
   void initState() {
@@ -251,37 +260,101 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
         ),
       );
     }
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
-      itemCount: widget.privateMaterialUnits.length,
-      itemBuilder: (context, bigIndex) {
-        final big = widget.privateMaterialUnits[bigIndex];
-        return Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            initiallyExpanded: bigIndex == 0,
-            tilePadding: const EdgeInsets.symmetric(horizontal: 6),
-            childrenPadding: const EdgeInsets.only(left: 8, bottom: 6),
-            iconColor: const Color(0xFF8AA5A5),
-            collapsedIconColor: const Color(0xFF8AA5A5),
-            title: Text(
-              big.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFFB8C9C9),
-                fontWeight: FontWeight.w800,
-                fontSize: 13.2,
-                height: 1.2,
+    return Listener(
+      onPointerUp: (_) => _finishPrivatePageDrag(),
+      onPointerCancel: (_) => _cancelPrivatePageDrag(),
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
+        itemCount: widget.privateMaterialUnits.length,
+        itemBuilder: (context, bigIndex) {
+          final big = widget.privateMaterialUnits[bigIndex];
+          return Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              initiallyExpanded: bigIndex == 0,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 6),
+              childrenPadding: const EdgeInsets.only(left: 8, bottom: 6),
+              iconColor: const Color(0xFF8AA5A5),
+              collapsedIconColor: const Color(0xFF8AA5A5),
+              title: Text(
+                big.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFB8C9C9),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13.2,
+                  height: 1.2,
+                ),
               ),
+              children: [
+                for (final mid in big.mids) _buildPrivateMidNode(mid),
+              ],
             ),
-            children: [
-              for (final mid in big.mids) _buildPrivateMidNode(mid),
-            ],
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
+  }
+
+  bool _isEffectivePrivatePageSelected(String pageKey) {
+    if (!_privatePageDragActive) {
+      return widget.selectedPrivateMaterialPageKeys.contains(pageKey);
+    }
+    if (_privatePageDragKeys.contains(pageKey)) {
+      return _privatePageDragSelectMode;
+    }
+    return _privatePageDragBaseKeys.contains(pageKey);
+  }
+
+  void _startPrivatePageDrag(String pageKey) {
+    if (widget.onPrivateMaterialPageKeysToggled == null) return;
+    final selected = _isEffectivePrivatePageSelected(pageKey);
+    setState(() {
+      _privatePageDragActive = true;
+      _privatePageDragSelectMode = !selected;
+      _privatePageDragBaseKeys =
+          Set<String>.from(widget.selectedPrivateMaterialPageKeys);
+      _privatePageDragKeys
+        ..clear()
+        ..add(pageKey);
+    });
+  }
+
+  void _enterPrivatePageDrag(String pageKey) {
+    if (!_privatePageDragActive) return;
+    if (_privatePageDragKeys.contains(pageKey)) return;
+    setState(() {
+      _privatePageDragKeys.add(pageKey);
+    });
+  }
+
+  void _finishPrivatePageDrag() {
+    if (!_privatePageDragActive) return;
+    final keys = List<String>.from(_privatePageDragKeys);
+    final selected = _privatePageDragSelectMode;
+    setState(() {
+      _privatePageDragActive = false;
+      _privatePageSuppressNextTap = true;
+      _privatePageDragKeys.clear();
+      _privatePageDragBaseKeys = <String>{};
+    });
+    if (keys.isNotEmpty) {
+      widget.onPrivateMaterialPageKeysToggled?.call(keys, selected);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_privatePageSuppressNextTap) return;
+      setState(() => _privatePageSuppressNextTap = false);
+    });
+  }
+
+  void _cancelPrivatePageDrag() {
+    if (!_privatePageDragActive) return;
+    setState(() {
+      _privatePageDragActive = false;
+      _privatePageDragKeys.clear();
+      _privatePageDragBaseKeys = <String>{};
+    });
   }
 
   Widget _buildPrivateMidNode(ProblemBankPrivateMaterialMidNode mid) {
@@ -311,8 +384,11 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
   }
 
   Widget _buildPrivateSmallNode(ProblemBankPrivateMaterialSmallNode small) {
-    final selected = widget.selectedPrivateMaterialPageKeys.contains(small.key);
-    final showTypeGroups = small.typeGroups.isNotEmpty;
+    final pageKeys = small.pages.map((p) => p.key).toList(growable: false);
+    final selected = pageKeys.isNotEmpty &&
+        pageKeys.every(widget.selectedPrivateMaterialPageKeys.contains);
+    final partiallySelected = !selected &&
+        pageKeys.any(widget.selectedPrivateMaterialPageKeys.contains);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
@@ -320,10 +396,10 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
         children: [
           InkWell(
             borderRadius: BorderRadius.circular(8),
-            onTap: widget.onPrivateMaterialPageToggled == null
+            onTap: widget.onPrivateMaterialPageKeysToggled == null
                 ? null
-                : () => widget.onPrivateMaterialPageToggled!(
-                      small.key,
+                : () => widget.onPrivateMaterialPageKeysToggled!(
+                      pageKeys,
                       !selected,
                     ),
             child: Padding(
@@ -331,14 +407,15 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
               child: Row(
                 children: [
                   Checkbox(
-                    value: selected,
+                    value: selected ? true : (partiallySelected ? null : false),
+                    tristate: true,
                     visualDensity: VisualDensity.compact,
                     side: const BorderSide(color: Color(0xFF5E7777)),
                     activeColor: const Color(0xFF1A6B5E),
-                    onChanged: widget.onPrivateMaterialPageToggled == null
+                    onChanged: widget.onPrivateMaterialPageKeysToggled == null
                         ? null
-                        : (v) => widget.onPrivateMaterialPageToggled!(
-                              small.key,
+                        : (v) => widget.onPrivateMaterialPageKeysToggled!(
+                              pageKeys,
                               v == true,
                             ),
                   ),
@@ -358,7 +435,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                     ),
                   ),
                   Text(
-                    '${small.questionCount}문항',
+                    '${small.pages.length}쪽',
                     style: const TextStyle(
                       color: Color(0xFF6F8585),
                       fontWeight: FontWeight.w700,
@@ -369,109 +446,79 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
               ),
             ),
           ),
-          if (showTypeGroups)
-            for (final type in small.typeGroups) _buildPrivateTypeTile(type)
-          else
-            for (final page in small.pages) _buildPrivatePageTile(page),
+          Padding(
+            padding: const EdgeInsets.only(left: 22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final page in small.pages) _buildPrivatePageTile(page),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildPrivateTypeTile(ProblemBankPrivateMaterialTypeNode type) {
-    final selected = widget.selectedPrivateMaterialPageKeys.contains(type.key);
-    final title = type.title.trim().isEmpty
-        ? type.label
-        : '${type.label} ${type.title}'.trim();
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: widget.onPrivateMaterialPageToggled == null
-          ? null
-          : () => widget.onPrivateMaterialPageToggled!(type.key, !selected),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        child: Row(
-          children: [
-            Checkbox(
-              value: selected,
-              visualDensity: VisualDensity.compact,
-              side: const BorderSide(color: Color(0xFF5E7777)),
-              activeColor: const Color(0xFF1A6B5E),
-              onChanged: widget.onPrivateMaterialPageToggled == null
-                  ? null
-                  : (v) =>
-                      widget.onPrivateMaterialPageToggled!(type.key, v == true),
-            ),
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: selected
-                      ? const Color(0xFFD6ECEA)
-                      : const Color(0xFF9FB3B3),
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  fontSize: 12.0,
-                ),
-              ),
-            ),
-            Text(
-              '${type.questionCount}문항',
-              style: const TextStyle(
-                color: Color(0xFF6F8585),
-                fontWeight: FontWeight.w700,
-                fontSize: 10.8,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildPrivatePageTile(ProblemBankPrivateMaterialPageNode page) {
-    final selected = widget.selectedPrivateMaterialPageKeys.contains(page.key);
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: widget.onPrivateMaterialPageToggled == null
-          ? null
-          : () => widget.onPrivateMaterialPageToggled!(page.key, !selected),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        child: Row(
-          children: [
-            Checkbox(
-              value: selected,
-              visualDensity: VisualDensity.compact,
-              side: const BorderSide(color: Color(0xFF5E7777)),
-              activeColor: const Color(0xFF1A6B5E),
-              onChanged: widget.onPrivateMaterialPageToggled == null
-                  ? null
-                  : (v) =>
-                      widget.onPrivateMaterialPageToggled!(page.key, v == true),
-            ),
-            Expanded(
-              child: Text(
-                '${page.displayPage}쪽',
-                style: TextStyle(
-                  color: selected
-                      ? const Color(0xFFD6ECEA)
-                      : const Color(0xFF9FB3B3),
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  fontSize: 12.2,
+    final selected = _isEffectivePrivatePageSelected(page.key);
+    return MouseRegion(
+      onEnter: (_) => _enterPrivatePageDrag(page.key),
+      child: Listener(
+        onPointerDown: (event) {
+          if (event.buttons == kPrimaryMouseButton) {
+            _startPrivatePageDrag(page.key);
+          }
+        },
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: widget.onPrivateMaterialPageToggled == null
+              ? null
+              : () {
+                  if (_privatePageSuppressNextTap) {
+                    setState(() => _privatePageSuppressNextTap = false);
+                    return;
+                  }
+                  widget.onPrivateMaterialPageToggled!(page.key, !selected);
+                },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Row(
+              children: [
+                IgnorePointer(
+                  child: Checkbox(
+                    value: selected,
+                    visualDensity: VisualDensity.compact,
+                    side: const BorderSide(color: Color(0xFF5E7777)),
+                    activeColor: const Color(0xFF1A6B5E),
+                    onChanged: widget.onPrivateMaterialPageToggled == null
+                        ? null
+                        : (_) {},
+                  ),
                 ),
-              ),
+                Expanded(
+                  child: Text(
+                    '${page.displayPage}쪽',
+                    style: TextStyle(
+                      color: selected
+                          ? const Color(0xFFD6ECEA)
+                          : const Color(0xFF9FB3B3),
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                      fontSize: 12.2,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${page.questionCount}문항',
+                  style: const TextStyle(
+                    color: Color(0xFF6F8585),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 10.8,
+                  ),
+                ),
+              ],
             ),
-            Text(
-              '${page.questionCount}문항',
-              style: const TextStyle(
-                color: Color(0xFF6F8585),
-                fontWeight: FontWeight.w700,
-                fontSize: 10.8,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

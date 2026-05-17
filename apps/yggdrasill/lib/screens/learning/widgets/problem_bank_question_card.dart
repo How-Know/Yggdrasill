@@ -18,6 +18,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
     this.previewStatus = '',
     this.previewErrorMessage = '',
     this.onRetryPreview,
+    this.showDragHandle = false,
   });
 
   final LearningProblemQuestion question;
@@ -32,6 +33,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
   final String previewStatus;
   final String previewErrorMessage;
   final VoidCallback? onRetryPreview;
+  final bool showDragHandle;
 
   @override
   Widget build(BuildContext context) {
@@ -49,29 +51,28 @@ class ProblemBankQuestionCard extends StatelessWidget {
         children: [
           _buildHeader(color),
           Divider(height: 1, color: color.divider),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: _buildPreviewContent(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  height: 222,
+                  child: _buildPreviewContent(),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _metaSummaryText(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color.textMuted,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _metaSummaryText(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: color.textMuted,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],
@@ -203,40 +204,49 @@ class ProblemBankQuestionCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (showSelectionControl)
-            Checkbox(
-              value: selected,
-              visualDensity: VisualDensity.compact,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              side: BorderSide(color: color.checkBorder),
-              activeColor: color.accent,
-              onChanged: (v) => onSelectedChanged(v ?? false),
+            SizedBox(
+              width: 34,
+              height: 28,
+              child: Center(
+                child: Checkbox(
+                  value: selected,
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  side: BorderSide(color: color.checkBorder),
+                  activeColor: color.accent,
+                  onChanged: (v) => onSelectedChanged(v ?? false),
+                ),
+              ),
             ),
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: _buildQuestionTitle(color),
-            ),
+            child: _buildQuestionTitle(color),
           ),
-          const SizedBox(width: 6),
-          Flexible(
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 104,
+            height: 28,
             child: Align(
-              alignment: Alignment.topRight,
-              child: Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                alignment: WrapAlignment.end,
-                children: [
-                  for (final mode in availableModes)
-                    _buildModeChip(
-                      mode,
-                      color: color,
-                      isOriginal: mode == originalMode,
-                      isSelected: mode == effectiveSelected,
-                    ),
-                ],
+              alignment: Alignment.centerRight,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var i = 0; i < availableModes.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 3),
+                      _buildModeChip(
+                        availableModes[i],
+                        color: color,
+                        isOriginal: availableModes[i] == originalMode,
+                        isSelected: availableModes[i] == effectiveSelected,
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -254,7 +264,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
     );
     if (difficultyLabel.isEmpty) {
       return Text(
-        '${question.displayQuestionNumber}번 문항',
+        question.displayQuestionNumber,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: titleStyle,
@@ -265,13 +275,13 @@ class ProblemBankQuestionCard extends StatelessWidget {
       children: [
         Flexible(
           child: Text(
-            '${question.displayQuestionNumber}번 문항',
+            question.displayQuestionNumber,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: titleStyle,
           ),
         ),
-        const SizedBox(width: 5),
+        const SizedBox(width: 3),
         _DifficultyDot(
           label: difficultyLabel,
           paperStyle: paperStyle,
@@ -348,33 +358,41 @@ class ProblemBankQuestionCard extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: enabled ? () => onModeSelected?.call(mode) : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: borderColor),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isSelected) ...[
-                Icon(
-                  Icons.check_rounded,
-                  size: 12,
-                  color: isOriginal ? color.badgeText : color.accent,
+        child: SizedBox(
+          width: 48,
+          height: 24,
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: borderColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 12,
+                  child: isSelected
+                      ? Icon(
+                          Icons.check_rounded,
+                          size: 12,
+                          color: isOriginal ? color.badgeText : color.accent,
+                        )
+                      : const SizedBox.shrink(),
                 ),
-                const SizedBox(width: 2),
+                const SizedBox(width: 1),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                  ),
+                ),
               ],
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: textColor,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -399,8 +417,8 @@ class _DifficultyDot extends StatelessWidget {
       message: '난이도 $label',
       waitDuration: const Duration(milliseconds: 450),
       child: Container(
-        width: 20,
-        height: 20,
+        width: 18,
+        height: 18,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           shape: BoxShape.circle,

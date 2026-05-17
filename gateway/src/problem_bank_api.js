@@ -705,7 +705,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v76_tall_math_line_top_pad';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v78_visual_line_tall_math_balance';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -864,6 +864,10 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     src.questionNumberFormat ?? src.question_number_format,
     defaults.questionNumberFormat || (profileHint === 'assignment' ? 'two_digit' : 'source'),
   );
+  const renumberQuestions = normalizeBool(
+    src.renumberQuestions ?? src.renumber_questions,
+    normalizeBool(defaults.renumberQuestions ?? defaults.renumber_questions, false),
+  );
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -881,6 +885,7 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     hideQuestionNumber,
     questionNumberPlacement,
     questionNumberFormat,
+    renumberQuestions,
     coverPageTexts,
     alignPolicy,
     questionMode,
@@ -1030,6 +1035,7 @@ function buildRenderHashPayload({
     hideQuestionNumber: renderConfig.hideQuestionNumber === true,
     questionNumberPlacement: renderConfig.questionNumberPlacement,
     questionNumberFormat: renderConfig.questionNumberFormat,
+    renumberQuestions: renderConfig.renumberQuestions === true,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -1086,6 +1092,7 @@ function buildExportOptions({
     hideQuestionNumber: renderConfig.hideQuestionNumber === true,
     questionNumberPlacement: renderConfig.questionNumberPlacement,
     questionNumberFormat: renderConfig.questionNumberFormat,
+    renumberQuestions: renderConfig.renumberQuestions === true,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,

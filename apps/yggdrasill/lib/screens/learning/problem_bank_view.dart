@@ -85,8 +85,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
+  final List<String> _cartQuestionIds = <String>[];
+  final Set<String> _activeTypeFilters = <String>{};
+  final Set<String> _activeDifficultyFilters = <String>{};
+  bool _questionOrderShuffleEnabled = false;
+  bool _questionOrderTypePriorityEnabled = false;
+  String _questionOrderShuffleMode = '랜덤';
+  String _questionOrderTypePriorityMode = '객관식 먼저';
 
-  /// 장바구니(선택만 보기) 활성 시 그리드에 선택된 문항만 표시.
+  /// 장바구니 활성 시 그리드에 장바구니 문항만 표시.
   bool _showOnlySelectedQuestions = false;
   final Map<String, String> _selectedQuestionModes = <String, String>{};
   final ScrollController _questionGridScrollCtrl = ScrollController();
@@ -104,6 +111,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   LearningProblemExportJob? _activeExportJob;
   _QuestionOrderSaveRequest? _queuedQuestionOrderSave;
   bool _questionOrderSaveInFlight = false;
+
+  static const double _questionCardSpacing = 8;
+  static const int _questionCardTargetColumns = 5;
+  static const double _questionCardCompactMinWidth = 212;
+  static const double _questionCardHeight = 304;
 
   @override
   void initState() {
@@ -425,11 +437,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return <String>{
       for (final big in units)
         for (final mid in big.mids)
-          for (final small in mid.smalls) ...<String>{
-            small.key,
-            for (final type in small.typeGroups) type.key,
+          for (final small in mid.smalls)
             for (final page in small.pages) page.key,
-          },
     };
   }
 
@@ -701,9 +710,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         } else {
           _selectedQuestionIds.removeWhere((id) => !aliveIds.contains(id));
         }
+        _cartQuestionIds.removeWhere((id) => !aliveIds.contains(id));
         if (_showOnlySelectedQuestions) {
-          if (_selectedQuestionIds.isEmpty ||
-              !_questions.any((q) => _selectedQuestionIds.contains(q.id))) {
+          if (_cartQuestionIds.isEmpty ||
+              !_questions.any((q) => _cartQuestionIds.contains(q.id))) {
             _showOnlySelectedQuestions = false;
           }
         }
@@ -737,22 +747,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     for (final big in _privateMaterialUnits) {
       for (final mid in big.mids) {
         for (final small in mid.smalls) {
-          if (_selectedPrivateMaterialPageKeys.contains(small.key)) {
-            for (final uid in small.questionUids) {
-              final safeUid = uid.trim();
-              if (safeUid.isEmpty || !seen.add(safeUid)) continue;
-              out.add(safeUid);
-            }
-            continue;
-          }
-          for (final type in small.typeGroups) {
-            if (!_selectedPrivateMaterialPageKeys.contains(type.key)) continue;
-            for (final uid in type.questionUids) {
-              final safeUid = uid.trim();
-              if (safeUid.isEmpty || !seen.add(safeUid)) continue;
-              out.add(safeUid);
-            }
-          }
           for (final page in small.pages) {
             if (!_selectedPrivateMaterialPageKeys.contains(page.key)) continue;
             for (final uid in page.questionUids) {
@@ -933,7 +927,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         documentId: documentId,
         templateProfile: _exportSettings.templateProfile,
         paperSize: _exportSettings.paperLabel,
-        questionModeByQuestionUid: _selectedModeMapForQuestions(questions),
+        questionModeByQuestionUid: _thumbnailModeMapForQuestions(questions),
       );
       if (!mounted) return;
 
@@ -1049,6 +1043,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _selectedPrivateMaterialPageKeys = <String>{};
       _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
       _selectedQuestionIds.clear();
+      _cartQuestionIds.clear();
       _showOnlySelectedQuestions = false;
     });
     await _reloadPrivateMaterialPageTree();
@@ -1067,12 +1062,21 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     String pageKey,
     bool selected,
   ) async {
+    await _onPrivateMaterialPageKeysToggled(<String>[pageKey], selected);
+  }
+
+  Future<void> _onPrivateMaterialPageKeysToggled(
+    Iterable<String> pageKeys,
+    bool selected,
+  ) async {
     setState(() {
       final next = Set<String>.from(_selectedPrivateMaterialPageKeys);
-      if (selected) {
-        next.add(pageKey);
-      } else {
-        next.remove(pageKey);
+      for (final pageKey in pageKeys) {
+        if (selected) {
+          next.add(pageKey);
+        } else {
+          next.remove(pageKey);
+        }
       }
       _selectedPrivateMaterialPageKeys = next;
       _selectedQuestionIds.clear();
@@ -1097,25 +1101,23 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       } else {
         _selectedQuestionIds.remove(id);
       }
-      if (_showOnlySelectedQuestions && _selectedQuestionIds.isEmpty) {
-        _showOnlySelectedQuestions = false;
-      }
     });
   }
 
-  void _selectAllQuestions() {
+  void _toggleSelectAllVisibleQuestions() {
+    final visible = _visibleQuestions;
+    if (visible.isEmpty) return;
+    final allSelected =
+        visible.every((q) => _selectedQuestionIds.contains(q.id));
     setState(() {
-      _selectedQuestionIds
-        ..clear()
-        ..addAll(_questions.map((e) => e.id));
-    });
-  }
-
-  void _clearQuestionSelection() {
-    setState(() {
-      _selectedQuestionIds.clear();
-      if (_showOnlySelectedQuestions) {
-        _showOnlySelectedQuestions = false;
+      if (allSelected) {
+        for (final question in visible) {
+          _selectedQuestionIds.remove(question.id);
+        }
+      } else {
+        for (final question in visible) {
+          _selectedQuestionIds.add(question.id);
+        }
       }
     });
   }
@@ -1125,18 +1127,117 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       setState(() => _showOnlySelectedQuestions = false);
       return;
     }
-    if (_selectedQuestionIds.isEmpty) {
-      _showSnack('선택된 문항이 없습니다.');
+    if (_cartQuestionIds.isEmpty) {
+      _showSnack('장바구니에 추가된 문항이 없습니다.');
       return;
     }
     setState(() => _showOnlySelectedQuestions = true);
   }
 
+  List<LearningProblemQuestion> get _filteredQuestions {
+    final typeFilters = _activeTypeFilters;
+    final difficultyFilters = _activeDifficultyFilters;
+    if (typeFilters.isEmpty && difficultyFilters.isEmpty) return _questions;
+    return _questions.where((q) {
+      if (typeFilters.isNotEmpty) {
+        final key = _privateMaterialTypeGroupTitle(
+          _privateMaterialTypeGroupKey(q),
+        );
+        if (!typeFilters.contains(key)) return false;
+      }
+      if (difficultyFilters.isNotEmpty) {
+        final difficulty = _difficultyLabelOf(q);
+        if (!difficultyFilters.contains(difficulty)) return false;
+      }
+      return true;
+    }).toList(growable: false);
+  }
+
   List<LearningProblemQuestion> get _visibleQuestions {
-    if (!_showOnlySelectedQuestions) return _questions;
+    final source = _filteredQuestions;
+    if (!_showOnlySelectedQuestions) return source;
+    final cartIds = _cartQuestionIds.toSet();
+    return source.where((q) => cartIds.contains(q.id)).toList(growable: false)
+      ..sort((a, b) => _cartQuestionIds
+          .indexOf(a.id)
+          .compareTo(_cartQuestionIds.indexOf(b.id)));
+  }
+
+  List<LearningProblemQuestion> get _makeTargetQuestions {
+    if (_cartQuestionIds.isNotEmpty) {
+      final byId = <String, LearningProblemQuestion>{
+        for (final q in _questions) q.id: q,
+      };
+      return _cartQuestionIds
+          .map((id) => byId[id])
+          .whereType<LearningProblemQuestion>()
+          .toList(growable: false);
+    }
     return _questions
         .where((q) => _selectedQuestionIds.contains(q.id))
         .toList(growable: false);
+  }
+
+  bool get _allVisibleQuestionsSelected {
+    final visible = _visibleQuestions;
+    return visible.isNotEmpty &&
+        visible.every((q) => _selectedQuestionIds.contains(q.id));
+  }
+
+  bool get _questionFilterActive =>
+      _activeTypeFilters.isNotEmpty || _activeDifficultyFilters.isNotEmpty;
+
+  void _toggleTypeFilter(String value) {
+    setState(() {
+      if (!_activeTypeFilters.add(value)) {
+        _activeTypeFilters.remove(value);
+      }
+    });
+  }
+
+  void _toggleDifficultyFilter(String value) {
+    setState(() {
+      if (!_activeDifficultyFilters.add(value)) {
+        _activeDifficultyFilters.remove(value);
+      }
+    });
+  }
+
+  void _clearQuestionFilters() {
+    if (!_questionFilterActive) return;
+    setState(() {
+      _activeTypeFilters.clear();
+      _activeDifficultyFilters.clear();
+    });
+  }
+
+  void _addSelectedQuestionsToCart() {
+    final selected = _visibleQuestions
+        .where((q) => _selectedQuestionIds.contains(q.id))
+        .toList(growable: false);
+    if (selected.isEmpty) {
+      _showSnack('추가할 문항을 먼저 체크해주세요.');
+      return;
+    }
+    var added = 0;
+    setState(() {
+      for (final question in selected) {
+        if (_cartQuestionIds.contains(question.id)) continue;
+        _cartQuestionIds.add(question.id);
+        added += 1;
+      }
+    });
+    _showSnack(
+      added > 0 ? '장바구니에 $added문항을 추가했습니다.' : '이미 장바구니에 담긴 문항입니다.',
+    );
+  }
+
+  void _clearCartQuestions() {
+    if (_cartQuestionIds.isEmpty) return;
+    setState(() {
+      _cartQuestionIds.clear();
+      _showOnlySelectedQuestions = false;
+    });
   }
 
   void _commitQuestionReorder({
@@ -1191,12 +1292,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   List<LearningProblemQuestion> get _selectedQuestions {
-    if (_selectedQuestionIds.isEmpty || _questions.isEmpty) {
-      return const <LearningProblemQuestion>[];
-    }
-    return _questions
-        .where((q) => _selectedQuestionIds.contains(q.id))
-        .toList(growable: false);
+    return _makeTargetQuestions;
   }
 
   String _selectedModeOfQuestion(LearningProblemQuestion question) {
@@ -1219,6 +1315,20 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return out;
   }
 
+  Map<String, String> _thumbnailModeMapForQuestions(
+    List<LearningProblemQuestion> questions,
+  ) {
+    final out = <String, String>{};
+    for (final question in questions) {
+      final key = question.stableQuestionKey;
+      if (key.isEmpty) continue;
+      // 카드 썸네일은 문항 본문 확인용이므로 객관식 보기는 숨긴다.
+      // 실제 서버 PDF 미리보기/만들기는 _selectedModeMapForQuestions를 그대로 사용한다.
+      out[key] = kLearningQuestionModeSubjective;
+    }
+    return out;
+  }
+
   void _setQuestionModeSelection(String questionId, String selectedMode) {
     LearningProblemQuestion? question;
     for (final candidate in _questions) {
@@ -1237,6 +1347,349 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     setState(() {
       _selectedQuestionModes[questionId] = next;
     });
+  }
+
+  void _setVisibleQuestionsMode(String mode) {
+    final visible = _visibleQuestions;
+    if (visible.isEmpty) return;
+    var changed = false;
+    setState(() {
+      for (final question in visible) {
+        if (!selectableQuestionModesOf(question).contains(mode)) continue;
+        final next = normalizeQuestionModeSelection(
+          question,
+          mode,
+          fallbackMode: kLearningQuestionModeOriginal,
+        );
+        if (_selectedQuestionModes[question.id] == next) continue;
+        _selectedQuestionModes[question.id] = next;
+        changed = true;
+      }
+    });
+    if (!changed) {
+      _showSnack('현재 표시 문항 중 변경 가능한 문항이 없습니다.');
+    } else {
+      unawaited(_fetchQuestionPreviews(visible));
+    }
+  }
+
+  int _difficultyRankOfQuestion(LearningProblemQuestion question) {
+    final label = _difficultyLabelOf(question);
+    const rank = <String, int>{
+      '하': 0,
+      '중': 1,
+      '상': 2,
+      '대표문제': 3,
+      '창의문제': 4,
+      '서술형': 5,
+    };
+    return rank[label] ?? 50;
+  }
+
+  int _typePriorityRankOfQuestion(LearningProblemQuestion question) {
+    if (!_questionOrderTypePriorityEnabled) return 0;
+    final mode = _selectedModeOfQuestion(question);
+    if (_questionOrderTypePriorityMode == '객관식 먼저') {
+      if (mode == kLearningQuestionModeObjective) return 0;
+      if (mode == kLearningQuestionModeSubjective) return 1;
+      return 2;
+    }
+    if (_questionOrderTypePriorityMode == '주관식 먼저') {
+      if (mode == kLearningQuestionModeSubjective) return 0;
+      if (mode == kLearningQuestionModeObjective) return 1;
+      return 2;
+    }
+    return 0;
+  }
+
+  List<LearningProblemQuestion> _orderedWithinQuestionOrderGroup(
+    List<LearningProblemQuestion> input,
+  ) {
+    final ordered = List<LearningProblemQuestion>.from(input);
+    if (!_questionOrderShuffleEnabled) return ordered;
+    if (_questionOrderShuffleMode == '랜덤') {
+      ordered.shuffle(math.Random());
+    } else if (_questionOrderShuffleMode == '난이도 오름차순') {
+      ordered.sort((a, b) {
+        final diff = _difficultyRankOfQuestion(a).compareTo(
+          _difficultyRankOfQuestion(b),
+        );
+        if (diff != 0) return diff;
+        return a.displayQuestionNumber.compareTo(b.displayQuestionNumber);
+      });
+    } else if (_questionOrderShuffleMode == '난이도 내림차순') {
+      ordered.sort((a, b) {
+        final diff = _difficultyRankOfQuestion(b).compareTo(
+          _difficultyRankOfQuestion(a),
+        );
+        if (diff != 0) return diff;
+        return a.displayQuestionNumber.compareTo(b.displayQuestionNumber);
+      });
+    }
+    return ordered;
+  }
+
+  List<LearningProblemQuestion> _orderedByCurrentSortOptions(
+    List<LearningProblemQuestion> input,
+  ) {
+    if (!_questionOrderTypePriorityEnabled) {
+      return _orderedWithinQuestionOrderGroup(input);
+    }
+    final grouped = <int, List<LearningProblemQuestion>>{};
+    final ranks = <int>[];
+    for (final question in input) {
+      final rank = _typePriorityRankOfQuestion(question);
+      grouped.putIfAbsent(rank, () {
+        ranks.add(rank);
+        return <LearningProblemQuestion>[];
+      }).add(question);
+    }
+    ranks.sort();
+    return <LearningProblemQuestion>[
+      for (final rank in ranks)
+        ..._orderedWithinQuestionOrderGroup(
+          grouped[rank] ?? const <LearningProblemQuestion>[],
+        ),
+    ];
+  }
+
+  void _applyQuestionOrderControls({
+    bool? shuffleEnabled,
+    String? shuffleMode,
+    bool? typePriorityEnabled,
+    String? typePriorityMode,
+  }) {
+    final nextShuffleEnabled = shuffleEnabled ?? _questionOrderShuffleEnabled;
+    final nextShuffle = shuffleMode ?? _questionOrderShuffleMode;
+    final nextTypePriorityEnabled =
+        typePriorityEnabled ?? _questionOrderTypePriorityEnabled;
+    final nextTypePriority = typePriorityMode ?? _questionOrderTypePriorityMode;
+    setState(() {
+      _questionOrderShuffleEnabled = nextShuffleEnabled;
+      _questionOrderShuffleMode = nextShuffle;
+      _questionOrderTypePriorityEnabled = nextTypePriorityEnabled;
+      _questionOrderTypePriorityMode = nextTypePriority;
+      if (_cartQuestionIds.isNotEmpty) {
+        final byId = <String, LearningProblemQuestion>{
+          for (final q in _questions) q.id: q,
+        };
+        final ordered = _orderedByCurrentSortOptions(
+          _cartQuestionIds
+              .map((id) => byId[id])
+              .whereType<LearningProblemQuestion>()
+              .toList(growable: false),
+        );
+        _cartQuestionIds
+          ..clear()
+          ..addAll(ordered.map((q) => q.id));
+      } else {
+        _questions = _orderedByCurrentSortOptions(_questions);
+      }
+    });
+  }
+
+  int _countQuestionsAllowing(String mode) {
+    return _visibleQuestions
+        .where((q) => selectableQuestionModesOf(q).contains(mode))
+        .length;
+  }
+
+  Widget _buildRangeSummaryControls({required bool isBusy}) {
+    final total = _visibleQuestions.length;
+    final objectiveCount =
+        _countQuestionsAllowing(kLearningQuestionModeObjective);
+    final subjectiveCount =
+        _countQuestionsAllowing(kLearningQuestionModeSubjective);
+    final essayCount = _countQuestionsAllowing(kLearningQuestionModeEssay);
+    const labelStyle = TextStyle(
+      color: Color(0xFF9FB3B3),
+      fontSize: 11,
+      fontWeight: FontWeight.w700,
+    );
+    const valueStyle = TextStyle(
+      color: Color(0xFFEAF2F2),
+      fontSize: 12,
+      fontWeight: FontWeight.w800,
+    );
+
+    Widget stat(String label, String value) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF10171A),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF333333)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: labelStyle),
+            const SizedBox(width: 5),
+            Text(value, style: valueStyle),
+          ],
+        ),
+      );
+    }
+
+    Widget actionButton({
+      required String label,
+      required VoidCallback? onPressed,
+    }) {
+      return SizedBox(
+        height: 34,
+        child: OutlinedButton(
+          onPressed: isBusy ? null : onPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFBEE7D2),
+            side: const BorderSide(color: Color(0xFF2B6B61)),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+          ),
+        ),
+      );
+    }
+
+    Widget dropdown({
+      required String value,
+      required List<String> options,
+      required bool enabled,
+      required ValueChanged<String?> onChanged,
+    }) {
+      return Opacity(
+        opacity: enabled ? 1 : 0.55,
+        child: Container(
+          height: 34,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF10171A),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF333333)),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: value,
+              dropdownColor: const Color(0xFF151C21),
+              iconEnabledColor: const Color(0xFF9FB3B3),
+              style: const TextStyle(
+                color: Color(0xFFEAF2F2),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+              items: options
+                  .map(
+                    (option) => DropdownMenuItem<String>(
+                      value: option,
+                      child: Text(option),
+                    ),
+                  )
+                  .toList(growable: false),
+              onChanged: isBusy || !enabled ? null : onChanged,
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget checkDropdown({
+      required String label,
+      required bool checked,
+      required ValueChanged<bool> onChecked,
+      required String value,
+      required List<String> options,
+      required ValueChanged<String?> onChanged,
+    }) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Checkbox(
+            value: checked,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            side: const BorderSide(color: Color(0xFF5E7777)),
+            activeColor: const Color(0xFF1A6B5E),
+            onChanged: isBusy ? null : (v) => onChecked(v == true),
+          ),
+          Text(label, style: labelStyle),
+          const SizedBox(width: 6),
+          dropdown(
+            value: value,
+            options: options,
+            enabled: checked,
+            onChanged: onChanged,
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF222222),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF333333)),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          stat('총 문항', '$total'),
+          stat('객관식', '$objectiveCount'),
+          stat('주관식', '$subjectiveCount'),
+          stat('서술형', '$essayCount'),
+          actionButton(
+            label: '가능 문항 객관식',
+            onPressed: objectiveCount == 0
+                ? null
+                : () =>
+                    _setVisibleQuestionsMode(kLearningQuestionModeObjective),
+          ),
+          actionButton(
+            label: '가능 문항 주관식',
+            onPressed: subjectiveCount == 0
+                ? null
+                : () =>
+                    _setVisibleQuestionsMode(kLearningQuestionModeSubjective),
+          ),
+          const SizedBox(width: 2),
+          const Text('문항순서', style: labelStyle),
+          checkDropdown(
+            label: '섞기/난이도',
+            checked: _questionOrderShuffleEnabled,
+            onChecked: (checked) =>
+                _applyQuestionOrderControls(shuffleEnabled: checked),
+            value: _questionOrderShuffleMode,
+            options: const <String>[
+              '랜덤',
+              '난이도 오름차순',
+              '난이도 내림차순',
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              _applyQuestionOrderControls(shuffleMode: value);
+            },
+          ),
+          checkDropdown(
+            label: '유형 우선',
+            checked: _questionOrderTypePriorityEnabled,
+            onChecked: (checked) =>
+                _applyQuestionOrderControls(typePriorityEnabled: checked),
+            value: _questionOrderTypePriorityMode,
+            options: const <String>['객관식 먼저', '주관식 먼저'],
+            onChanged: (value) {
+              if (value == null) return;
+              _applyQuestionOrderControls(typePriorityMode: value);
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void _setExportLayoutColumns(String value) {
@@ -2426,10 +2879,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return '${now.year}${two(now.month)}${two(now.day)}_${two(now.hour)}${two(now.minute)}';
   }
 
-  void _showCreatePlaceholder() {
-    _showSnack('만들기 기능은 다음 단계에서 구현 예정입니다.');
-  }
-
   String _formatDateTimeShort(DateTime? value) {
     if (value == null) return '날짜 없음';
     String two(int v) => v.toString().padLeft(2, '0');
@@ -3538,34 +3987,43 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               children: [
                 Expanded(
                   flex: 13,
-                  child: ProblemBankFilterBar(
-                    selectedCurriculumCode: _selectedCurriculumCode,
-                    curriculumLabels: _curriculumLabels,
-                    onCurriculumChanged: _onCurriculumChanged,
-                    selectedLevel: _selectedSchoolLevel,
-                    levelOptions: _levelOptions,
-                    onLevelChanged: _onSchoolLevelChanged,
-                    selectedCourse: _selectedDetailedCourse,
-                    courseOptions: _courseOptions,
-                    onCourseChanged: _onDetailedCourseChanged,
-                    selectedSourceTypeCode: _selectedSourceTypeCode,
-                    sourceTypeLabels: _sourceTypeLabels,
-                    onSourceTypeChanged: _onSourceTypeChanged,
-                    selectedPrivateMaterialKey:
-                        _selectedPrivateMaterialDropdownValue(),
-                    privateMaterialOptions: _privateMaterialOptions
-                        .map(
-                          (m) => DropdownMenuItem<String>(
-                            value: m.key,
-                            child: Text(
-                              m.label,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(growable: false),
-                    onPrivateMaterialChanged: _onPrivateMaterialChanged,
-                    isBusy: busy || exportBusy,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ProblemBankFilterBar(
+                        selectedCurriculumCode: _selectedCurriculumCode,
+                        curriculumLabels: _curriculumLabels,
+                        onCurriculumChanged: _onCurriculumChanged,
+                        selectedLevel: _selectedSchoolLevel,
+                        levelOptions: _levelOptions,
+                        onLevelChanged: _onSchoolLevelChanged,
+                        selectedCourse: _selectedDetailedCourse,
+                        courseOptions: _courseOptions,
+                        onCourseChanged: _onDetailedCourseChanged,
+                        selectedSourceTypeCode: _selectedSourceTypeCode,
+                        sourceTypeLabels: _sourceTypeLabels,
+                        onSourceTypeChanged: _onSourceTypeChanged,
+                        selectedPrivateMaterialKey:
+                            _selectedPrivateMaterialDropdownValue(),
+                        privateMaterialOptions: _privateMaterialOptions
+                            .map(
+                              (m) => DropdownMenuItem<String>(
+                                value: m.key,
+                                child: Text(
+                                  m.label,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onPrivateMaterialChanged: _onPrivateMaterialChanged,
+                        isBusy: busy || exportBusy,
+                      ),
+                      const SizedBox(height: 8),
+                      _buildRangeSummaryControls(
+                        isBusy: busy || exportBusy,
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -3573,7 +4031,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   flex: 12,
                   child: ProblemBankExportOptionsPanel(
                     settings: _exportSettings,
-                    selectedCount: _selectedQuestionIds.length,
+                    selectedCount: _makeTargetQuestions.length,
                     isBusy: _isExporting,
                     isSavingLocally: _isSavingExportLocally,
                     activeJob: _activeExportJob,
@@ -3763,6 +4221,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                 _selectedPrivateMaterialPageKeys,
                             onPrivateMaterialPageToggled:
                                 _onPrivateMaterialPageToggled,
+                            onPrivateMaterialPageKeysToggled:
+                                _onPrivateMaterialPageKeysToggled,
                             privateMaterialTitle:
                                 _selectedPrivateMaterialOption?.label ?? '',
                             privateMaterialEmptyMessage:
@@ -3784,15 +4244,24 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   right: 0,
                   bottom: 16,
                   child: ProblemBankBottomFabBar(
-                    selectedCount: _selectedQuestionIds.length,
-                    showOnlySelectedActive: _showOnlySelectedQuestions,
+                    cartCount: _cartQuestionIds.length,
+                    cartActive: _showOnlySelectedQuestions,
+                    allVisibleSelected: _allVisibleQuestionsSelected,
+                    filterActive: _questionFilterActive,
                     isBusy: exportBusy,
-                    onSelectAll: _selectAllQuestions,
-                    onClearSelection: _clearQuestionSelection,
-                    onToggleShowOnlySelected: _onToggleShowOnlySelectedFilter,
-                    onPreview: _openExportLayoutPreviewDialog,
-                    onCreatePlaceholder: _showCreatePlaceholder,
+                    typeFilterOptions: _typeFilterOptions,
+                    difficultyFilterOptions: _difficultyFilterOptions,
+                    selectedTypeFilters: _activeTypeFilters,
+                    selectedDifficultyFilters: _activeDifficultyFilters,
+                    onToggleSelectAll: _toggleSelectAllVisibleQuestions,
+                    onToggleCart: _onToggleShowOnlySelectedFilter,
+                    onClearCart: _clearCartQuestions,
+                    onAddToCart: _addSelectedQuestionsToCart,
+                    onCreate: _openExportLayoutPreviewDialog,
                     onPreset: _openExportPresetManagerDialog,
+                    onToggleTypeFilter: _toggleTypeFilter,
+                    onToggleDifficultyFilter: _toggleDifficultyFilter,
+                    onClearFilters: _clearQuestionFilters,
                   ),
                 ),
               ],
@@ -3807,31 +4276,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(6, 12, 6, 10),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _showOnlySelectedQuestions
-                      ? '선택 문항만 표시 · ${_visibleQuestions.length}개 (전체 ${_questions.length}개)'
-                      : '문항 ${_questions.length}개 · 선택 ${_selectedQuestionIds.length}개',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: _rsTextMuted,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              if (_isLoadingQuestions || _isInitializing)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-            ],
-          ),
-        ),
         Expanded(
           child: _buildQuestionBody(),
         ),
@@ -3873,7 +4317,104 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return title.isEmpty ? label : '$label $title';
   }
 
-  Widget _buildQuestionCardTile(LearningProblemQuestion question) {
+  String _difficultyLabelOf(LearningProblemQuestion q) {
+    final meta = q.meta;
+    final direct = '${meta['textbook_difficulty_label'] ?? ''}'.trim();
+    if (direct.isNotEmpty) return direct;
+    final cropPage = _mapFromDynamic(meta['textbook_crop_page']);
+    return '${cropPage['difficulty_label'] ?? cropPage['label'] ?? ''}'.trim();
+  }
+
+  List<String> get _typeFilterOptions {
+    final out = <String>{};
+    for (final q in _questions) {
+      final group = _textbookContentGroupOf(q);
+      if ('${group['kind'] ?? ''}'.trim() != 'type') continue;
+      final label = '${group['label'] ?? ''}'.trim();
+      if (label.isEmpty) continue;
+      out.add(_privateMaterialTypeGroupTitle(_privateMaterialTypeGroupKey(q)));
+    }
+    return out.toList()..sort();
+  }
+
+  List<String> get _difficultyFilterOptions {
+    const order = <String, int>{
+      '하': 0,
+      '중': 1,
+      '상': 2,
+      '대표문제': 3,
+      '창의문제': 4,
+      '서술형': 5,
+    };
+    final out = <String>{};
+    for (final q in _questions) {
+      final label = _difficultyLabelOf(q);
+      if (label.isNotEmpty) out.add(label);
+    }
+    final list = out.toList();
+    list.sort((a, b) {
+      final ai = order[a] ?? 100;
+      final bi = order[b] ?? 100;
+      if (ai != bi) return ai.compareTo(bi);
+      return a.compareTo(b);
+    });
+    return list;
+  }
+
+  void _toggleTypeGroupSelection(List<LearningProblemQuestion> questions) {
+    if (questions.isEmpty) return;
+    final allSelected =
+        questions.every((q) => _selectedQuestionIds.contains(q.id));
+    setState(() {
+      for (final q in questions) {
+        if (allSelected) {
+          _selectedQuestionIds.remove(q.id);
+        } else {
+          _selectedQuestionIds.add(q.id);
+        }
+      }
+    });
+  }
+
+  void _commitCartQuestionReorder({
+    required String id,
+    required int targetIndex,
+  }) {
+    final fromIndex = _cartQuestionIds.indexOf(id);
+    if (fromIndex < 0) return;
+    final moved = _cartQuestionIds.removeAt(fromIndex);
+    final toIndex = targetIndex.clamp(0, _cartQuestionIds.length).toInt();
+    _cartQuestionIds.insert(toIndex, moved);
+  }
+
+  ({double availableWidth, int columns, double cardWidth}) _questionGridMetrics(
+    BoxConstraints constraints,
+  ) {
+    const fallbackWidth =
+        _questionCardCompactMinWidth * _questionCardTargetColumns +
+            (_questionCardTargetColumns - 1) * _questionCardSpacing;
+    final availableWidth =
+        constraints.maxWidth.isFinite ? constraints.maxWidth : fallbackWidth;
+    var columns = _questionCardTargetColumns;
+    while (columns > 1) {
+      final width =
+          (availableWidth - (columns - 1) * _questionCardSpacing) / columns;
+      if (width >= _questionCardCompactMinWidth) break;
+      columns -= 1;
+    }
+    final cardWidth =
+        (availableWidth - (columns - 1) * _questionCardSpacing) / columns;
+    return (
+      availableWidth: availableWidth,
+      columns: columns,
+      cardWidth: cardWidth,
+    );
+  }
+
+  Widget _buildQuestionCardTile(
+    LearningProblemQuestion question, {
+    bool showDragHandle = false,
+  }) {
     final selected = _selectedQuestionIds.contains(question.id);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -3894,6 +4435,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         onModeSelected: (mode) {
           _setQuestionModeSelection(question.id, mode);
         },
+        showDragHandle: showDragHandle,
       ),
     );
   }
@@ -3901,21 +4443,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Widget _buildPrivateMaterialGroupedQuestionBody() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 8.0;
-        const defaultGridColumns = 5;
-        const minCardWidth = 252.0;
-        const cardHeight = 432.0;
-        final availableWidth = constraints.maxWidth.isFinite
-            ? constraints.maxWidth
-            : (minCardWidth * defaultGridColumns +
-                (defaultGridColumns - 1) * spacing);
-        var cols = defaultGridColumns;
-        while (cols > 1) {
-          final trialWidth = (availableWidth - (cols - 1) * spacing) / cols;
-          if (trialWidth >= minCardWidth) break;
-          cols -= 1;
-        }
-        final cardWidth = (availableWidth - (cols - 1) * spacing) / cols;
+        final metrics = _questionGridMetrics(constraints);
         final grouped = <String, List<LearningProblemQuestion>>{};
         for (final question in _visibleQuestions) {
           final key = _privateMaterialTypeGroupKey(question);
@@ -3931,6 +4459,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           itemBuilder: (context, index) {
             final key = keys[index];
             final questions = grouped[key] ?? const <LearningProblemQuestion>[];
+            final allSelected = questions.isNotEmpty &&
+                questions.every((q) => _selectedQuestionIds.contains(q.id));
+            final anySelected =
+                questions.any((q) => _selectedQuestionIds.contains(q.id));
             return Padding(
               padding:
                   EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 14),
@@ -3947,6 +4479,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     ),
                     child: Row(
                       children: [
+                        Checkbox(
+                          value:
+                              allSelected ? true : (anySelected ? null : false),
+                          tristate: true,
+                          visualDensity: VisualDensity.compact,
+                          side: const BorderSide(color: Color(0xFF5E7777)),
+                          activeColor: const Color(0xFF1A6B5E),
+                          onChanged: (_) =>
+                              _toggleTypeGroupSelection(questions),
+                        ),
+                        const SizedBox(width: 2),
                         Expanded(
                           child: Text(
                             _privateMaterialTypeGroupTitle(key),
@@ -3955,7 +4498,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             style: const TextStyle(
                               color: Color(0xFFD6ECEA),
                               fontWeight: FontWeight.w800,
-                              fontSize: 13,
+                              fontSize: 16,
                             ),
                           ),
                         ),
@@ -3972,13 +4515,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   ),
                   const SizedBox(height: 8),
                   Wrap(
-                    spacing: spacing,
-                    runSpacing: spacing,
+                    spacing: _questionCardSpacing,
+                    runSpacing: _questionCardSpacing,
                     children: [
                       for (final question in questions)
                         SizedBox(
-                          width: cardWidth,
-                          height: cardHeight,
+                          width: metrics.cardWidth,
+                          height: _questionCardHeight,
                           child: _buildQuestionCardTile(question),
                         ),
                     ],
@@ -4015,7 +4558,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (_showOnlySelectedQuestions && _visibleQuestions.isEmpty) {
       return const Center(
         child: Text(
-          '표시할 선택 문항이 없습니다.\n아래 장바구니를 다시 눌러 전체 목록으로 돌아가 주세요.',
+          '장바구니에 표시할 문항이 없습니다.\n아래 장바구니를 다시 눌러 전체 목록으로 돌아가 주세요.',
           textAlign: TextAlign.center,
           style: TextStyle(
             color: _rsTextMuted,
@@ -4025,39 +4568,77 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         ),
       );
     }
+    if (_showOnlySelectedQuestions) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final metrics = _questionGridMetrics(constraints);
+          return Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: metrics.availableWidth,
+              child: AnimatedReorderableGrid<LearningProblemQuestion>(
+                items: _visibleQuestions,
+                itemId: (q) => q.id,
+                cardWidth: metrics.cardWidth,
+                cardHeight: _questionCardHeight,
+                spacing: _questionCardSpacing,
+                columns: metrics.columns,
+                scrollController: _questionGridScrollCtrl,
+                dragAnchorStrategy: pointerDragAnchorStrategy,
+                scrollBottomPadding: 120,
+                enableReorder: true,
+                itemBuilder: (context, question) {
+                  return _buildQuestionCardTile(question);
+                },
+                feedbackBuilder: (context, question) {
+                  return ProblemBankQuestionCard(
+                    question: question,
+                    selected: _selectedQuestionIds.contains(question.id),
+                    selectedMode: _selectedModeOfQuestion(question),
+                    figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
+                        const <String, String>{},
+                    previewImageUrl: _questionPreviewUrls[question.id],
+                    previewStatus: _questionPreviewStatus[question.id] ?? '',
+                    previewErrorMessage:
+                        _questionPreviewError[question.id] ?? '',
+                    onRetryPreview: () => _retryQuestionPreview(question.id),
+                    onSelectedChanged: (_) {},
+                    onModeSelected: null,
+                  );
+                },
+                onReorder: (question, targetIndex) {
+                  setState(() {
+                    _commitCartQuestionReorder(
+                      id: question.id,
+                      targetIndex: targetIndex,
+                    );
+                  });
+                },
+              ),
+            ),
+          );
+        },
+      );
+    }
     if (_isPrivateMaterialSource &&
         _hasPrivateMaterialTypeGroups(_visibleQuestions)) {
       return _buildPrivateMaterialGroupedQuestionBody();
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 8.0;
         // 그리드: 기본 5열, 카드당 최소 너비 미만이면 열 수만 줄임. 높이 고정(워커와 무관, UI 전용).
-        const defaultGridColumns = 5;
-        const minCardWidth = 252.0;
-        const cardHeight = 432.0;
-        final availableWidth = constraints.maxWidth.isFinite
-            ? constraints.maxWidth
-            : (minCardWidth * defaultGridColumns +
-                (defaultGridColumns - 1) * spacing);
-        var cols = defaultGridColumns;
-        while (cols > 1) {
-          final trialWidth = (availableWidth - (cols - 1) * spacing) / cols;
-          if (trialWidth >= minCardWidth) break;
-          cols -= 1;
-        }
-        final cardWidth = (availableWidth - (cols - 1) * spacing) / cols;
+        final metrics = _questionGridMetrics(constraints);
         return Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
-            width: availableWidth,
+            width: metrics.availableWidth,
             child: AnimatedReorderableGrid<LearningProblemQuestion>(
               items: _visibleQuestions,
               itemId: (q) => q.id,
-              cardWidth: cardWidth,
-              cardHeight: cardHeight,
-              spacing: spacing,
-              columns: cols,
+              cardWidth: metrics.cardWidth,
+              cardHeight: _questionCardHeight,
+              spacing: _questionCardSpacing,
+              columns: metrics.columns,
               scrollController: _questionGridScrollCtrl,
               dragAnchorStrategy: pointerDragAnchorStrategy,
               scrollBottomPadding: 120,

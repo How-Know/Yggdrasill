@@ -55,7 +55,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v76_tall_math_line_top_pad';
+const RENDER_CONFIG_VERSION = 'pb_render_v78_visual_line_tall_math_balance';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -1979,6 +1979,15 @@ function normalizeQuestionNumberFormat(raw) {
   return 'source';
 }
 
+function renumberQuestionsForRender(questions, enabled) {
+  if (!enabled || !Array.isArray(questions)) return questions;
+  return questions.map((question, index) => ({
+    ...question,
+    question_number: String(index + 1),
+    questionNumber: String(index + 1),
+  }));
+}
+
 function normalizeLayoutColumns(raw) {
   const v = String(raw ?? '').trim();
   if (v === '2' || v === '2\uB2E8' || v.toLowerCase() === 'two') return 2;
@@ -2480,6 +2489,10 @@ function buildRenderConfigFromJob(job) {
       options.question_number_format ??
       (profileHint === 'assignment' ? 'two_digit' : 'source'),
   );
+  const renumberQuestions = normalizeBool(
+    options.renumberQuestions ?? options.renumber_questions,
+    false,
+  );
   const coverPageTexts = normalizeCoverPageTexts(
     options.coverPageTexts || options.coverTexts || options.coverPageTextConfig,
   );
@@ -2510,6 +2523,7 @@ function buildRenderConfigFromJob(job) {
     hideQuestionNumber,
     questionNumberPlacement,
     questionNumberFormat,
+    renumberQuestions,
     coverPageTexts,
     layoutColumns,
     maxQuestionsPerPage,
@@ -2570,6 +2584,7 @@ function computeRenderHash(renderConfig) {
     includeCoverPage: renderConfig.includeCoverPage,
     questionNumberPlacement: renderConfig.questionNumberPlacement,
     questionNumberFormat: renderConfig.questionNumberFormat,
+    renumberQuestions: renderConfig.renumberQuestions === true,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -4025,7 +4040,11 @@ async function renderPdf(job, questions, renderConfig) {
     renderConfig?.questionModeByQuestionUid || renderConfig?.questionModeByQuestionId || {},
     fallbackQuestionMode,
   );
-  const exportQuestions = modeApplied.questions;
+  const exportQuestions = renumberQuestionsForRender(
+    modeApplied.questions,
+    renderConfig?.renumberQuestions === true,
+  );
+  modeApplied.questions = exportQuestions;
   const questionMode = fallbackQuestionMode;
   const layoutColumns = normalizeLayoutColumns(renderConfig?.layoutColumns || 1);
   const maxQuestionsPerPage = normalizeMaxQuestionsPerPage(
