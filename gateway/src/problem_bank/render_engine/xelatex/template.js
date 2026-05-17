@@ -799,11 +799,13 @@ function renderDisplayMathStemLine(sub, equations, firstPrefix = '') {
   const body = smartTexLine(source, equations);
   if (!body.trim()) return '';
   const prefix = firstPrefix ? `${firstPrefix}\\hspace*{0.4em}` : '';
-  return `{\\setstretch{2.30}\\lineskiplimit=0.55em\\lineskip=0.85em\\par\\vspace{0.09\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.225\\baselineskip}}`;
+  return `{\\setstretch{2.30}\\lineskiplimit=0.55em\\lineskip=0.85em\\par\\vspace{0.16\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.16\\baselineskip}}`;
 }
 
-function texHasTallFraction(tex) {
-  return /\\(?:dfrac|frac|tfrac)\b/.test(String(tex || ''));
+function texHasTallInlineMath(tex) {
+  const value = String(tex || '');
+  return /\\(?:dfrac|frac|tfrac|over|sqrt|mtsqrtpad|mtsymmathbox|mtlinesymbox|sum|prod|int|iint|iiint)\b/.test(value)
+    || /\\begin\{(?:cases|array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}/.test(value);
 }
 
 /**
@@ -812,7 +814,7 @@ function texHasTallFraction(tex) {
  * hangindent 는 paragraph 단위로만 유효하므로, 결과 말미에 반드시 \par 을 넣어
  * 그룹/마진이 닫히기 전에 현재 paragraph 의 line-break 가 결정되도록 한다.
  */
-function renderStemTextLine(sub, equations, firstPrefix = '') {
+function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   // 사용자 요청 23차: 문항 본문(stem text) 줄간격을 본문 기본(\setstretch{1.7}) 대비
   //   10% 축소하여 `\setstretch{1.53}` (=1.7×0.9) 로 조판한다.
   //   → 보기박스/조건박스/그림/표/5지선다형 보기는 별도 경로로 조판되므로 영향 없음
@@ -827,10 +829,12 @@ function renderStemTextLine(sub, equations, firstPrefix = '') {
   //   (choice 영역의 `\lineskip=1.2em` 과 유사한 접근, 값은 보수적으로 0.6em 로 설정해
   //    일반 본문 행간까지 과도하게 늘어나지 않도록.)
   const STEM_STRETCH = '1.53';
-  const wrapStem = (inner, { tallFraction = false } = {}) => {
-    const fractionPad = tallFraction ? '\\par\\vspace{0.10\\baselineskip}' : '';
-    const fractionTail = tallFraction ? '\\vspace{0.10\\baselineskip}' : '';
-    return `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.6em${fractionPad}${inner}\\par${fractionTail}}`;
+  const allowTallMathTopPad = options?.allowTallMathTopPad === true;
+  const wrapStem = (inner, { tallMath = false } = {}) => {
+    const tallMathTopPad = allowTallMathTopPad && tallMath
+      ? '\\par\\vspace{0.10\\baselineskip}'
+      : '';
+    return `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.6em${tallMathTopPad}${inner}\\par}`;
   };
   const renderManualMathLineBreak = (source, manualFirstPrefix = '') => {
     const pieces = splitByMathLineBreakMarkers(source);
@@ -851,9 +855,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '') {
       if (rendered) lines.push(rendered);
     }
     const renderedLines = lines.join('\\nobreak\\vspace{0.05em}\n');
-    return lines.length > 0
-      ? wrapStem(renderedLines, { tallFraction: texHasTallFraction(renderedLines) })
-      : '';
+    return lines.length > 0 ? wrapStem(renderedLines, { tallMath: texHasTallInlineMath(renderedLines) }) : '';
   };
   // 세트형 하위문항 (1), (2), ...
   const subQ = sub.match(/^\((\d+)\)\s+(.*)$/);
@@ -868,7 +870,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '') {
     const restTex = smartTexLine(subQ[2], equations);
     return wrapStem(
       `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`,
-      { tallFraction: texHasTallFraction(restTex) },
+      { tallMath: texHasTallInlineMath(restTex) },
     );
   }
   if (sub.includes('[수식줄바꿈')) {
@@ -888,13 +890,13 @@ function renderStemTextLine(sub, equations, firstPrefix = '') {
       const labelTex = `${nameTex}\\ :\\ `;
       return wrapStem(
         `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`,
-        { tallFraction: texHasTallFraction(restTex) },
+        { tallMath: texHasTallInlineMath(restTex) },
       );
     }
   }
   const bodyTex = smartTexLine(sub, equations);
   return wrapStem(`${firstPrefix}${bodyTex}`, {
-    tallFraction: texHasTallFraction(bodyTex),
+    tallMath: texHasTallInlineMath(bodyTex),
   });
 }
 
@@ -1884,11 +1886,8 @@ function chooseChoiceLayout(choices, equations, layoutColumns = 1) {
     return visualLength(expanded) * widthFactor;
   });
   const maxLen = Math.max(...lengths);
-  const totalLen = lengths.reduce((a, b) => a + b, 0);
-  if (maxLen > 25) return 'stack';
-  if (totalLen > 65) return 'stack';
-  if (maxLen > 16 || totalLen > 50) return 'row2';
-  if (maxLen > 8 || totalLen > 30) return 'row2';
+  if (maxLen > 18) return 'stack';
+  if (maxLen > 8) return 'row2';
   return 'row1';
 }
 
@@ -1994,8 +1993,6 @@ function renderBlankChoicesLatex(question, choices, equations) {
 function renderChoicesLatex(choices, equations, layoutColumns = 1) {
   if (!Array.isArray(choices) || choices.length === 0) return '';
 
-  const layout = chooseChoiceLayout(choices, equations, layoutColumns);
-
   const renderItem = (c, idx) => {
     const text = typeof c === 'string' ? c : c?.text || c?.label || '';
     const label = CIRCLED_DIGITS[idx] || String(idx + 1);
@@ -2008,29 +2005,44 @@ function renderChoicesLatex(choices, equations, layoutColumns = 1) {
   // lineskip / lineskiplimit 을 em 기반으로 → 폰트 크기에 비례해 분수 포함 줄의 여유 간격도 스케일.
   const CHOICE_STRETCH = '\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em';
 
-  if (layout === 'row1') {
+  if (choices.length === 5) {
     const cells = choices.map((c, i) => renderItem(c, i));
-    const w = '\\dimexpr0.2\\linewidth-0.2em\\relax';
-    return [
-      '{' + CHOICE_STRETCH,
-      '\\noindent%',
-      cells.map((cell) => `\\makebox[${w}][l]{${cell}}`).join('%\n') + '%',
-      '\\par}',
-    ].join('\n');
-  }
+    const row1W = '\\dimexpr0.2\\linewidth-0.2em\\relax';
+    const row2W = '\\dimexpr0.3333\\linewidth-0.3333em\\relax';
+    const measureCells = cells.flatMap((cell) => [
+      `\\sbox{\\YggChoiceMeasureBox}{${cell}}%`,
+      `\\ifdim\\wd\\YggChoiceMeasureBox>${row1W} \\ifnum\\YggChoiceLayout<2 \\YggChoiceLayout=2 \\fi\\fi%`,
+      `\\ifdim\\wd\\YggChoiceMeasureBox>${row2W} \\YggChoiceLayout=3 \\fi%`,
+    ]);
+    const row1 = cells.map((cell) => `\\makebox[${row1W}][l]{${cell}}`).join('%\n');
+    const row2Top = cells.slice(0, 3).map((cell) => `\\makebox[${row2W}][l]{${cell}}`).join('%\n');
+    const row2Bot = cells.slice(3, 5).map((cell) => `\\makebox[${row2W}][l]{${cell}}`).join('%\n');
+    const stack = choices.map((c, i) => {
+      const text = typeof c === 'string' ? c : c?.text || c?.label || '';
+      const label = CIRCLED_DIGITS[i] || String(i + 1);
+      const content = smartTexLine(text, equations);
+      return `\\hangindent=1.5em\\hangafter=1\\noindent\\makebox[1.5em][l]{${label}}${content}`;
+    }).join('\\par\n');
 
-  if (layout === 'row2') {
-    const cells = choices.map((c, i) => renderItem(c, i));
-    const w = '\\dimexpr0.3333\\linewidth-0.3333em\\relax';
-    const top3 = cells.slice(0, 3).map((cell) => `\\makebox[${w}][l]{${cell}}`).join('%\n');
-    const bot2 = cells.slice(3, 5).map((cell) => `\\makebox[${w}][l]{${cell}}`).join('%\n');
     return [
       '{' + CHOICE_STRETCH,
-      '\\noindent%',
-      top3 + '%',
-      '\\par\\noindent%',
-      bot2 + '%',
-      '\\par}',
+      '\\YggChoiceLayout=1',
+      ...measureCells,
+      '\\ifnum\\YggChoiceLayout=1',
+      '  \\noindent%',
+      `  ${row1}%`,
+      '  \\par',
+      '\\else\\ifnum\\YggChoiceLayout=2',
+      '  \\noindent%',
+      `  ${row2Top}%`,
+      '  \\par\\noindent%',
+      `  ${row2Bot}%`,
+      '  \\par',
+      '\\else',
+      stack,
+      '  \\par',
+      '\\fi\\fi',
+      '}',
     ].join('\n');
   }
 
@@ -2239,6 +2251,8 @@ function buildPreamble({
   lines.push('\\usepackage{multicol}');
   lines.push('\\newlength{\\tblcellwd}');
   lines.push('\\newlength{\\tblcellht}');
+  lines.push('\\newsavebox{\\YggChoiceMeasureBox}');
+  lines.push('\\newcount\\YggChoiceLayout');
   // \mtemptybox : 가로:세로 = 3:2 비율의 빈칸 네모 (math/text 모두 안전).
   // 한글 글자 전체 높이(ascender+descender 포함)와 시각적으로 동일하도록 1.05em × 1.575em 으로 설정.
   // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
@@ -2882,6 +2896,8 @@ function getFirstLineProbeLatex(question, {
   showQuestionNumber = true,
   questionNumberPlacement = 'inline',
   questionNumberFormat = 'source',
+  stemSizePt = 11,
+  inlineNumberFontPtOverride = null,
 } = {}) {
   const qNum = question?.question_number || question?.questionNumber || '';
   const qNumDisplay = formatQuestionNumberForDisplay(qNum, questionNumberFormat);
@@ -2908,7 +2924,10 @@ function getFirstLineProbeLatex(question, {
       parts.push(`\\textbf{${escapeLatexText(String(qNumDisplay))}}`);
       return `\\hbox{${parts.join('')}}`;
     }
-    parts.push(`\\textbf{${escapeLatexText(String(qNumDisplay))}.}\\enspace`);
+    parts.push(`${inlineQuestionNumberLatex(qNumDisplay, {
+      stemSizePt,
+      inlineNumberFontPtOverride,
+    })}\\enspace`);
   }
   if (firstText) {
     parts.push(smartTexLine(firstText, equations));
@@ -2926,6 +2945,23 @@ function formatQuestionNumberForDisplay(raw, format = 'source') {
   if (!m) return value;
   const padded = String(Number.parseInt(m[0], 10)).padStart(2, '0');
   return `${value.slice(0, m.index)}${padded}${value.slice((m.index || 0) + m[0].length)}`;
+}
+
+function inlineQuestionNumberFontPt(stemSizePt = 11, inlineNumberFontPtOverride = null) {
+  const override = Number(inlineNumberFontPtOverride);
+  const base = Number.isFinite(override) && override > 0
+    ? override
+    : Math.max(7, Number(stemSizePt) || 11);
+  return base + 1.0;
+}
+
+function inlineQuestionNumberLatex(qNumDisplay, {
+  stemSizePt = 11,
+  inlineNumberFontPtOverride = null,
+} = {}) {
+  const fontPt = inlineQuestionNumberFontPt(stemSizePt, inlineNumberFontPtOverride);
+  const leadPt = (fontPt * 1.08).toFixed(2);
+  return `{\\fontsize{${fontPt.toFixed(2)}pt}{${leadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}.}`;
 }
 
 function formatIndependentSetHeaderLabelLatex(group) {
@@ -3044,11 +3080,12 @@ function renderOneQuestion(question, {
   const qNumDisplay = formatQuestionNumberForDisplay(qNum, questionNumberFormat);
   const numberAbove = showQuestionNumber && questionNumberPlacement === 'above';
   const computedAboveNumberFontPt = (Number(stemSizePt || 11) + 1) * 1.21;
-  const aboveNumberFontPt = (
+  const aboveNumberBaseFontPt = (
     Number.isFinite(Number(aboveNumberFontPtOverride)) && Number(aboveNumberFontPtOverride) > 0
       ? Number(aboveNumberFontPtOverride)
       : computedAboveNumberFontPt
-  ).toFixed(2);
+  );
+  const aboveNumberFontPt = (aboveNumberBaseFontPt + 1.0).toFixed(2);
   const aboveNumberLeadPt = (Number(aboveNumberFontPt) * 1.08).toFixed(2);
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
@@ -3514,13 +3551,10 @@ function renderOneQuestion(question, {
     // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut(짝 slot 라벨박스 \vphantom)
     // 을 여기서 소비해 라벨박스와 동일 ht 를 가지도록 한다.
     const strut = sectionLabel ? '' : firstLineStrut;
-    const inlineNumberFontPt = Number(inlineNumberFontPtOverride);
-    const inlineNumberLeadPt = Number.isFinite(inlineNumberFontPt) && inlineNumberFontPt > 0
-      ? (inlineNumberFontPt * 1.08).toFixed(2)
-      : '';
-    const inlineNumberTex = Number.isFinite(inlineNumberFontPt) && inlineNumberFontPt > 0
-      ? `{\\fontsize{${inlineNumberFontPt.toFixed(2)}pt}{${inlineNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}.}`
-      : `\\textbf{${escapeLatexText(String(qNumDisplay))}.}`;
+    const inlineNumberTex = inlineQuestionNumberLatex(qNumDisplay, {
+      stemSizePt: questionFontSizePt,
+      inlineNumberFontPtOverride,
+    });
     parts.push(
       `\\noindent\\hspace{-1em}${strut}${inlineNumberTex}\\enspace`,
     );
@@ -3642,6 +3676,7 @@ function renderOneQuestion(question, {
     return true;
   };
 
+  let emittedStemTextLineAny = false;
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
     const prev = segments[sIdx - 1];
@@ -3763,7 +3798,9 @@ function renderOneQuestion(question, {
             if (/\\includegraphics/.test(piece)) {
               parts.push(piece);
             } else {
-              let rendered = renderStemTextLine(piece, equations);
+              let rendered = renderStemTextLine(piece, equations, '', {
+                allowTallMathTopPad: emittedStemTextLineAny,
+              });
               if (rendered.trim()) {
                 // 라인별 정렬값에 따라 center/right/justify 환경으로 감싼다.
                 //   - 원본 HWPX 문단 속성으로 center 가 기록되어 있거나,
@@ -3781,6 +3818,7 @@ function renderOneQuestion(question, {
                   rendered = `\\begin{flushright}\n${rendered}\n\\end{flushright}`;
                 }
                 parts.push(rendered);
+                emittedStemTextLineAny = true;
                 // 현재 파트가 속한 소문항 인덱스를 기록.
                 partsMeta.set(parts.length - 1, { subQ: currentSubQ });
               }
@@ -4000,10 +4038,13 @@ export function buildTexSource(question, options = {}) {
     '\\usepackage[most]{tcolorbox}',
     '\\newlength{\\tblcellwd}',
     '\\newlength{\\tblcellht}',
+    '\\newsavebox{\\YggChoiceMeasureBox}',
+    '\\newcount\\YggChoiceLayout',
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
+    '\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
@@ -4138,10 +4179,13 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\usepackage{graphicx}',
     '\\usepackage[normalem]{ulem}',
     '\\usepackage{setspace}',
+    '\\newsavebox{\\YggChoiceMeasureBox}',
+    '\\newcount\\YggChoiceLayout',
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
+    '\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
@@ -4649,16 +4693,19 @@ function renderMockGridPageLatex(
 
     // --- case 2: row 에 라벨 없음 → 양쪽 stem 첫 줄 ht 의 max 로 동기화 ---
     //   분수(\dfrac), 위·아래첨자 등으로 한쪽 첫 줄 ht 가 커질 경우, 짝 slot 에도 동일 ht 가 주입되어
-    //   "첫 hbox top edge" 가 수평으로 맞춰진다. \vphantom 은 width=0 이라 가시적 영향은 없다.
+    //   "첫 hbox top edge" 가 수평으로 맞춰진다.
+    //   depth 는 복사하지 않는다. 반대쪽에 분수가 없을 때 아래 줄간격까지 커지는 것을 막기 위함.
     const probeL = qL ? getFirstLineProbeLatex(qL, {
       showQuestionNumber,
       questionNumberPlacement,
       questionNumberFormat,
+      stemSizePt,
     }) : '\\strut';
     const probeR = qR ? getFirstLineProbeLatex(qR, {
       showQuestionNumber,
       questionNumberPlacement,
       questionNumberFormat,
+      stemSizePt,
     }) : '\\strut';
     const macroL = `pair@content@${pageMacroPrefix}@${r}@L`;
     const macroR = `pair@content@${pageMacroPrefix}@${r}@R`;
@@ -4667,7 +4714,7 @@ function renderMockGridPageLatex(
       `\\expandafter\\gdef\\csname ${macroL}\\endcsname{${probeL}}%`,
       `\\expandafter\\gdef\\csname ${macroR}\\endcsname{${probeR}}%`,
     );
-    const strutSnippet = `\\vphantom{\\csname ${macroL}\\endcsname\\csname ${macroR}\\endcsname}`;
+    const strutSnippet = `{\\setbox0=\\hbox{\\csname ${macroL}\\endcsname\\csname ${macroR}\\endcsname}\\rule{0pt}{\\ht0}}`;
     leftStrutMacros.push(strutSnippet);
     rightStrutMacros.push(strutSnippet);
     leftLabelStrutMacros.push(null);

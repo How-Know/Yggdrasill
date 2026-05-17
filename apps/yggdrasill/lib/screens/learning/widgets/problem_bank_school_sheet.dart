@@ -311,26 +311,121 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
   }
 
   Widget _buildPrivateSmallNode(ProblemBankPrivateMaterialSmallNode small) {
+    final selected = widget.selectedPrivateMaterialPageKeys.contains(small.key);
+    final showTypeGroups = small.typeGroups.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 4, 3),
-            child: Text(
-              small.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFF8FAAAA),
-                fontWeight: FontWeight.w700,
-                fontSize: 11.6,
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: widget.onPrivateMaterialPageToggled == null
+                ? null
+                : () => widget.onPrivateMaterialPageToggled!(
+                      small.key,
+                      !selected,
+                    ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: selected,
+                    visualDensity: VisualDensity.compact,
+                    side: const BorderSide(color: Color(0xFF5E7777)),
+                    activeColor: const Color(0xFF1A6B5E),
+                    onChanged: widget.onPrivateMaterialPageToggled == null
+                        ? null
+                        : (v) => widget.onPrivateMaterialPageToggled!(
+                              small.key,
+                              v == true,
+                            ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      small.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected
+                            ? const Color(0xFFD6ECEA)
+                            : const Color(0xFF8FAAAA),
+                        fontWeight:
+                            selected ? FontWeight.w800 : FontWeight.w700,
+                        fontSize: 11.6,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${small.questionCount}문항',
+                    style: const TextStyle(
+                      color: Color(0xFF6F8585),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 10.8,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          for (final page in small.pages) _buildPrivatePageTile(page),
+          if (showTypeGroups)
+            for (final type in small.typeGroups) _buildPrivateTypeTile(type)
+          else
+            for (final page in small.pages) _buildPrivatePageTile(page),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPrivateTypeTile(ProblemBankPrivateMaterialTypeNode type) {
+    final selected = widget.selectedPrivateMaterialPageKeys.contains(type.key);
+    final title = type.title.trim().isEmpty
+        ? type.label
+        : '${type.label} ${type.title}'.trim();
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: widget.onPrivateMaterialPageToggled == null
+          ? null
+          : () => widget.onPrivateMaterialPageToggled!(type.key, !selected),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          children: [
+            Checkbox(
+              value: selected,
+              visualDensity: VisualDensity.compact,
+              side: const BorderSide(color: Color(0xFF5E7777)),
+              activeColor: const Color(0xFF1A6B5E),
+              onChanged: widget.onPrivateMaterialPageToggled == null
+                  ? null
+                  : (v) =>
+                      widget.onPrivateMaterialPageToggled!(type.key, v == true),
+            ),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected
+                      ? const Color(0xFFD6ECEA)
+                      : const Color(0xFF9FB3B3),
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  fontSize: 12.0,
+                ),
+              ),
+            ),
+            Text(
+              '${type.questionCount}문항',
+              style: const TextStyle(
+                color: Color(0xFF6F8585),
+                fontWeight: FontWeight.w700,
+                fontSize: 10.8,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -628,16 +723,42 @@ class ProblemBankPrivateMaterialMidNode {
 
 class ProblemBankPrivateMaterialSmallNode {
   const ProblemBankPrivateMaterialSmallNode({
+    required this.key,
     required this.title,
     required this.order,
     required this.subKey,
     required this.pages,
+    required this.typeGroups,
+    required this.questionUids,
   });
 
+  final String key;
   final String title;
   final int order;
   final String subKey;
   final List<ProblemBankPrivateMaterialPageNode> pages;
+  final List<ProblemBankPrivateMaterialTypeNode> typeGroups;
+  final List<String> questionUids;
+
+  int get questionCount => questionUids.length;
+}
+
+class ProblemBankPrivateMaterialTypeNode {
+  const ProblemBankPrivateMaterialTypeNode({
+    required this.key,
+    required this.order,
+    required this.label,
+    required this.title,
+    required this.questionUids,
+  });
+
+  final String key;
+  final int order;
+  final String label;
+  final String title;
+  final List<String> questionUids;
+
+  int get questionCount => questionUids.length;
 }
 
 class ProblemBankPrivateMaterialPageNode {

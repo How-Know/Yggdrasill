@@ -174,7 +174,8 @@ class ProblemBankQuestionCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 12,
-                color: isError ? const Color(0xFF8B2F2F) : const Color(0xFF5A5A5A),
+                color:
+                    isError ? const Color(0xFF8B2F2F) : const Color(0xFF5A5A5A),
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -216,16 +217,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                '${question.displayQuestionNumber}번 문항',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  color: color.textPrimary,
-                ),
-              ),
+              child: _buildQuestionTitle(color),
             ),
           ),
           const SizedBox(width: 6),
@@ -251,6 +243,75 @@ class ProblemBankQuestionCard extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildQuestionTitle(_CardPalette color) {
+    final difficultyLabel = _difficultyLabel();
+    final titleStyle = TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w800,
+      color: color.textPrimary,
+    );
+    if (difficultyLabel.isEmpty) {
+      return Text(
+        '${question.displayQuestionNumber}번 문항',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: titleStyle,
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: Text(
+            '${question.displayQuestionNumber}번 문항',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: titleStyle,
+          ),
+        ),
+        const SizedBox(width: 5),
+        _DifficultyDot(
+          label: difficultyLabel,
+          paperStyle: paperStyle,
+        ),
+      ],
+    );
+  }
+
+  String _difficultyLabel() {
+    String readString(Object? value) => value == null ? '' : '$value'.trim();
+    Map<String, dynamic> mapOf(Object? value) {
+      if (value is Map<String, dynamic>) return value;
+      if (value is Map) {
+        return value.map((key, val) => MapEntry('$key', val));
+      }
+      return const <String, dynamic>{};
+    }
+
+    final meta = question.meta;
+    final direct = readString(
+      meta['textbook_difficulty_label'] ??
+          meta['difficulty_label'] ??
+          meta['difficultyLabel'],
+    );
+    if (direct.isNotEmpty) return direct;
+
+    final crop = mapOf(meta['textbook_crop'] ?? meta['textbookCrop']);
+    final cropLabel = readString(
+      crop['difficulty_label'] ?? crop['difficultyLabel'] ?? crop['label'],
+    );
+    if (cropLabel.isNotEmpty) return cropLabel;
+
+    final cropPage =
+        mapOf(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
+    final cropPageLabel = readString(
+      cropPage['difficulty_label'] ??
+          cropPage['difficultyLabel'] ??
+          cropPage['label'],
+    );
+    return cropPageLabel;
   }
 
   String _metaSummaryText() {
@@ -318,6 +379,110 @@ class ProblemBankQuestionCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _DifficultyDot extends StatelessWidget {
+  const _DifficultyDot({
+    required this.label,
+    required this.paperStyle,
+  });
+
+  final String label;
+  final bool paperStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _difficultyColors(label, paperStyle: paperStyle);
+    final display = _displayLabel(label);
+    return Tooltip(
+      message: '난이도 $label',
+      waitDuration: const Duration(milliseconds: 450),
+      child: Container(
+        width: 20,
+        height: 20,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: colors.$1,
+          border: Border.all(color: colors.$2),
+        ),
+        child: Text(
+          display,
+          maxLines: 1,
+          overflow: TextOverflow.clip,
+          style: TextStyle(
+            color: colors.$3,
+            fontSize: display.length >= 2 ? 8.5 : 10,
+            fontWeight: FontWeight.w800,
+            height: 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _displayLabel(String label) {
+    final safe = label.trim();
+    if (safe.isEmpty) return '';
+    if (safe.length <= 2) return safe;
+    final upper = safe.toUpperCase();
+    final abc = RegExp(r'[ABC]').firstMatch(upper);
+    if (abc != null) return abc.group(0) ?? safe.substring(0, 1);
+    return safe.substring(0, 1);
+  }
+
+  static (Color, Color, Color) _difficultyColors(
+    String label, {
+    required bool paperStyle,
+  }) {
+    final safe = label.trim().toLowerCase();
+    final isEasy = safe.contains('하') ||
+        safe.contains('쉬') ||
+        safe.contains('easy') ||
+        safe == 'a';
+    final isHard = safe.contains('상') ||
+        safe.contains('고난') ||
+        safe.contains('심화') ||
+        safe.contains('hard') ||
+        safe == 'c';
+    if (isEasy) {
+      return paperStyle
+          ? (
+              const Color(0xFFE7F1EA),
+              const Color(0xFFB9D5C1),
+              const Color(0xFF366947)
+            )
+          : (
+              const Color(0xFF21362D),
+              const Color(0xFF547B62),
+              const Color(0xFFC3DEC8)
+            );
+    }
+    if (isHard) {
+      return paperStyle
+          ? (
+              const Color(0xFFF2E8E5),
+              const Color(0xFFD9BDB4),
+              const Color(0xFF7A4B3D)
+            )
+          : (
+              const Color(0xFF3A2C2A),
+              const Color(0xFF7C5C55),
+              const Color(0xFFE1C6BE)
+            );
+    }
+    return paperStyle
+        ? (
+            const Color(0xFFE7EDF2),
+            const Color(0xFFB9C8D5),
+            const Color(0xFF3D5D73)
+          )
+        : (
+            const Color(0xFF24323A),
+            const Color(0xFF516B7A),
+            const Color(0xFFC4D5DE)
+          );
   }
 }
 

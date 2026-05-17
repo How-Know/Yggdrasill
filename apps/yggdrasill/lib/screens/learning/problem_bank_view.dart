@@ -425,8 +425,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return <String>{
       for (final big in units)
         for (final mid in big.mids)
-          for (final small in mid.smalls)
+          for (final small in mid.smalls) ...<String>{
+            small.key,
+            for (final type in small.typeGroups) type.key,
             for (final page in small.pages) page.key,
+          },
     };
   }
 
@@ -489,6 +492,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final small = mid.smalls.putIfAbsent(
             '$smallOrder|$subKey|$smallName',
             () => _PrivateMaterialSmallBuilder(
+              key: '$bigOrder|$midOrder|$subKey',
               order: smallOrder,
               subKey: subKey,
               title: smallName.isNotEmpty ? smallName : '소단원',
@@ -512,7 +516,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               ),
             );
             for (final ref in refs) {
-              page.addQuestion(ref.questionUid, ref.problemNumber);
+              page.addQuestion(ref);
+              small.addQuestion(ref);
             }
           }
         }
@@ -538,30 +543,43 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final meta = _mapFromDynamic(row['meta']);
       final vlmMeta = _mapFromDynamic(meta['vlm']);
       final cropPageMeta = _mapFromDynamic(meta['textbook_crop_page']);
-      final pageCandidates = <int>{
-        if ((_intFromDynamic(row['source_page']) ?? 0) > 0)
-          _intFromDynamic(row['source_page'])!,
-        if ((_intFromDynamic(vlmMeta['source_page']) ?? 0) > 0)
-          _intFromDynamic(vlmMeta['source_page'])!,
-        if ((_intFromDynamic(cropPageMeta['display_page']) ?? 0) > 0)
-          _intFromDynamic(cropPageMeta['display_page'])!,
-        if ((_intFromDynamic(cropPageMeta['raw_page']) ?? 0) > 0)
-          _intFromDynamic(cropPageMeta['raw_page'])!,
-      };
-      if (pageCandidates.isEmpty) continue;
+      final displayPage = _intFromDynamic(cropPageMeta['display_page']);
+      final rawPage = _intFromDynamic(cropPageMeta['raw_page']);
+      final sourcePage = _intFromDynamic(row['source_page']);
+      final vlmSourcePage = _intFromDynamic(vlmMeta['source_page']);
+      final pageNumber = (displayPage != null && displayPage > 0)
+          ? displayPage
+          : (sourcePage != null && sourcePage > 0)
+              ? sourcePage
+              : (vlmSourcePage != null && vlmSourcePage > 0)
+                  ? vlmSourcePage
+                  : null;
+      if (pageNumber == null) continue;
+      final contentGroup = _mapFromDynamic(
+        meta['textbook_content_group'] ?? cropPageMeta['content_group'],
+      );
       final sourceOrder = _intFromDynamic(row['source_order']) ?? 1 << 20;
-      for (final page in pageCandidates) {
-        final refs =
-            out.putIfAbsent(page, () => <_PrivateMaterialPageQuestionRef>[]);
-        if (refs.any((ref) => ref.questionUid == questionUid)) continue;
-        refs.add(
-          _PrivateMaterialPageQuestionRef(
-            questionUid: questionUid,
-            problemNumber: questionNumber,
-            insertionOrder: sourceOrder,
-          ),
-        );
-      }
+      final refs = out.putIfAbsent(
+        pageNumber,
+        () => <_PrivateMaterialPageQuestionRef>[],
+      );
+      if (refs.any((ref) => ref.questionUid == questionUid)) continue;
+      refs.add(
+        _PrivateMaterialPageQuestionRef(
+          questionUid: questionUid,
+          problemNumber: questionNumber,
+          insertionOrder: sourceOrder,
+          displayPage: pageNumber,
+          rawPage: rawPage,
+          difficultyLabel:
+              '${meta['textbook_difficulty_label'] ?? cropPageMeta['label'] ?? cropPageMeta['difficulty_label'] ?? ''}'
+                  .trim(),
+          contentGroupKind: '${contentGroup['kind'] ?? ''}'.trim(),
+          contentGroupLabel: '${contentGroup['label'] ?? ''}'.trim(),
+          contentGroupTitle: '${contentGroup['title'] ?? ''}'.trim(),
+          contentGroupOrder: _intFromDynamic(contentGroup['order']),
+        ),
+      );
     }
     return out;
   }
@@ -719,6 +737,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     for (final big in _privateMaterialUnits) {
       for (final mid in big.mids) {
         for (final small in mid.smalls) {
+          if (_selectedPrivateMaterialPageKeys.contains(small.key)) {
+            for (final uid in small.questionUids) {
+              final safeUid = uid.trim();
+              if (safeUid.isEmpty || !seen.add(safeUid)) continue;
+              out.add(safeUid);
+            }
+            continue;
+          }
+          for (final type in small.typeGroups) {
+            if (!_selectedPrivateMaterialPageKeys.contains(type.key)) continue;
+            for (final uid in type.questionUids) {
+              final safeUid = uid.trim();
+              if (safeUid.isEmpty || !seen.add(safeUid)) continue;
+              out.add(safeUid);
+            }
+          }
           for (final page in small.pages) {
             if (!_selectedPrivateMaterialPageKeys.contains(page.key)) continue;
             for (final uid in page.questionUids) {
@@ -3805,6 +3839,159 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
+  Map<String, dynamic> _textbookContentGroupOf(LearningProblemQuestion q) {
+    final direct = _mapFromDynamic(q.meta['textbook_content_group']);
+    if (direct.isNotEmpty) return direct;
+    final cropPage = _mapFromDynamic(q.meta['textbook_crop_page']);
+    return _mapFromDynamic(cropPage['content_group']);
+  }
+
+  bool _hasPrivateMaterialTypeGroups(List<LearningProblemQuestion> questions) {
+    return questions.any((q) {
+      final group = _textbookContentGroupOf(q);
+      return '${group['kind'] ?? ''}'.trim() == 'type' &&
+          '${group['label'] ?? ''}'.trim().isNotEmpty;
+    });
+  }
+
+  String _privateMaterialTypeGroupKey(LearningProblemQuestion q) {
+    final group = _textbookContentGroupOf(q);
+    final kind = '${group['kind'] ?? ''}'.trim();
+    final label = '${group['label'] ?? ''}'.trim();
+    final title = '${group['title'] ?? ''}'.trim();
+    if (kind == 'type' && label.isNotEmpty) {
+      return '$label|$title';
+    }
+    return '유형 미지정|';
+  }
+
+  String _privateMaterialTypeGroupTitle(String key) {
+    final parts = key.split('|');
+    final label = parts.isNotEmpty ? parts.first.trim() : '';
+    final title = parts.length > 1 ? parts.sublist(1).join('|').trim() : '';
+    if (label.isEmpty || label == '유형 미지정') return '유형 미지정';
+    return title.isEmpty ? label : '$label $title';
+  }
+
+  Widget _buildQuestionCardTile(LearningProblemQuestion question) {
+    final selected = _selectedQuestionIds.contains(question.id);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _toggleQuestionSelection(question.id, !selected),
+      child: ProblemBankQuestionCard(
+        question: question,
+        selected: selected,
+        selectedMode: _selectedModeOfQuestion(question),
+        figureUrlsByPath:
+            _questionFigureUrlsByPath[question.id] ?? const <String, String>{},
+        previewImageUrl: _questionPreviewUrls[question.id],
+        previewStatus: _questionPreviewStatus[question.id] ?? '',
+        previewErrorMessage: _questionPreviewError[question.id] ?? '',
+        onRetryPreview: () => _retryQuestionPreview(question.id),
+        onSelectedChanged: (next) {
+          _toggleQuestionSelection(question.id, next);
+        },
+        onModeSelected: (mode) {
+          _setQuestionModeSelection(question.id, mode);
+        },
+      ),
+    );
+  }
+
+  Widget _buildPrivateMaterialGroupedQuestionBody() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 8.0;
+        const defaultGridColumns = 5;
+        const minCardWidth = 252.0;
+        const cardHeight = 432.0;
+        final availableWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : (minCardWidth * defaultGridColumns +
+                (defaultGridColumns - 1) * spacing);
+        var cols = defaultGridColumns;
+        while (cols > 1) {
+          final trialWidth = (availableWidth - (cols - 1) * spacing) / cols;
+          if (trialWidth >= minCardWidth) break;
+          cols -= 1;
+        }
+        final cardWidth = (availableWidth - (cols - 1) * spacing) / cols;
+        final grouped = <String, List<LearningProblemQuestion>>{};
+        for (final question in _visibleQuestions) {
+          final key = _privateMaterialTypeGroupKey(question);
+          grouped.putIfAbsent(key, () => <LearningProblemQuestion>[]).add(
+                question,
+              );
+        }
+        final keys = grouped.keys.toList(growable: false);
+        return ListView.builder(
+          controller: _questionGridScrollCtrl,
+          padding: const EdgeInsets.only(top: 2, right: 6, bottom: 126),
+          itemCount: keys.length,
+          itemBuilder: (context, index) {
+            final key = keys[index];
+            final questions = grouped[key] ?? const <LearningProblemQuestion>[];
+            return Padding(
+              padding:
+                  EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111A1D),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF223131)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _privateMaterialTypeGroupTitle(key),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFD6ECEA),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${questions.length}문항',
+                          style: const TextStyle(
+                            color: Color(0xFF8AA5A5),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: spacing,
+                    runSpacing: spacing,
+                    children: [
+                      for (final question in questions)
+                        SizedBox(
+                          width: cardWidth,
+                          height: cardHeight,
+                          child: _buildQuestionCardTile(question),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildQuestionBody() {
     if (_isInitializing || _isLoadingQuestions) {
       return const Center(
@@ -3837,6 +4024,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           ),
         ),
       );
+    }
+    if (_isPrivateMaterialSource &&
+        _hasPrivateMaterialTypeGroups(_visibleQuestions)) {
+      return _buildPrivateMaterialGroupedQuestionBody();
     }
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -3872,29 +4063,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               scrollBottomPadding: 120,
               enableReorder: !_showOnlySelectedQuestions,
               itemBuilder: (context, question) {
-                final selected = _selectedQuestionIds.contains(question.id);
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _toggleQuestionSelection(question.id, !selected),
-                  child: ProblemBankQuestionCard(
-                    question: question,
-                    selected: selected,
-                    selectedMode: _selectedModeOfQuestion(question),
-                    figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
-                        const <String, String>{},
-                    previewImageUrl: _questionPreviewUrls[question.id],
-                    previewStatus: _questionPreviewStatus[question.id] ?? '',
-                    previewErrorMessage:
-                        _questionPreviewError[question.id] ?? '',
-                    onRetryPreview: () => _retryQuestionPreview(question.id),
-                    onSelectedChanged: (next) {
-                      _toggleQuestionSelection(question.id, next);
-                    },
-                    onModeSelected: (mode) {
-                      _setQuestionModeSelection(question.id, mode);
-                    },
-                  ),
-                );
+                return _buildQuestionCardTile(question);
               },
               feedbackBuilder: (context, question) {
                 final selected = _selectedQuestionIds.contains(question.id);
@@ -4049,7 +4218,7 @@ class _PrivateMaterialMidBuilder {
       order: order,
       smalls: smallNodes
           .map((s) => s.toNode())
-          .where((s) => s.pages.isNotEmpty)
+          .where((s) => s.questionCount > 0)
           .toList(growable: false),
     );
   }
@@ -4057,25 +4226,95 @@ class _PrivateMaterialMidBuilder {
 
 class _PrivateMaterialSmallBuilder {
   _PrivateMaterialSmallBuilder({
+    required this.key,
     required this.order,
     required this.subKey,
     required this.title,
   });
 
+  final String key;
   final int order;
   final String subKey;
   final String title;
   final Map<String, _PrivateMaterialPageBuilder> pages =
       <String, _PrivateMaterialPageBuilder>{};
+  final Map<String, _PrivateMaterialTypeBuilder> typeGroups =
+      <String, _PrivateMaterialTypeBuilder>{};
+  final List<_PrivateMaterialPageQuestionRef> _questions =
+      <_PrivateMaterialPageQuestionRef>[];
+
+  void addQuestion(_PrivateMaterialPageQuestionRef ref) {
+    if (_questions.any((q) => q.questionUid == ref.questionUid)) return;
+    _questions.add(ref);
+    if (ref.contentGroupKind == 'type' && ref.contentGroupLabel.isNotEmpty) {
+      final typeKey = '$key|type|${ref.contentGroupOrder ?? 1 << 20}|'
+          '${ref.contentGroupLabel}|${ref.contentGroupTitle}';
+      final group = typeGroups.putIfAbsent(
+        typeKey,
+        () => _PrivateMaterialTypeBuilder(
+          key: typeKey,
+          order: ref.contentGroupOrder ?? 1 << 20,
+          label: ref.contentGroupLabel,
+          title: ref.contentGroupTitle,
+        ),
+      );
+      group.addQuestion(ref);
+    }
+  }
 
   ProblemBankPrivateMaterialSmallNode toNode() {
     final pageNodes = pages.values.toList()
       ..sort((a, b) => a.displayPage.compareTo(b.displayPage));
+    final typeNodes = typeGroups.values.toList()
+      ..sort((a, b) {
+        if (a.order != b.order) return a.order.compareTo(b.order);
+        return a.label.compareTo(b.label);
+      });
+    final sortedQuestions = _sortedPrivateMaterialRefs(_questions);
     return ProblemBankPrivateMaterialSmallNode(
+      key: key,
       title: title.trim().isEmpty ? '소단원' : title,
       order: order,
       subKey: subKey,
       pages: pageNodes.map((p) => p.toNode()).toList(growable: false),
+      typeGroups: typeNodes.map((t) => t.toNode()).toList(growable: false),
+      questionUids: List<String>.unmodifiable(
+        sortedQuestions.map((q) => q.questionUid),
+      ),
+    );
+  }
+}
+
+class _PrivateMaterialTypeBuilder {
+  _PrivateMaterialTypeBuilder({
+    required this.key,
+    required this.order,
+    required this.label,
+    required this.title,
+  });
+
+  final String key;
+  final int order;
+  final String label;
+  final String title;
+  final List<_PrivateMaterialPageQuestionRef> _questions =
+      <_PrivateMaterialPageQuestionRef>[];
+
+  void addQuestion(_PrivateMaterialPageQuestionRef ref) {
+    if (_questions.any((q) => q.questionUid == ref.questionUid)) return;
+    _questions.add(ref);
+  }
+
+  ProblemBankPrivateMaterialTypeNode toNode() {
+    final sortedQuestions = _sortedPrivateMaterialRefs(_questions);
+    return ProblemBankPrivateMaterialTypeNode(
+      key: key,
+      order: order,
+      label: label.trim().isEmpty ? '유형' : label.trim(),
+      title: title.trim(),
+      questionUids: List<String>.unmodifiable(
+        sortedQuestions.map((q) => q.questionUid),
+      ),
     );
   }
 }
@@ -4093,33 +4332,16 @@ class _PrivateMaterialPageBuilder {
   final List<_PrivateMaterialPageQuestionRef> _questions =
       <_PrivateMaterialPageQuestionRef>[];
 
-  void addQuestion(String questionUid, String problemNumber) {
-    final safeUid = questionUid.trim();
-    if (safeUid.isEmpty || _questions.any((q) => q.questionUid == safeUid)) {
+  void addQuestion(_PrivateMaterialPageQuestionRef ref) {
+    if (ref.questionUid.trim().isEmpty ||
+        _questions.any((q) => q.questionUid == ref.questionUid)) {
       return;
     }
-    _questions.add(
-      _PrivateMaterialPageQuestionRef(
-        questionUid: safeUid,
-        problemNumber: problemNumber,
-        insertionOrder: _questions.length,
-      ),
-    );
+    _questions.add(ref);
   }
 
   ProblemBankPrivateMaterialPageNode toNode() {
-    final sortedQuestions = List<_PrivateMaterialPageQuestionRef>.from(
-      _questions,
-    )..sort((a, b) {
-        final aNo = int.tryParse(a.problemNumber);
-        final bNo = int.tryParse(b.problemNumber);
-        if (aNo != null && bNo != null && aNo != bNo) {
-          return aNo.compareTo(bNo);
-        }
-        if (aNo != null && bNo == null) return -1;
-        if (aNo == null && bNo != null) return 1;
-        return a.insertionOrder.compareTo(b.insertionOrder);
-      });
+    final sortedQuestions = _sortedPrivateMaterialRefs(_questions);
     return ProblemBankPrivateMaterialPageNode(
       key: key,
       displayPage: displayPage,
@@ -4131,16 +4353,46 @@ class _PrivateMaterialPageBuilder {
   }
 }
 
+List<_PrivateMaterialPageQuestionRef> _sortedPrivateMaterialRefs(
+  List<_PrivateMaterialPageQuestionRef> refs,
+) {
+  return List<_PrivateMaterialPageQuestionRef>.from(refs)
+    ..sort((a, b) {
+      final aNo = int.tryParse(a.problemNumber);
+      final bNo = int.tryParse(b.problemNumber);
+      if (aNo != null && bNo != null && aNo != bNo) {
+        return aNo.compareTo(bNo);
+      }
+      if (aNo != null && bNo == null) return -1;
+      if (aNo == null && bNo != null) return 1;
+      return a.insertionOrder.compareTo(b.insertionOrder);
+    });
+}
+
 class _PrivateMaterialPageQuestionRef {
   const _PrivateMaterialPageQuestionRef({
     required this.questionUid,
     required this.problemNumber,
     required this.insertionOrder,
+    required this.displayPage,
+    this.rawPage,
+    this.difficultyLabel = '',
+    this.contentGroupKind = '',
+    this.contentGroupLabel = '',
+    this.contentGroupTitle = '',
+    this.contentGroupOrder,
   });
 
   final String questionUid;
   final String problemNumber;
   final int insertionOrder;
+  final int displayPage;
+  final int? rawPage;
+  final String difficultyLabel;
+  final String contentGroupKind;
+  final String contentGroupLabel;
+  final String contentGroupTitle;
+  final int? contentGroupOrder;
 }
 
 class _NaesinGradeOption {

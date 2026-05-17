@@ -32,7 +32,7 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .q-stem { white-space: normal; text-indent: 0 !important; }
     .stem-line.stem-line-display-math {
       display: block;
-      margin: calc(var(--line-height-pt) * 0.09 * 1pt) 0 calc(var(--line-height-pt) * 0.225 * 1pt);
+      margin: calc(var(--line-height-pt) * 0.16 * 1pt) 0 calc(var(--line-height-pt) * 0.16 * 1pt);
       padding-left: 2.55em;
       line-height: 2.3;
     }

@@ -274,6 +274,9 @@ class LearningProblemQuestion {
         .where((e) => e.isNotEmpty)
         .toList(growable: false);
     final meta = _mapOrEmpty(map['meta']);
+    final cropPageMeta =
+        _mapOrEmpty(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
+    final displaySourcePage = _intOrZero(cropPageMeta['display_page']);
     return LearningProblemQuestion(
       id: '${map['id'] ?? ''}',
       questionUid:
@@ -290,7 +293,9 @@ class LearningProblemQuestion {
       subjectiveAnswer: '${map['subjective_answer'] ?? ''}'.trim(),
       reviewerNotes: '${map['reviewer_notes'] ?? ''}'.trim(),
       equations: equations,
-      sourcePage: _intOrZero(map['source_page']),
+      sourcePage: displaySourcePage > 0
+          ? displaySourcePage
+          : _intOrZero(map['source_page']),
       sourceOrder: _intOrZero(map['source_order']),
       curriculumCode: '${map['curriculum_code'] ?? ''}',
       sourceTypeCode: '${map['source_type_code'] ?? ''}',
@@ -1139,6 +1144,7 @@ class LearningProblemBankService {
 
     final readyDocIds = <String>{};
     final documentNameMap = <String, String>{};
+    final documentMetaMap = <String, Map<String, dynamic>>{};
     for (final item in (readyDocRows as List<dynamic>)) {
       final row = _mapOrEmpty(item);
       if (_isSavedSettingsDocumentRow(row)) continue;
@@ -1173,6 +1179,7 @@ class LearningProblemBankService {
       }
       readyDocIds.add(docId);
       documentNameMap[docId] = '${row['source_filename'] ?? ''}'.trim();
+      documentMetaMap[docId] = _mapOrEmpty(row['meta']);
     }
 
     if (readyDocIds.isEmpty) {
@@ -1278,7 +1285,12 @@ class LearningProblemBankService {
     if (list.isEmpty) return const <LearningProblemQuestion>[];
 
     final limited = list.length > limit ? list.take(limit).toList() : list;
-    return limited
+    final enriched = await _attachTextbookCropMeta(
+      academyId: academyId,
+      questionRows: limited,
+      documentMetaById: documentMetaMap,
+    );
+    return enriched
         .map(
           (row) => LearningProblemQuestion.fromMap(
             row,
@@ -1287,6 +1299,128 @@ class LearningProblemBankService {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<List<Map<String, dynamic>>> _attachTextbookCropMeta({
+    required String academyId,
+    required List<Map<String, dynamic>> questionRows,
+    required Map<String, Map<String, dynamic>> documentMetaById,
+  }) async {
+    if (questionRows.isEmpty || documentMetaById.isEmpty) {
+      return questionRows;
+    }
+    final docIds = questionRows
+        .map((row) => '${row['document_id'] ?? ''}'.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final labelByDocAndNumber = <String, String>{};
+    String problemKey(dynamic value) {
+      if (value == null) return '';
+      final raw = '$value'.trim();
+      final numericMatch = RegExp(r'\d+').firstMatch(raw);
+      final numeric = int.tryParse(numericMatch?.group(0) ?? '');
+      if (numeric != null && numeric > 0) return '$numeric';
+      return raw.replaceAll(RegExp(r'\s+'), '');
+    }
+
+    for (final docId in docIds) {
+      final meta = documentMetaById[docId] ?? const <String, dynamic>{};
+      final scope =
+          _mapOrEmpty(meta['textbook_scope'] ?? meta['textbookScope']);
+      if (scope.isEmpty) continue;
+      final bookId = '${scope['book_id'] ?? scope['bookId'] ?? ''}'.trim();
+      final gradeLabel =
+          '${scope['grade_label'] ?? scope['gradeLabel'] ?? ''}'.trim();
+      final subKey = '${scope['sub_key'] ?? scope['subKey'] ?? ''}'.trim();
+      final bigOrder = _intOrNull(scope['big_order'] ?? scope['bigOrder']);
+      final midOrder = _intOrNull(scope['mid_order'] ?? scope['midOrder']);
+      if (bookId.isEmpty ||
+          gradeLabel.isEmpty ||
+          subKey.isEmpty ||
+          bigOrder == null ||
+          midOrder == null) {
+        continue;
+      }
+      try {
+        final rows = await _client
+            .from('textbook_problem_crops')
+            .select(
+              'problem_number,raw_page,display_page,label,content_group_kind,content_group_label,content_group_title,content_group_order',
+            )
+            .eq('academy_id', academyId)
+            .eq('book_id', bookId)
+            .eq('grade_label', gradeLabel)
+            .eq('big_order', bigOrder)
+            .eq('mid_order', midOrder)
+            .eq('sub_key', subKey);
+        for (final raw in _listOrEmpty(rows)) {
+          final crop = _mapOrEmpty(raw);
+          final problemNumber = problemKey(crop['problem_number']);
+          if (problemNumber.isEmpty) continue;
+          final label = '${crop['label'] ?? ''}'.trim();
+          final contentGroup = <String, dynamic>{
+            'kind': '${crop['content_group_kind'] ?? ''}'.trim(),
+            'label': '${crop['content_group_label'] ?? ''}'.trim(),
+            'title': '${crop['content_group_title'] ?? ''}'.trim(),
+            'order': _intOrNull(crop['content_group_order']),
+          };
+          final rawPage = _intOrNull(crop['raw_page']);
+          final displayPage = _intOrNull(crop['display_page']);
+          if (label.isEmpty &&
+              (contentGroup['kind'] as String).isEmpty &&
+              rawPage == null &&
+              displayPage == null) {
+            continue;
+          }
+          labelByDocAndNumber['$docId|$problemNumber'] = jsonEncode(
+            <String, dynamic>{
+              'label': label,
+              'raw_page': rawPage,
+              'display_page': displayPage,
+              'content_group': contentGroup,
+            },
+          );
+        }
+      } catch (_) {
+        // 난이도 표시는 보조 정보이므로 조회 실패가 문항 목록 로드를 막지 않는다.
+      }
+    }
+
+    if (labelByDocAndNumber.isEmpty) return questionRows;
+    return questionRows.map((row) {
+      final docId = '${row['document_id'] ?? ''}'.trim();
+      final questionNumber = problemKey(row['question_number']);
+      final encoded = labelByDocAndNumber['$docId|$questionNumber'];
+      if (encoded == null || encoded.isEmpty) return row;
+      final cropInfo = _mapOrEmpty(jsonDecode(encoded));
+      final label = '${cropInfo['label'] ?? ''}'.trim();
+      final contentGroup = _mapOrEmpty(cropInfo['content_group']);
+      final cropPage = <String, dynamic>{
+        ..._mapOrEmpty(_mapOrEmpty(row['meta'])['textbook_crop_page']),
+        if (_intOrNull(cropInfo['raw_page']) != null)
+          'raw_page': _intOrNull(cropInfo['raw_page']),
+        if (_intOrNull(cropInfo['display_page']) != null)
+          'display_page': _intOrNull(cropInfo['display_page']),
+        if (label.isNotEmpty) ...<String, dynamic>{
+          'label': label,
+          'difficulty_label': label,
+        },
+        if ('${contentGroup['kind'] ?? ''}'.trim().isNotEmpty)
+          'content_group': contentGroup,
+        'source': 'textbook_problem_crops',
+      };
+      final meta = _mapOrEmpty(row['meta']);
+      return <String, dynamic>{
+        ...row,
+        'meta': <String, dynamic>{
+          ...meta,
+          if (label.isNotEmpty) 'textbook_difficulty_label': label,
+          if ('${contentGroup['kind'] ?? ''}'.trim().isNotEmpty)
+            'textbook_content_group': contentGroup,
+          'textbook_crop_page': cropPage,
+        },
+      };
+    }).toList(growable: false);
   }
 
   Future<List<LearningProblemQuestion>> loadQuestionsByQuestionUids({
@@ -1362,12 +1496,13 @@ class LearningProblemBankService {
     }
 
     final docNameById = <String, String>{};
+    final docMetaById = <String, Map<String, dynamic>>{};
     if (docIds.isNotEmpty) {
       for (final chunk in _chunkStrings(docIds.toList(growable: false), 250)) {
         try {
           final rows = await _client
               .from('pb_documents')
-              .select('id,source_filename')
+              .select('id,source_filename,meta')
               .eq('academy_id', safeAcademyId)
               .inFilter('id', chunk);
           for (final raw in _listOrEmpty(rows)) {
@@ -1375,11 +1510,27 @@ class LearningProblemBankService {
             final id = '${row['id'] ?? ''}'.trim();
             if (id.isEmpty) continue;
             docNameById[id] = '${row['source_filename'] ?? ''}'.trim();
+            docMetaById[id] = _mapOrEmpty(row['meta']);
           }
         } catch (_) {
           continue;
         }
       }
+    }
+
+    final enrichedRows = await _attachTextbookCropMeta(
+      academyId: safeAcademyId,
+      questionRows: <Map<String, dynamic>>[
+        ...byUid.values,
+        ...byId.values,
+      ],
+      documentMetaById: docMetaById,
+    );
+    for (final row in enrichedRows) {
+      final uid = '${row['question_uid'] ?? ''}'.trim();
+      final id = '${row['id'] ?? ''}'.trim();
+      if (uid.isNotEmpty) byUid[uid] = row;
+      if (id.isNotEmpty) byId[id] = row;
     }
 
     final out = <LearningProblemQuestion>[];
@@ -1426,7 +1577,26 @@ class LearningProblemBankService {
         if (row.isNotEmpty) out.add(row);
       }
     }
-    return out;
+    final docMetaById = <String, Map<String, dynamic>>{};
+    for (final chunk in _chunkStrings(safeDocumentIds, 250)) {
+      try {
+        final rows = await _client
+            .from('pb_documents')
+            .select('id,meta')
+            .eq('academy_id', safeAcademyId)
+            .inFilter('id', chunk);
+        for (final raw in _listOrEmpty(rows)) {
+          final row = _mapOrEmpty(raw);
+          final id = '${row['id'] ?? ''}'.trim();
+          if (id.isNotEmpty) docMetaById[id] = _mapOrEmpty(row['meta']);
+        }
+      } catch (_) {}
+    }
+    return _attachTextbookCropMeta(
+      academyId: safeAcademyId,
+      questionRows: out,
+      documentMetaById: docMetaById,
+    );
   }
 
   Future<Map<String, int>> loadQuestionOrders({

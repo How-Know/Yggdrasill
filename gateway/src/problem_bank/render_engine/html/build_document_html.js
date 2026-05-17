@@ -166,7 +166,7 @@ function buildStyles({
     .q-num {
       font-family: "YggQNum", "YggMain", serif;
       font-weight: 700;
-      font-size: calc((var(--stem-size-pt) + 0.5) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 1.5) * 1pt);
       -webkit-text-stroke: 0.3pt currentColor;
       display: inline;
       line-height: 1;
@@ -177,7 +177,7 @@ function buildStyles({
     .q-num-above {
       font-family: "YggQNum", "YggMain", serif;
       font-weight: 700;
-      font-size: calc((var(--stem-size-pt) + 0.5) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 1.5) * 1pt);
       -webkit-text-stroke: 0.3pt currentColor;
       line-height: 1;
       text-indent: 0;
@@ -185,7 +185,7 @@ function buildStyles({
       white-space: nowrap;
     }
     body.profile-assignment .q-num-above {
-      font-size: calc(((var(--stem-size-pt) + 1) * 1.21 - 0.5) * 1pt);
+      font-size: calc(((var(--stem-size-pt) + 1) * 1.21 + 0.5) * 1pt);
       margin-bottom: 0.6pt;
     }
     .q-stem {
@@ -214,7 +214,7 @@ function buildStyles({
     .stem-line.stem-line-right { text-align: right; }
     .stem-line.stem-line-justify { text-align: justify; }
     .stem-line.stem-line-display-math {
-      margin: calc(var(--line-height-pt) * 0.09 * 1pt) 0 calc(var(--line-height-pt) * 0.225 * 1pt);
+      margin: calc(var(--line-height-pt) * 0.16 * 1pt) 0 calc(var(--line-height-pt) * 0.16 * 1pt);
       padding-left: 2.55em;
       line-height: 2.3;
     }

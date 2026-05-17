@@ -716,7 +716,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
   try {
     const { data: crops, error } = await supa
       .from('textbook_problem_crops')
-      .select('problem_number,raw_page,display_page,is_set_header,set_from,set_to,item_region_1k')
+      .select('problem_number,raw_page,display_page,label,is_set_header,set_from,set_to,content_group_kind,content_group_label,content_group_title,content_group_order,item_region_1k')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
@@ -751,6 +751,15 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
         displayPage: Number.isFinite(Number(crop?.display_page))
           ? Number(crop.display_page)
           : null,
+        problemLabel: compact(crop?.label),
+        contentGroup: {
+          kind: compact(crop?.content_group_kind),
+          label: compact(crop?.content_group_label),
+          title: compact(crop?.content_group_title),
+          order: Number.isFinite(Number(crop?.content_group_order))
+            ? Number(crop.content_group_order)
+            : null,
+        },
       });
     }
     if (typeof log === 'function') {
@@ -942,6 +951,9 @@ function toPayloadQuestion({
     meta: {
       ...(update.meta || {}),
       ...(textbookScope ? { textbook_scope: textbookScope } : {}),
+      ...(vlmQ?.textbook_difficulty_label
+        ? { textbook_difficulty_label: compact(vlmQ.textbook_difficulty_label) }
+        : {}),
       ...(vlmQ?.textbook_crop_page ? { textbook_crop_page: vlmQ.textbook_crop_page } : {}),
     },
   };
@@ -1103,12 +1115,24 @@ export async function runVlmExtraction({
     if (cropPage?.rawPage) {
       enrichedVlmQ = {
         ...(enrichedVlmQ || {}),
-        source_page: cropPage.rawPage,
+        source_page: cropPage.displayPage || cropPage.rawPage,
         textbook_crop_page: {
           raw_page: cropPage.rawPage,
           display_page: cropPage.displayPage,
+          ...(cropPage.problemLabel
+            ? { difficulty_label: cropPage.problemLabel, label: cropPage.problemLabel }
+            : {}),
+          ...(cropPage.contentGroup?.kind
+            ? { content_group: cropPage.contentGroup }
+            : {}),
           source: 'textbook_problem_crops',
         },
+        ...(cropPage.problemLabel
+          ? { textbook_difficulty_label: cropPage.problemLabel }
+          : {}),
+        ...(cropPage.contentGroup?.kind
+          ? { textbook_content_group: cropPage.contentGroup }
+          : {}),
       };
     }
     const payload = toPayloadQuestion({

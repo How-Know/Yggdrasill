@@ -76,11 +76,8 @@ export function renderChoiceItem(choice, mathRenderer, equations, opts) {
 export function chooseLayout(items) {
   if (items.length !== 5) return 'stack';
   const maxLen = Math.max(...items.map((it) => it.textLength));
-  const totalLen = items.reduce((s, it) => s + it.textLength, 0);
-  if (maxLen > 22) return 'stack';
-  if (totalLen > 55) return 'stack';
-  if (maxLen > 12 || totalLen > 40) return 'row2';
-  if (maxLen > 6 || totalLen > 25) return 'row2';
+  if (maxLen > 18) return 'stack';
+  if (maxLen > 6) return 'row2';
   return 'row1';
 }
 
