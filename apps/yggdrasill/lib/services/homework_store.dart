@@ -1619,6 +1619,9 @@ class HomeworkStore {
     final gradeLabel = preset.assignmentGradeLabel.trim();
     final courseLabel = preset.assignmentCourseLabel.trim();
     final bookId = '${preset.renderConfig['assignmentBookId'] ?? ''}'.trim();
+    final preferredFlowId =
+        '${preset.renderConfig['assignmentFlowId'] ?? preset.renderConfig['flowId'] ?? ''}'
+            .trim();
     final preferredFlowName =
         '${preset.renderConfig['assignmentFlowName'] ?? ''}'
             .replaceAll(RegExp(r'\s+'), ' ')
@@ -1637,6 +1640,7 @@ class HomeworkStore {
       body: body,
       color: const Color(0xFF33A373),
       type: '문제은행 과제',
+      flowId: preferredFlowId.isEmpty ? null : preferredFlowId,
       preferredFlowName: preferredFlowName.isEmpty ? null : preferredFlowName,
       count: preset.selectedQuestionCount > 0
           ? preset.selectedQuestionCount
@@ -1659,7 +1663,7 @@ class HomeworkStore {
       sourceStudentId: '',
       sourceGroupId: null,
       title: title,
-      flowId: null,
+      flowId: preferredFlowId.isEmpty ? null : preferredFlowId,
       preferredFlowName: preferredFlowName.isEmpty ? null : preferredFlowName,
       parts: <HomeworkRecentTemplatePart>[part],
       createdAt: createdAt,

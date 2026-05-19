@@ -227,13 +227,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           studentId: studentId,
           hw: hw,
         );
-        final cacheKey = (links['cacheKey'] ?? '').trim();
-        final answerPath = (links['answerPathRaw'] ?? '').trim();
+        final cacheKey = payload.answerViewerCacheKey.trim().isNotEmpty
+            ? payload.answerViewerCacheKey.trim()
+            : (links['cacheKey'] ?? '').trim();
+        final answerPath = payload.answerPathRaw.trim().isNotEmpty
+            ? payload.answerPathRaw.trim()
+            : (links['answerPathRaw'] ?? '').trim();
+        final solutionPath = payload.solutionPathRaw.trim().isNotEmpty
+            ? payload.solutionPathRaw.trim()
+            : (links['solutionPathRaw'] ?? '').trim();
         if (cacheKey.isNotEmpty && answerPath.isNotEmpty) {
           RightSheetAnswerPreloadService.instance.putPdfLinks(
             cacheKey: cacheKey,
             answerPath: answerPath,
-            solutionPath: (links['solutionPathRaw'] ?? '').trim(),
+            solutionPath: solutionPath,
           );
         }
         final overlayMaps = overlayEntries
@@ -260,7 +267,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           scoreByQuestionKey: payload.scoreByQuestionKey,
           overlayEntries: overlayMaps,
           answerPathRaw: answerPath,
-          solutionPathRaw: (links['solutionPathRaw'] ?? '').trim(),
+          solutionPathRaw: solutionPath,
           answerViewerCacheKey: cacheKey,
         );
         RightSheetAnswerPreloadService.instance.putSessionPayload(
@@ -293,17 +300,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       keys: keys,
     );
     if (textbookPayload == null) return null;
-    final links = await _resolveRightSheetAnswerViewerLinks(
-      studentId: studentId,
-      hw: hw,
-    );
-    final cacheKey = (links['cacheKey'] ?? '').trim();
-    final answerPath = (links['answerPathRaw'] ?? '').trim();
+    final cacheKey = textbookPayload.answerViewerCacheKey.trim();
+    final answerPath = textbookPayload.answerPathRaw.trim();
+    final solutionPath = textbookPayload.solutionPathRaw.trim();
     if (cacheKey.isNotEmpty && answerPath.isNotEmpty) {
       RightSheetAnswerPreloadService.instance.putPdfLinks(
         cacheKey: cacheKey,
         answerPath: answerPath,
-        solutionPath: (links['solutionPathRaw'] ?? '').trim(),
+        solutionPath: solutionPath,
       );
     }
     final overlayMaps = overlayEntries
@@ -331,7 +335,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       scoreByQuestionKey: textbookPayload.scoreByQuestionKey,
       overlayEntries: overlayMaps,
       answerPathRaw: answerPath,
-      solutionPathRaw: (links['solutionPathRaw'] ?? '').trim(),
+      solutionPathRaw: solutionPath,
       answerViewerCacheKey: cacheKey,
     );
     RightSheetAnswerPreloadService.instance.putSessionPayload(
@@ -1700,9 +1704,23 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (template.parts.isEmpty) return;
     final studentId = student.id;
     var resolvedFlowId = (template.flowId ?? '').trim();
+    if (resolvedFlowId.isEmpty) {
+      resolvedFlowId = await _resolveTemplatePreferredFlowId(
+        studentId: studentId,
+        template: template,
+      );
+      if (!context.mounted) return;
+    }
+    final isProblemBankAssignmentTemplate = template.parts.any(
+      (part) =>
+          (part.pbPresetId ?? '').trim().isNotEmpty ||
+          (part.sourceUnitLevel ?? '').trim() == 'problem_bank_assignment',
+    );
     final bookId = template.primaryBookId;
     final gradeLabel = template.primaryGradeLabel;
-    if (bookId.isNotEmpty && gradeLabel.isNotEmpty) {
+    if (!isProblemBankAssignmentTemplate &&
+        bookId.isNotEmpty &&
+        gradeLabel.isNotEmpty) {
       final linkStatus = await _checkFavoriteTemplateLinkStatus(
         studentId: studentId,
         templateFlowId: resolvedFlowId,
@@ -1726,13 +1744,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           resolvedFlowId = linkedFlowId;
         }
       }
-    }
-    if (resolvedFlowId.trim().isEmpty) {
-      resolvedFlowId = await _resolveTemplatePreferredFlowId(
-        studentId: studentId,
-        template: template,
-      );
-      if (!context.mounted) return;
     }
 
     final mode = await _askFavoriteIssueMode(
@@ -3169,10 +3180,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       'answerRect1k': cell.answerRect1k.take(4).toList(),
                     if (cell.focusRect1k.length >= 4)
                       'focusRect1k': cell.focusRect1k.take(4).toList(),
+                    if (cell.answerPathRaw.trim().isNotEmpty)
+                      'answerPathRaw': cell.answerPathRaw.trim(),
+                    if (cell.solutionPathRaw.trim().isNotEmpty)
+                      'solutionPathRaw': cell.solutionPathRaw.trim(),
                     if (cell.solutionPageNumber != null)
                       'solutionPageNumber': cell.solutionPageNumber,
                     if (cell.solutionRect1k.length >= 4)
                       'solutionRect1k': cell.solutionRect1k.take(4).toList(),
+                    if (cell.sourceInfo.isNotEmpty)
+                      'sourceInfo': Map<String, String>.from(cell.sourceInfo),
                   },
                 )
                 .toList(growable: false),
@@ -3187,6 +3204,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         String title,
         List<HomeworkAnswerGradingPage> gradingPages,
         Map<String, double> scoreByQuestionKey,
+        String answerPathRaw,
+        String solutionPathRaw,
+        String answerViewerCacheKey,
       })?> _resolveTestPbGradingViewerPayload({
     required HomeworkItem seedHomework,
     required List<({String studentId, String itemId})> keys,
@@ -3255,6 +3275,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       sourceKind: 'pb_question',
       sourceIds: questions.map((question) => question.id),
     );
+    final textbookSourceContext = await _loadProblemBankTextbookSourceContext(
+      questions: questions,
+      homeworkId: baseItem.id,
+    );
 
     final modeByUid = preset.questionModeByQuestionUid;
     final presetScoreByUid = preset.questionScoreByQuestionUid;
@@ -3299,13 +3323,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final question = questionByKey[uid];
       if (question == null) continue;
       fallbackIndex += 1;
+      final questionIndex = fallbackIndex;
       final rawIndex = int.tryParse(question.displayQuestionNumber.trim());
-      final questionIndex = rawIndex != null && rawIndex > 0
+      final originalQuestionIndex = rawIndex != null && rawIndex > 0
           ? rawIndex
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
       final answer = previewAnswerForMode(question, answerMode).trim();
       final answerRender = answerRenderByQuestionId[question.id.trim()];
+      final textbookSourceRow =
+          textbookSourceContext.rowsByQuestionId[question.id.trim()];
 
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
@@ -3349,6 +3376,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               answerAssetKind:
                   answerRender == null ? '' : 'unified_answer_render',
               answerRenderStyleVersion: answerRender?.styleVersion ?? '',
+              answerPathRaw: textbookSourceContext
+                      .pdfPathsByQuestionId[question.id.trim()]?['answer'] ??
+                  '',
+              solutionPathRaw: textbookSourceContext
+                      .pdfPathsByQuestionId[question.id.trim()]?['solution'] ??
+                  '',
+              solutionPageNumber:
+                  _intFromDynamic(textbookSourceRow?['solution_raw_page']) ??
+                      _intFromDynamic(
+                        textbookSourceRow?['solution_display_page'],
+                      ),
+              solutionRect1k: _intListFromDynamic(
+                textbookSourceRow?['solution_number_region_1k'] ??
+                    textbookSourceRow?['solution_content_region_1k'],
+              ),
+              sourceInfo: _problemBankQuestionSourceInfo(
+                question,
+                textbookRow: textbookSourceRow,
+                originalQuestionIndex: originalQuestionIndex,
+              ),
             ),
           );
     }
@@ -3371,6 +3418,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       title: title,
       gradingPages: gradingPages,
       scoreByQuestionKey: scoreByQuestionKey,
+      answerPathRaw: textbookSourceContext.answerPathRaw,
+      solutionPathRaw: textbookSourceContext.solutionPathRaw,
+      answerViewerCacheKey: textbookSourceContext.answerViewerCacheKey,
     );
   }
 
@@ -3408,6 +3458,253 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   String _trimDynamic(dynamic raw) => '${raw ?? ''}'.trim();
+
+  Map<String, dynamic> _mapFromDynamic(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return raw.map((key, value) => MapEntry('$key', value));
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return decoded.map((key, value) => MapEntry('$key', value));
+        }
+      } catch (_) {}
+    }
+    return const <String, dynamic>{};
+  }
+
+  Map<String, String> _problemBankQuestionSourceInfo(
+    LearningProblemQuestion question, {
+    Map<String, dynamic>? textbookRow,
+    int? originalQuestionIndex,
+  }) {
+    String firstNonEmpty(Iterable<dynamic> values) {
+      for (final value in values) {
+        final text = _trimDynamic(value);
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
+    final sourceType = question.sourceTypeCode.trim().toLowerCase();
+    final cropPage = _mapFromDynamic(
+      question.meta['textbook_crop_page'] ?? question.meta['textbookCropPage'],
+    );
+    final crop = _mapFromDynamic(
+      question.meta['textbook_crop'] ?? question.meta['textbookCrop'],
+    );
+    final contentGroup = _mapFromDynamic(
+      textbookRow?['content_group'] ??
+          question.meta['textbook_content_group'] ??
+          cropPage['content_group'] ??
+          crop['contentGroup'],
+    );
+    final looksLikeExam = sourceType.contains('hwpx') ||
+        sourceType.contains('exam') ||
+        question.schoolName.trim().isNotEmpty ||
+        question.examYear != null ||
+        question.examTermLabel.trim().isNotEmpty;
+    final originalQuestionNumber =
+        originalQuestionIndex != null && originalQuestionIndex > 0
+            ? '$originalQuestionIndex'
+            : question.displayQuestionNumber;
+    final sourceInfo = <String, String>{
+      'sourceKind': looksLikeExam ? 'exam' : 'textbook',
+      if (looksLikeExam) ...{
+        'schoolName': question.schoolName.trim(),
+        'year': question.examYear == null ? '' : '${question.examYear}',
+        'examName': firstNonEmpty([
+          [
+            question.semesterLabel.trim(),
+            question.examTermLabel.trim(),
+          ].where((part) => part.isNotEmpty).join(' '),
+          question.documentSourceName,
+        ]),
+        'originalQuestionNumber': originalQuestionNumber,
+      } else ...{
+        'bookName': firstNonEmpty([
+          question.materialName,
+          question.documentSourceName,
+          question.publisherName,
+        ]),
+        'originalQuestionNumber': originalQuestionNumber,
+        'difficulty': firstNonEmpty([
+          textbookRow?['label'],
+          textbookRow?['difficulty_label'],
+          textbookRow?['textbook_difficulty_label'],
+          question.meta['difficulty_label'],
+          question.meta['difficultyLabel'],
+          question.meta['textbook_difficulty_label'],
+          question.meta['difficulty'],
+          question.meta['level'],
+          crop['difficulty_label'],
+          crop['difficultyLabel'],
+          crop['label'],
+          cropPage['difficulty_label'],
+          cropPage['difficultyLabel'],
+          cropPage['label'],
+        ]),
+        'typeName': firstNonEmpty([
+          question.questionType,
+          question.meta['type_name'],
+          question.meta['problem_type'],
+          question.meta['unit_label'],
+          textbookRow?['type_group_label'],
+          textbookRow?['content_group_label'],
+          textbookRow?['content_group_title'],
+          contentGroup['label'],
+          contentGroup['title'],
+          question.courseLabel,
+        ]),
+      },
+    };
+    sourceInfo.removeWhere((_, value) => value.trim().isEmpty);
+    return sourceInfo;
+  }
+
+  ({String bookId, String gradeLabel, String cropId})?
+      _problemBankQuestionTextbookRef(LearningProblemQuestion question) {
+    String firstNonEmpty(Iterable<dynamic> values) {
+      for (final value in values) {
+        final text = _trimDynamic(value);
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
+    final meta = question.meta;
+    final cropPage =
+        _mapFromDynamic(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
+    final crop = _mapFromDynamic(meta['textbook_crop'] ?? meta['textbookCrop']);
+    final scope =
+        _mapFromDynamic(meta['textbook_scope'] ?? meta['textbookScope']);
+    final bookId = firstNonEmpty([
+      cropPage['book_id'],
+      cropPage['bookId'],
+      crop['book_id'],
+      crop['bookId'],
+      scope['book_id'],
+      scope['bookId'],
+      meta['book_id'],
+      meta['bookId'],
+    ]);
+    final gradeLabel = firstNonEmpty([
+      cropPage['grade_label'],
+      cropPage['gradeLabel'],
+      crop['grade_label'],
+      crop['gradeLabel'],
+      scope['grade_label'],
+      scope['gradeLabel'],
+      meta['grade_label'],
+      meta['gradeLabel'],
+    ]);
+    if (bookId.isEmpty || gradeLabel.isEmpty) return null;
+    final cropId = firstNonEmpty([
+      cropPage['crop_id'],
+      cropPage['cropId'],
+      cropPage['id'],
+      crop['crop_id'],
+      crop['cropId'],
+      crop['id'],
+      meta['textbook_crop_id'],
+      meta['textbookCropId'],
+    ]);
+    return (bookId: bookId, gradeLabel: gradeLabel, cropId: cropId);
+  }
+
+  Future<
+      ({
+        Map<String, Map<String, dynamic>> rowsByQuestionId,
+        Map<String, Map<String, String>> pdfPathsByQuestionId,
+        String answerPathRaw,
+        String solutionPathRaw,
+        String answerViewerCacheKey,
+      })> _loadProblemBankTextbookSourceContext({
+    required List<LearningProblemQuestion> questions,
+    required String homeworkId,
+  }) async {
+    final refsByQuestionId =
+        <String, ({String bookId, String gradeLabel, String cropId})>{};
+    final cropIdsByBookGrade = <String, Set<String>>{};
+    for (final question in questions) {
+      final ref = _problemBankQuestionTextbookRef(question);
+      if (ref == null) continue;
+      final questionId = question.id.trim();
+      if (questionId.isNotEmpty) refsByQuestionId[questionId] = ref;
+      if (ref.cropId.isNotEmpty) {
+        cropIdsByBookGrade
+            .putIfAbsent('${ref.bookId}|${ref.gradeLabel}', () => <String>{})
+            .add(ref.cropId);
+      }
+    }
+
+    final rowsByCropId = <String, Map<String, dynamic>>{};
+    for (final entry in cropIdsByBookGrade.entries) {
+      final parts = entry.key.split('|');
+      if (parts.length < 2 || entry.value.isEmpty) continue;
+      final rows =
+          await DataManager.instance.loadTextbookProblemRegionsForGrading(
+        bookId: parts[0],
+        gradeLabel: parts.sublist(1).join('|'),
+        cropIds: entry.value,
+      );
+      for (final row in rows) {
+        final cropId = _trimDynamic(row['id']);
+        if (cropId.isNotEmpty) rowsByCropId[cropId] = row;
+      }
+    }
+
+    final rowsByQuestionId = <String, Map<String, dynamic>>{};
+    refsByQuestionId.forEach((questionId, ref) {
+      final row = rowsByCropId[ref.cropId];
+      if (row != null) rowsByQuestionId[questionId] = row;
+    });
+
+    var answerPathRaw = '';
+    var solutionPathRaw = '';
+    var cacheKey = '';
+    final pdfPathsByBookGrade = <String, Map<String, String>>{};
+    for (final ref in refsByQuestionId.values) {
+      final key = '${ref.bookId}|${ref.gradeLabel}';
+      if (pdfPathsByBookGrade.containsKey(key)) continue;
+      final links = await _resolveTextbookPdfLinksForBookGrade(
+        bookId: ref.bookId,
+        gradeLabel: ref.gradeLabel,
+      );
+      final answerPath = await _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: links,
+        kind: 'ans',
+      );
+      final solutionPath = await _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: links,
+        kind: 'sol',
+      );
+      pdfPathsByBookGrade[key] = <String, String>{
+        'answer': answerPath,
+        'solution': solutionPath,
+      };
+    }
+    final pdfPathsByQuestionId = <String, Map<String, String>>{};
+    refsByQuestionId.forEach((questionId, ref) {
+      final paths = pdfPathsByBookGrade['${ref.bookId}|${ref.gradeLabel}'];
+      if (paths != null) pdfPathsByQuestionId[questionId] = paths;
+    });
+    if (pdfPathsByBookGrade.isNotEmpty) {
+      final paths = pdfPathsByBookGrade.values.first;
+      answerPathRaw = paths['answer'] ?? '';
+      solutionPathRaw = paths['solution'] ?? '';
+      cacheKey =
+          'test_pb_textbook:$homeworkId|right_sheet_answer:$answerPathRaw';
+    }
+
+    return (
+      rowsByQuestionId: rowsByQuestionId,
+      pdfPathsByQuestionId: pdfPathsByQuestionId,
+      answerPathRaw: answerPathRaw,
+      solutionPathRaw: solutionPathRaw,
+      answerViewerCacheKey: cacheKey,
+    );
+  }
 
   Set<String> _textbookProblemCropIdsFromItem(HomeworkItem item) {
     final out = <String>{};
@@ -3575,12 +3872,66 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return fallbackLatex.isEmpty ? '-' : fallbackLatex;
   }
 
+  Map<String, String> _textbookSourceInfoFromRow(
+    Map<String, dynamic> row, {
+    required HomeworkItem baseItem,
+  }) {
+    String firstNonEmpty(Iterable<dynamic> values) {
+      for (final value in values) {
+        final text = _trimDynamic(value);
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
+    final contentGroupRaw = row['content_group'];
+    final contentGroup = contentGroupRaw is Map
+        ? Map<String, dynamic>.from(contentGroupRaw)
+        : const <String, dynamic>{};
+    final cropSnapshot = _mapFromDynamic(row['crop_snapshot']);
+    final bookName = _extractHomeworkBookName(baseItem);
+    final sourceInfo = <String, String>{
+      'sourceKind': 'textbook',
+      'bookName': bookName == '-' ? '' : bookName,
+      'originalQuestionNumber': firstNonEmpty([
+        row['problem_number'],
+        row['question_label'],
+      ]),
+      'difficulty': firstNonEmpty([
+        row['label'],
+        row['difficulty_label'],
+        row['textbook_difficulty_label'],
+        row['difficultyLabel'],
+        cropSnapshot['label'],
+        cropSnapshot['difficulty_label'],
+        cropSnapshot['difficultyLabel'],
+      ]),
+      'typeName': firstNonEmpty([
+        row['type_group_label'],
+        row['type_name'],
+        row['problem_type_name'],
+        row['content_group_label'],
+        contentGroup['label'],
+        cropSnapshot['typeGroupLabel'],
+        cropSnapshot['contentGroupLabel'],
+        row['content_group_title'],
+        contentGroup['title'],
+        cropSnapshot['contentGroupTitle'],
+      ]),
+    };
+    sourceInfo.removeWhere((_, value) => value.trim().isEmpty);
+    return sourceInfo;
+  }
+
   Future<
       ({
         String homeworkId,
         String title,
         List<HomeworkAnswerGradingPage> gradingPages,
         Map<String, double> scoreByQuestionKey,
+        String answerPathRaw,
+        String solutionPathRaw,
+        String answerViewerCacheKey,
       })?> _resolveTextbookProblemGradingPayload({
     required HomeworkItem seedHomework,
     required List<({String studentId, String itemId})> keys,
@@ -3607,6 +3958,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final bookId = (baseItem.bookId ?? '').trim();
     final gradeLabel = (baseItem.gradeLabel ?? '').trim();
     if (bookId.isEmpty || gradeLabel.isEmpty) return null;
+    final textbookLinks = await _resolveHomeworkPdfLinks(
+      baseItem,
+      allowFlowFallback: true,
+    );
+    final answerPathRaw = await _resolveTextbookPdfPathForRightSheet(
+      textbookLinks: textbookLinks,
+      kind: 'ans',
+    );
+    final solutionPathRaw = await _resolveTextbookPdfPathForRightSheet(
+      textbookLinks: textbookLinks,
+      kind: 'sol',
+    );
 
     final assignedRows = await _loadAssignedTextbookProblemRows(
       textbookItems: textbookItems,
@@ -3756,6 +4119,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 row['solution_number_region_1k'] ??
                     row['solution_content_region_1k'],
               ),
+              sourceInfo: _textbookSourceInfoFromRow(
+                row,
+                baseItem: baseItem,
+              ),
             ),
           );
     }
@@ -3778,6 +4145,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       title: title,
       gradingPages: gradingPages,
       scoreByQuestionKey: const <String, double>{},
+      answerPathRaw: answerPathRaw,
+      solutionPathRaw: solutionPathRaw,
+      answerViewerCacheKey:
+          'textbook_problem:${baseItem.id}|right_sheet_answer:$answerPathRaw',
     );
   }
 
@@ -3823,6 +4194,42 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         : '';
   }
 
+  Future<_ResolvedHomeworkPdfLinks> _resolveTextbookPdfLinksForBookGrade({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final safeBookId = bookId.trim();
+    final safeGradeLabel = gradeLabel.trim();
+    if (safeBookId.isEmpty || safeGradeLabel.isEmpty) {
+      return const _ResolvedHomeworkPdfLinks(
+        bookId: '',
+        gradeLabel: '',
+        bodyPathRaw: '',
+        answerPathRaw: '',
+        solutionPathRaw: '',
+      );
+    }
+    try {
+      final links =
+          await DataManager.instance.loadResourceFileLinks(safeBookId);
+      return _ResolvedHomeworkPdfLinks(
+        bookId: safeBookId,
+        gradeLabel: safeGradeLabel,
+        bodyPathRaw: (links['$safeGradeLabel#body'] ?? '').trim(),
+        answerPathRaw: (links['$safeGradeLabel#ans'] ?? '').trim(),
+        solutionPathRaw: (links['$safeGradeLabel#sol'] ?? '').trim(),
+      );
+    } catch (_) {
+      return _ResolvedHomeworkPdfLinks(
+        bookId: safeBookId,
+        gradeLabel: safeGradeLabel,
+        bodyPathRaw: '',
+        answerPathRaw: '',
+        solutionPathRaw: '',
+      );
+    }
+  }
+
   Future<Map<String, String>> _resolveRightSheetAnswerViewerLinks({
     required String studentId,
     required HomeworkItem hw,
@@ -3854,7 +4261,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final raw = normalizedKind == 'sol'
         ? textbookLinks.solutionPathRaw.trim()
         : textbookLinks.answerPathRaw.trim();
-    if (raw.isEmpty) return '';
     try {
       final source = await TextbookPdfService.instance.resolve(
         TextbookPdfRef(
@@ -4111,9 +4517,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 },
               )
               .toList(growable: false),
-          answerPathRaw: gradingPdfLinks['answerPathRaw'] ?? '',
-          solutionPathRaw: gradingPdfLinks['solutionPathRaw'] ?? '',
-          answerViewerCacheKey: gradingPdfLinks['cacheKey'] ?? '',
+          answerPathRaw: payload.answerPathRaw.trim().isNotEmpty
+              ? payload.answerPathRaw
+              : (gradingPdfLinks['answerPathRaw'] ?? ''),
+          solutionPathRaw: payload.solutionPathRaw.trim().isNotEmpty
+              ? payload.solutionPathRaw
+              : (gradingPdfLinks['solutionPathRaw'] ?? ''),
+          answerViewerCacheKey: payload.answerViewerCacheKey.trim().isNotEmpty
+              ? payload.answerViewerCacheKey
+              : (gradingPdfLinks['cacheKey'] ?? ''),
           initialStates: _toRightSheetStateMap(initialStates),
           gradingLocked: hasSavedGrading,
           onRequestEditReset: () async {
@@ -4227,10 +4639,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         fallbackHomework: hw,
         payloadTitle: textbookProblemPayload.title,
       );
-      final gradingPdfLinks = await _resolveRightSheetAnswerViewerLinks(
-        studentId: studentId,
-        hw: hw,
-      );
       if (!mounted) return;
       rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
         sessionId:
@@ -4252,9 +4660,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               },
             )
             .toList(growable: false),
-        answerPathRaw: gradingPdfLinks['answerPathRaw'] ?? '',
-        solutionPathRaw: gradingPdfLinks['solutionPathRaw'] ?? '',
-        answerViewerCacheKey: gradingPdfLinks['cacheKey'] ?? '',
+        answerPathRaw: textbookProblemPayload.answerPathRaw,
+        solutionPathRaw: textbookProblemPayload.solutionPathRaw,
+        answerViewerCacheKey: textbookProblemPayload.answerViewerCacheKey,
         initialStates: _toRightSheetStateMap(initialStates),
         gradingLocked: hasSavedGrading,
         onRequestEditReset: () async {
@@ -11477,13 +11885,12 @@ Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
             break;
           }
         }
-        if (matched != null) {
-          if (bookId.isEmpty) {
-            bookId = '${matched['book_id'] ?? ''}'.trim();
-          }
-          if (gradeLabel.isEmpty) {
-            gradeLabel = '${matched['grade_label'] ?? ''}'.trim();
-          }
+        final selected = matched ?? rows.first;
+        if (bookId.isEmpty) {
+          bookId = '${selected['book_id'] ?? ''}'.trim();
+        }
+        if (gradeLabel.isEmpty) {
+          gradeLabel = '${selected['grade_label'] ?? ''}'.trim();
         }
       }
     } catch (_) {}
@@ -12759,7 +13166,10 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
   final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
   final rangeRaw = resolvedSource.isProblemBank ? '' : rangeDisplay;
   var effectivePaperSize = resolvedSource.preferredPaperSize.trim();
-  if (effectivePaperSize.isEmpty && isPdf) {
+  if (!resolvedSource.isProblemBank && isPdf) {
+    effectivePaperSize = 'A4';
+    print('[PRINT][paper] textbookDefaultPaper="A4"');
+  } else if (effectivePaperSize.isEmpty && isPdf) {
     effectivePaperSize = await _inferPreferredPaperSizeFromPdf(
       inputPath: printablePath,
       pageRange: rangeRaw,

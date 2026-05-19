@@ -2666,8 +2666,11 @@ class _RightSheetGradingCellVm {
   final int? answerPageNumber;
   final List<int> answerRect1k;
   final List<int> focusRect1k;
+  final String answerPathRaw;
+  final String solutionPathRaw;
   final int? solutionPageNumber;
   final List<int> solutionRect1k;
+  final Map<String, String> sourceInfo;
 
   const _RightSheetGradingCellVm({
     required this.key,
@@ -2687,8 +2690,11 @@ class _RightSheetGradingCellVm {
     this.answerPageNumber,
     this.answerRect1k = const <int>[],
     this.focusRect1k = const <int>[],
+    this.answerPathRaw = '',
+    this.solutionPathRaw = '',
     this.solutionPageNumber,
     this.solutionRect1k = const <int>[],
+    this.sourceInfo = const <String, String>{},
   });
 
   String get displayQuestionLabel {
@@ -2705,6 +2711,227 @@ class _RightSheetGradingPageVm {
     required this.pageNumber,
     required this.cells,
   });
+}
+
+class _RightSheetAnswerListRow extends StatefulWidget {
+  final String questionLabel;
+  final bool editLocked;
+  final String state;
+  final Color backgroundColor;
+  final Color borderColor;
+  final double answerSlotHeight;
+  final bool hasSourceInfo;
+  final VoidCallback onOpenSolution;
+  final VoidCallback onReportIssue;
+  final VoidCallback onToggleState;
+  final VoidCallback onShowSourceInfo;
+  final Widget answerChild;
+
+  const _RightSheetAnswerListRow({
+    required this.questionLabel,
+    required this.editLocked,
+    required this.state,
+    required this.backgroundColor,
+    required this.borderColor,
+    required this.answerSlotHeight,
+    required this.hasSourceInfo,
+    required this.onOpenSolution,
+    required this.onReportIssue,
+    required this.onToggleState,
+    required this.onShowSourceInfo,
+    required this.answerChild,
+  });
+
+  @override
+  State<_RightSheetAnswerListRow> createState() =>
+      _RightSheetAnswerListRowState();
+}
+
+class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
+    with SingleTickerProviderStateMixin {
+  static const double _actionPaneWidth = 62;
+  static const Duration _snapDuration = Duration(milliseconds: 170);
+
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: _snapDuration);
+
+  bool get _isOpen => _ctrl.value > 0.01;
+
+  void _open() => _ctrl.animateTo(1, curve: Curves.easeOutCubic);
+  void _close() => _ctrl.animateTo(0, curve: Curves.easeOutCubic);
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+    final next = _ctrl.value + (details.delta.dx / _actionPaneWidth);
+    _ctrl.value = next.clamp(0.0, 1.0);
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0.0;
+    if (velocity > 250) {
+      _open();
+      return;
+    }
+    if (velocity < -250) {
+      _close();
+      return;
+    }
+    if (_ctrl.value >= 0.45) {
+      _open();
+    } else {
+      _close();
+    }
+  }
+
+  void _runFrontAction(VoidCallback action) {
+    if (_isOpen) {
+      _close();
+      return;
+    }
+    action();
+  }
+
+  void _showInfo() {
+    _close();
+    widget.onShowSourceInfo();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(12);
+    final questionLabel = widget.questionLabel;
+    final infoColor = widget.hasSourceInfo ? _rsAccent : _rsTextSub;
+
+    Widget questionButton() {
+      return Tooltip(
+        message: '$questionLabel번 해설 PDF로 이동',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: widget.onOpenSolution,
+          onLongPress: widget.onReportIssue,
+          child: SizedBox(
+            width: 56,
+            height: 44,
+            child: Center(
+              child: Text(
+                questionLabel,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF9FB3B3),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  height: 1.0,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget answerCard() {
+      return InkWell(
+        borderRadius: radius,
+        onTap: () => _runFrontAction(widget.onToggleState),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: widget.backgroundColor,
+            borderRadius: radius,
+            border: Border.all(color: widget.borderColor),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: widget.answerSlotHeight,
+                  child: Opacity(
+                    opacity: widget.state == 'unsolved' ? 0.48 : 1.0,
+                    child: widget.answerChild,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: Tooltip(
+        message: widget.editLocked
+            ? '$questionLabel번 · 저장된 채점 결과'
+            : '$questionLabel번',
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            questionButton(),
+            const SizedBox(width: 8),
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+                onHorizontalDragEnd: _handleHorizontalDragEnd,
+                onHorizontalDragCancel: _close,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: _actionPaneWidth,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Material(
+                            color: infoColor.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(11),
+                            child: InkWell(
+                              onTap: _showInfo,
+                              borderRadius: BorderRadius.circular(11),
+                              splashFactory: NoSplash.splashFactory,
+                              child: SizedBox.expand(
+                                child: Icon(
+                                  Icons.info_outline_rounded,
+                                  size: 21,
+                                  color: infoColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      AnimatedBuilder(
+                        animation: _ctrl,
+                        builder: (context, child) {
+                          final dx = _actionPaneWidth * _ctrl.value;
+                          return Transform.translate(
+                            offset: Offset(dx, 0),
+                            child: child,
+                          );
+                        },
+                        child: answerCard(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _AnswerKeyGradingTabPanel extends StatefulWidget {
@@ -2921,6 +3148,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final sessionId = session.sessionId.trim();
     if (sessionId.isEmpty ||
         session.answerPathRaw.trim().isEmpty ||
+        _isProblemBankGradingSession(session) ||
         _autoOpenedAnswerSessionId == sessionId) {
       return;
     }
@@ -2940,6 +3168,23 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         }),
       );
     });
+  }
+
+  bool _isProblemBankGradingSession(RightSideSheetTestGradingSession session) {
+    if (session.sessionId.contains('test_pb_grade')) return true;
+    for (final rawPage in session.gradingPages) {
+      final rawCells = rawPage['cells'];
+      if (rawCells is! List) continue;
+      for (final rawCell in rawCells) {
+        if (rawCell is! Map) continue;
+        final sourceKind =
+            '${rawCell['answerSourceKind'] ?? rawCell['answer_source_kind'] ?? ''}'
+                .trim()
+                .toLowerCase();
+        if (sourceKind == 'pb_question') return true;
+      }
+    }
+    return false;
   }
 
   Future<String> _resolveActiveAcademyId() async {
@@ -3881,6 +4126,27 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           return values.length >= 4 ? values.take(4).toList() : const <int>[];
         }
 
+        Map<String, String> parseStringMap(dynamic raw) {
+          dynamic source = raw;
+          if (source is String) {
+            try {
+              source = jsonDecode(source);
+            } catch (_) {
+              return const <String, String>{};
+            }
+          }
+          if (source is! Map) return const <String, String>{};
+          final out = <String, String>{};
+          source.forEach((key, value) {
+            final outKey = '$key'.trim();
+            final outValue = '$value'.trim();
+            if (outKey.isNotEmpty && outValue.isNotEmpty) {
+              out[outKey] = outValue;
+            }
+          });
+          return out;
+        }
+
         parsedCells.add(
           _RightSheetGradingCellVm(
             key: key,
@@ -3942,6 +4208,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   rawCell['bbox1k'] ??
                   rawCell['bbox_1k'],
             ),
+            answerPathRaw:
+                '${rawCell['answerPathRaw'] ?? rawCell['answer_path_raw'] ?? ''}'
+                    .trim(),
+            solutionPathRaw:
+                '${rawCell['solutionPathRaw'] ?? rawCell['solution_path_raw'] ?? ''}'
+                    .trim(),
             solutionPageNumber: parsePositiveInt(
               rawCell['solutionPageNumber'] ??
                   rawCell['solution_page_number'] ??
@@ -3957,6 +4229,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   rawCell['solution_number_region_1k'] ??
                   rawCell['solutionContentRegion1k'] ??
                   rawCell['solution_content_region_1k'],
+            ),
+            sourceInfo: parseStringMap(
+              rawCell['sourceInfo'] ?? rawCell['source_info'],
             ),
           ),
         );
@@ -4687,16 +4962,30 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     bool initialShowSolution = false,
     int focusPageNumber = 0,
     List<int> focusRect1k = const <int>[],
+    String answerPathRawOverride = '',
+    String solutionPathRawOverride = '',
+    bool preferSolutionRawAsBase = false,
   }) async {
     if (_answerPdfOpening) return;
-    final raw = session.answerPathRaw.trim();
+    final answerRaw = answerPathRawOverride.trim().isNotEmpty
+        ? answerPathRawOverride.trim()
+        : session.answerPathRaw.trim();
+    final solutionRaw = solutionPathRawOverride.trim().isNotEmpty
+        ? solutionPathRawOverride.trim()
+        : session.solutionPathRaw.trim();
+    final raw = preferSolutionRawAsBase && solutionRaw.isNotEmpty
+        ? solutionRaw
+        : (answerRaw.isNotEmpty ? answerRaw : solutionRaw);
     if (raw.isEmpty) return;
     final cacheKey = session.answerViewerCacheKey.trim().isEmpty
         ? 'right_sheet_answer:${session.sessionId}'
         : session.answerViewerCacheKey.trim();
     setState(() => _answerPdfOpening = true);
     try {
-      final answerPath = await _resolveSessionPdfViewerPath(raw, kind: 'ans');
+      final answerPath = await _resolveSessionPdfViewerPath(
+        raw,
+        kind: preferSolutionRawAsBase && solutionRaw.isNotEmpty ? 'sol' : 'ans',
+      );
       if (answerPath.trim().isEmpty) return;
       if (!_isSessionAnswerWebUrl(answerPath)) {
         final file = File(answerPath);
@@ -4710,7 +4999,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         }
       }
 
-      final solutionRaw = session.solutionPathRaw.trim();
       final solutionPath = solutionRaw.isEmpty
           ? ''
           : await _resolveSessionPdfViewerPath(solutionRaw, kind: 'sol');
@@ -4856,6 +5144,30 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       focusRect1k: cell.solutionRect1k.length >= 4
           ? cell.solutionRect1k
           : cell.focusRect1k,
+      answerPathRawOverride: cell.answerPathRaw,
+      solutionPathRawOverride: cell.solutionPathRaw,
+      preferSolutionRawAsBase:
+          cell.answerPathRaw.trim().isEmpty && cell.solutionPathRaw.isNotEmpty,
+    );
+  }
+
+  Future<void> _openQuestionSourceInfoDialog(
+    _RightSheetGradingCellVm cell,
+  ) async {
+    if (cell.sourceInfo.isEmpty) {
+      ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+        const SnackBar(content: Text('표시할 문항 출처 정보가 없습니다.')),
+      );
+      return;
+    }
+    await _showTopOverlayDialog<void>(
+      builder: (dialogContext, closeDialog) {
+        return _QuestionSourceInfoDialog(
+          questionLabel: cell.displayQuestionLabel,
+          sourceInfo: cell.sourceInfo,
+          onClose: closeDialog,
+        );
+      },
     );
   }
 
@@ -5625,75 +5937,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final colors = _resolveAnswerRowStyle(state);
     final questionLabel = cell.displayQuestionLabel;
     final answerSlotHeight = _answerSlotHeightForCell(cell);
-    return Tooltip(
-      message: _gradingEditLocked
-          ? '$questionLabel번 · 저장된 채점 결과'
-          : '$questionLabel번',
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Tooltip(
-            message: '$questionLabel번 해설 PDF로 이동',
-            child: InkWell(
-              borderRadius: BorderRadius.circular(10),
-              onTap: () => unawaited(
-                _openCellSolution(cell, pageNumber: pageNumber),
-              ),
-              onLongPress: () => unawaited(
-                _openQuestionIssueReportDialog(cell),
-              ),
-              child: SizedBox(
-                width: 56,
-                height: 44,
-                child: Center(
-                  child: Text(
-                    questionLabel,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFF9FB3B3),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w900,
-                      height: 1.0,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => unawaited(_toggleCellState(cell.key)),
-              child: Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                decoration: BoxDecoration(
-                  color: colors.background,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: colors.border),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: answerSlotHeight,
-                        child: Opacity(
-                          opacity: state == 'unsolved' ? 0.48 : 1.0,
-                          child: _buildAnswerImageOrFallback(cell),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
+    return _RightSheetAnswerListRow(
+      questionLabel: questionLabel,
+      editLocked: _gradingEditLocked,
+      state: state,
+      backgroundColor: colors.background,
+      borderColor: colors.border,
+      answerSlotHeight: answerSlotHeight,
+      hasSourceInfo: cell.sourceInfo.isNotEmpty,
+      onOpenSolution: () => unawaited(
+        _openCellSolution(cell, pageNumber: pageNumber),
       ),
+      onReportIssue: () => unawaited(_openQuestionIssueReportDialog(cell)),
+      onToggleState: () => unawaited(_toggleCellState(cell.key)),
+      onShowSourceInfo: () => unawaited(_openQuestionSourceInfoDialog(cell)),
+      answerChild: _buildAnswerImageOrFallback(cell),
     );
   }
 
@@ -6356,6 +6614,171 @@ class _BookCardState extends State<_BookCard> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _QuestionSourceInfoDialog extends StatelessWidget {
+  final String questionLabel;
+  final Map<String, String> sourceInfo;
+  final VoidCallback onClose;
+
+  const _QuestionSourceInfoDialog({
+    required this.questionLabel,
+    required this.sourceInfo,
+    required this.onClose,
+  });
+
+  String _value(String key) => (sourceInfo[key] ?? '').trim();
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = _value('sourceKind').toLowerCase();
+    final isExam = kind == 'exam' || kind == 'hwpx';
+    final rows = isExam
+        ? <({String label, String value})>[
+            (label: '학교', value: _value('schoolName')),
+            (label: '연도', value: _value('year')),
+            (label: '시험', value: _value('examName')),
+            (label: '원문항', value: _value('originalQuestionNumber')),
+          ]
+        : <({String label, String value})>[
+            (label: '교재명', value: _value('bookName')),
+            (label: '원문항', value: _value('originalQuestionNumber')),
+            (label: '난이도', value: _value('difficulty')),
+            (label: '유형', value: _value('typeName')),
+          ];
+    final visibleRows =
+        rows.where((row) => row.value.trim().isNotEmpty).toList();
+
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: const BorderSide(color: _rsBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(22, 20, 22, 0),
+      contentPadding: const EdgeInsets.fromLTRB(22, 16, 22, 4),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      title: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _rsAccent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _rsAccent.withValues(alpha: 0.26)),
+            ),
+            child: const Icon(
+              Icons.info_outline_rounded,
+              color: _rsAccent,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '$questionLabel번 문항 출처',
+              style: const TextStyle(
+                color: _rsText,
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 420,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: _rsPanelBg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _rsBorder),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: visibleRows.isEmpty
+                ? const Text(
+                    '등록된 세부 출처 정보가 없습니다.',
+                    style: TextStyle(
+                      color: _rsTextSub,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < visibleRows.length; i++) ...[
+                        _QuestionSourceInfoRow(
+                          label: visibleRows[i].label,
+                          value: visibleRows[i].value,
+                        ),
+                        if (i != visibleRows.length - 1)
+                          const Divider(
+                            height: 18,
+                            thickness: 1,
+                            color: _rsBorder,
+                          ),
+                      ],
+                    ],
+                  ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: onClose,
+          style: TextButton.styleFrom(foregroundColor: _rsAccent),
+          child: const Text('확인'),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuestionSourceInfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _QuestionSourceInfoRow({
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 74,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: _rsTextSub,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              height: 1.3,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: _rsText,
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              height: 1.3,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

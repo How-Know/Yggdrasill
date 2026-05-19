@@ -34,8 +34,11 @@ class HomeworkAnswerGradingCell {
   final int? answerPageNumber;
   final List<int> answerRect1k;
   final List<int> focusRect1k;
+  final String answerPathRaw;
+  final String solutionPathRaw;
   final int? solutionPageNumber;
   final List<int> solutionRect1k;
+  final Map<String, String> sourceInfo;
 
   const HomeworkAnswerGradingCell({
     required this.key,
@@ -55,8 +58,11 @@ class HomeworkAnswerGradingCell {
     this.answerPageNumber,
     this.answerRect1k = const <int>[],
     this.focusRect1k = const <int>[],
+    this.answerPathRaw = '',
+    this.solutionPathRaw = '',
     this.solutionPageNumber,
     this.solutionRect1k = const <int>[],
+    this.sourceInfo = const <String, String>{},
   });
 }
 

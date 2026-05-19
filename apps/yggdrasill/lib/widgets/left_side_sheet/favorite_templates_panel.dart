@@ -574,6 +574,74 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     }
   }
 
+  Future<void> _deleteGeneratedAssignmentPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    final presetId = preset.id.trim();
+    if (presetId.isEmpty) return;
+    final title = preset.displayName.trim().isEmpty
+        ? '문제은행 과제'
+        : preset.displayName.trim();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          title: const Text(
+            '미리 만든 과제 삭제',
+            style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+          ),
+          content: Text(
+            '"$title" 과제를 목록에서 삭제할까요?',
+            style: const TextStyle(color: kDlgTextSub, height: 1.35),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB74C4C),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('삭제'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      final safeAcademyId = (academyId ?? '').trim();
+      if (safeAcademyId.isEmpty) {
+        throw Exception('학원 정보를 찾지 못했습니다.');
+      }
+      await _problemBankService.deleteExportPreset(
+        academyId: safeAcademyId,
+        presetId: presetId,
+      );
+      LearningProblemBankService.generatedAssignmentChanged.add(null);
+      await _refreshTemplates();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('미리 만든 과제를 삭제했습니다.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('과제 삭제 실패: $e')),
+      );
+    }
+  }
+
   Widget _buildAssignmentCard(
     HomeworkRecentTemplate template, {
     required double width,
@@ -587,37 +655,54 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       children: [
         _buildTemplateCard(template, width: width, sheetScale: sheetScale),
         SizedBox(height: 6 * sheetScale),
-        Align(
-          alignment: Alignment.centerRight,
-          child: OutlinedButton.icon(
-            onPressed: preset == null || isPrinting
-                ? null
-                : () => unawaited(_printGeneratedAssignmentPreset(preset)),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFFC7F2D8),
-              disabledForegroundColor: const Color(0xFF7CA39A),
-              side: const BorderSide(color: Color(0xFF285C46), width: 1.1),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.symmetric(
-                horizontal: 10 * sheetScale,
-                vertical: 7 * sheetScale,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            OutlinedButton.icon(
+              onPressed: preset == null || isPrinting
+                  ? null
+                  : () => unawaited(_printGeneratedAssignmentPreset(preset)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFC7F2D8),
+                disabledForegroundColor: const Color(0xFF7CA39A),
+                side: const BorderSide(color: Color(0xFF285C46), width: 1.1),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.symmetric(
+                  horizontal: 10 * sheetScale,
+                  vertical: 7 * sheetScale,
+                ),
+              ),
+              icon: isPrinting
+                  ? SizedBox(
+                      width: 14 * sheetScale,
+                      height: 14 * sheetScale,
+                      child: const CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(Icons.print_rounded, size: 16 * sheetScale),
+              label: Text(
+                isPrinting ? '생성 중' : '바로 인쇄',
+                style: TextStyle(
+                  fontSize: 13 * sheetScale,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
-            icon: isPrinting
-                ? SizedBox(
-                    width: 14 * sheetScale,
-                    height: 14 * sheetScale,
-                    child: const CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(Icons.print_rounded, size: 16 * sheetScale),
-            label: Text(
-              isPrinting ? '생성 중' : '바로 인쇄',
-              style: TextStyle(
-                fontSize: 13 * sheetScale,
-                fontWeight: FontWeight.w800,
+            SizedBox(width: 6 * sheetScale),
+            Tooltip(
+              message: '삭제',
+              child: IconButton(
+                onPressed: preset == null || isPrinting
+                    ? null
+                    : () => unawaited(_deleteGeneratedAssignmentPreset(preset)),
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20 * sheetScale,
+                  color: const Color(0xFFE57373),
+                ),
               ),
             ),
-          ),
+          ],
         ),
       ],
     );

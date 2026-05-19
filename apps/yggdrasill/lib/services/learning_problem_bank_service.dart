@@ -1345,7 +1345,7 @@ class LearningProblemBankService {
         final rows = await _client
             .from('textbook_problem_crops')
             .select(
-              'problem_number,raw_page,display_page,label,content_group_kind,content_group_label,content_group_title,content_group_order',
+              'id,problem_number,raw_page,display_page,label,content_group_kind,content_group_label,content_group_title,content_group_order',
             )
             .eq('academy_id', academyId)
             .eq('book_id', bookId)
@@ -1357,6 +1357,7 @@ class LearningProblemBankService {
           final crop = _mapOrEmpty(raw);
           final problemNumber = problemKey(crop['problem_number']);
           if (problemNumber.isEmpty) continue;
+          final cropId = '${crop['id'] ?? ''}'.trim();
           final label = '${crop['label'] ?? ''}'.trim();
           final contentGroup = <String, dynamic>{
             'kind': '${crop['content_group_kind'] ?? ''}'.trim(),
@@ -1375,6 +1376,9 @@ class LearningProblemBankService {
           labelByDocAndNumber['$docId|$problemNumber'] = jsonEncode(
             <String, dynamic>{
               'label': label,
+              'crop_id': cropId,
+              'book_id': bookId,
+              'grade_label': gradeLabel,
               'raw_page': rawPage,
               'display_page': displayPage,
               'content_group': contentGroup,
@@ -1397,6 +1401,12 @@ class LearningProblemBankService {
       final contentGroup = _mapOrEmpty(cropInfo['content_group']);
       final cropPage = <String, dynamic>{
         ..._mapOrEmpty(_mapOrEmpty(row['meta'])['textbook_crop_page']),
+        if ('${cropInfo['crop_id'] ?? ''}'.trim().isNotEmpty)
+          'crop_id': '${cropInfo['crop_id'] ?? ''}'.trim(),
+        if ('${cropInfo['book_id'] ?? ''}'.trim().isNotEmpty)
+          'book_id': '${cropInfo['book_id'] ?? ''}'.trim(),
+        if ('${cropInfo['grade_label'] ?? ''}'.trim().isNotEmpty)
+          'grade_label': '${cropInfo['grade_label'] ?? ''}'.trim(),
         if (_intOrNull(cropInfo['raw_page']) != null)
           'raw_page': _intOrNull(cropInfo['raw_page']),
         if (_intOrNull(cropInfo['display_page']) != null)
@@ -1417,6 +1427,13 @@ class LearningProblemBankService {
           if (label.isNotEmpty) 'textbook_difficulty_label': label,
           if ('${contentGroup['kind'] ?? ''}'.trim().isNotEmpty)
             'textbook_content_group': contentGroup,
+          'textbook_scope': <String, dynamic>{
+            ..._mapOrEmpty(meta['textbook_scope'] ?? meta['textbookScope']),
+            if ('${cropInfo['book_id'] ?? ''}'.trim().isNotEmpty)
+              'book_id': '${cropInfo['book_id'] ?? ''}'.trim(),
+            if ('${cropInfo['grade_label'] ?? ''}'.trim().isNotEmpty)
+              'grade_label': '${cropInfo['grade_label'] ?? ''}'.trim(),
+          },
           'textbook_crop_page': cropPage,
         },
       };

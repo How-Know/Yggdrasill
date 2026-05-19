@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/services/past_exam_shortcut_store.dart';
 import 'package:mneme_flutter/services/tenant_service.dart';
@@ -25,6 +24,7 @@ class _PastExamPapersDialogState extends State<PastExamPapersDialog> {
   static const Color _cellEmpty = Color(0xFF2d2d2d);
   static const Color _cellLinked = Color(0xFF39d353);
   static const double _cellRadius = 4;
+
   /// 그리드 한 칸(패딩 제외 순수 셀)
   static const double _cellSize = 52;
   static const double _cellPad = 5;
@@ -42,10 +42,8 @@ class _PastExamPapersDialogState extends State<PastExamPapersDialog> {
   String? _dragHoverCellId;
   double _gradeWheelAccum = 0;
 
-  List<NaesinGradeOption> get _allGradeOptions => <NaesinGradeOption>[
-        ...NaesinExamContext.gradeOptionsForLevel(EducationLevel.middle),
-        ...NaesinExamContext.gradeOptionsForLevel(EducationLevel.high),
-      ];
+  List<NaesinGradeOption> get _allGradeOptions =>
+      NaesinExamContext.allGradeOptions();
 
   List<String> get _schools => NaesinExamContext.schoolsForGradeKey(_gradeKey);
 
@@ -348,15 +346,16 @@ class _PastExamPapersDialogState extends State<PastExamPapersDialog> {
                                           ? '과목'
                                           : '과목·분기'),
                                   value: _courseKey,
-                                  items: NaesinExamContext.courseOptionsForGrade(
-                                          _gradeKey)
-                                      .map(
-                                        (e) => DropdownMenuItem<String>(
-                                          value: e.key,
-                                          child: Text(e.label),
-                                        ),
-                                      )
-                                      .toList(),
+                                  items:
+                                      NaesinExamContext.courseOptionsForGrade(
+                                              _gradeKey)
+                                          .map(
+                                            (e) => DropdownMenuItem<String>(
+                                              value: e.key,
+                                              child: Text(e.label),
+                                            ),
+                                          )
+                                          .toList(),
                                   onChanged: (v) => unawaited(_pickCourse(v)),
                                 ),
                             ],

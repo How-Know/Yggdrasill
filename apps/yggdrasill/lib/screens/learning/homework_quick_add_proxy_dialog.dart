@@ -536,8 +536,8 @@ class HomeworkQuickAddProxyDialogState
     return null;
   }
 
-  List<_NaesinGradeOption> _naesinGradeOptionsForLevel(EducationLevel level) {
-    return NaesinExamContext.gradeOptionsForLevel(level)
+  List<_NaesinGradeOption> get _naesinAllGradeOptions {
+    return NaesinExamContext.allGradeOptions()
         .map(
           (e) => _NaesinGradeOption(
             key: e.key,
@@ -6276,11 +6276,7 @@ class HomeworkQuickAddProxyDialogState
         _naesinExamTerm.isEmpty) {
       _initNaesinFilterDefaults();
     }
-    final info = _studentInfoForDialog();
-    final level = info?.student.educationLevel == EducationLevel.high
-        ? EducationLevel.high
-        : EducationLevel.middle;
-    final gradeOptions = _naesinGradeOptionsForLevel(level);
+    final gradeOptions = _naesinAllGradeOptions;
     final safeGradeKey = gradeOptions.any((e) => e.key == _naesinGradeKey)
         ? _naesinGradeKey
         : gradeOptions.first.key;

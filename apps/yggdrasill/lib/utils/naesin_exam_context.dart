@@ -93,6 +93,14 @@ class NaesinExamContext {
     }
   }
 
+  /// 중1~중3, 고1~고3 전체 (학생 중·고 구분과 무관한 학년 선택용).
+  static List<NaesinGradeOption> allGradeOptions() {
+    return <NaesinGradeOption>[
+      ...gradeOptionsForLevel(EducationLevel.middle),
+      ...gradeOptionsForLevel(EducationLevel.high),
+    ];
+  }
+
   /// H2는 4과목, H3는 프리셋 연결용 최소 옵션(대수).
   static List<NaesinCourseOption> courseOptionsForGrade(String gradeKey) {
     switch (gradeKey) {

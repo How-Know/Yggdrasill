@@ -76,9 +76,6 @@ class ProblemBankDocument {
     final privateMaterial = sourceRaw['private_material'] == true;
     final mockPast = sourceRaw['mock_past_exam'] == true;
     final schoolPast = sourceRaw['school_past_exam'] == true;
-    final cropPageMeta =
-        _mapOrEmpty(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
-    final displaySourcePage = _intOrZero(cropPageMeta['display_page']);
     final fallbackSourceType = privateMaterial
         ? 'market_book'
         : mockPast
@@ -609,6 +606,9 @@ class ProblemBankQuestion {
     final textbookCourse = _mapOrEmpty(
       sourceRaw['textbook_course'] ?? meta['textbook_course'],
     );
+    final cropPageMeta =
+        _mapOrEmpty(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
+    final displaySourcePage = _intOrZero(cropPageMeta['display_page']);
     final privateMaterial = sourceRaw['private_material'] == true;
     final mockPast = sourceRaw['mock_past_exam'] == true;
     final schoolPast = sourceRaw['school_past_exam'] == true;

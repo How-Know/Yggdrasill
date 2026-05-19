@@ -5051,6 +5051,7 @@ async function handleTextbookUploadUrl(body, res) {
       academyId,
       fileId,
       gradeLabel,
+      courseKey,
       kind,
     });
   } catch (e) {

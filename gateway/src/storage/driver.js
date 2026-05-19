@@ -347,10 +347,27 @@ export async function removeObjectsByPrefixInFolder(opts) {
  * canonical storage_key from the logical identifiers. Keeping this in one
  * place makes it trivial to change the path scheme later.
  */
-export function buildTextbookStorageKey({ academyId, fileId, gradeLabel, kind }) {
+function storagePathSegment(input) {
+  const s = sanitizeString(input);
+  if (!s) return '';
+  const slug = slugForFileName(s);
+  if (slug && !/^_+$/.test(slug)) return slug;
+  // Supabase Storage rejects non-ASCII object keys in some signed-upload
+  // paths. Keep the segment reversible-ish and collision-resistant while
+  // staying inside the conservative ASCII set.
+  return encodeURIComponent(s).replace(/%/g, '~');
+}
+
+export function buildTextbookStorageKey({
+  academyId,
+  fileId,
+  gradeLabel,
+  courseKey,
+  kind,
+}) {
   const a = sanitizeString(academyId);
   const f = sanitizeString(fileId);
-  const g = sanitizeString(gradeLabel).replace(/[\\/]/g, '_');
+  const g = storagePathSegment(courseKey) || storagePathSegment(gradeLabel);
   const k = sanitizeString(kind);
   if (!a || !f || !g || !k) {
     throw new Error('buildTextbookStorageKey: missing required fields');

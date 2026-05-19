@@ -467,7 +467,6 @@ class RightSheetGradingSearchService {
     final raw = normalizedKind == 'sol'
         ? textbookLinks.solutionPathRaw.trim()
         : textbookLinks.answerPathRaw.trim();
-    if (raw.isEmpty) return '';
     try {
       final source = await TextbookPdfService.instance.resolve(
         TextbookPdfRef(
@@ -601,8 +600,9 @@ class RightSheetGradingSearchService {
       final question = questionByKey[uid];
       if (question == null) continue;
       fallbackIndex += 1;
+      final questionIndex = fallbackIndex;
       final rawIndex = int.tryParse(question.displayQuestionNumber.trim());
-      final questionIndex = rawIndex != null && rawIndex > 0
+      final originalQuestionIndex = rawIndex != null && rawIndex > 0
           ? rawIndex
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
@@ -649,6 +649,10 @@ class RightSheetGradingSearchService {
               answerAssetKind:
                   answerRender == null ? '' : 'unified_answer_render',
               answerRenderStyleVersion: answerRender?.styleVersion ?? '',
+              sourceInfo: _problemBankQuestionSourceInfo(
+                question,
+                originalQuestionIndex: originalQuestionIndex,
+              ),
             ),
           );
     }
@@ -672,6 +676,95 @@ class RightSheetGradingSearchService {
       gradingPages: gradingPages,
       scoreByQuestionKey: scoreByQuestionKey,
     );
+  }
+
+  String _trimDynamic(dynamic raw) => '${raw ?? ''}'.trim();
+
+  Map<String, dynamic> _mapFromDynamic(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return raw.map((key, value) => MapEntry('$key', value));
+    return const <String, dynamic>{};
+  }
+
+  Map<String, String> _problemBankQuestionSourceInfo(
+    LearningProblemQuestion question, {
+    int? originalQuestionIndex,
+  }) {
+    String firstNonEmpty(Iterable<dynamic> values) {
+      for (final value in values) {
+        final text = _trimDynamic(value);
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
+    final sourceType = question.sourceTypeCode.trim().toLowerCase();
+    final cropPage = _mapFromDynamic(
+      question.meta['textbook_crop_page'] ?? question.meta['textbookCropPage'],
+    );
+    final crop = _mapFromDynamic(
+      question.meta['textbook_crop'] ?? question.meta['textbookCrop'],
+    );
+    final contentGroup = _mapFromDynamic(
+      question.meta['textbook_content_group'] ??
+          cropPage['content_group'] ??
+          crop['contentGroup'],
+    );
+    final looksLikeExam = sourceType.contains('hwpx') ||
+        sourceType.contains('exam') ||
+        question.schoolName.trim().isNotEmpty ||
+        question.examYear != null ||
+        question.examTermLabel.trim().isNotEmpty;
+    final originalQuestionNumber =
+        originalQuestionIndex != null && originalQuestionIndex > 0
+            ? '$originalQuestionIndex'
+            : question.displayQuestionNumber;
+    final sourceInfo = <String, String>{
+      'sourceKind': looksLikeExam ? 'exam' : 'textbook',
+      if (looksLikeExam) ...{
+        'schoolName': question.schoolName.trim(),
+        'year': question.examYear == null ? '' : '${question.examYear}',
+        'examName': firstNonEmpty([
+          [
+            question.semesterLabel.trim(),
+            question.examTermLabel.trim(),
+          ].where((part) => part.isNotEmpty).join(' '),
+          question.documentSourceName,
+        ]),
+        'originalQuestionNumber': originalQuestionNumber,
+      } else ...{
+        'bookName': firstNonEmpty([
+          question.materialName,
+          question.documentSourceName,
+          question.publisherName,
+        ]),
+        'originalQuestionNumber': originalQuestionNumber,
+        'difficulty': firstNonEmpty([
+          question.meta['difficulty_label'],
+          question.meta['difficultyLabel'],
+          question.meta['textbook_difficulty_label'],
+          question.meta['difficulty'],
+          question.meta['level'],
+          crop['difficulty_label'],
+          crop['difficultyLabel'],
+          crop['label'],
+          cropPage['difficulty_label'],
+          cropPage['difficultyLabel'],
+          cropPage['label'],
+        ]),
+        'typeName': firstNonEmpty([
+          question.questionType,
+          question.meta['type_name'],
+          question.meta['problem_type'],
+          question.meta['unit_label'],
+          contentGroup['label'],
+          contentGroup['title'],
+          question.courseLabel,
+        ]),
+      },
+    };
+    sourceInfo.removeWhere((_, value) => value.trim().isEmpty);
+    return sourceInfo;
   }
 
   Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
@@ -922,6 +1015,12 @@ class RightSheetGradingSearchService {
                     if (cell.answerRenderStyleVersion.trim().isNotEmpty)
                       'answerRenderStyleVersion':
                           cell.answerRenderStyleVersion.trim(),
+                    if (cell.answerPathRaw.trim().isNotEmpty)
+                      'answerPathRaw': cell.answerPathRaw.trim(),
+                    if (cell.solutionPathRaw.trim().isNotEmpty)
+                      'solutionPathRaw': cell.solutionPathRaw.trim(),
+                    if (cell.sourceInfo.isNotEmpty)
+                      'sourceInfo': Map<String, String>.from(cell.sourceInfo),
                   },
                 )
                 .toList(growable: false),

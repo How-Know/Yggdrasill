@@ -2749,7 +2749,14 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
   const subjectiveAnswer = resolveSubjectiveAnswer(question, objectiveAnswer);
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
-  const mode = normalizeQuestionModeSelection(question, selectedMode, fallbackMode);
+  const requestedMode = normalizeQuestionMode(selectedMode);
+  let mode = normalizeQuestionModeSelection(question, selectedMode, fallbackMode);
+  if (mode === 'objective' && (!allowObjective || objectiveChoices.length < 2)) {
+    if (requestedMode === 'objective' || !allowSubjective) {
+      throw new Error(`question_mode_incompatible_objective:${question.id || question.question_number || '?'}`);
+    }
+    mode = 'subjective';
+  }
   const out = {
     ...question,
     allow_objective: allowObjective,
