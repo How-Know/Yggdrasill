@@ -55,10 +55,14 @@ class HomeworkTestGradingAttemptRecord {
 class HomeworkTestSavedGradingSession {
   final HomeworkTestGradingAttemptRecord attempt;
   final Map<String, HomeworkAnswerCellState> states;
+  final Map<String, String> correctionStates;
+  final Map<String, int> correctionAttemptNumbers;
 
   const HomeworkTestSavedGradingSession({
     required this.attempt,
     required this.states,
+    this.correctionStates = const <String, String>{},
+    this.correctionAttemptNumbers = const <String, int>{},
   });
 }
 
@@ -122,6 +126,10 @@ class HomeworkTestGradingResultService {
     required List<HomeworkAnswerGradingPage> gradingPages,
     required Map<String, double> scoreByQuestionKey,
     String groupHomeworkTitleSnapshot = '',
+    String baselineAttemptId = '',
+    Map<String, HomeworkAnswerCellState> baselineStates =
+        const <String, HomeworkAnswerCellState>{},
+    Map<String, String> correctionStates = const <String, String>{},
   }) async {
     final normalizedAction = action.trim().toLowerCase();
     if (normalizedAction != 'complete' && normalizedAction != 'confirm') {
@@ -133,10 +141,22 @@ class HomeworkTestGradingResultService {
     final academyId = await _resolveAcademyId();
     if (academyId.isEmpty) return false;
 
+    final nextAttemptNumber =
+        await _loadAttemptCountForHomework(academyId, homeworkItemId) + 1;
+    final existingCorrectionAttemptNumbers =
+        await _loadCorrectionAttemptNumbersForHomework(
+      academyId: academyId,
+      homeworkItemId: homeworkItemId,
+    );
     final computed = _computeAttemptRows(
       states: states,
       gradingPages: gradingPages,
       scoreByQuestionKey: scoreByQuestionKey,
+      baselineAttemptId: baselineAttemptId,
+      baselineStates: baselineStates,
+      correctionStates: correctionStates,
+      nextAttemptNumber: nextAttemptNumber,
+      existingCorrectionAttemptNumbers: existingCorrectionAttemptNumbers,
     );
     final solveElapsedMs = math.max(0, homeworkItem.accumulatedMs);
     final timeLimitMinutes = homeworkItem.timeLimitMinutes ?? 0;
@@ -184,6 +204,14 @@ class HomeworkTestGradingResultService {
             'question_index': row.questionIndex,
             'correct_answer_snapshot': row.correctAnswerSnapshot,
             'state': row.state,
+            if (row.baselineAttemptId.isNotEmpty)
+              'baseline_attempt_id': row.baselineAttemptId,
+            if (row.baselineState.isNotEmpty)
+              'baseline_state': row.baselineState,
+            if (row.correctionState.isNotEmpty)
+              'correction_state': row.correctionState,
+            if (row.correctionAttemptNumber != null)
+              'correction_attempt_number': row.correctionAttemptNumber,
             'point_value': row.pointValue,
             'earned_point': row.earnedPoint,
             'reserved_elapsed_ms': null,
@@ -206,6 +234,46 @@ class HomeworkTestGradingResultService {
             .delete()
             .eq('id', attemptId);
       } catch (_) {}
+      if (_isMissingRetryColumnError(error)) {
+        final fallbackAttemptId = _uuid.v4();
+        final fallbackAttemptRow = Map<String, dynamic>.from(attemptRow)
+          ..['id'] = fallbackAttemptId;
+        final fallbackItemRows = itemRows
+            .map(
+              (row) => Map<String, dynamic>.from(row)
+                ..['id'] = _uuid.v4()
+                ..['attempt_id'] = fallbackAttemptId
+                ..remove('baseline_attempt_id')
+                ..remove('baseline_state')
+                ..remove('correction_state')
+                ..remove('correction_attempt_number'),
+            )
+            .toList(growable: false);
+        try {
+          await supa
+              .from('homework_test_grading_attempts')
+              .insert(fallbackAttemptRow);
+          if (fallbackItemRows.isNotEmpty) {
+            await supa
+                .from('homework_test_grading_attempt_items')
+                .insert(fallbackItemRows);
+          }
+          return true;
+        } catch (fallbackError, fallbackStackTrace) {
+          try {
+            await supa
+                .from('homework_test_grading_attempts')
+                .delete()
+                .eq('id', fallbackAttemptId);
+          } catch (_) {}
+          if (!_isMissingTableError(fallbackError)) {
+            debugPrint(
+                'saveAttemptFromSession fallback failed: $fallbackError');
+            debugPrintStack(stackTrace: fallbackStackTrace);
+          }
+          return false;
+        }
+      }
       if (!_isMissingTableError(error)) {
         debugPrint('saveAttemptFromSession failed: $error');
         debugPrintStack(stackTrace: stackTrace);
@@ -273,27 +341,98 @@ class HomeworkTestGradingResultService {
       ));
       if (attempt.id.isEmpty) return null;
 
-      final itemRows = await Supabase.instance.client
-          .from('homework_test_grading_attempt_items')
-          .select('question_key,state')
-          .eq('academy_id', academyId)
-          .eq('attempt_id', attempt.id)
-          .order('page_number', ascending: true)
-          .order('question_index', ascending: true);
+      final itemRows = await _loadSavedSessionItemRows(
+        academyId: academyId,
+        attemptId: attempt.id,
+      );
       final states = <String, HomeworkAnswerCellState>{};
+      final correctionStates = <String, String>{};
+      final correctionAttemptNumbers = <String, int>{};
       for (final raw in itemRows) {
         final row = Map<String, dynamic>.from(raw as Map);
         final key = '${row['question_key'] ?? ''}'.trim();
         if (key.isEmpty) continue;
         states[key] = _decodeState('${row['state'] ?? ''}');
+        final correctionState = '${row['correction_state'] ?? ''}'.trim();
+        if (correctionState.isNotEmpty) {
+          correctionStates[key] = correctionState;
+          final correctionAttemptNumber =
+              _intOf(row['correction_attempt_number']);
+          if (correctionAttemptNumber > 0) {
+            correctionAttemptNumbers[key] = correctionAttemptNumber;
+          }
+        }
       }
       return HomeworkTestSavedGradingSession(
         attempt: attempt,
         states: states,
+        correctionStates: correctionStates,
+        correctionAttemptNumbers: correctionAttemptNumbers,
       );
     } catch (error, stackTrace) {
       if (!_isMissingTableError(error)) {
         debugPrint('loadLatestSavedSessionForHomework failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      return null;
+    }
+  }
+
+  Future<HomeworkTestSavedGradingSession?> loadFirstSavedSessionForHomework({
+    required String homeworkItemId,
+  }) async {
+    final academyId = await _resolveAcademyId();
+    final itemId = homeworkItemId.trim();
+    if (academyId.isEmpty || itemId.isEmpty) return null;
+    try {
+      final attemptRows = await Supabase.instance.client
+          .from('homework_test_grading_attempts')
+          .select(
+            'id,student_id,homework_item_id,action,assignment_code_snapshot,'
+            'group_homework_title_snapshot,solve_elapsed_ms,extra_elapsed_ms,'
+            'score_correct,score_total,wrong_count,unsolved_count,graded_at',
+          )
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', itemId)
+          .order('graded_at', ascending: true)
+          .limit(1);
+      if (attemptRows.isEmpty) return null;
+      final attempt = _attemptFromRow(Map<String, dynamic>.from(
+        attemptRows.first as Map,
+      ));
+      if (attempt.id.isEmpty) return null;
+
+      final itemRows = await _loadSavedSessionItemRows(
+        academyId: academyId,
+        attemptId: attempt.id,
+      );
+      final states = <String, HomeworkAnswerCellState>{};
+      final correctionStates = <String, String>{};
+      final correctionAttemptNumbers = <String, int>{};
+      for (final raw in itemRows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final key = '${row['question_key'] ?? ''}'.trim();
+        if (key.isEmpty) continue;
+        states[key] = _decodeState('${row['state'] ?? ''}');
+        final correctionState = '${row['correction_state'] ?? ''}'.trim();
+        if (correctionState.isNotEmpty) {
+          correctionStates[key] = correctionState;
+          final correctionAttemptNumber =
+              _intOf(row['correction_attempt_number']);
+          if (correctionAttemptNumber > 0) {
+            correctionAttemptNumbers[key] = correctionAttemptNumber;
+          }
+        }
+      }
+      return HomeworkTestSavedGradingSession(
+        attempt: attempt,
+        states: states,
+        correctionStates: correctionStates,
+        correctionAttemptNumbers: correctionAttemptNumbers,
+      );
+    } catch (error, stackTrace) {
+      if (!_isMissingTableError(error)) {
+        debugPrint('loadFirstSavedSessionForHomework failed: $error');
         debugPrintStack(stackTrace: stackTrace);
       }
       return null;
@@ -555,6 +694,12 @@ class HomeworkTestGradingResultService {
     required Map<String, HomeworkAnswerCellState> states,
     required List<HomeworkAnswerGradingPage> gradingPages,
     required Map<String, double> scoreByQuestionKey,
+    String baselineAttemptId = '',
+    Map<String, HomeworkAnswerCellState> baselineStates =
+        const <String, HomeworkAnswerCellState>{},
+    Map<String, String> correctionStates = const <String, String>{},
+    int nextAttemptNumber = 1,
+    Map<String, int> existingCorrectionAttemptNumbers = const <String, int>{},
   }) {
     final hasScoreData = scoreByQuestionKey.isNotEmpty;
     final rows = <_ComputedAttemptRow>[];
@@ -580,6 +725,20 @@ class HomeworkTestGradingResultService {
         } else if (state == HomeworkAnswerCellState.unsolved) {
           unsolvedCount += 1;
         }
+        final baselineState = baselineStates[key];
+        final baselineStateRaw = baselineState == null ||
+                baselineState == HomeworkAnswerCellState.correct
+            ? ''
+            : _encodeState(baselineState);
+        final correctionState = correctionStates[key] == 'corrected' &&
+                baselineStateRaw.isNotEmpty &&
+                state == HomeworkAnswerCellState.correct
+            ? 'corrected'
+            : '';
+        final correctionAttemptNumber = correctionState.isEmpty
+            ? null
+            : existingCorrectionAttemptNumbers[key] ??
+                math.max(1, nextAttemptNumber);
         rows.add(
           _ComputedAttemptRow(
             questionKey: key,
@@ -589,6 +748,11 @@ class HomeworkTestGradingResultService {
             correctAnswerSnapshot:
                 cell.answer.trim().isEmpty ? null : cell.answer.trim(),
             state: _encodeState(state),
+            baselineAttemptId:
+                baselineStateRaw.isEmpty ? '' : baselineAttemptId.trim(),
+            baselineState: baselineStateRaw,
+            correctionState: correctionState,
+            correctionAttemptNumber: correctionAttemptNumber,
             pointValue: pointValue,
             earnedPoint: earnedPoint,
           ),
@@ -621,6 +785,79 @@ class HomeworkTestGradingResultService {
       unsolvedCount: _intOf(raw['unsolved_count']),
       gradedAt: _dateTimeOf(raw['graded_at']) ?? DateTime(1970),
     );
+  }
+
+  Future<List<dynamic>> _loadSavedSessionItemRows({
+    required String academyId,
+    required String attemptId,
+  }) async {
+    final supa = Supabase.instance.client;
+    try {
+      return await supa
+          .from('homework_test_grading_attempt_items')
+          .select(
+              'question_key,state,correction_state,correction_attempt_number')
+          .eq('academy_id', academyId)
+          .eq('attempt_id', attemptId)
+          .order('page_number', ascending: true)
+          .order('question_index', ascending: true);
+    } catch (error) {
+      if (!_isMissingRetryColumnError(error)) rethrow;
+      return await supa
+          .from('homework_test_grading_attempt_items')
+          .select('question_key,state')
+          .eq('academy_id', academyId)
+          .eq('attempt_id', attemptId)
+          .order('page_number', ascending: true)
+          .order('question_index', ascending: true);
+    }
+  }
+
+  Future<int> _loadAttemptCountForHomework(
+    String academyId,
+    String homeworkItemId,
+  ) async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('homework_test_grading_attempts')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', homeworkItemId);
+      return rows.length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<Map<String, int>> _loadCorrectionAttemptNumbersForHomework({
+    required String academyId,
+    required String homeworkItemId,
+  }) async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('homework_test_grading_attempt_items')
+          .select('question_key,correction_attempt_number')
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', homeworkItemId)
+          .eq('correction_state', 'corrected');
+      final out = <String, int>{};
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final key = '${row['question_key'] ?? ''}'.trim();
+        final number = _intOf(row['correction_attempt_number']);
+        if (key.isEmpty || number <= 0) continue;
+        final existing = out[key];
+        if (existing == null || number < existing) {
+          out[key] = number;
+        }
+      }
+      return out;
+    } catch (error) {
+      if (!_isMissingRetryColumnError(error)) {
+        debugPrint('loadCorrectionAttemptNumbersForHomework failed: $error');
+      }
+      return const <String, int>{};
+    }
   }
 
   String _normalizeAssignmentCode(String? raw) {
@@ -683,6 +920,19 @@ class HomeworkTestGradingResultService {
             (msg.contains('does not exist') || msg.contains('42p01'));
   }
 
+  bool _isMissingRetryColumnError(Object error) {
+    final msg = error.toString().toLowerCase();
+    return msg.contains('homework_test_grading_attempt_items') &&
+        (msg.contains('baseline_attempt_id') ||
+            msg.contains('baseline_state') ||
+            msg.contains('correction_state') ||
+            msg.contains('correction_attempt_number')) &&
+        (msg.contains('schema cache') ||
+            msg.contains('could not find') ||
+            msg.contains('does not exist') ||
+            msg.contains('42703'));
+  }
+
   Future<String> _resolveAcademyId() async {
     var academyId =
         (await TenantService.instance.getActiveAcademyId() ?? '').trim();
@@ -724,6 +974,10 @@ class _ComputedAttemptRow {
   final int questionIndex;
   final String? correctAnswerSnapshot;
   final String state;
+  final String baselineAttemptId;
+  final String baselineState;
+  final String correctionState;
+  final int? correctionAttemptNumber;
   final double pointValue;
   final double earnedPoint;
 
@@ -734,6 +988,10 @@ class _ComputedAttemptRow {
     required this.questionIndex,
     required this.correctAnswerSnapshot,
     required this.state,
+    required this.baselineAttemptId,
+    required this.baselineState,
+    required this.correctionState,
+    required this.correctionAttemptNumber,
     required this.pointValue,
     required this.earnedPoint,
   });

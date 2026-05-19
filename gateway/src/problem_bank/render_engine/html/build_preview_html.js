@@ -36,6 +36,13 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       padding-left: 2.55em;
       line-height: 2.3;
     }
+    .stem-line.stem-line-display-math.stem-line-display-math-block,
+    .stem-line-display-math-block .stem-line-display-math-row {
+      line-height: var(--lc-line-normal);
+    }
+    .stem-line.stem-line-display-math.stem-line-display-math-block {
+      margin: calc(var(--line-height-pt) * 0.24 * 1pt) 0 calc(var(--line-height-pt) * 0.24 * 1pt);
+    }
     .lc-line {
       display: inline;
       line-height: var(--lc-line-normal);

@@ -2717,6 +2717,9 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final String questionLabel;
   final bool editLocked;
   final String state;
+  final String baselineState;
+  final bool correctedRetry;
+  final int correctionAttemptNumber;
   final Color backgroundColor;
   final Color borderColor;
   final double answerSlotHeight;
@@ -2731,6 +2734,9 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     required this.questionLabel,
     required this.editLocked,
     required this.state,
+    this.baselineState = '',
+    this.correctedRetry = false,
+    this.correctionAttemptNumber = 0,
     required this.backgroundColor,
     required this.borderColor,
     required this.answerSlotHeight,
@@ -2751,6 +2757,8 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
     with SingleTickerProviderStateMixin {
   static const double _actionPaneWidth = 62;
   static const Duration _snapDuration = Duration(milliseconds: 170);
+  static const double _cardRadius = 12.0;
+  static const double _cardBorderWidth = 1.7;
 
   late final AnimationController _ctrl =
       AnimationController(vsync: this, duration: _snapDuration);
@@ -2803,9 +2811,12 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(12);
+    final radius = BorderRadius.circular(_cardRadius);
     final questionLabel = widget.questionLabel;
     final infoColor = widget.hasSourceInfo ? _rsAccent : _rsTextSub;
+    final correctionBadgeLabel = widget.correctionAttemptNumber > 0
+        ? '수정 ${widget.correctionAttemptNumber}'
+        : '수정';
 
     Widget questionButton() {
       return Tooltip(
@@ -2836,30 +2847,68 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
     }
 
     Widget answerCard() {
-      return InkWell(
+      final shape = RoundedRectangleBorder(
         borderRadius: radius,
-        onTap: () => _runFrontAction(widget.onToggleState),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          decoration: BoxDecoration(
-            color: widget.backgroundColor,
-            borderRadius: radius,
-            border: Border.all(color: widget.borderColor),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: widget.answerSlotHeight,
-                  child: Opacity(
-                    opacity: widget.state == 'unsolved' ? 0.48 : 1.0,
-                    child: widget.answerChild,
+        side: BorderSide(
+          color: widget.borderColor,
+          width: _cardBorderWidth,
+        ),
+      );
+      return Material(
+        color: widget.backgroundColor,
+        surfaceTintColor: Colors.transparent,
+        shape: shape,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: shape,
+          onTap: () => _runFrontAction(widget.onToggleState),
+          splashFactory: NoSplash.splashFactory,
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 13.7,
+              vertical: 13.7,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: widget.answerSlotHeight,
+                    child: Opacity(
+                      opacity: widget.state == 'unsolved' ? 0.42 : 1.0,
+                      child: widget.answerChild,
+                    ),
                   ),
                 ),
-              ),
-            ],
+                if (widget.correctedRetry) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: _rsAccent.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: _rsAccent.withValues(alpha: 0.55),
+                      ),
+                    ),
+                    child: Text(
+                      correctionBadgeLabel,
+                      style: const TextStyle(
+                        color: _rsAccent,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w900,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       );
@@ -2868,9 +2917,11 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
     return Material(
       color: Colors.transparent,
       child: Tooltip(
-        message: widget.editLocked
-            ? '$questionLabel번 · 저장된 채점 결과'
-            : '$questionLabel번',
+        message: widget.correctedRetry
+            ? '$questionLabel번 · 첫 시도 ${widget.baselineState == 'unsolved' ? '미풀이' : '오답'} → 수정됨'
+            : widget.editLocked
+                ? '$questionLabel번 · 저장된 채점 결과'
+                : '$questionLabel번',
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -2982,9 +3033,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   String? _searchSuggestError;
   String? _searchError;
   Map<String, String> _gradingStates = <String, String>{};
+  Map<String, String> _baselineStates = <String, String>{};
+  Map<String, String> _correctionStates = <String, String>{};
+  Map<String, int> _correctionAttemptNumbers = <String, int>{};
   String _boundSessionId = '';
   RightSideSheetTestGradingSession? _boundSessionRef;
   bool _gradingEditLocked = false;
+  bool _wrongOnly = false;
   bool _editResetBusy = false;
   bool _actionBusy = false;
   bool _answerPdfOpening = false;
@@ -3121,7 +3176,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _autoOpenedAnswerSessionId = '';
       setState(() {
         _gradingStates = <String, String>{};
+        _baselineStates = <String, String>{};
+        _correctionStates = <String, String>{};
+        _correctionAttemptNumbers = <String, int>{};
         _gradingEditLocked = false;
+        _wrongOnly = false;
         _answerRenders = <String, LearningProblemAnswerRender>{};
         _answerRenderFailedKeys = <String>{};
         _lastAnswerRenderRouteLogKey = '';
@@ -3132,9 +3191,37 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     session.initialStates.forEach((key, value) {
       mapped[key] = _normalizeState(value);
     });
+    final baselineStates = <String, String>{};
+    session.baselineStates.forEach((key, value) {
+      final normalized = _normalizeState(value);
+      if (normalized == 'wrong' || normalized == 'unsolved') {
+        baselineStates[key] = normalized;
+      }
+    });
+    final correctionStates = <String, String>{};
+    session.initialCorrectionStates.forEach((key, value) {
+      if (value.trim() == 'corrected' && baselineStates.containsKey(key)) {
+        correctionStates[key] = 'corrected';
+      }
+    });
+    baselineStates.forEach((key, _) {
+      if (_normalizeState(mapped[key]) == 'correct') {
+        correctionStates[key] = 'corrected';
+      }
+    });
+    final correctionAttemptNumbers = <String, int>{};
+    session.correctionAttemptNumbers.forEach((key, value) {
+      if (value > 0 && correctionStates[key] == 'corrected') {
+        correctionAttemptNumbers[key] = value;
+      }
+    });
     setState(() {
       _gradingStates = mapped;
+      _baselineStates = baselineStates;
+      _correctionStates = correctionStates;
+      _correctionAttemptNumbers = correctionAttemptNumbers;
       _gradingEditLocked = session.gradingLocked;
+      _wrongOnly = session.wrongOnlyDefault && baselineStates.isNotEmpty;
       _answerRenders = <String, LearningProblemAnswerRender>{};
       _answerRenderFailedKeys = <String>{};
       _lastAnswerRenderRouteLogKey = '';
@@ -3557,14 +3644,44 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
+  bool _isBaselineRetryKey(String key) {
+    final state = _baselineStates[key];
+    return state == 'wrong' || state == 'unsolved';
+  }
+
+  bool _isCorrectedRetryKey(String key) {
+    return _correctionStates[key] == 'corrected' && _isBaselineRetryKey(key);
+  }
+
   Future<void> _toggleCellState(String key) async {
+    if (_gradingEditLocked && _isBaselineRetryKey(key)) {
+      setState(() {
+        if (_isCorrectedRetryKey(key)) {
+          _correctionStates.remove(key);
+          _gradingStates[key] = _baselineStates[key] ?? 'wrong';
+        } else {
+          _gradingStates[key] = 'correct';
+          _correctionStates[key] = 'corrected';
+        }
+      });
+      _emitStateChanged();
+      return;
+    }
     if (_gradingEditLocked) {
       final unlocked = await _confirmResetForEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
       final current = _normalizeState(_gradingStates[key]);
-      _gradingStates[key] = _nextState(current);
+      final next = _nextState(current);
+      _gradingStates[key] = next;
+      if (_isBaselineRetryKey(key)) {
+        if (next == 'correct') {
+          _correctionStates[key] = 'corrected';
+        } else {
+          _correctionStates.remove(key);
+        }
+      }
     });
     _emitStateChanged();
   }
@@ -3573,7 +3690,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final session = widget.session;
     if (session == null || _editResetBusy) return false;
     final confirmed = await showDialog<bool>(
-      context: context,
+      context: _navigatorContext,
+      useRootNavigator: true,
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: _rsPanelBg,
@@ -3594,11 +3712,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
+              onPressed: () =>
+                  Navigator.of(dialogContext, rootNavigator: true).pop(false),
               child: const Text('취소'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
+              onPressed: () =>
+                  Navigator.of(dialogContext, rootNavigator: true).pop(true),
               child: const Text('수정하고 리셋'),
             ),
           ],
@@ -3626,6 +3746,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     setState(() {
       _gradingEditLocked = false;
       _gradingStates = <String, String>{};
+      _baselineStates = <String, String>{};
+      _correctionStates = <String, String>{};
+      _correctionAttemptNumbers = <String, int>{};
+      _wrongOnly = false;
     });
     _emitStateChanged();
     return true;
@@ -4051,6 +4175,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       await session.onAction?.call(
         action,
         Map<String, String>.from(_gradingStates),
+        Map<String, String>.from(_correctionStates),
       );
       widget.onClearSession();
       if (session.closeSheetOnAction) {
@@ -4082,6 +4207,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (rawCell is! Map) continue;
         final key = '${rawCell['key'] ?? ''}'.trim();
         if (key.isEmpty) continue;
+        if (_wrongOnly &&
+            (!_isBaselineRetryKey(key) || _isCorrectedRetryKey(key))) {
+          continue;
+        }
         final questionIndex = (rawCell['questionIndex'] is int)
             ? rawCell['questionIndex'] as int
             : int.tryParse('${rawCell['questionIndex']}') ?? 0;
@@ -4800,6 +4929,50 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ),
+            if (_baselineStates.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              InkWell(
+                borderRadius: BorderRadius.circular(9),
+                onTap: () {
+                  setState(() {
+                    _wrongOnly = !_wrongOnly;
+                  });
+                },
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: IgnorePointer(
+                          child: Checkbox(
+                            value: _wrongOnly,
+                            onChanged: (_) {},
+                            activeColor: _rsAccent,
+                            checkColor: Colors.white,
+                            side: const BorderSide(color: _rsTextSub),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        '틀린것만 보기',
+                        style: TextStyle(
+                          color: _rsTextSub,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ],
@@ -5406,15 +5579,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     switch (_normalizeState(state)) {
       case 'wrong':
         return (
-          border: const Color(0xFFB34B61),
-          background: const Color(0xFF2A171D),
+          border: const Color(0xFFE54848),
+          background: const Color(0xFF151C21),
           text: const Color(0xFFFFD7DE),
           label: '오답',
         );
       case 'unsolved':
         return (
-          border: const Color(0xFF1E2C38),
-          background: const Color(0xFF131A1F),
+          border: const Color(0xFF4F626B),
+          background: const Color(0xFF151C21),
           text: const Color(0xFFA9BAC4),
           label: '미풀이',
         );
@@ -5937,10 +6110,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final colors = _resolveAnswerRowStyle(state);
     final questionLabel = cell.displayQuestionLabel;
     final answerSlotHeight = _answerSlotHeightForCell(cell);
+    final baselineState = _baselineStates[cell.key] ?? '';
+    final correctedRetry = _isCorrectedRetryKey(cell.key);
+    final correctionAttemptNumber = _correctionAttemptNumbers[cell.key] ?? 0;
     return _RightSheetAnswerListRow(
       questionLabel: questionLabel,
       editLocked: _gradingEditLocked,
       state: state,
+      baselineState: baselineState,
+      correctedRetry: correctedRetry,
+      correctionAttemptNumber: correctionAttemptNumber,
       backgroundColor: colors.background,
       borderColor: colors.border,
       answerSlotHeight: answerSlotHeight,
@@ -6129,12 +6308,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                             const SizedBox(height: 22),
                             if (pages.isNotEmpty) _buildAnswerList(pages),
                             if (pages.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 24),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 24),
                                 child: Text(
-                                  '검색 결과가 없습니다.',
+                                  _wrongOnly && _baselineStates.isNotEmpty
+                                      ? '첫 채점에서 틀렸거나 미풀이였던 문항이 없습니다.'
+                                      : '검색 결과가 없습니다.',
                                   textAlign: TextAlign.center,
-                                  style: TextStyle(
+                                  style: const TextStyle(
                                     color: _rsTextSub,
                                     fontWeight: FontWeight.w700,
                                     fontSize: 12.5,

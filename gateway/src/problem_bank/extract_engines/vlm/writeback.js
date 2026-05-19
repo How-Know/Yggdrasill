@@ -20,7 +20,96 @@ export function normalizeMathDelimiters(input) {
   s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => inner);
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner) => inner);
   s = s.replace(/\$([^$\n]+?)\$/g, (_, inner) => inner);
-  return s;
+  return normalizeDegreeUnitLatex(s);
+}
+
+function normalizeDegreeUnitLatex(input) {
+  return String(input || '')
+    .replace(/℃/g, '^\\circ C')
+    .replace(/\\circ(?=[CFKcfk]\b)/g, '\\circ ');
+}
+
+const VLM_TABLE_BLOCK_RE = /(\[표시작\][\s\S]*?\[표끝\])/g;
+
+function protectTableBlocks(input) {
+  const source = String(input || '');
+  if (!source.includes('[표시작]')) {
+    return {
+      text: source,
+      restore: (value) => value,
+    };
+  }
+  const blocks = [];
+  const text = source.replace(VLM_TABLE_BLOCK_RE, (match) => {
+    const token = `\u0000VLMTABLE${blocks.length}\u0000`;
+    blocks.push(match);
+    return token;
+  });
+  return {
+    text,
+    restore(value) {
+      let restored = String(value || '');
+      for (let i = 0; i < blocks.length; i += 1) {
+        restored = restored.replaceAll(`\u0000VLMTABLE${i}\u0000`, blocks[i]);
+      }
+      return restored;
+    },
+  };
+}
+
+function normalizeLiteralJsonNewlineText(input) {
+  const src = String(input || '');
+  if (!src.includes('\\n')) return src;
+  const preserves = [
+    /^abla(?![A-Za-z])/,       // \nabla
+    /^atural(?![A-Za-z])/,     // \natural
+    /^e(?![A-Za-z])/,          // \ne
+    /^eq(?![A-Za-z])/,         // \neq
+    /^eg(?![A-Za-z])/,         // \neg
+    /^i(?![A-Za-z])/,          // \ni
+    /^ot(?![A-Za-z])/,         // \not
+    /^u(?![A-Za-z])/,          // \nu
+    /^ew(?:command|length|page|line|theorem)\b/,
+    /^oindent\b/,
+    /^onumber\b/,
+    /^ormal(?:font|size)\b/,
+    /^obreakspace\b/,
+    /^ull\b/,
+  ];
+  let out = '';
+  for (let i = 0; i < src.length; i += 1) {
+    if (src[i] === '\\' && src[i + 1] === 'n') {
+      const rest = src.slice(i + 2);
+      if (preserves.some((re) => re.test(rest))) {
+        out += '\\n';
+      } else {
+        out += '\n';
+      }
+      i += 1;
+      continue;
+    }
+    out += src[i];
+  }
+  return out;
+}
+
+function normalizeVlmStructuralLineBreaks(input) {
+  if (typeof input !== 'string' || !input) return input;
+  const protectedTables = protectTableBlocks(input);
+  let s = protectedTables.text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\u2028|\u2029|\u000b/g, '\n');
+  s = normalizeLiteralJsonNewlineText(s);
+  // VLM sometimes uses LaTeX row breaks for visual line breaks in boxes.
+  // The Yggdrasill stem contract uses real LF/[문단]; keep tabular rows protected.
+  s = s.replace(/[ \t]*\\\\[ \t]*(?:\n|$)/g, '\n');
+  s = s
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return protectedTables.restore(s);
 }
 
 function normalizeCompactFractionCommands(input) {
@@ -59,7 +148,9 @@ function normalizeAnswerSurfaceText(input) {
     if (next === out) break;
     out = next;
   }
-  return normalizeCompactFractionCommands(out).replace(/\s+/g, ' ').trim();
+  return normalizeDegreeUnitLatex(normalizeCompactFractionCommands(out))
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function normalizeEmptyBracketSpacing(input) {
@@ -71,17 +162,23 @@ function normalizeEmptyBracketSpacing(input) {
 export function normalizeVlmQuestion(vlmQ) {
   if (!vlmQ || typeof vlmQ !== 'object') return vlmQ;
   const out = { ...vlmQ };
-  out.stem = normalizeEmptyBracketSpacing(normalizeMathDelimiters(out.stem));
+  out.stem = normalizeEmptyBracketSpacing(
+    normalizeVlmStructuralLineBreaks(normalizeMathDelimiters(out.stem)),
+  );
   if (Array.isArray(out.choices)) {
     out.choices = out.choices.map((c) => ({
       ...c,
-      text: normalizeEmptyBracketSpacing(normalizeMathDelimiters(c?.text)),
+      text: normalizeEmptyBracketSpacing(
+        normalizeVlmStructuralLineBreaks(normalizeMathDelimiters(c?.text)),
+      ),
     }));
   }
   if (Array.isArray(out.sub_questions)) {
     out.sub_questions = out.sub_questions.map((sq) => ({
       ...sq,
-      text: normalizeEmptyBracketSpacing(normalizeMathDelimiters(sq?.text)),
+      text: normalizeEmptyBracketSpacing(
+        normalizeVlmStructuralLineBreaks(normalizeMathDelimiters(sq?.text)),
+      ),
     }));
   }
   if (out.answer && typeof out.answer === 'object') {

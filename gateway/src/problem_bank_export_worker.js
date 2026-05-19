@@ -55,7 +55,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v78_visual_line_tall_math_balance';
+const RENDER_CONFIG_VERSION = 'pb_render_v81_display_math_block_outer_gap';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,

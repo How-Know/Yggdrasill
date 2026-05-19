@@ -9,12 +9,11 @@
 export function buildDetectSolutionRefsPrompt({
   rawPage,
   displayPage,
-  pageOffset,
   expectedNumbers,
 }) {
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
-      ? `이 이미지는 해설 PDF 의 **책면 기준 ${displayPage}페이지** (PDF raw page ${rawPage}, page_offset=${pageOffset}) 이다.`
+      ? `이 이미지는 해설 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
       : `이 이미지는 해설 PDF 의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
 
   const expected = Array.isArray(expectedNumbers)

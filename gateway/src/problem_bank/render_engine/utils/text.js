@@ -3,7 +3,7 @@
 // applyInlineAlignmentMarkers 로 정규화하여 속성 부분은 stemLineAligns 로 옮기고
 // 텍스트에는 plain `[문단]` 만 남긴다. 정규식을 `?:` 형태로 확장해 두면, 만일
 // 전처리가 누락되어도 최종 strip 단계에서 마커 자체는 안전하게 제거된다.
-const STRUCTURAL_MARKER_REGEX = /\[(?:문단(?::[^\]]*)?|수식줄바꿈(?::[^\]]*)?|수식제시|수식제시줄|displaymath|mathline|박스시작|박스끝)\]/gi;
+const STRUCTURAL_MARKER_REGEX = /\[(?:문단(?::[^\]]*)?|수식줄바꿈(?::[^\]]*)?|수식제시|수식제시줄|수식제시시작|수식제시끝|수식제시줄시작|수식제시줄끝|displaymath|mathline|displaymath(?::|-)(?:start|end)|mathline(?::|-)(?:start|end)|박스시작|박스끝)\]/gi;
 
 // `[공백:N]` 은 사용자가 리뷰 UI 에서 직접 넣는 "고정폭 공백 N em" 마커.
 // 렌더 경로가 `\s+` 를 여러 단계에서 collapse 하므로, 의도적으로 넣은 다중 공백은

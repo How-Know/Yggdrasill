@@ -47,12 +47,11 @@ export const VLM_DETECT_PAGE_KINDS = Object.freeze([
 export function buildDetectProblemsPrompt({
   displayPage,
   rawPage,
-  pageOffset,
   includeContentGroups = true,
 }) {
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
-      ? `이 이미지는 **책면 기준 ${displayPage}페이지** (PDF raw page ${rawPage}, page_offset=${pageOffset}) 이다.`
+      ? `이 이미지는 교재 스캔본의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
       : `이 이미지는 교재 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
 
   let lines = [

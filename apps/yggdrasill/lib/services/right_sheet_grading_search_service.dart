@@ -256,12 +256,17 @@ class RightSheetGradingSearchService {
         await _gradingResultService.loadLatestSavedSessionForHomework(
       homeworkItemId: payload.homeworkId,
     );
+    final baselineSession =
+        await _gradingResultService.loadFirstSavedSessionForHomework(
+      homeworkItemId: payload.homeworkId,
+    );
     if (!context.mounted) return false;
     final initialStates = savedSession?.states.isNotEmpty == true
         ? savedSession!.states
         : cachedStates;
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
+    final baselineStates = _retryBaselineStates(baselineSession);
     final studentName = _resolveHomeworkPrintStudentName(studentId);
     final groupHomeworkTitle = _resolveGroupHomeworkTitle(
       studentId: studentId,
@@ -292,6 +297,13 @@ class RightSheetGradingSearchService {
       solutionPathRaw: gradingPdfLinks['solutionPathRaw'] ?? '',
       answerViewerCacheKey: gradingPdfLinks['cacheKey'] ?? '',
       initialStates: _toRightSheetStateMap(initialStates),
+      initialCorrectionStates:
+          savedSession?.correctionStates ?? const <String, String>{},
+      correctionAttemptNumbers:
+          savedSession?.correctionAttemptNumbers ?? const <String, int>{},
+      baselineAttemptId: baselineSession?.attempt.id ?? '',
+      baselineStates: _toRightSheetStateMap(baselineStates),
+      wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
       gradingLocked: hasSavedGrading,
       onRequestEditReset: () async {
         final reset = await _gradingResultService.resetAttemptsForHomework(
@@ -320,7 +332,7 @@ class RightSheetGradingSearchService {
           states: decoded,
         );
       },
-      onAction: (action, states) async {
+      onAction: (action, states, correctionStates) async {
         final decoded = _fromRightSheetStateMap(states);
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
             Map<String, HomeworkAnswerCellState>.from(decoded);
@@ -344,6 +356,9 @@ class RightSheetGradingSearchService {
             gradingPages: payload.gradingPages,
             scoreByQuestionKey: payload.scoreByQuestionKey,
             groupHomeworkTitleSnapshot: groupHomeworkTitle,
+            baselineAttemptId: baselineSession?.attempt.id ?? '',
+            baselineStates: baselineStates,
+            correctionStates: correctionStates,
           );
           if (!saved) {
             if (context.mounted) {
@@ -976,6 +991,20 @@ class RightSheetGradingSearchService {
     final out = <String, HomeworkAnswerCellState>{};
     states.forEach((key, value) {
       out[key] = _decodeTestGradingState(value);
+    });
+    return out;
+  }
+
+  Map<String, HomeworkAnswerCellState> _retryBaselineStates(
+    HomeworkTestSavedGradingSession? session,
+  ) {
+    if (session == null) return const <String, HomeworkAnswerCellState>{};
+    final out = <String, HomeworkAnswerCellState>{};
+    session.states.forEach((key, state) {
+      if (state == HomeworkAnswerCellState.wrong ||
+          state == HomeworkAnswerCellState.unsolved) {
+        out[key] = state;
+      }
     });
     return out;
   }

@@ -112,7 +112,6 @@ class _TextbookUnitAuthoringDialogState
   bool _loadingPayload = true;
   String? _payloadError;
   String _seriesKey = kTextbookSeriesCatalog.first.key;
-  int _pageOffset = 0;
   final List<_BigUnitEdit> _bigUnits = <_BigUnitEdit>[];
 
   _SubFocus? _focus;
@@ -178,7 +177,6 @@ class _TextbookUnitAuthoringDialogState
       final series = (payload?['series'] as String?)?.trim().isNotEmpty == true
           ? (payload!['series'] as String).trim()
           : kTextbookSeriesCatalog.first.key;
-      final pageOffset = int.tryParse('${row?['page_offset'] ?? 0}') ?? 0;
       final entry = textbookSeriesByKey(series) ?? kTextbookSeriesCatalog.first;
       final loaded = bigUnitsFromPayload(payload, seriesKey: entry.key);
       final editable = <_BigUnitEdit>[];
@@ -216,7 +214,6 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         _seriesKey = entry.key;
-        _pageOffset = pageOffset;
         _bigUnits
           ..clear()
           ..addAll(editable);
@@ -391,9 +388,11 @@ class _TextbookUnitAuthoringDialogState
     );
   }
 
-  int _rawPageForDisplayPage(int displayPage) => displayPage + _pageOffset;
+  // 단원분석/VLM 추출에서는 입력 페이지를 PDF raw page 로 그대로 사용한다.
+  // textbook_metadata.page_offset 은 학습앱 표시용 보정값이며 추출 범위에는 적용하지 않는다.
+  int _rawPageForDisplayPage(int displayPage) => displayPage;
 
-  int _displayPageForRawPage(int rawPage) => rawPage - _pageOffset;
+  int _displayPageForRawPage(int rawPage) => rawPage;
 
   List<_PageAnalysisRow> _pageRowsFromSavedCrops(
     List<Map<String, dynamic>> rows,
@@ -2364,8 +2363,11 @@ class _TextbookUnitAuthoringDialogState
     final start = _positiveInt(sub.startCtrl.text);
     if (start == null) return;
     if (!_viewerController.isReady) return;
+    final pageCount = _bodyDocument?.pages.length ?? 0;
+    if (pageCount <= 0) return;
+    final targetPage = _rawPageForDisplayPage(start).clamp(1, pageCount);
     try {
-      _viewerController.goToPage(pageNumber: _rawPageForDisplayPage(start));
+      _viewerController.goToPage(pageNumber: targetPage);
     } catch (_) {
       // Best-effort; pdfrx throws if the page number is out of range.
     }
@@ -2729,8 +2731,7 @@ class _TextbookUnitAuthoringDialogState
               Text(
                 '${progress.done}/${progress.total} 완료'
                 '${progress.failed > 0 ? " · 실패 ${progress.failed}" : ""}'
-                ' · 현재 책면 ${_displayPageForRawPage(progress.cursor)}p'
-                ' (PDF ${progress.cursor}p)',
+                ' · 현재 PDF ${progress.cursor}p',
                 style: const TextStyle(color: _kTextSub, fontSize: 11),
               ),
             ],
@@ -3598,28 +3599,31 @@ class _SubRowStats extends StatelessWidget {
                 color: bg,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    fullyUploaded
-                        ? Icons.cloud_done_outlined
-                        : analyzed > 0 && uploaded == 0
-                            ? Icons.cloud_upload_outlined
-                            : Icons.inventory_2_outlined,
-                    size: 11,
-                    color: fg,
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    label,
-                    style: TextStyle(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      fullyUploaded
+                          ? Icons.cloud_done_outlined
+                          : analyzed > 0 && uploaded == 0
+                              ? Icons.cloud_upload_outlined
+                              : Icons.inventory_2_outlined,
+                      size: 11,
                       color: fg,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 3),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: fg,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             if (running)

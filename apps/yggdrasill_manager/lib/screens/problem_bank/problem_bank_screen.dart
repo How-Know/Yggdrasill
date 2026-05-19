@@ -6557,6 +6557,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return out;
   }
 
+  Map<String, Map<String, dynamic>> _tableLayoutItemsByKey(
+      Map<String, dynamic> meta) {
+    final raw = meta['table_layout'];
+    final layout = raw is Map ? raw : const <String, dynamic>{};
+    final items = layout['items'];
+    if (items is! List) return const <String, Map<String, dynamic>>{};
+    final out = <String, Map<String, dynamic>>{};
+    for (final item in items) {
+      if (item is! Map) continue;
+      final mapped = Map<String, dynamic>.from(
+        item.map((key, value) => MapEntry('$key', value)),
+      );
+      final key =
+          '${mapped['tableKey'] ?? mapped['key'] ?? mapped['assetKey'] ?? ''}'
+              .trim();
+      if (key.isNotEmpty) out[key] = mapped;
+    }
+    return out;
+  }
+
   void _writeImageChoiceRowsMeta(Map<String, dynamic> meta, String rows) {
     final safeRows = rows == '3' ? '3' : '2';
     _removeAutoTypeBadgeSuppression(meta, _autoTypeBadgeImageChoice);
@@ -7270,6 +7290,69 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return 1;
   }
 
+  Map<String, dynamic>? _figureLayoutItemForAsset(
+    ProblemBankQuestion q,
+    Map<String, dynamic>? asset,
+    int orderHint,
+  ) {
+    final itemsByKey = _figureLayoutItemsByKey(q.meta);
+    if (itemsByKey.isEmpty) return null;
+    final key = _figureScaleKeyForAsset(asset, orderHint);
+    return itemsByKey[key] ??
+        itemsByKey['idx:${asset?['figure_index'] ?? orderHint}'] ??
+        itemsByKey['ord:$orderHint'];
+  }
+
+  bool _isInlineFigureLayout(Map<String, dynamic>? layoutItem) {
+    final position = '${layoutItem?['position'] ?? ''}'.trim().toLowerCase();
+    return position == 'inline-left' || position == 'inline-right';
+  }
+
+  Widget _buildWrappedFigureTextPreviewBlock(
+    ProblemBankQuestion q, {
+    required String text,
+    required Map<String, dynamic> asset,
+    required Map<String, dynamic>? layoutItem,
+    required int orderHint,
+    bool expanded = false,
+  }) {
+    final position = '${layoutItem?['position'] ?? ''}'.trim().toLowerCase();
+    final widthEm = (layoutItem?['widthEm'] as num?)?.toDouble() ??
+        _scaleToWidthEm(_figureRenderScaleForAsset(
+          q,
+          asset: asset,
+          order: orderHint,
+        ));
+    final fontSize = expanded ? 13.8 : 13.4;
+    final figureWidth =
+        (widthEm * fontSize).clamp(90.0, expanded ? 360.0 : 260.0).toDouble();
+    final figure = SizedBox(
+      width: figureWidth,
+      child: _buildInlineFigureVisual(
+        q,
+        asset: asset,
+        expanded: expanded,
+        orderHint: orderHint,
+      ),
+    );
+    final textWidget = Expanded(
+      child: _buildStemTextPreviewLine(
+        text,
+        fontSize: fontSize,
+      ),
+    );
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: position == 'inline-left'
+            ? <Widget>[figure, const SizedBox(width: 8), textWidget]
+            : <Widget>[textWidget, const SizedBox(width: 8), figure],
+      ),
+    );
+  }
+
   Widget _buildInlineFigureVisual(
     ProblemBankQuestion q, {
     Map<String, dynamic>? asset,
@@ -7874,6 +7957,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final matches =
         _figureMarkerRegex.allMatches(cleaned).toList(growable: false);
     if (matches.isEmpty) {
+      if (assets.isNotEmpty) {
+        final firstAsset = assets.first;
+        final firstLayout = _figureLayoutItemForAsset(q, firstAsset, 1);
+        if (cleaned.isNotEmpty && _isInlineFigureLayout(firstLayout)) {
+          out.add(_buildWrappedFigureTextPreviewBlock(
+            q,
+            text: cleaned,
+            asset: firstAsset,
+            layoutItem: firstLayout,
+            orderHint: 1,
+            expanded: expanded,
+          ));
+          final maxFallback = expanded ? assets.length : 1;
+          for (int i = 1; i < maxFallback && i < assets.length; i += 1) {
+            out.add(_buildInlineFigureInStem(q,
+                asset: assets[i], expanded: expanded));
+          }
+          return out;
+        }
+      }
       out.add(_buildStemTextPreviewLine(cleaned));
       if (assets.isNotEmpty) {
         final maxFallback = expanded ? assets.length : 1;
@@ -7891,6 +7994,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     for (final match in matches) {
       final before =
           _normalizePreviewMultiline(cleaned.substring(cursor, match.start));
+      final markerAsset =
+          assetCursor < assets.length ? assets[assetCursor] : null;
+      final markerOrderHint = assetCursor + 1;
+      final markerLayout = markerAsset == null
+          ? null
+          : _figureLayoutItemForAsset(q, markerAsset, markerOrderHint);
+      if (before.isNotEmpty &&
+          markerAsset != null &&
+          _isInlineFigureLayout(markerLayout)) {
+        out.add(_buildWrappedFigureTextPreviewBlock(
+          q,
+          text: before,
+          asset: markerAsset,
+          layoutItem: markerLayout,
+          orderHint: markerOrderHint,
+          expanded: expanded,
+        ));
+        assetCursor += 1;
+        cursor = match.end;
+        continue;
+      }
       if (before.isNotEmpty) {
         out.add(_buildStemTextPreviewLine(before));
       }
@@ -9004,6 +9128,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     List<List<String>>? horizontalGroups,
     Map<String, TableScaleValue>? tableScales,
     TableScaleValue? tableScaleDefault,
+    Map<String, String>? tablePositionMap,
+    Map<String, double>? tableOffsetXMap,
   }) {
     final updatedMeta = Map<String, dynamic>.from(q.meta);
     // 표 스케일: draft 값이 명시적으로 제공됐으면 그 값을, 아니면 기존 meta 값 유지.
@@ -9023,6 +9149,41 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         updatedMeta.remove('table_scale_default');
       } else {
         updatedMeta['table_scale_default'] = tableScaleDefault.toJson();
+      }
+    }
+    if (tablePositionMap != null || tableOffsetXMap != null) {
+      final tableKeys = <String>{
+        ...?tablePositionMap?.keys,
+        ...?tableOffsetXMap?.keys,
+      };
+      final tableItems = <Map<String, dynamic>>[];
+      for (final key in tableKeys) {
+        final trimmedKey = key.trim();
+        if (trimmedKey.isEmpty) continue;
+        final arrangement =
+            tablePositionMap?[trimmedKey] ?? _figurePositionOptions[2];
+        final pos = _figureLayoutPositionForArrangement(arrangement);
+        final anchor = _figureLayoutAnchorForArrangement(arrangement);
+        final offsetX =
+            (tableOffsetXMap?[trimmedKey] ?? 0.0).clamp(-8.0, 8.0).toDouble();
+        final isDefault =
+            pos == 'below-stem' && anchor == 'center' && offsetX.abs() < 0.05;
+        if (isDefault) continue;
+        tableItems.add(<String, dynamic>{
+          'tableKey': trimmedKey,
+          'position': pos,
+          'anchor': anchor,
+          'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
+          'offsetYEm': 0,
+        });
+      }
+      if (tableItems.isEmpty) {
+        updatedMeta.remove('table_layout');
+      } else {
+        updatedMeta['table_layout'] = <String, dynamic>{
+          'version': 1,
+          'items': tableItems,
+        };
       }
     }
 
@@ -9153,6 +9314,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       for (final t in tableEntries)
         t.key: initialTableScales[t.key] ?? const TableScaleValue(),
     };
+    final tableLayoutItems = _tableLayoutItemsByKey(q.meta);
+    final tablePositionMap = <String, String>{
+      for (final t in tableEntries)
+        t.key: _figureArrangementFromPositionAnchor(
+          '${tableLayoutItems[t.key]?['position'] ?? 'below-stem'}',
+          '${tableLayoutItems[t.key]?['anchor'] ?? 'center'}',
+        ),
+    };
+    final tableOffsetXMap = <String, double>{
+      for (final t in tableEntries)
+        t.key: (double.tryParse(
+                    '${tableLayoutItems[t.key]?['offsetXEm'] ?? ''}') ??
+                0.0)
+            .clamp(-8.0, 8.0)
+            .toDouble(),
+    };
     final answerFigureWidthDrafts = <String, double>{
       for (var i = 0; i < answerFigureAssets.length; i += 1)
         'idx:${i + 1}': _answerFigureWidthEm(q, i),
@@ -9179,6 +9356,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       tableScales: hasTables ? tableScaleDrafts : null,
                       tableScaleDefault:
                           hasTables ? const TableScaleValue() : null,
+                      tablePositionMap: hasTables ? tablePositionMap : null,
+                      tableOffsetXMap: hasTables ? tableOffsetXMap : null,
                     )
                   : q.meta,
             );
@@ -9221,6 +9400,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 q,
                 Map<String, TableScaleValue>.from(tableScaleDrafts),
                 const TableScaleValue(),
+                tablePositionMap: Map<String, String>.from(tablePositionMap),
+                tableOffsetXMap: Map<String, double>.from(tableOffsetXMap),
               );
             }
 
@@ -9380,6 +9561,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       _buildTableEditSection(
                         entries: tableEntries,
                         drafts: tableScaleDrafts,
+                        positionMap: tablePositionMap,
+                        offsetXMap: tableOffsetXMap,
                         setLocalState: setLocalState,
                         onSettingChanged: applyAndRefresh,
                       ),
@@ -9784,6 +9967,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   Widget _buildTableEditSection({
     required List<TableScaleEntry> entries,
     required Map<String, TableScaleValue> drafts,
+    required Map<String, String> positionMap,
+    required Map<String, double> offsetXMap,
     required void Function(void Function()) setLocalState,
     required VoidCallback onSettingChanged,
   }) {
@@ -9820,6 +10005,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   setLocalState(() {
                     for (final t in entries) {
                       drafts[t.key] = const TableScaleValue();
+                      positionMap[t.key] = 'center';
+                      offsetXMap[t.key] = 0.0;
                     }
                   });
                   onSettingChanged();
@@ -9833,119 +10020,211 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ),
           const SizedBox(height: 6),
           for (final t in entries) ...[
-            Container(
-              margin: const EdgeInsets.only(top: 6),
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1F1F23),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        t.label,
-                        style: const TextStyle(
-                          color: _text,
-                          fontSize: 12.2,
-                          fontWeight: FontWeight.w800,
+            () {
+              final position = positionMap[t.key] ?? 'center';
+              final offsetX =
+                  (offsetXMap[t.key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
+              return Container(
+                margin: const EdgeInsets.only(top: 6),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1F1F23),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          t.label,
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 12.2,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: (t.type == 'raw'
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: (t.type == 'raw'
+                                    ? Colors.orangeAccent
+                                    : t.type == 'blank_choice'
+                                        ? const Color(0xFF9ED9C3)
+                                        : _accent)
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            t.type == 'raw'
+                                ? 'raw tabular'
+                                : t.type == 'blank_choice'
+                                    ? '빈칸형'
+                                    : '구조화 표',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: t.type == 'raw'
                                   ? Colors.orangeAccent
                                   : t.type == 'blank_choice'
                                       ? const Color(0xFF9ED9C3)
-                                      : _accent)
-                              .withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(4),
+                                      : _accent,
+                            ),
+                          ),
                         ),
+                      ],
+                    ),
+                    if (t.type == 'raw' || t.type == 'blank_choice')
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
                         child: Text(
-                          t.type == 'raw'
-                              ? 'raw tabular'
-                              : t.type == 'blank_choice'
-                                  ? '빈칸형'
-                                  : '구조화 표',
+                          t.type == 'blank_choice'
+                              ? '* 높이와 글자 크기는 고정하고, 가로 간격만 조정합니다.'
+                              : '* 기본 글자 크기는 본문에 동기화되며, 저장된 표별 보정값이 있으면 함께 적용됩니다.',
                           style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: t.type == 'raw'
-                                ? Colors.orangeAccent
-                                : t.type == 'blank_choice'
-                                    ? const Color(0xFF9ED9C3)
-                                    : _accent,
+                            color: _textSub,
+                            fontSize: 10.6,
+                            fontStyle: FontStyle.italic,
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  if (t.type == 'raw' || t.type == 'blank_choice')
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        t.type == 'blank_choice'
-                            ? '* 높이와 글자 크기는 고정하고, 가로 간격만 조정합니다.'
-                            : '* 기본 글자 크기는 본문에 동기화되며, 저장된 표별 보정값이 있으면 함께 적용됩니다.',
-                        style: TextStyle(
-                          color: _textSub,
-                          fontSize: 10.6,
-                          fontStyle: FontStyle.italic,
-                        ),
+                    if (t.type != 'blank_choice') ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          const Text(
+                            '배치',
+                            style: TextStyle(
+                              color: _textSub,
+                              fontSize: 11.4,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: DropdownButton<String>(
+                              value: _figurePositionOptions.contains(position)
+                                  ? position
+                                  : 'center',
+                              isExpanded: true,
+                              isDense: true,
+                              style: const TextStyle(
+                                color: _text,
+                                fontSize: 11.4,
+                              ),
+                              underline: const SizedBox.shrink(),
+                              items: _figurePositionOptions
+                                  .map((pos) => DropdownMenuItem<String>(
+                                        value: pos,
+                                        child: Text(
+                                          _figurePositionLabels[pos] ?? pos,
+                                        ),
+                                      ))
+                                  .toList(growable: false),
+                              onChanged: (v) {
+                                if (v == null) return;
+                                setLocalState(() {
+                                  positionMap[t.key] = v;
+                                });
+                                onSettingChanged();
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  const SizedBox(height: 4),
-                  _buildTableScaleSlider(
-                    title: '가로',
-                    value:
-                        (drafts[t.key] ?? const TableScaleValue()).widthScale,
-                    min: minS,
-                    max: maxS,
-                    divisions: divisions,
-                    onChanged: (v) {
-                      final cur = drafts[t.key] ?? const TableScaleValue();
-                      setLocalState(() {
-                        drafts[t.key] = cur.copyWith(widthScale: v);
-                      });
-                    },
-                    onChangeEnd: (_) => onSettingChanged(),
-                  ),
-                  if (t.type != 'blank_choice')
+                      Row(
+                        children: [
+                          const Text(
+                            '좌우',
+                            style: TextStyle(
+                              color: _textSub,
+                              fontSize: 11.4,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Slider(
+                              value: offsetX.clamp(-4.0, 4.0).toDouble(),
+                              min: -4.0,
+                              max: 4.0,
+                              divisions: 32,
+                              activeColor: _accent,
+                              inactiveColor: _border,
+                              onChanged: (v) {
+                                setLocalState(() {
+                                  offsetXMap[t.key] =
+                                      (v * 10).roundToDouble() / 10.0;
+                                });
+                              },
+                              onChangeEnd: (_) => onSettingChanged(),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 48,
+                            child: Text(
+                              '${offsetX.toStringAsFixed(1)}em',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                color: _text,
+                                fontSize: 11.2,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 4),
                     _buildTableScaleSlider(
-                      title: '세로',
-                      value: (drafts[t.key] ?? const TableScaleValue())
-                          .heightScale,
+                      title: '가로',
+                      value:
+                          (drafts[t.key] ?? const TableScaleValue()).widthScale,
                       min: minS,
                       max: maxS,
                       divisions: divisions,
                       onChanged: (v) {
                         final cur = drafts[t.key] ?? const TableScaleValue();
                         setLocalState(() {
-                          drafts[t.key] = cur.copyWith(heightScale: v);
+                          drafts[t.key] = cur.copyWith(widthScale: v);
                         });
                       },
                       onChangeEnd: (_) => onSettingChanged(),
                     ),
-                  if (t.maxCols >= 2)
-                    _buildColumnScalesRow(
-                      entry: t,
-                      draft: drafts[t.key] ?? const TableScaleValue(),
-                      minS: minS,
-                      maxS: maxS,
-                      divisions: divisions,
-                      setLocalState: setLocalState,
-                      onSettingChanged: onSettingChanged,
-                      drafts: drafts,
-                    ),
-                ],
-              ),
-            ),
+                    if (t.type != 'blank_choice')
+                      _buildTableScaleSlider(
+                        title: '세로',
+                        value: (drafts[t.key] ?? const TableScaleValue())
+                            .heightScale,
+                        min: minS,
+                        max: maxS,
+                        divisions: divisions,
+                        onChanged: (v) {
+                          final cur = drafts[t.key] ?? const TableScaleValue();
+                          setLocalState(() {
+                            drafts[t.key] = cur.copyWith(heightScale: v);
+                          });
+                        },
+                        onChangeEnd: (_) => onSettingChanged(),
+                      ),
+                    if (t.maxCols >= 2)
+                      _buildColumnScalesRow(
+                        entry: t,
+                        draft: drafts[t.key] ?? const TableScaleValue(),
+                        minS: minS,
+                        maxS: maxS,
+                        divisions: divisions,
+                        setLocalState: setLocalState,
+                        onSettingChanged: onSettingChanged,
+                        drafts: drafts,
+                      ),
+                  ],
+                ),
+              );
+            }(),
           ],
         ],
       ),
@@ -10748,8 +11027,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   ProblemBankQuestion _applyTableScalesLocal(
     ProblemBankQuestion q,
     Map<String, TableScaleValue> scales,
-    TableScaleValue defaultScale,
-  ) {
+    TableScaleValue defaultScale, {
+    Map<String, String>? tablePositionMap,
+    Map<String, double>? tableOffsetXMap,
+  }) {
     final currentIdx = _questions.indexWhere((it) => it.id == q.id);
     if (currentIdx < 0) return q;
     final current = _questions[currentIdx];
@@ -10771,6 +11052,41 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       updatedMeta.remove('table_scale_default');
     } else {
       updatedMeta['table_scale_default'] = defaultScale.toJson();
+    }
+    if (tablePositionMap != null || tableOffsetXMap != null) {
+      final tableKeys = <String>{
+        ...?tablePositionMap?.keys,
+        ...?tableOffsetXMap?.keys,
+      };
+      final items = <Map<String, dynamic>>[];
+      for (final key in tableKeys) {
+        final trimmedKey = key.trim();
+        if (trimmedKey.isEmpty) continue;
+        final arrangement =
+            tablePositionMap?[trimmedKey] ?? _figurePositionOptions[2];
+        final pos = _figureLayoutPositionForArrangement(arrangement);
+        final anchor = _figureLayoutAnchorForArrangement(arrangement);
+        final offsetX =
+            (tableOffsetXMap?[trimmedKey] ?? 0.0).clamp(-8.0, 8.0).toDouble();
+        final isDefault =
+            pos == 'below-stem' && anchor == 'center' && offsetX.abs() < 0.05;
+        if (isDefault) continue;
+        items.add(<String, dynamic>{
+          'tableKey': trimmedKey,
+          'position': pos,
+          'anchor': anchor,
+          'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
+          'offsetYEm': 0,
+        });
+      }
+      if (items.isEmpty) {
+        updatedMeta.remove('table_layout');
+      } else {
+        updatedMeta['table_layout'] = <String, dynamic>{
+          'version': 1,
+          'items': items,
+        };
+      }
     }
 
     final updatedQ = current.copyWith(meta: updatedMeta);
@@ -12389,11 +12705,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   markerTile(
                     icon: Icons.functions_rounded,
                     title: '수식 제시줄',
-                    syntax: '[수식제시]\n[수식제시줄]\n[displaymath]\n[mathline]',
+                    syntax:
+                        '[수식제시]\n[수식제시줄]\n[displaymath]\n[mathline]\n\n[수식제시시작]\n...\n[수식제시끝]',
                     description:
-                        'PDF 원문에서 실제로 별도 줄로 들여쓰기된 수식 제시줄일 때, 그 줄 맨 앞에 붙입니다.',
-                    example: '[수식제시] 20 = 3 + 17 = 7 + 13',
-                    caution: '중요: 자동 감지는 하지 않습니다. 이 마커가 있는 줄에만 제시줄 스타일이 적용됩니다.',
+                        'PDF 원문에서 실제로 별도 줄로 들여쓰기된 수식 제시줄일 때 사용합니다. 한 줄이면 줄 맨 앞에 붙이고, 여러 줄이 같은 제시줄 영역이면 시작/끝 마커로 감쌉니다.',
+                    example:
+                        '[수식제시] 20 = 3 + 17 = 7 + 13\n\n[수식제시시작]\nf(x)=x^2+1\ng(x)=2x-3\n[수식제시끝]',
+                    caution:
+                        '중요: 자동 감지는 하지 않습니다. 한 줄 마커는 해당 줄에만, 시작/끝 마커는 감싼 줄 전체에만 제시줄 스타일이 적용됩니다.',
                   ),
                   const SizedBox(height: 10),
                   markerTile(

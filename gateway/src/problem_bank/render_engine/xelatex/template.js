@@ -41,7 +41,12 @@ import {
 //   대표 사례: \right\} → JSON.parse → \x0dight\} → "l.120 ight\}$" 컴파일 실패.
 function sanitizeLatexControlChars(value) {
   if (typeof value === 'string') {
+    const displayBlockLfToken = '__YGG_DISPLAY_MATH_BLOCK_LF__';
+    const displayBlockRe = /(\[(?:수식제시시작|수식제시줄시작|displaymath:start|displaymath-start|mathline:start|mathline-start)\])([\s\S]*?)(\[(?:수식제시끝|수식제시줄끝|displaymath:end|displaymath-end|mathline:end|mathline-end)\])/gi;
     let s = value;
+    s = s.replace(displayBlockRe, (_match, start, body, end) => (
+      `${start}${String(body || '').replace(/\x0d?\x0a/g, displayBlockLfToken)}${end}`
+    ));
     s = s.replace(/\x0c/g, '\\f');
     s = s.replace(/\x08/g, '\\b');
     s = s.replace(/\x0b/g, '\\v');
@@ -50,6 +55,7 @@ function sanitizeLatexControlChars(value) {
     // 과거 실수: ")" terminator 를 빠뜨려 "\right)" 가 "ight)" 로 깨져 재발한 적 있음.
     s = s.replace(/\x0d(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\r');
     s = s.replace(/\x0a(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\n');
+    s = s.replaceAll(displayBlockLfToken, '\n');
     return s;
   }
   if (Array.isArray(value)) return value.map(sanitizeLatexControlChars);
@@ -70,6 +76,8 @@ function sanitizeLatexControlChars(value) {
 const PARAGRAPH_MARKER_RE = /\[문단(?::[^\]]*)?\]/g;
 const MATH_LINE_BREAK_MARKER_RE = /\[수식줄바꿈(?::([^\]]*))?\]/gi;
 const MATH_DISPLAY_LINE_MARKER_RE = /\[(?:수식제시|수식제시줄|displaymath|mathline)\]/gi;
+const MATH_DISPLAY_BLOCK_START_RE = /\[(?:수식제시시작|수식제시줄시작|displaymath:start|displaymath-start|mathline:start|mathline-start)\]/i;
+const MATH_DISPLAY_BLOCK_END_RE = /\[(?:수식제시끝|수식제시줄끝|displaymath:end|displaymath-end|mathline:end|mathline-end)\]/i;
 const BOX_ALIGN_MARKER_RE = /^\s*\[(?:정렬|align)\s*:\s*(왼쪽|좌측|left|가운데|중앙|center|오른쪽|우측|right)\]\s*$/i;
 const BOGI_MARKER_RE = /\[박스시작\]|\[박스끝\]/g;
 const BOX_PARAGRAPH_BREAK = '__PB_BOX_PARAGRAPH_BREAK__';
@@ -175,6 +183,8 @@ function stripMarkers(text) {
     .replace(PARAGRAPH_MARKER_RE, ' ')
     .replace(MATH_LINE_BREAK_MARKER_RE, ' ')
     .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_START_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_END_RE, ' ')
     .replace(BOGI_MARKER_RE, '');
 }
 
@@ -390,7 +400,16 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/×/g, '\\times');
   out = out.replace(/÷/g, '\\div');
   out = out.replace(/(?<!\\)%/g, '\\%');
+  // VLM/answer text may save Celsius as "\circC". TeX reads that as one
+  // undefined command (\circC), so separate the unit letter before compile.
+  out = out.replace(/℃/g, '^{\\circ}C');
+  out = out.replace(/\\circ(?=[CFKcfk]\b)/g, '\\circ ');
   out = normalizeCompactFractionCommands(out);
+  // Some extracted box/display lines carry a LaTeX line-break marker at the
+  // very end of a standalone math segment. Once wrapped as "$...$", that
+  // becomes "$... \\$" and XeLaTeX fails with "There's no line here to end".
+  // Keep internal row breaks intact; only trim orphaned final breaks.
+  out = out.replace(/(?:\\\\\s*)+$/g, '');
 
   // 분수 크기 일관성: \frac 은 주변 math style(text/display) 에 따라 크기가 바뀐다.
   //   본문은 $\displaystyle ...$ 로 감싸지만, 중첩 분수(분자/분모 안의 \frac)는
@@ -422,8 +441,15 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\(?:diamond|lozenge|blacklozenge)(?![A-Za-z])\s+/g, (m) => `${m.trim()}\\;`);
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
-  // box{X} (내용이 있는 박스) → \boxed{X}. 빈 경우는 위 규칙이 이미 처리.
-  out = out.replace(/(?<![\\A-Za-z])box\{([^}]+)\}/g, '\\boxed{$1}');
+  // box{X} (내용이 있는 박스) → \boxed{X}. 한글 라벨이 들어간 box{(가)}류는
+  // math mode 안에서 한글이 깨지지 않도록 \text{}로 감싼다.
+  out = out.replace(/(?<![\\A-Za-z])box\{([^}]+)\}/g, (_match, inner) => {
+    const content = String(inner || '');
+    if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(content)) {
+      return `\\boxed{\\text{${content}}}`;
+    }
+    return `\\boxed{${content}}`;
+  });
   out = out.replace(/\\mtexponentempty\\mtemptybox\{\}/g, '\\mtexponentemptybox{}');
 
   // 한국식 평행기호: slash 두 개를 쓰되 줄 높이에 영향을 주지 않게 격리한다.
@@ -614,6 +640,34 @@ function protectLatexTextBlocks(input) {
   };
 }
 
+function protectLatexBoxBlocks(input) {
+  const source = String(input || '');
+  if (!/box\s*\{/.test(source)) {
+    return {
+      text: source,
+      restore: (value) => value,
+    };
+  }
+
+  const blocks = [];
+  const text = source.replace(/(?<![\\A-Za-z])box\s*\{[^{}]*[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣][^{}]*\}/gi, (match) => {
+    const token = `\u0000LATEXBOX${blocks.length}\u0000`;
+    blocks.push(match);
+    return token;
+  });
+
+  return {
+    text,
+    restore(value) {
+      let restored = String(value || '');
+      for (let i = 0; i < blocks.length; i += 1) {
+        restored = restored.replaceAll(`\u0000LATEXBOX${i}\u0000`, blocks[i]);
+      }
+      return restored;
+    },
+  };
+}
+
 function normalizeLiteralEscapedNewlines(input) {
   const src = String(input || '');
   if (!src.includes('\\n')) return src;
@@ -675,6 +729,8 @@ function smartTexLineCore(text, equations, options = {}) {
   }
   const protectedText = protectLatexTextBlocks(body);
   body = protectedText.text;
+  const protectedBoxes = protectLatexBoxBlocks(body);
+  body = protectedBoxes.text;
 
   const parts = [];
   let lastEnd = 0;
@@ -707,6 +763,7 @@ function smartTexLineCore(text, equations, options = {}) {
       const trailSp = /\s$/.test(raw) ? ' ' : '';
       let math = raw.trim();
       if (!math) return (leadSp || trailSp) ? ' ' : '';
+      math = protectedBoxes.restore(math);
       math = applyEquationLookup(math, lookup);
       math = normalizeMathSegment(math);
       const addVisualLinePad = enableVisualLineTallMathPad
@@ -725,9 +782,9 @@ function smartTexLineCore(text, equations, options = {}) {
     .join('');
 
   if (prefix) {
-    return protectedText.restore(`$\\displaystyle ${prefix}$${result}`);
+    return protectedText.restore(protectedBoxes.restore(`$\\displaystyle ${prefix}$${result}`));
   }
-  return protectedText.restore(result);
+  return protectedText.restore(protectedBoxes.restore(result));
 }
 
 /**
@@ -805,12 +862,34 @@ function stripMathDisplayLineMarker(text) {
   return String(text || '').replace(MATH_DISPLAY_LINE_MARKER_RE, ' ');
 }
 
+function stripMathDisplayBlockMarkers(text) {
+  return String(text || '')
+    .replace(MATH_DISPLAY_BLOCK_START_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_END_RE, ' ');
+}
+
 function renderDisplayMathStemLine(sub, equations, firstPrefix = '') {
   const source = stripMathDisplayLineMarker(sub).trim();
   const body = smartTexLine(source, equations);
   if (!body.trim()) return '';
   const prefix = firstPrefix ? `${firstPrefix}\\hspace*{0.4em}` : '';
   return `{\\setstretch{2.30}\\lineskiplimit=0.55em\\lineskip=0.85em\\par\\vspace{0.16\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.16\\baselineskip}}`;
+}
+
+function renderDisplayMathStemBlock(lines, equations) {
+  const renderedLines = (Array.isArray(lines) ? lines : [])
+    .flatMap((line) => stripMathDisplayBlockMarkers(line).split(/\r?\n/))
+    .map((line) => smartTexLine(line.trim(), equations))
+    .filter((line) => line && line.trim())
+    .map((line) => `\\noindent\\mtlinesymbox{${line}}\\par`);
+  if (renderedLines.length === 0) return '';
+  return [
+    '{\\setstretch{1.53}\\lineskiplimit=0.4em\\lineskip=0.6em\\parskip=0pt',
+    '\\par\\vspace{0.24\\baselineskip}',
+    '\\noindent\\hspace*{2.55em}\\begin{minipage}[t]{\\dimexpr\\linewidth-2.55em\\relax}',
+    renderedLines.join('\n'),
+    '\\end{minipage}\\par\\vspace{0.24\\baselineskip}}',
+  ].join('\n');
 }
 
 function texHasTallInlineMath(tex) {
@@ -951,6 +1030,9 @@ function parseStemSegments(stem, stemLineAligns = []) {
   let inRawTable = false;
   let rawTableLines = [];
   let rawTableLineAligns = [];
+  let inDisplayMathBlock = false;
+  let displayMathLines = [];
+  let displayMathLineAligns = [];
   let textLines = [];
   let textLineAligns = [];
 
@@ -998,9 +1080,53 @@ function parseStemSegments(stem, stemLineAligns = []) {
     rawTableLineAligns = [];
   }
 
+  function flushDisplayMathBlock() {
+    if (displayMathLines.length === 0) return;
+    segments.push({
+      type: 'display_math_block',
+      lines: [...displayMathLines],
+      lineAligns: [...displayMathLineAligns],
+    });
+    displayMathLines = [];
+    displayMathLineAligns = [];
+  }
+
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
     const line = lines[lineIdx];
     const lineAlign = lineAligns[lineIdx] || 'left';
+    const displayBlockStarts = MATH_DISPLAY_BLOCK_START_RE.test(line);
+    const displayBlockEnds = MATH_DISPLAY_BLOCK_END_RE.test(line);
+
+    if (!inDisplayMathBlock && displayBlockStarts) {
+      flushText();
+      if (inBox) {
+        inBox = false;
+        flushBox();
+      }
+      if (inRawTable) {
+        inRawTable = false;
+        flushRawTable();
+      }
+      inDisplayMathBlock = true;
+      const cleaned = stripMathDisplayBlockMarkers(line).trim();
+      if (cleaned) { displayMathLines.push(cleaned); displayMathLineAligns.push(lineAlign); }
+      if (displayBlockEnds) {
+        inDisplayMathBlock = false;
+        flushDisplayMathBlock();
+      }
+      continue;
+    }
+
+    if (inDisplayMathBlock) {
+      const cleaned = stripMathDisplayBlockMarkers(line).trim();
+      if (cleaned) { displayMathLines.push(cleaned); displayMathLineAligns.push(lineAlign); }
+      if (displayBlockEnds) {
+        inDisplayMathBlock = false;
+        flushDisplayMathBlock();
+      }
+      continue;
+    }
+
     // [표시작]/[표끝] 은 "VLM 이 이미 LaTeX tabular 를 써 둔" 구간. 그대로 통과시킨다.
     if (!inRawTable && RAW_TABLE_START_RE.test(line)) {
       flushText();
@@ -1075,6 +1201,9 @@ function parseStemSegments(stem, stemLineAligns = []) {
       lines: [...rawTableLines],
       lineAligns: [...rawTableLineAligns],
     });
+  }
+  if (inDisplayMathBlock && displayMathLines.length > 0) {
+    flushDisplayMathBlock();
   }
   if (inBox && boxLines.length > 0) {
     const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
@@ -1624,19 +1753,37 @@ function parseRawTabularToRows(rawTexBlock) {
 //
 // rows 는 parseTableLines 결과 또는 parseRawTabularToRows 결과. 둘 다 동일한
 // `rows[][cells][lines]` 구조이므로 이 함수 내부에서는 구분 없이 처리.
-function renderTableLatex(rows, equations, tableScale = null, stemSizePt = 11) {
+function tableWidthFraction(rows, tableScale = null, { forceWidthFrac = null } = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const maxCols = Math.max(...rows.map((r) => r.length));
+  if (maxCols === 0) return '';
+  const widthScale = clampTableScale(tableScale?.widthScale);
+  const forced = Number(forceWidthFrac);
+  if (Number.isFinite(forced) && forced > 0) {
+    return Math.max(0.05, Math.min(1.0, forced));
+  }
+  const baseWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
+  return Math.max(0.05, Math.min(1.0, baseWidthFrac * widthScale));
+}
+
+function renderTableLatex(
+  rows,
+  equations,
+  tableScale = null,
+  stemSizePt = 11,
+  tableLayout = null,
+  renderOptions = {},
+) {
   if (!Array.isArray(rows) || rows.length === 0) return '';
   const maxCols = Math.max(...rows.map((r) => r.length));
   if (maxCols === 0) return '';
 
-  const widthScale = clampTableScale(tableScale?.widthScale);
   const heightScale = clampTableScale(tableScale?.heightScale);
   const tableFontSizePt = resolveTableFontSizePt(tableScale, stemSizePt);
   const tableFontLeadPt = Math.max(tableFontSizePt * 1.15, tableFontSizePt + 1).toFixed(2);
   const tabColSepPt = resolveTableTabColSepPt(tableScale);
-  const baseWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
   // 표 전체 폭 분수. 1.0(=\linewidth) 이 상한.
-  const effWidthFrac = Math.max(0.05, Math.min(1.0, baseWidthFrac * widthScale));
+  const effWidthFrac = tableWidthFraction(rows, tableScale, renderOptions);
   const cellHeightEm = (2.2 * heightScale).toFixed(2);
 
   // 컬럼별 상대 가중치. meta.table_scales[...].columnScales 가 있으면 그것을,
@@ -1701,15 +1848,36 @@ function renderTableLatex(rows, equations, tableScale = null, stemSizePt = 11) {
     );
   }
 
-  return [
-    ...lengthDefs,
-    `\\setlength{\\tblcellht}{${cellHeightEm}em}`,
-    `\\par\\noindent{\\hfill\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
+  const tableInner = [
+    `{\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
     latexRows.join('\n\\hline\n'),
     '\\hline',
-    '\\end{tabular}\\hfill\\null}\\par',
+    '\\end{tabular}}',
+  ].join('\n');
+  const position = normalizeTableLayoutPosition(tableLayout?.position);
+  const anchor = normalizeTableLayoutAnchor(tableLayout?.anchor);
+  const offsetXEm = clampTableOffsetEm(tableLayout?.offsetXEm);
+  const align = position === 'inline-right' || anchor === 'right'
+    ? 'right'
+    : position === 'inline-left' || anchor === 'left'
+      ? 'left'
+      : 'center';
+  const shiftedTable = offsetXEm === 0
+    ? tableInner
+    : `\\hspace*{${offsetXEm.toFixed(2)}em}${tableInner}`;
+  const alignedTable = align === 'right'
+    ? `\\hfill ${shiftedTable}`
+    : align === 'left'
+      ? `${shiftedTable}\\hfill\\null`
+      : `\\hfill ${shiftedTable}\\hfill\\null`;
+  return [
+    ...lengthDefs,
+    `\\setlength{\\tblcellht}{${cellHeightEm}em}`,
+    renderOptions.omitOuterPar
+      ? `\\noindent ${alignedTable}`
+      : `\\par\\noindent ${alignedTable}\\par`,
   ].join('\n');
 }
 
@@ -1838,6 +2006,50 @@ function resolveTableScale(question, type, index) {
     tabColSepPt: 6,
     columnScales: null,
   };
+}
+
+function resolveTableLayout(question, type, index) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const raw = meta.table_layout && typeof meta.table_layout === 'object'
+    ? meta.table_layout
+    : null;
+  const items = Array.isArray(raw?.items) ? raw.items : [];
+  const key = `${type}:${index}`;
+  const match = items.find((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const itemKey = String(item.tableKey ?? item.key ?? item.assetKey ?? '').trim();
+    return itemKey === key;
+  });
+  if (!match) {
+    return {
+      position: 'below-stem',
+      anchor: 'center',
+      offsetXEm: 0,
+    };
+  }
+  return {
+    position: normalizeTableLayoutPosition(match.position),
+    anchor: normalizeTableLayoutAnchor(match.anchor),
+    offsetXEm: clampTableOffsetEm(match.offsetXEm ?? match.offsetX ?? 0),
+  };
+}
+
+function normalizeTableLayoutPosition(value) {
+  const s = String(value || '').trim().toLowerCase();
+  return ['below-stem', 'inline-right', 'inline-left', 'between-stem-choices', 'above-choices'].includes(s)
+    ? s
+    : 'below-stem';
+}
+
+function normalizeTableLayoutAnchor(value) {
+  const s = String(value || '').trim().toLowerCase();
+  return ['center', 'left', 'right', 'top'].includes(s) ? s : 'center';
+}
+
+function clampTableOffsetEm(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-8, Math.min(8, n));
 }
 
 /* ------------------------------------------------------------------ */
@@ -2256,6 +2468,7 @@ function buildPreamble({
   lines.push('\\tolerance=9999');
   lines.push('\\emergencystretch=0pt');
   lines.push('\\usepackage{graphicx}');
+  lines.push('\\usepackage{wrapfig}');
   // adjustbox: \includegraphics 에 'max width' 같은 확장 키 사용.
   lines.push('\\usepackage[export]{adjustbox}');
   lines.push('\\usepackage{xcolor}');
@@ -3135,7 +3348,7 @@ function renderOneQuestion(question, {
   // [DEBUG] 렌더 진입 시점의 layout/scale 관찰 로그. 표/그림 설정이 실제 DB → 렌더러로
   //        전달됐는지를 한눈에 확인하기 위함. 진단 후 필요 시 제거 가능.
   if (process.env.PB_RENDER_DEBUG === '1'
-      || (question?.meta && (question.meta.figure_layout || question.meta.table_scales))) {
+      || (question?.meta && (question.meta.figure_layout || question.meta.table_scales || question.meta.table_layout))) {
     try {
       const metaSnap = question?.meta && typeof question.meta === 'object'
         ? question.meta : {};
@@ -3161,7 +3374,8 @@ function renderOneQuestion(question, {
         + `metaFigLayout=${JSON.stringify(flSummary)} `
         + `resolvedGroups=${JSON.stringify(resolvedGroupsSummary)} `
         + `tableScales=${JSON.stringify(metaSnap.table_scales || null)} `
-        + `tableScaleDefault=${JSON.stringify(metaSnap.table_scale_default || null)}`,
+        + `tableScaleDefault=${JSON.stringify(metaSnap.table_scale_default || null)} `
+        + `tableLayout=${JSON.stringify(metaSnap.table_layout || null)}`,
       );
     } catch (e) {
       console.warn('[xelatex:render] debug log failed:', e?.message || e);
@@ -3363,20 +3577,106 @@ function renderOneQuestion(question, {
     return out.join('\n');
   }
 
+  function estimateTextWrapLines(seg, contentWidthFrac = 0.55) {
+    const lines = Array.isArray(seg?.lines) ? seg.lines : [];
+    const charsPerLine = Math.max(10, Math.round(34 * Math.max(0.25, Math.min(0.85, contentWidthFrac))));
+    let count = 0;
+    for (const rawLine of lines) {
+      const raw = String(rawLine || '');
+      if (SUBQ_MARKER_LINE_RE.test(raw)) continue;
+      const stripped = raw.replace(PARAGRAPH_MARKER_RE, '').trim();
+      if (!stripped) {
+        count += 1;
+        continue;
+      }
+      const parts = raw.split(PARAGRAPH_MARKER_RE).map((v) => v.trim()).filter(Boolean);
+      for (const part of parts) {
+        const plain = part
+          .replace(/\[\[PB_FIG_[^\]]+\]\]/g, '')
+          .replace(/\[(?:그림|도형|도표|표)\]/g, '')
+          .replace(/\\[a-zA-Z]+(?:\{[^}]*\})?/g, 'x')
+          .trim();
+        count += Math.max(1, Math.ceil(Array.from(plain).length / charsPerLine));
+      }
+    }
+    return Math.max(1, count);
+  }
+
+  function wrapClearLines(wrapLines, textLines) {
+    const missing = Math.max(0, Math.min(8, Math.ceil(wrapLines - textLines)));
+    if (missing <= 0) return '';
+    return '\n' + Array.from({ length: missing }, () => '\\par\\noindent\\mbox{}').join('\n');
+  }
+
   function renderInlineFigureWithTextLatex(i, textSeg, position) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
     const text = renderTextSegmentInlineLatex(textSeg).trim();
     if (!text) return renderFigureLatex(i);
-    const gap = '0.90em';
-    const figWidth = expr.widthExpr;
-    const textWidth = `\\dimexpr\\linewidth-${figWidth}-${gap}\\relax`;
-    const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${expr.include}\\end{minipage}`;
-    const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
-    if (position === 'inline-right') {
-      return `\\par\\noindent${textBox}\\hspace{${gap}}${figBox}\\par\n`;
-    }
-    return `\\par\\noindent${figBox}\\hspace{${gap}}${textBox}\\par\n`;
+    const layout = layoutForIndex(i) || {};
+    const offsetX = safeFigureOffsetX(layout);
+    const offset = Math.abs(offsetX) > 1e-3 ? `\\hspace*{${offsetX.toFixed(2)}em}` : '';
+    const side = position === 'inline-right' ? 'r' : 'l';
+    const widthEm = Math.max(2, Math.min(50, Number(expr.widthEm) || 20));
+    const objectFrac = Math.max(0.2, Math.min(0.58, widthEm / 42));
+    const textLines = estimateTextWrapLines(textSeg, 1 - objectFrac);
+    const wrapLines = Math.max(4, Math.min(16, Math.ceil(widthEm * 0.42)));
+    const clear = wrapClearLines(wrapLines, textLines);
+    // 실제 어울림: wrapfigure 로 본문이 그림 아래쪽에서 다시 전체 폭으로 흐르게 한다.
+    // 선택지는 stem 이 아니므로, 본문이 짧은 경우 빈 줄로 wrap 을 소진해 선택지가 말려들지 않게 한다.
+    return [
+      '\\par\\begingroup',
+      '\\setlength{\\columnsep}{1.80em}',
+      '\\setlength{\\intextsep}{0pt}',
+      `\\begin{wrapfigure}[${wrapLines}]{${side}}{${expr.widthExpr}}`,
+      '\\vspace{-0.35\\baselineskip}',
+      `\\centering ${offset}${expr.include}`,
+      '\\vspace{-0.15\\baselineskip}',
+      '\\end{wrapfigure}',
+      `\\noindent ${text}${clear}`,
+      '\\par\\endgroup',
+    ].join('\n');
+  }
+
+  function renderInlineTableWithTextLatex(rows, scale, layout, textSeg, position) {
+    if (!Array.isArray(rows) || rows.length === 0) return '';
+    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    if (!text) return renderTableLatex(rows, equations, scale, stemSizePt, layout);
+    const rawTableWidthFrac = tableWidthFraction(rows, scale);
+    const tableWidthFrac = Math.max(0.24, Math.min(0.52, rawTableWidthFrac || 0.42));
+    const tableWidth = `${tableWidthFrac.toFixed(2)}\\linewidth`;
+    const inlineTableLayout = {
+      ...(layout || {}),
+      position: 'below-stem',
+      anchor: 'center',
+    };
+    const table = renderTableLatex(
+      rows,
+      equations,
+      scale,
+      stemSizePt,
+      inlineTableLayout,
+      { forceWidthFrac: 1.0, omitOuterPar: true },
+    ).trim();
+    if (!table) return '';
+    const side = position === 'inline-right' ? 'r' : 'l';
+    const textLines = estimateTextWrapLines(textSeg, 1 - tableWidthFrac);
+    const rowCount = Math.max(1, rows.length);
+    const heightScale = clampTableScale(scale?.heightScale);
+    const wrapLines = Math.max(4, Math.min(16, Math.ceil(rowCount * heightScale * 1.7 + 1)));
+    const clear = wrapClearLines(wrapLines, textLines);
+    return [
+      '\\par\\begingroup',
+      '\\setlength{\\columnsep}{1.80em}',
+      '\\setlength{\\intextsep}{0pt}',
+      `\\begin{wrapfigure}[${wrapLines}]{${side}}{${tableWidth}}`,
+      '\\vspace{-0.35\\baselineskip}',
+      table,
+      '\\vspace{-0.15\\baselineskip}',
+      '\\end{wrapfigure}',
+      `\\noindent ${text}${clear}`,
+      '\\par\\endgroup',
+    ].join('\n');
   }
 
   // 그룹(가로 배치) 전체를 한 줄 minipage 묶음으로 방출.
@@ -3621,6 +3921,7 @@ function renderOneQuestion(question, {
   const isTableType = (t) => t === 'table' || t === 'raw_tabular';
   const isFigOrTableType = (t) => isFigureType(t) || isTableType(t);
   const isBigBlockType = (t) => isBoxType(t) || isFigOrTableType(t);
+  const isSelfGappedType = (t) => t === 'display_math_block';
   // 블록의 "앞" (= 해당 블록 앞에 붙이는 여백) 과 "뒤" (= 해당 블록 뒤에 붙이는 여백) 분리.
   const gapBefore = (t) => {
     if (isFigureType(t)) return FIG_GAP_TOP;
@@ -3654,7 +3955,7 @@ function renderOneQuestion(question, {
       if (!s) continue;
       if (s.type === 'figure') {
         n += 1;
-      } else if (s.type === 'text' || s.type === 'bogi' || s.type === 'deco') {
+      } else if (s.type === 'text' || s.type === 'bogi' || s.type === 'deco' || s.type === 'display_math_block') {
         // 텍스트/박스 내부에도 마커가 남아있을 수 있음 — parseStemSegments 는 text 만
         // 승격하므로 text 안에는 사실상 더 없지만(분할됐음), bogi/deco 에는 남아있다.
         // plain [그림]/[도형]/[도표] 와 [[PB_FIG_<id>]] 토큰 모두 동등하게 "마커 1개" 로 카운트.
@@ -3693,7 +3994,10 @@ function renderOneQuestion(question, {
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
     const prev = segments[sIdx - 1];
-    const needsGap = prev && (prev.type !== 'text' || seg.type !== 'text');
+    const needsGap = prev
+      && !isSelfGappedType(prev.type)
+      && !isSelfGappedType(seg.type)
+      && (prev.type !== 'text' || seg.type !== 'text');
     // figure seg 가 실제 렌더 생략될 예정이면, 앞쪽 gap 도 생략.
     const segEmits = seg.type === 'figure' ? figureSegWillEmit(sIdx) : true;
     parts.push(`% DBG seg#${sIdx} type=${seg.type} prev=${prev ? prev.type : 'NONE'} needsGap=${needsGap} segEmits=${segEmits} figIdx=${figIdx}`);
@@ -3723,6 +4027,69 @@ function renderOneQuestion(question, {
       // 세트형 [소문항N] 마커가 stem 에 이미 경계를 잡아놓은 경우에는
       // 문장 중간 "(N)" splitAtSubQuestionMarkers 중복 분할을 스킵 → 본문 인용 오분할 방지.
       const hasSubQMarker = seg.lines.some((l) => SUBQ_MARKER_LINE_RE.test(String(l)));
+      const nextSeg = segments[sIdx + 1];
+      if (!hasSubQMarker && nextSeg?.type === 'figure') {
+        const nextFigText = nextSeg.lines?.[0] || '[그림]';
+        const nextFigIdx = figMarkerCountUpTo(sIdx + 1);
+        const nextLayout = layoutForIndex(nextFigIdx) || {};
+        const nextPosition = String(nextLayout.position || '').trim();
+        if (
+          (nextPosition === 'inline-left' || nextPosition === 'inline-right')
+          && figureSegWillEmit(sIdx + 1)
+        ) {
+          const i = resolveFigureIndexForSegment(sIdx + 1, nextFigText);
+          if (!figIdxConsumedByGroup.has(i)) {
+            emittedFigIdxs.add(i);
+            const renderedInline = renderInlineFigureWithTextLatex(
+              i,
+              seg,
+              nextPosition,
+            );
+            if (renderedInline && renderedInline.trim()) {
+              parts.push(renderedInline);
+              emittedStemTextLineAny = true;
+              sIdx += 1;
+              continue;
+            }
+          }
+        }
+      }
+      if (!hasSubQMarker && (nextSeg?.type === 'table' || nextSeg?.type === 'raw_tabular')) {
+        const tableType = nextSeg.type === 'table' ? 'struct' : 'raw';
+        const nextTableIndex = tableType === 'struct' ? structTableIdx + 1 : rawTableIdx + 1;
+        const layout = resolveTableLayout(question, tableType, nextTableIndex);
+        const position = String(layout.position || '').trim();
+        if (position === 'inline-left' || position === 'inline-right') {
+          let rows = [];
+          let scale = null;
+          if (tableType === 'struct') {
+            rows = parseTableLines(nextSeg.lines);
+            scale = resolveTableScale(question, 'struct', nextTableIndex);
+          } else {
+            const raw = nextSeg.lines.join('\n');
+            rows = parseRawTabularToRows(autoWrapTabularCells(raw));
+            scale = resolveTableScale(question, 'raw', nextTableIndex);
+          }
+          const renderedInline = renderInlineTableWithTextLatex(
+            rows,
+            scale,
+            layout,
+            seg,
+            position,
+          );
+          if (renderedInline && renderedInline.trim()) {
+            if (tableType === 'struct') {
+              structTableIdx += 1;
+            } else {
+              rawTableIdx += 1;
+            }
+            parts.push(renderedInline);
+            emittedStemTextLineAny = true;
+            sIdx += 1;
+            continue;
+          }
+        }
+      }
       let subQEmittedAny = false;
       // rawLine 간 누적된 "빈 줄 + 단독 [문단] 라인" 수. 다음 실제 콘텐츠/마커 앞에 수직 간격으로 반영.
       let outerPendingEmpty = 0;
@@ -3840,6 +4207,8 @@ function renderOneQuestion(question, {
           }
         }
       }
+    } else if (seg.type === 'display_math_block') {
+      parts.push(renderDisplayMathStemBlock(seg.lines, equations));
     } else if (seg.type === 'bogi') {
       parts.push(renderBogiBoxLatex(seg.lines, equations, replaceFigureMarkers));
     } else if (seg.type === 'deco') {
@@ -3847,8 +4216,29 @@ function renderOneQuestion(question, {
     } else if (seg.type === 'table') {
       structTableIdx += 1;
       const scale = resolveTableScale(question, 'struct', structTableIdx);
+      const layout = resolveTableLayout(question, 'struct', structTableIdx);
       const rows = parseTableLines(seg.lines);
-      parts.push(renderTableLatex(rows, equations, scale, stemSizePt));
+      const position = String(layout.position || '').trim();
+      const nextSeg = segments[sIdx + 1];
+      if (
+        (position === 'inline-left' || position === 'inline-right')
+        && nextSeg?.type === 'text'
+      ) {
+        const renderedInline = renderInlineTableWithTextLatex(
+          rows,
+          scale,
+          layout,
+          nextSeg,
+          position,
+        );
+        if (renderedInline && renderedInline.trim()) {
+          parts.push(renderedInline);
+          emittedStemTextLineAny = true;
+          sIdx += 1;
+          continue;
+        }
+      }
+      parts.push(renderTableLatex(rows, equations, scale, stemSizePt, layout));
     } else if (seg.type === 'raw_tabular') {
       // VLM 이 작성한 \begin{tabular}{...}...\end{tabular} 블록.
       // 1) autoWrapTabularCells 로 각 셀을 수식/텍스트 모드로 감싸고
@@ -3862,11 +4252,46 @@ function renderOneQuestion(question, {
       const patched = autoWrapTabularCells(raw);
       const rows = parseRawTabularToRows(patched);
       const scale = resolveTableScale(question, 'raw', rawTableIdx);
+      const layout = resolveTableLayout(question, 'raw', rawTableIdx);
+      const position = String(layout.position || '').trim();
+      const nextSeg = segments[sIdx + 1];
+      if (
+        rows.length > 0
+        && (position === 'inline-left' || position === 'inline-right')
+        && nextSeg?.type === 'text'
+      ) {
+        const renderedInline = renderInlineTableWithTextLatex(
+          rows,
+          scale,
+          layout,
+          nextSeg,
+          position,
+        );
+        if (renderedInline && renderedInline.trim()) {
+          parts.push(renderedInline);
+          emittedStemTextLineAny = true;
+          sIdx += 1;
+          continue;
+        }
+      }
       if (rows.length === 0) {
         // 해체 실패 — 원본을 그대로 중앙 정렬 출력 (fallback).
-        parts.push(`\\par\\noindent\\begin{center}\n${patched}\n\\end{center}\\par`);
+        const align = layout.position === 'inline-right' || layout.anchor === 'right'
+          ? 'right'
+          : layout.position === 'inline-left' || layout.anchor === 'left'
+            ? 'left'
+            : 'center';
+        const offset = clampTableOffsetEm(layout.offsetXEm);
+        const shifted = offset === 0 ? patched : `\\hspace*{${offset.toFixed(2)}em}${patched}`;
+        if (align === 'right') {
+          parts.push(`\\par\\noindent\\hfill ${shifted}\\par`);
+        } else if (align === 'left') {
+          parts.push(`\\par\\noindent ${shifted}\\hfill\\null\\par`);
+        } else {
+          parts.push(`\\par\\noindent\\hfill ${shifted}\\hfill\\null\\par`);
+        }
       } else {
-        parts.push(renderTableLatex(rows, equations, scale, stemSizePt));
+        parts.push(renderTableLatex(rows, equations, scale, stemSizePt, layout));
       }
     } else if (seg.type === 'figure') {
       // parseStemSegments 후처리에서 본문 중간의 [그림] 마커를 별도 figure 세그먼트로 승격시킨다.
@@ -4042,6 +4467,7 @@ export function buildTexSource(question, options = {}) {
     '\\tolerance=9999',
     '\\emergencystretch=0pt',
     '\\usepackage{graphicx}',
+    '\\usepackage{wrapfig}',
     // adjustbox: \includegraphics 에 'max width' 같은 확장 키 사용.
     '\\usepackage[export]{adjustbox}',
     '\\usepackage{xcolor}',
@@ -4191,6 +4617,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\emergencystretch=0pt',
     '\\usepackage{xcolor}',
     '\\usepackage{graphicx}',
+    '\\usepackage{wrapfig}',
     '\\usepackage[normalem]{ulem}',
     '\\usepackage{setspace}',
     '\\newsavebox{\\YggChoiceMeasureBox}',

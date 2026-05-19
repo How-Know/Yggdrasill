@@ -10,6 +10,7 @@ typedef RightSheetTestGradingStatesChanged = void Function(
 typedef RightSheetTestGradingAction = Future<void> Function(
   String action,
   RightSheetTestGradingStates states,
+  RightSheetTestGradingStates correctionStates,
 );
 typedef RightSheetTestGradingEditResetAction = Future<bool> Function();
 
@@ -54,6 +55,11 @@ class RightSideSheetTestGradingSession {
   final List<Map<String, dynamic>> gradingPages;
   final List<Map<String, String>> overlayEntries;
   final RightSheetTestGradingStates initialStates;
+  final RightSheetTestGradingStates initialCorrectionStates;
+  final Map<String, int> correctionAttemptNumbers;
+  final String baselineAttemptId;
+  final RightSheetTestGradingStates baselineStates;
+  final bool wrongOnlyDefault;
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
   final bool gradingLocked;
@@ -73,6 +79,11 @@ class RightSideSheetTestGradingSession {
     required this.gradingPages,
     this.overlayEntries = const <Map<String, String>>[],
     this.initialStates = const <String, String>{},
+    this.initialCorrectionStates = const <String, String>{},
+    this.correctionAttemptNumbers = const <String, int>{},
+    this.baselineAttemptId = '',
+    this.baselineStates = const <String, String>{},
+    this.wrongOnlyDefault = false,
     this.onStatesChanged,
     this.onAction,
     this.gradingLocked = false,

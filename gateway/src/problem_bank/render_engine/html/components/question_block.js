@@ -33,6 +33,8 @@ import { resolveFigureLayout } from '../../utils/figure_layout.js';
 const STRUCTURAL_STRIP = /\[문단(?::[^\]]*)?\]/g;
 const MATH_LINE_BREAK_MARKER_RE = /\[수식줄바꿈(?::([^\]]*))?\]/gi;
 const MATH_DISPLAY_LINE_MARKER_RE = /\[(?:수식제시|수식제시줄|displaymath|mathline)\]/gi;
+const MATH_DISPLAY_BLOCK_START_RE = /\[(?:수식제시시작|수식제시줄시작|displaymath:start|displaymath-start|mathline:start|mathline-start)\]/i;
+const MATH_DISPLAY_BLOCK_END_RE = /\[(?:수식제시끝|수식제시줄끝|displaymath:end|displaymath-end|mathline:end|mathline-end)\]/i;
 const BOX_START = /\[박스시작\]/;
 const BOX_END = /\[박스끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
@@ -63,6 +65,8 @@ function cleanLine(line) {
     .replace(STRUCTURAL_STRIP, ' ')
     .replace(MATH_LINE_BREAK_MARKER_RE, ' ')
     .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_START_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_END_RE, ' ')
     .replace(BOX_START, '')
     .replace(BOX_END, '')
     .replace(FIGURE_MARKER_RE, '')
@@ -78,6 +82,12 @@ function hasMathDisplayLineMarker(text) {
 function stripMathDisplayLineMarker(text) {
   MATH_DISPLAY_LINE_MARKER_RE.lastIndex = 0;
   return String(text || '').replace(MATH_DISPLAY_LINE_MARKER_RE, ' ');
+}
+
+function stripMathDisplayBlockMarkers(text) {
+  return String(text || '')
+    .replace(MATH_DISPLAY_BLOCK_START_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_END_RE, ' ');
 }
 
 function normalizeMathLineBreakAlign(value) {
@@ -502,6 +512,8 @@ function cleanLineKeepingPlaceholders(line) {
   return line
     .replace(STRUCTURAL_STRIP, ' ')
     .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_START_RE, ' ')
+    .replace(MATH_DISPLAY_BLOCK_END_RE, ' ')
     .replace(BOX_START, '')
     .replace(BOX_END, '')
     .replace(/\s+/g, ' ')
@@ -528,6 +540,8 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
   let hasFraction = false;
   let inBox = false;
   let boxLines = [];
+  let inDisplayMathBlock = false;
+  let displayMathLines = [];
   let inlineBuffer = [];
   let figureCounter = 0;
 
@@ -658,9 +672,63 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
     boxLines = [];
   };
 
+  const flushDisplayMathBlock = () => {
+    if (displayMathLines.length === 0) return;
+    flushInline();
+    const htmlParts = [];
+    for (const entry of displayMathLines) {
+      const pieces = String(entry.text || '').split(/\r?\n/);
+      for (const piece of pieces) {
+        const source = piece.trim();
+        if (!source) continue;
+        const one = renderOneLine(source, mathRenderer, equations, opts);
+        if (!one?.html) continue;
+        if (one.hasFraction) hasFraction = true;
+        htmlParts.push(`<div class="stem-line-display-math-row">${one.html}</div>`);
+      }
+    }
+    if (htmlParts.length > 0) {
+      blocks.push({
+        type: 'block',
+        html: `<div class="stem-line stem-line-display-math stem-line-display-math-block">${htmlParts.join('')}</div>`,
+      });
+    }
+    displayMathLines = [];
+  };
+
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
     const rawLine = lines[lineIdx];
     const lineAlign = lineAligns[lineIdx] || 'left';
+    const displayBlockStarts = MATH_DISPLAY_BLOCK_START_RE.test(rawLine);
+    const displayBlockEnds = MATH_DISPLAY_BLOCK_END_RE.test(rawLine);
+
+    if (!inDisplayMathBlock && displayBlockStarts) {
+      if (inBox) {
+        flushBox();
+        inBox = false;
+      } else {
+        flushInline();
+      }
+      inDisplayMathBlock = true;
+      const clean = prepareLine(stripMathDisplayBlockMarkers(rawLine));
+      if (clean) displayMathLines.push({ text: clean, align: lineAlign });
+      if (displayBlockEnds) {
+        inDisplayMathBlock = false;
+        flushDisplayMathBlock();
+      }
+      continue;
+    }
+
+    if (inDisplayMathBlock) {
+      const clean = prepareLine(stripMathDisplayBlockMarkers(rawLine));
+      if (clean) displayMathLines.push({ text: clean, align: lineAlign });
+      if (displayBlockEnds) {
+        inDisplayMathBlock = false;
+        flushDisplayMathBlock();
+      }
+      continue;
+    }
+
     if (PARAGRAPH_MARKER_LINE_RE.test(rawLine)) {
       if (!inBox) {
         flushInline();
@@ -698,6 +766,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
     inlineBuffer.push({ text: clean, align: lineAlign });
   }
   flushBox();
+  flushDisplayMathBlock();
   flushInline();
 
   let stemHtml = blocks.map((b) => b.html).join('');

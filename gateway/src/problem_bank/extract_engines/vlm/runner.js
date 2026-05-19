@@ -11,16 +11,25 @@
 // DB write, 잡 상태 전이, figure-job 큐잉 같은 후처리는 호출 측(processOneJob) 이
 // 이미 가진 공통 코드로 처리하도록 맡긴다. 즉 이 runner 는 "파서 교체 판" 역할만 함.
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { PDFDocument } from 'pdf-lib';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 import { callGeminiWithPdf } from './client.js';
 import { normalizeVlmQuestion, buildRowUpdate } from './writeback.js';
+
+const execFileAsync = promisify(execFileCb);
 
 function compact(v) {
   return String(v || '').trim();
 }
 
 const TEXTBOOK_ANSWER_IMAGE_BUCKET = 'textbook-answer-images';
+const PDF_FIGURE_BUCKET = 'problem-previews';
 const ANSWER_IMAGE_MARKER_RE = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\]|\[\[PB_ANSWER_FIG_[^\]]+\]\])/i;
 const TEXTBOOK_VLM_CHUNK_MAX_PAGES = Math.max(
   1,
@@ -39,6 +48,86 @@ function problemNumberKey(v) {
 
 function stableShortHash(value) {
   return createHash('sha1').update(String(value || '')).digest('hex').slice(0, 12);
+}
+
+function parseBbox1k(raw) {
+  const source = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.bbox_1k)
+      ? raw.bbox_1k
+      : Array.isArray(raw?.bbox)
+        ? raw.bbox
+        : Array.isArray(raw?.region_1k)
+          ? raw.region_1k
+          : null;
+  if (!source || source.length !== 4) return null;
+  const values = source.map((v) => Number(v));
+  if (values.some((v) => !Number.isFinite(v))) return null;
+  const [y1, x1, y2, x2] = values.map((v) => Math.max(0, Math.min(1000, Math.round(v))));
+  if (y2 <= y1 || x2 <= x1) return null;
+  if ((y2 - y1) < 8 || (x2 - x1) < 8) return null;
+  return [y1, x1, y2, x2];
+}
+
+function safeObjectPathPart(value, fallback = 'item') {
+  const safe = String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return safe || fallback;
+}
+
+async function renderPdfPageToPng(pdfBuffer, pageNumber, { dpi = 220 } = {}) {
+  const page = Number.parseInt(String(pageNumber ?? ''), 10);
+  if (!Number.isFinite(page) || page <= 0) return null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-pdf-figure-'));
+  const pdfPath = path.join(dir, 'source.pdf');
+  const outBase = path.join(dir, 'page');
+  try {
+    fs.writeFileSync(pdfPath, pdfBuffer);
+    await execFileAsync(
+      'pdftoppm',
+      ['-png', '-f', String(page), '-l', String(page), '-singlefile', '-r', String(dpi), pdfPath, outBase],
+      { timeout: 60_000, cwd: dir },
+    );
+    const pngPath = `${outBase}.png`;
+    if (!fs.existsSync(pngPath)) return null;
+    return fs.readFileSync(pngPath);
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+}
+
+async function cropPdfFigureFromPagePng(pagePng, bbox1k) {
+  if (!Buffer.isBuffer(pagePng) || pagePng.length === 0 || !bbox1k) return null;
+  const meta = await sharp(pagePng).metadata();
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  const [y1, x1, y2, x2] = bbox1k;
+  const pad = Math.max(6, Math.round(Math.min(width, height) * 0.012));
+  const left = Math.max(0, Math.floor((x1 / 1000) * width) - pad);
+  const top = Math.max(0, Math.floor((y1 / 1000) * height) - pad);
+  const right = Math.min(width, Math.ceil((x2 / 1000) * width) + pad);
+  const bottom = Math.min(height, Math.ceil((y2 / 1000) * height) + pad);
+  const cropWidth = Math.max(1, right - left);
+  const cropHeight = Math.max(1, bottom - top);
+  if (cropWidth < 16 || cropHeight < 16) return null;
+  const bytes = await sharp(pagePng)
+    .extract({ left, top, width: cropWidth, height: cropHeight })
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .toBuffer();
+  const croppedMeta = await sharp(bytes).metadata();
+  return {
+    bytes,
+    width: Number(croppedMeta.width || cropWidth),
+    height: Number(croppedMeta.height || cropHeight),
+    cropRectPx: { left, top, width: cropWidth, height: cropHeight },
+  };
 }
 
 function textbookSubKey(textbookScope) {
@@ -843,6 +932,146 @@ function applyTextbookAnswerSidecar(vlmQ, sidecar) {
   return next;
 }
 
+async function attachPdfFigureAssets({
+  supa,
+  pdfBuffer,
+  job,
+  doc,
+  vlmQ,
+  cropPage = null,
+  pagePngCache = null,
+  log = null,
+}) {
+  const figures = Array.isArray(vlmQ?.figures) ? vlmQ.figures : [];
+  if (figures.length === 0) return vlmQ;
+  const candidates = figures
+    .map((figure, idx) => ({
+      figure,
+      index: Number.isFinite(Number(figure?.order)) && Number(figure.order) > 0
+        ? Number(figure.order)
+        : idx + 1,
+      bbox1k: parseBbox1k(figure),
+    }))
+    .filter((x) => x.bbox1k);
+  if (candidates.length === 0) return vlmQ;
+
+  const rawPage = Number(cropPage?.rawPage || cropPage?.raw_page || vlmQ?.source_page);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) return vlmQ;
+
+  let pagePng = null;
+  try {
+    const cacheKey = String(rawPage);
+    if (pagePngCache instanceof Map && pagePngCache.has(cacheKey)) {
+      pagePng = pagePngCache.get(cacheKey);
+    } else {
+      pagePng = await renderPdfPageToPng(pdfBuffer, rawPage, {
+        dpi: Number.parseInt(process.env.PB_PDF_FIGURE_RENDER_DPI || '220', 10) || 220,
+      });
+      if (pagePngCache instanceof Map && pagePng) {
+        pagePngCache.set(cacheKey, pagePng);
+      }
+    }
+  } catch (err) {
+    if (typeof log === 'function') {
+      log('vlm_pdf_figure_render_failed', {
+        questionNumber: vlmQ?.question_number,
+        rawPage,
+        message: compact(err?.message || err),
+      });
+    }
+    return vlmQ;
+  }
+  if (!pagePng) return vlmQ;
+
+  const nowIso = new Date().toISOString();
+  const docPart = safeObjectPathPart(doc?.id || job?.document_id, 'document');
+  const jobPart = safeObjectPathPart(job?.id, 'job');
+  const questionPart = safeObjectPathPart(vlmQ?.question_number, 'question');
+  const assets = [];
+  for (const candidate of candidates) {
+    try {
+      const cropped = await cropPdfFigureFromPagePng(pagePng, candidate.bbox1k);
+      if (!cropped) continue;
+      const hash = createHash('sha256').update(cropped.bytes).digest('hex');
+      const objectPath =
+        `${job.academy_id}/${docPart}/pdf-figures/${jobPart}/` +
+        `${questionPart}_${candidate.index}_${randomUUID()}.png`;
+      const { error: uploadErr } = await supa.storage
+        .from(PDF_FIGURE_BUCKET)
+        .upload(objectPath, cropped.bytes, {
+          contentType: 'image/png',
+          upsert: true,
+        });
+      if (uploadErr) {
+        throw new Error(uploadErr.message);
+      }
+      assets.push({
+        id: randomUUID(),
+        source: 'textbook_pdf_crop',
+        status: 'cropped_from_pdf',
+        approved: true,
+        review_required: false,
+        bucket: PDF_FIGURE_BUCKET,
+        path: objectPath,
+        mime_type: 'image/png',
+        figure_index: candidate.index,
+        confidence: 0.86,
+        bbox_1k: candidate.bbox1k,
+        source_page: rawPage,
+        width_px: cropped.width,
+        height_px: cropped.height,
+        size_bytes: cropped.bytes.length,
+        content_hash: hash,
+        crop_rect_px: cropped.cropRectPx,
+        created_at: nowIso,
+      });
+    } catch (err) {
+      if (typeof log === 'function') {
+        log('vlm_pdf_figure_crop_failed', {
+          questionNumber: vlmQ?.question_number,
+          rawPage,
+          figureIndex: candidate.index,
+          message: compact(err?.message || err),
+        });
+      }
+    }
+  }
+  if (assets.length === 0) return vlmQ;
+
+  if (typeof log === 'function') {
+    log('vlm_pdf_figure_crops_uploaded', {
+      questionNumber: vlmQ?.question_number,
+      rawPage,
+      assetCount: assets.length,
+    });
+  }
+  return {
+    ...(vlmQ || {}),
+    pdf_figure_assets: assets,
+  };
+}
+
+function buildDefaultPdfFigureLayout(assets) {
+  const rows = Array.isArray(assets) ? assets : [];
+  const items = rows.map((asset, idx) => {
+    const figureIndex = Number.isFinite(Number(asset?.figure_index)) && Number(asset.figure_index) > 0
+      ? Number(asset.figure_index)
+      : idx + 1;
+    return {
+      assetKey: `idx:${figureIndex}`,
+      widthEm: rows.length >= 2 ? 12.0 : 20.0,
+      position: 'below-stem',
+      anchor: 'center',
+      offsetXEm: 0,
+      offsetYEm: 0,
+    };
+  });
+  const groups = items.length === 2
+    ? [{ type: 'horizontal', members: items.map((item) => item.assetKey), gap: 0.5 }]
+    : [];
+  return { version: 1, items, groups };
+}
+
 function expectedQuestionNumbersForInput(cropPagesByNumber, input) {
   if (!(cropPagesByNumber instanceof Map) || cropPagesByNumber.size === 0) {
     return [];
@@ -890,6 +1119,9 @@ function toPayloadQuestion({
     modelName,
     keepTypeFromDb: false,
   });
+  const pdfFigureAssets = Array.isArray(normalized?.pdf_figure_assets)
+    ? normalized.pdf_figure_assets
+    : [];
 
   // VLM 은 "uncertain_fields" 길이가 0 이면 high, 아니면 medium 이라고 자체 보고한다.
   // 워커의 lowConfidenceCount 집계는 숫자 confidence 기준이므로 여기서도 숫자로 환산.
@@ -950,6 +1182,15 @@ function toPayloadQuestion({
     objective_generated: update.objective_generated,
     meta: {
       ...(update.meta || {}),
+      ...(pdfFigureAssets.length > 0
+        ? {
+            figure_assets: pdfFigureAssets,
+            figure_layout: buildDefaultPdfFigureLayout(pdfFigureAssets),
+            figure_review_required: false,
+            figure_last_generated_at: new Date().toISOString(),
+            figure_crop_source: 'textbook_pdf_crop',
+          }
+        : {}),
       ...(textbookScope ? { textbook_scope: textbookScope } : {}),
       ...(vlmQ?.textbook_difficulty_label
         ? { textbook_difficulty_label: compact(vlmQ.textbook_difficulty_label) }
@@ -1105,7 +1346,10 @@ export async function runVlmExtraction({
   });
 
   let lowConfidenceCount = 0;
-  const payloadQuestionsRaw = ordered.map((vlmQ, idx) => {
+  const payloadQuestionsRaw = [];
+  const figurePagePngCache = new Map();
+  for (let idx = 0; idx < ordered.length; idx += 1) {
+    const vlmQ = ordered[idx];
     const qKey = problemNumberKey(vlmQ?.question_number);
     const existingRow = qKey ? existingByNum.get(qKey) || null : null;
     let enrichedVlmQ = qKey
@@ -1135,6 +1379,16 @@ export async function runVlmExtraction({
           : {}),
       };
     }
+    enrichedVlmQ = await attachPdfFigureAssets({
+      supa,
+      pdfBuffer: originalPdfBuffer,
+      job,
+      doc,
+      vlmQ: enrichedVlmQ,
+      cropPage,
+      pagePngCache: figurePagePngCache,
+      log,
+    });
     const payload = toPayloadQuestion({
       vlmQ: enrichedVlmQ,
       existingRow,
@@ -1148,8 +1402,8 @@ export async function runVlmExtraction({
     if (Number(payload.confidence || 0) < Number(reviewConfidenceThreshold || 0.6)) {
       lowConfidenceCount += 1;
     }
-    return payload;
-  });
+    payloadQuestionsRaw.push(payload);
+  }
   const payloadQuestions = normalizeIndependentSetPayloadQuestions(
     payloadQuestionsRaw,
     textbookScope,

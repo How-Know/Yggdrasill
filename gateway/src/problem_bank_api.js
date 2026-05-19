@@ -705,7 +705,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v78_visual_line_tall_math_balance';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v81_display_math_block_outer_gap';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -5378,23 +5378,6 @@ function isTextbookVlmQuotaError(input) {
   );
 }
 
-async function lookupTextbookPageOffset({ academyId, bookId, gradeLabel }) {
-  if (!academyId || !bookId || !gradeLabel) return { pageOffset: 0, found: false };
-  const { data, error } = await supa
-    .from('textbook_metadata')
-    .select('page_offset')
-    .eq('academy_id', academyId)
-    .eq('book_id', bookId)
-    .eq('grade_label', gradeLabel)
-    .maybeSingle();
-  if (error || !data) return { pageOffset: 0, found: false };
-  const raw = Number(data.page_offset);
-  return {
-    pageOffset: Number.isFinite(raw) ? raw : 0,
-    found: true,
-  };
-}
-
 async function handleTextbookVlmDetectProblems(body, res) {
   const apiKey =
     (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
@@ -5438,12 +5421,11 @@ async function handleTextbookVlmDetectProblems(body, res) {
     ? rawSectionHint
     : '';
 
-  const { pageOffset, found: offsetFound } = await lookupTextbookPageOffset({
-    academyId,
-    bookId,
-    gradeLabel,
-  });
-  const displayPage = rawPage - pageOffset;
+  // Textbook authoring VLM uses operator-entered PDF raw pages directly.
+  // page_offset is a learning-app display concern and must not shift VLM ranges.
+  const displayPage = rawPage;
+  const pageOffset = 0;
+  const offsetFound = false;
 
   let result;
   let usedFallbackPrompt = false;
@@ -5880,12 +5862,9 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     })
     .filter((s) => s.length > 0);
 
-  const { pageOffset, found: offsetFound } = await lookupTextbookPageOffset({
-    academyId,
-    bookId,
-    gradeLabel,
-  });
-  const displayPage = rawPage - pageOffset;
+  const displayPage = rawPage;
+  const pageOffset = 0;
+  const offsetFound = false;
 
   let result;
   try {
@@ -5977,12 +5956,9 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     })
     .filter((s) => s.length > 0);
 
-  const { pageOffset, found: offsetFound } = await lookupTextbookPageOffset({
-    academyId,
-    bookId,
-    gradeLabel,
-  });
-  const displayPage = rawPage - pageOffset;
+  const displayPage = rawPage;
+  const pageOffset = 0;
+  const offsetFound = false;
 
   let result;
   try {

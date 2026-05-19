@@ -3139,6 +3139,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return out;
   }
 
+  Map<String, HomeworkAnswerCellState> _retryBaselineStates(
+    HomeworkTestSavedGradingSession? session,
+  ) {
+    if (session == null) return const <String, HomeworkAnswerCellState>{};
+    final out = <String, HomeworkAnswerCellState>{};
+    session.states.forEach((key, state) {
+      if (state == HomeworkAnswerCellState.wrong ||
+          state == HomeworkAnswerCellState.unsolved) {
+        out[key] = state;
+      }
+    });
+    return out;
+  }
+
   List<Map<String, dynamic>> _toRightSheetGradingPages(
     List<HomeworkAnswerGradingPage> pages,
   ) {
@@ -4289,12 +4303,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         await _gradingResultService.loadLatestSavedSessionForHomework(
       homeworkItemId: payload.homeworkId,
     );
+    final baselineSession =
+        await _gradingResultService.loadFirstSavedSessionForHomework(
+      homeworkItemId: payload.homeworkId,
+    );
     if (!context.mounted || !mounted) return true;
     final initialStates = savedSession?.states.isNotEmpty == true
         ? savedSession!.states
         : cachedStates;
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
+    final baselineStates = _retryBaselineStates(baselineSession);
 
     rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
       sessionId: payload.sessionId,
@@ -4309,6 +4328,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       solutionPathRaw: payload.solutionPathRaw,
       answerViewerCacheKey: payload.answerViewerCacheKey,
       initialStates: _toRightSheetStateMap(initialStates),
+      initialCorrectionStates:
+          savedSession?.correctionStates ?? const <String, String>{},
+      correctionAttemptNumbers:
+          savedSession?.correctionAttemptNumbers ?? const <String, int>{},
+      baselineAttemptId: baselineSession?.attempt.id ?? '',
+      baselineStates: _toRightSheetStateMap(baselineStates),
+      wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
       gradingLocked: hasSavedGrading,
       onRequestEditReset: () async {
         final reset = await _gradingResultService.resetAttemptsForHomework(
@@ -4339,7 +4365,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           states: decoded,
         );
       },
-      onAction: (action, states) async {
+      onAction: (action, states, correctionStates) async {
         if (!mounted) return;
         final decoded = _fromRightSheetStateMap(states);
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -4365,11 +4391,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             gradingPages: payload.gradingPages,
             scoreByQuestionKey: payload.scoreByQuestionKey,
             groupHomeworkTitleSnapshot: payload.groupHomeworkTitle,
+            baselineAttemptId: baselineSession?.attempt.id ?? '',
+            baselineStates: baselineStates,
+            correctionStates: correctionStates,
           );
           if (!mounted) return;
           if (!saved) {
             savedGrading = false;
-            _showHomeworkChipSnackBar(context, '채점 결과 저장에 실패했습니다.');
+            _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
           } else {
             _testGradingSavedHomeworkIds.add(payload.homeworkId);
           }
@@ -4456,12 +4485,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             await _gradingResultService.loadLatestSavedSessionForHomework(
           homeworkItemId: payload.homeworkId,
         );
+        final baselineSession =
+            await _gradingResultService.loadFirstSavedSessionForHomework(
+          homeworkItemId: payload.homeworkId,
+        );
         if (!context.mounted) return;
         final initialStates = savedSession?.states.isNotEmpty == true
             ? savedSession!.states
             : cachedStates;
         final hasSavedGrading = savedSession != null ||
             _testGradingSavedHomeworkIds.contains(payload.homeworkId);
+        final baselineStates = _retryBaselineStates(baselineSession);
         final homeworkStore = HomeworkStore.instance;
         final studentName = _resolveHomeworkPrintStudentName(studentId);
         final groupHomeworkTitle = () {
@@ -4527,6 +4561,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               ? payload.answerViewerCacheKey
               : (gradingPdfLinks['cacheKey'] ?? ''),
           initialStates: _toRightSheetStateMap(initialStates),
+          initialCorrectionStates:
+              savedSession?.correctionStates ?? const <String, String>{},
+          correctionAttemptNumbers:
+              savedSession?.correctionAttemptNumbers ?? const <String, int>{},
+          baselineAttemptId: baselineSession?.attempt.id ?? '',
+          baselineStates: _toRightSheetStateMap(baselineStates),
+          wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
           gradingLocked: hasSavedGrading,
           onRequestEditReset: () async {
             final reset = await _gradingResultService.resetAttemptsForHomework(
@@ -4557,7 +4598,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               states: decoded,
             );
           },
-          onAction: (action, states) async {
+          onAction: (action, states, correctionStates) async {
             if (!mounted) return;
             final decoded = _fromRightSheetStateMap(states);
             _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -4583,11 +4624,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 gradingPages: payload.gradingPages,
                 scoreByQuestionKey: payload.scoreByQuestionKey,
                 groupHomeworkTitleSnapshot: groupHomeworkTitle,
+                baselineAttemptId: baselineSession?.attempt.id ?? '',
+                baselineStates: baselineStates,
+                correctionStates: correctionStates,
               );
               if (!mounted) return;
               if (!saved) {
                 savedGrading = false;
-                _showHomeworkChipSnackBar(context, '채점 결과 저장에 실패했습니다.');
+                _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
               } else {
                 _testGradingSavedHomeworkIds.add(payload.homeworkId);
               }
@@ -4626,6 +4670,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           await _gradingResultService.loadLatestSavedSessionForHomework(
         homeworkItemId: textbookProblemPayload.homeworkId,
       );
+      final baselineSession =
+          await _gradingResultService.loadFirstSavedSessionForHomework(
+        homeworkItemId: textbookProblemPayload.homeworkId,
+      );
       if (!context.mounted) return;
       final initialStates = savedSession?.states.isNotEmpty == true
           ? savedSession!.states
@@ -4633,6 +4681,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final hasSavedGrading = savedSession != null ||
           _testGradingSavedHomeworkIds
               .contains(textbookProblemPayload.homeworkId);
+      final baselineStates = _retryBaselineStates(baselineSession);
       final studentName = _resolveHomeworkPrintStudentName(studentId);
       final groupHomeworkTitle = _resolveGradingGroupTitleForPending(
         keys: keys,
@@ -4664,6 +4713,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         solutionPathRaw: textbookProblemPayload.solutionPathRaw,
         answerViewerCacheKey: textbookProblemPayload.answerViewerCacheKey,
         initialStates: _toRightSheetStateMap(initialStates),
+        initialCorrectionStates:
+            savedSession?.correctionStates ?? const <String, String>{},
+        correctionAttemptNumbers:
+            savedSession?.correctionAttemptNumbers ?? const <String, int>{},
+        baselineAttemptId: baselineSession?.attempt.id ?? '',
+        baselineStates: _toRightSheetStateMap(baselineStates),
+        wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
         gradingLocked: hasSavedGrading,
         onRequestEditReset: () async {
           final reset = await _gradingResultService.resetAttemptsForHomework(
@@ -4699,7 +4755,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             states: decoded,
           );
         },
-        onAction: (action, states) async {
+        onAction: (action, states, correctionStates) async {
           if (!mounted) return;
           final decoded = _fromRightSheetStateMap(states);
           _testGradingDraftStatesByHomeworkId[textbookProblemPayload
@@ -4725,6 +4781,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               gradingPages: textbookProblemPayload.gradingPages,
               scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
               groupHomeworkTitleSnapshot: groupHomeworkTitle,
+              baselineAttemptId: baselineSession?.attempt.id ?? '',
+              baselineStates: baselineStates,
+              correctionStates: correctionStates,
             );
             if (!mounted) return;
             if (!saved) {
@@ -10651,14 +10710,12 @@ class _HomeworkPrintOverlayMeta {
   final String bookCourseText;
   final String studentName;
   final String assignmentCodeText;
-  final bool isTest;
 
   const _HomeworkPrintOverlayMeta({
     required this.assignedDateText,
     required this.bookCourseText,
     required this.studentName,
     required this.assignmentCodeText,
-    this.isTest = false,
   });
 }
 
@@ -10696,7 +10753,6 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       bookCourseText: '교재 미기재',
       studentName: _resolveHomeworkPrintStudentName(studentId),
       assignmentCodeText: '-',
-      isTest: _isTestHomeworkItem(fallbackHomework),
     );
   }
 
@@ -10748,14 +10804,11 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       : (sortedCodes.length == 1
           ? sortedCodes.first
           : '${sortedCodes.first} 외 ${sortedCodes.length - 1}건');
-  final bool isTestMeta = byId.values.any(_isTestHomeworkItem) ||
-      _isTestHomeworkItem(fallbackHomework);
   return _HomeworkPrintOverlayMeta(
     assignedDateText: assignedDateText,
     bookCourseText: bookCourseText,
     studentName: _resolveHomeworkPrintStudentName(studentId),
     assignmentCodeText: assignmentCodeText,
-    isTest: isTestMeta,
   );
 }
 
@@ -10802,24 +10855,16 @@ void _drawHomeworkPrintOverlayOnFirstPage({
 }) {
   final size = page.getClientSize();
   final g = graphicsOverride ?? page.graphics;
-  final line1Parts = <String>[
+  final singleLineParts = <String>[
     if (meta.assignedDateText.trim().isNotEmpty && meta.assignedDateText != '-')
       meta.assignedDateText,
     if (meta.bookCourseText.trim().isNotEmpty) meta.bookCourseText,
+    if (meta.studentName.trim().isNotEmpty) meta.studentName.trim() else '학생',
   ];
-  final line1 = line1Parts.isEmpty ? '-' : line1Parts.join(' · ');
-  final line2 = meta.studentName.trim().isEmpty ? '학생' : meta.studentName;
+  final singleLineText =
+      singleLineParts.isEmpty ? '-' : singleLineParts.join(' · ');
   final assignmentCodeText =
       meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
-  // 테스트 카드는 상단을 한 줄로(날짜·교재·학생명 합쳐서) 출력한다.
-  final bool singleLineTop = meta.isTest;
-  final String singleLineText = () {
-    final parts = <String>[
-      if (line1.trim().isNotEmpty && line1 != '-') line1,
-      if (line2.trim().isNotEmpty) line2,
-    ];
-    return parts.isEmpty ? '-' : parts.join(' · ');
-  }();
 
   if (bottomLeftLayout) {
     const double leftInset = 14;
@@ -10828,12 +10873,12 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     final double bottomInset = bottomInsetOverride;
     final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
 
-    final double infoBlockH = singleLineTop ? lineH : lineH * 2;
+    final double infoBlockH = lineH;
     final double infoTop = size.height - bottomInset - infoBlockH;
     final infoBgRect = Rect.fromLTWH(
       leftInset - pad,
       infoTop - pad,
-      (singleLineTop ? 260 : 180) + pad * 2,
+      260 + pad * 2,
       infoBlockH + pad * 2,
     );
     g.drawRectangle(
@@ -10844,30 +10889,13 @@ void _drawHomeworkPrintOverlayOnFirstPage({
       alignment: sf.PdfTextAlignment.left,
       lineAlignment: sf.PdfVerticalAlignment.top,
     );
-    if (singleLineTop) {
-      g.drawString(
-        singleLineText,
-        line1Font,
-        brush: textBrush,
-        bounds: Rect.fromLTWH(leftInset, infoTop, 260, lineH),
-        format: leftFormat,
-      );
-    } else {
-      g.drawString(
-        line1,
-        line1Font,
-        brush: textBrush,
-        bounds: Rect.fromLTWH(leftInset, infoTop, 180, lineH),
-        format: leftFormat,
-      );
-      g.drawString(
-        line2,
-        line2Font,
-        brush: textBrush,
-        bounds: Rect.fromLTWH(leftInset, infoTop + lineH, 180, lineH),
-        format: leftFormat,
-      );
-    }
+    g.drawString(
+      singleLineText,
+      line1Font,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(leftInset, infoTop, 260, lineH),
+      format: leftFormat,
+    );
 
     const double codeW = 120;
     final double codeTop = size.height - bottomInset - lineH;
@@ -10906,30 +10934,13 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     lineAlignment: sf.PdfVerticalAlignment.top,
   );
   final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
-  if (singleLineTop) {
-    g.drawString(
-      singleLineText,
-      line1Font,
-      brush: textBrush,
-      bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
-      format: format,
-    );
-  } else {
-    g.drawString(
-      line1,
-      line1Font,
-      brush: textBrush,
-      bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
-      format: format,
-    );
-    g.drawString(
-      line2,
-      line2Font,
-      brush: textBrush,
-      bounds: Rect.fromLTWH(left, topInset + lineH, boxWidth, lineH),
-      format: format,
-    );
-  }
+  g.drawString(
+    singleLineText,
+    line1Font,
+    brush: textBrush,
+    bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
+    format: format,
+  );
   final double bottomInset = bottomInsetOverride;
   const double codeLineH = 18;
   final codeTop = math.max(0.0, size.height - bottomInset - codeLineH);
