@@ -23,6 +23,60 @@ import {
   SPACE_MARKER_REGEX,
 } from '../utils/text.js';
 
+function measuredWrapMacroLines() {
+  return [
+    '\\newsavebox{\\YggWrapObjectBox}',
+    '\\newcount\\YggWrapLineCount',
+    '\\newcount\\YggWrapTextLineCount',
+    '\\newcount\\YggWrapClearCount',
+    '\\newdimen\\YggWrapObjectHeight',
+    '\\newcommand{\\YggWrapClearRemaining}[2]{%',
+    '  \\YggWrapClearCount=#1\\relax',
+    '  \\advance\\YggWrapClearCount by -#2\\relax',
+    '  \\ifnum\\YggWrapClearCount>0',
+    '    \\ifnum\\YggWrapClearCount>8 \\YggWrapClearCount=8\\fi',
+    '    \\loop\\ifnum\\YggWrapClearCount>0',
+    '      \\par\\noindent\\mbox{}%',
+    '      \\advance\\YggWrapClearCount by -1\\relax',
+    '    \\repeat',
+    '  \\fi',
+    '}',
+    '\\long\\def\\YggMeasuredWrapBegin#1#2#3{%',
+    '  \\par\\begingroup',
+    '  \\setlength{\\columnsep}{1.80em}%',
+    '  \\setlength{\\intextsep}{0pt}%',
+    '  \\sbox{\\YggWrapObjectBox}{\\begin{minipage}{#2}\\vspace{0pt}#3\\end{minipage}}%',
+    '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapObjectBox+\\dp\\YggWrapObjectBox+0.35\\baselineskip\\relax',
+    '  \\YggWrapLineCount=0\\relax',
+    '  \\loop\\ifdim\\YggWrapObjectHeight>0pt',
+    '    \\advance\\YggWrapLineCount by 1\\relax',
+    '    \\advance\\YggWrapObjectHeight by -\\baselineskip',
+    '  \\repeat',
+    '  \\ifnum\\YggWrapLineCount<2 \\YggWrapLineCount=2\\fi',
+    '  \\begin{wrapfigure}[\\the\\YggWrapLineCount]{#1}{#2}',
+    '    \\vspace{-0.35\\baselineskip}',
+    '    \\usebox{\\YggWrapObjectBox}',
+    '    \\vspace{-0.15\\baselineskip}',
+    '  \\end{wrapfigure}',
+    '}',
+    '\\newcommand{\\YggMeasuredWrapEnd}[1]{%',
+    '  \\YggWrapClearRemaining{\\the\\YggWrapLineCount}{#1}%',
+    '  \\par\\endgroup',
+    '}',
+  ];
+}
+
+function tableColumnLengthLines() {
+  return Array.from({ length: 26 }, (_, i) => (
+    `\\newlength{\\tblcelwd${String.fromCharCode(0x41 + i)}}`
+  ));
+}
+
+function useLegacyInlineWrapMode() {
+  const mode = String(process.env.PB_XELATEX_INLINE_WRAP_MODE || '').trim().toLowerCase();
+  return mode === 'legacy' || mode === 'minipage';
+}
+
 // -----------------------------------------------------------------------------
 // LaTeX 제어문자 복구 (렌더 시점 safety net).
 //   VLM 경로에서 Gemini 가 \frac / \bullet / \vec / \t... 를 single-escape(\f ..)
@@ -1841,9 +1895,6 @@ function renderTableLatex(
   for (let i = 0; i < maxCols; i += 1) {
     const name = colWidthVar(i);
     lengthDefs.push(
-      `\\makeatletter\\@ifundefined{${name.slice(1)}}{\\newlength{${name}}}{}\\makeatother`,
-    );
-    lengthDefs.push(
       `\\setlength{${name}}{\\dimexpr ${colFracs[i].toFixed(6)}\\linewidth - ${(2 * tabColSepPt).toFixed(2)}pt - 1.2pt\\relax}`,
     );
   }
@@ -2477,8 +2528,10 @@ function buildPreamble({
   lines.push('\\usepackage{multicol}');
   lines.push('\\newlength{\\tblcellwd}');
   lines.push('\\newlength{\\tblcellht}');
+  lines.push(...tableColumnLengthLines());
   lines.push('\\newsavebox{\\YggChoiceMeasureBox}');
   lines.push('\\newcount\\YggChoiceLayout');
+  lines.push(...measuredWrapMacroLines());
   // \mtemptybox : 가로:세로 = 3:2 비율의 빈칸 네모 (math/text 모두 안전).
   // 한글 글자 전체 높이(ascender+descender 포함)와 시각적으로 동일하도록 1.05em × 1.575em 으로 설정.
   // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
@@ -3602,13 +3655,26 @@ function renderOneQuestion(question, {
     return Math.max(1, count);
   }
 
-  function wrapClearLines(wrapLines, textLines) {
-    const missing = Math.max(0, Math.min(8, Math.ceil(wrapLines - textLines)));
-    if (missing <= 0) return '';
-    return '\n' + Array.from({ length: missing }, () => '\\par\\noindent\\mbox{}').join('\n');
+  function renderLegacyInlineFigureWithTextLatex(i, textSeg, position) {
+    const expr = figureIncludeExpr(i);
+    if (!expr) return '';
+    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    if (!text) return renderFigureLatex(i);
+    const gap = '0.90em';
+    const figWidth = expr.widthExpr;
+    const textWidth = `\\dimexpr\\linewidth-${figWidth}-${gap}\\relax`;
+    const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${expr.include}\\end{minipage}`;
+    const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
+    if (position === 'inline-right') {
+      return `\\par\\noindent${textBox}\\hspace{${gap}}${figBox}\\par\n`;
+    }
+    return `\\par\\noindent${figBox}\\hspace{${gap}}${textBox}\\par\n`;
   }
 
   function renderInlineFigureWithTextLatex(i, textSeg, position) {
+    if (useLegacyInlineWrapMode()) {
+      return renderLegacyInlineFigureWithTextLatex(i, textSeg, position);
+    }
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
     const text = renderTextSegmentInlineLatex(textSeg).trim();
@@ -3620,25 +3686,49 @@ function renderOneQuestion(question, {
     const widthEm = Math.max(2, Math.min(50, Number(expr.widthEm) || 20));
     const objectFrac = Math.max(0.2, Math.min(0.58, widthEm / 42));
     const textLines = estimateTextWrapLines(textSeg, 1 - objectFrac);
-    const wrapLines = Math.max(4, Math.min(16, Math.ceil(widthEm * 0.42)));
-    const clear = wrapClearLines(wrapLines, textLines);
-    // 실제 어울림: wrapfigure 로 본문이 그림 아래쪽에서 다시 전체 폭으로 흐르게 한다.
-    // 선택지는 stem 이 아니므로, 본문이 짧은 경우 빈 줄로 wrap 을 소진해 선택지가 말려들지 않게 한다.
+    const object = `\\centering ${offset}${expr.include}`;
     return [
-      '\\par\\begingroup',
-      '\\setlength{\\columnsep}{1.80em}',
-      '\\setlength{\\intextsep}{0pt}',
-      `\\begin{wrapfigure}[${wrapLines}]{${side}}{${expr.widthExpr}}`,
-      '\\vspace{-0.35\\baselineskip}',
-      `\\centering ${offset}${expr.include}`,
-      '\\vspace{-0.15\\baselineskip}',
-      '\\end{wrapfigure}',
-      `\\noindent ${text}${clear}`,
-      '\\par\\endgroup',
-    ].join('\n');
+      `\\YggMeasuredWrapBegin{${side}}{${expr.widthExpr}}{${object}}`,
+      `\\noindent ${text}`,
+      `\\YggMeasuredWrapEnd{${textLines}}`,
+    ].join('\n') + '\n';
+  }
+
+  function renderLegacyInlineTableWithTextLatex(rows, scale, layout, textSeg, position) {
+    if (!Array.isArray(rows) || rows.length === 0) return '';
+    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    if (!text) return renderTableLatex(rows, equations, scale, stemSizePt, layout);
+    const rawTableWidthFrac = tableWidthFraction(rows, scale);
+    const tableWidthFrac = Math.max(0.24, Math.min(0.52, rawTableWidthFrac || 0.42));
+    const tableWidth = `${tableWidthFrac.toFixed(2)}\\linewidth`;
+    const gap = '0.90em';
+    const textWidth = `\\dimexpr\\linewidth-${tableWidth}-${gap}\\relax`;
+    const inlineTableLayout = {
+      ...(layout || {}),
+      position: 'below-stem',
+      anchor: 'center',
+    };
+    const table = renderTableLatex(
+      rows,
+      equations,
+      scale,
+      stemSizePt,
+      inlineTableLayout,
+      { forceWidthFrac: 1.0, omitOuterPar: true },
+    ).trim();
+    if (!table) return '';
+    const tableBox = `\\begin{minipage}[t]{${tableWidth}}\\vspace{0pt}${table}\\end{minipage}`;
+    const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
+    if (position === 'inline-right') {
+      return `\\par\\noindent${textBox}\\hspace{${gap}}${tableBox}\\par\n`;
+    }
+    return `\\par\\noindent${tableBox}\\hspace{${gap}}${textBox}\\par\n`;
   }
 
   function renderInlineTableWithTextLatex(rows, scale, layout, textSeg, position) {
+    if (useLegacyInlineWrapMode()) {
+      return renderLegacyInlineTableWithTextLatex(rows, scale, layout, textSeg, position);
+    }
     if (!Array.isArray(rows) || rows.length === 0) return '';
     const text = renderTextSegmentInlineLatex(textSeg).trim();
     if (!text) return renderTableLatex(rows, equations, scale, stemSizePt, layout);
@@ -3661,22 +3751,11 @@ function renderOneQuestion(question, {
     if (!table) return '';
     const side = position === 'inline-right' ? 'r' : 'l';
     const textLines = estimateTextWrapLines(textSeg, 1 - tableWidthFrac);
-    const rowCount = Math.max(1, rows.length);
-    const heightScale = clampTableScale(scale?.heightScale);
-    const wrapLines = Math.max(4, Math.min(16, Math.ceil(rowCount * heightScale * 1.7 + 1)));
-    const clear = wrapClearLines(wrapLines, textLines);
     return [
-      '\\par\\begingroup',
-      '\\setlength{\\columnsep}{1.80em}',
-      '\\setlength{\\intextsep}{0pt}',
-      `\\begin{wrapfigure}[${wrapLines}]{${side}}{${tableWidth}}`,
-      '\\vspace{-0.35\\baselineskip}',
-      table,
-      '\\vspace{-0.15\\baselineskip}',
-      '\\end{wrapfigure}',
-      `\\noindent ${text}${clear}`,
-      '\\par\\endgroup',
-    ].join('\n');
+      `\\YggMeasuredWrapBegin{${side}}{${tableWidth}}{${table}}`,
+      `\\noindent ${text}`,
+      `\\YggMeasuredWrapEnd{${textLines}}`,
+    ].join('\n') + '\n';
   }
 
   // 그룹(가로 배치) 전체를 한 줄 minipage 묶음으로 방출.
@@ -4477,8 +4556,10 @@ export function buildTexSource(question, options = {}) {
     '\\usepackage[most]{tcolorbox}',
     '\\newlength{\\tblcellwd}',
     '\\newlength{\\tblcellht}',
+    ...tableColumnLengthLines(),
     '\\newsavebox{\\YggChoiceMeasureBox}',
     '\\newcount\\YggChoiceLayout',
+    ...measuredWrapMacroLines(),
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
