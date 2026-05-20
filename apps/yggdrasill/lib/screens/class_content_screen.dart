@@ -1703,19 +1703,24 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }) async {
     if (template.parts.isEmpty) return;
     final studentId = student.id;
-    var resolvedFlowId = (template.flowId ?? '').trim();
-    if (resolvedFlowId.isEmpty) {
-      resolvedFlowId = await _resolveTemplatePreferredFlowId(
-        studentId: studentId,
-        template: template,
-      );
-      if (!context.mounted) return;
-    }
     final isProblemBankAssignmentTemplate = template.parts.any(
       (part) =>
           (part.pbPresetId ?? '').trim().isNotEmpty ||
           (part.sourceUnitLevel ?? '').trim() == 'problem_bank_assignment',
     );
+    var resolvedFlowId = (template.flowId ?? '').trim();
+    final preferredFlowId = await _resolveTemplatePreferredFlowId(
+      studentId: studentId,
+      template: template,
+    );
+    if (!context.mounted) return;
+    if (isProblemBankAssignmentTemplate) {
+      // 미리 만든 과제는 생성한 학생의 flowId가 저장되어 있을 수 있으므로,
+      // 드롭 대상 학생의 플로우 이름으로 다시 매칭한 값을 우선 사용한다.
+      resolvedFlowId = preferredFlowId;
+    } else if (resolvedFlowId.isEmpty) {
+      resolvedFlowId = preferredFlowId;
+    }
     final bookId = template.primaryBookId;
     final gradeLabel = template.primaryGradeLabel;
     if (!isProblemBankAssignmentTemplate &&
@@ -1774,13 +1779,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required HomeworkRecentTemplate template,
   }) async {
-    final preferredName =
-        StudentFlow.normalizeName(template.primaryPreferredFlowName);
+    String normalizeFlowName(String raw) {
+      var value = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (value.endsWith('플로우')) {
+        value = value.substring(0, value.length - '플로우'.length).trim();
+      }
+      return StudentFlow.normalizeName(value);
+    }
+
+    final preferredName = normalizeFlowName(template.primaryPreferredFlowName);
     if (preferredName.trim().isEmpty) return '';
     final flows = await StudentFlowStore.instance.loadForStudent(studentId);
     for (final flow in flows) {
       if (!flow.enabled) continue;
-      if (StudentFlow.normalizeName(flow.name) == preferredName) {
+      if (normalizeFlowName(flow.name) == preferredName) {
         return flow.id.trim();
       }
     }
@@ -2073,6 +2085,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       for (final part in template.parts) {
         final partType = (part.type ?? '').trim();
         final isTestPart = _isTestHomeworkTypeLabel(partType);
+        final isProblemBankPart = (part.pbPresetId ?? '').trim().isNotEmpty ||
+            (part.sourceUnitLevel ?? '').trim() == 'problem_bank_assignment';
         final fallbackOrigin = (part.flowId ?? '').trim();
         final resolvedOriginFlowId = (part.testOriginFlowId ?? '')
                 .trim()
@@ -2085,7 +2099,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           'color': part.color,
           'flowId': isTestPart
               ? testFlowId
-              : ((part.flowId ?? '').trim().isEmpty ? null : part.flowId),
+              : (isProblemBankPart
+                  ? (normalizedFlowId.isEmpty ? null : normalizedFlowId)
+                  : ((part.flowId ?? '').trim().isEmpty ? null : part.flowId)),
           'testOriginFlowId':
               isTestPart ? resolvedOriginFlowId : part.testOriginFlowId,
           'type': isTestPart ? '프린트' : partType,
@@ -2122,7 +2138,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     } else {
       final part = template.parts.first;
-      final fallbackFlowId = (part.flowId ?? '').trim();
+      final isProblemBankPart = (part.pbPresetId ?? '').trim().isNotEmpty ||
+          (part.sourceUnitLevel ?? '').trim() == 'problem_bank_assignment';
+      final fallbackFlowId =
+          isProblemBankPart ? '' : (part.flowId ?? '').trim();
       final isTestPart = _isTestHomeworkTypeLabel(part.type);
       final resolvedFlowId = isTestPart
           ? testFlowId

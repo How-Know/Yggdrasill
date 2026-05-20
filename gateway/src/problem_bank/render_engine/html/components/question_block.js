@@ -54,11 +54,17 @@ function stripImageChoiceFigureMarkers(stem) {
     .trim();
 }
 const BOGI_ITEM_SPLIT_RE =
-  /(?=(?:[ㄱ-ㅎ]\.\s|(?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|）)\s))/;
+  /(?=(?:[ㄱ-ㅎ]\.\s*|(?:\(|（)\s*[ㄱ-ㅎ가나다라마바사아자차카타파하]\s*(?:\)|）)\s*))/;
 const BOGI_ITEM_RE =
-  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
+  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([ㄱ-ㅎ가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
 const SYMBOL_LABEL_LINE_RE = /^\s*\\(bullet|circ)\b\s*/;
 const PARAGRAPH_MARKER_LINE_RE = /^\s*\[문단(?::[^\]]*)?\]\s*$/;
+
+function bogiLabelTextFromMatch(match) {
+  if (!match) return '';
+  const label = match[1] || match[2] || '';
+  return match[1] ? `${label}.` : `(${label})`;
+}
 
 function cleanLine(line) {
   return line
@@ -157,6 +163,14 @@ function buildSingleFigureHtml(url, layoutItem) {
   const posClass = `figure-pos-${position}`;
   const anchorClass = `figure-anchor-${anchor}`;
   const offsetX = safeFigureOffsetX(layoutItem);
+  const isInline = position === 'inline-left' || position === 'inline-right';
+  if (isInline && Number.isFinite(w)) {
+    const occupiedW = inlineFigureOccupiedWidthEm(Number(w), offsetX) || Number(w);
+    const outerAlign = position === 'inline-right' ? 'left' : 'right';
+    return `<div class="figure-inline-block ${posClass} ${anchorClass}" style="width:${occupiedW.toFixed(2)}em;text-align:${outerAlign};">`
+      + `<img class="figure-img" src="${url}" style="width:${Number(w).toFixed(2)}em;max-width:100%;" />`
+      + `</div>`;
+  }
   const offsetStyle = Math.abs(offsetX) > 1e-3 ? `transform:translateX(${offsetX}em);` : '';
   const widthStyle = w
     ? `width:${w}em;max-width:100%;${offsetStyle}`
@@ -173,6 +187,12 @@ function safeFigureOffsetX(layoutItem) {
   if (anchor === 'left' || position === 'inline-left') return Math.max(0, raw);
   if (anchor === 'right' || position === 'inline-right') return Math.min(0, raw);
   return raw;
+}
+
+function inlineFigureOccupiedWidthEm(widthEm, offsetX) {
+  const base = Number.isFinite(widthEm) ? Math.max(2, Math.min(50, Number(widthEm))) : null;
+  if (base == null) return null;
+  return Math.max(2, Math.min(60, base + Math.abs(Number(offsetX) || 0)));
 }
 
 function buildGroupFigureHtml(members, dataUrls, layoutItems, gapEm) {
@@ -394,10 +414,7 @@ function sectionLabelForBogiPart(part) {
   }
   const match = text.match(BOGI_ITEM_RE);
   if (!match) return null;
-  const consonantLabel = match[1] || '';
-  const syllableLabel = match[2] || '';
-  const label = consonantLabel || syllableLabel;
-  const labelText = consonantLabel ? `${label}.` : `(${label})`;
+  const labelText = bogiLabelTextFromMatch(match);
   return {
     labelHtml: escapeHtml(labelText),
     content: text.slice(match[0].length).trim(),

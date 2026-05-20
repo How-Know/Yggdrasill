@@ -1837,17 +1837,18 @@ class LearningProblemBankService {
     required bool includeAnswerSheet,
     required bool includeExplanation,
     required String displayName,
-  }) {
-    return saveExportSettingsAsDocument(
+  }) async {
+    final assignmentRenderConfig = <String, dynamic>{
+      ...renderConfig,
+      'presetKind': 'assignment',
+      'assignmentLibraryKind': 'generated_assignment',
+    };
+    final result = await saveExportSettingsAsDocument(
       academyId: academyId,
       sourceDocumentId: sourceDocumentId,
       selectedQuestionUidsOrdered: selectedQuestionUidsOrdered,
       questionModeByQuestionUid: questionModeByQuestionUid,
-      renderConfig: <String, dynamic>{
-        ...renderConfig,
-        'presetKind': 'assignment',
-        'assignmentLibraryKind': 'generated_assignment',
-      },
+      renderConfig: assignmentRenderConfig,
       templateProfile: templateProfile,
       paperSize: paperSize,
       includeAnswerSheet: includeAnswerSheet,
@@ -1855,6 +1856,15 @@ class LearningProblemBankService {
       displayName: displayName,
       presetKind: 'assignment',
     );
+    final presetId = result.preset?.id.trim() ?? '';
+    if (presetId.isNotEmpty) {
+      await overwriteExportPresetRenderConfig(
+        academyId: academyId,
+        presetId: presetId,
+        renderConfig: assignmentRenderConfig,
+      );
+    }
+    return result;
   }
 
   Future<List<LearningProblemDocumentExportPreset>>

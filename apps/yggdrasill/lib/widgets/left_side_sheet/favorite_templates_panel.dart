@@ -8,11 +8,13 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../models/student_flow.dart';
+import '../../screens/learning/models/problem_bank_export_models.dart';
+import '../../screens/learning/widgets/problem_bank_export_server_preview_dialog.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
-import '../../screens/learning/models/problem_bank_export_models.dart';
 import '../dialog_tokens.dart';
 
 enum _TemplateLibraryMode { favorites, assignments }
@@ -33,7 +35,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   bool _loading = false;
   String _bookFilter = '';
   String _gradeFilter = '';
-  _TemplateLibraryMode _mode = _TemplateLibraryMode.favorites;
+  _TemplateLibraryMode _mode = _TemplateLibraryMode.assignments;
   List<HomeworkRecentTemplate> _templates = const [];
   List<HomeworkRecentTemplate> _assignmentTemplates = const [];
   Map<String, LearningProblemDocumentExportPreset> _assignmentPresetById =
@@ -43,6 +45,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       LearningProblemBankService();
   StreamSubscription<void>? _assignmentPresetSubscription;
   String _printingPresetId = '';
+  String _previewingPresetId = '';
 
   @override
   void initState() {
@@ -94,6 +97,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             .map((e) => e.primaryBookId)
             .where((id) => id.trim().isNotEmpty)
             .toSet(),
+        ...assignmentTemplates
+            .map((e) => e.primaryBookId)
+            .where((id) => id.trim().isNotEmpty)
+            .toSet(),
       };
       final missingBookIds = requiredBookIds
           .where((id) => !bookNameById.containsKey(id))
@@ -111,13 +118,6 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         bookNameById = merged;
       }
       if (!mounted) return;
-      final activeTemplates = _mode == _TemplateLibraryMode.assignments
-          ? assignmentTemplates
-          : templates;
-      final hasBookFilter = _bookFilter.isNotEmpty &&
-          activeTemplates.any((t) => _templateBookKey(t) == _bookFilter);
-      final hasGradeFilter = _gradeFilter.isNotEmpty &&
-          activeTemplates.any((t) => t.primaryGradeLabel == _gradeFilter);
       setState(() {
         _templates = templates;
         _assignmentTemplates = assignmentTemplates;
@@ -125,8 +125,16 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           for (final preset in assignmentPresets) preset.id: preset,
         };
         _bookNameById = bookNameById;
-        if (!hasBookFilter) _bookFilter = '';
-        if (!hasGradeFilter) _gradeFilter = '';
+        if (_bookFilter.isNotEmpty &&
+            !_activeTemplates()
+                .any((t) => _templateBookKey(t) == _bookFilter)) {
+          _bookFilter = '';
+        }
+        if (_gradeFilter.isNotEmpty &&
+            !_activeTemplates()
+                .any((t) => t.primaryGradeLabel == _gradeFilter)) {
+          _gradeFilter = '';
+        }
       });
     } finally {
       if (mounted) {
@@ -153,24 +161,100 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   }
 
   String _assignmentBookLabel(HomeworkRecentTemplate template) {
+    final course = _assignmentCourseLabel(template);
+    final bookId = template.primaryBookId.trim();
+    String stripCourseAndUnit(String raw) {
+      var text = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (text.isEmpty || course.isEmpty) return text;
+      final normalizedCourse = course.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final idx = text.indexOf(normalizedCourse);
+      if (idx > 0) {
+        text = text.substring(0, idx).trim();
+      }
+      return text.replaceAll(RegExp(r'[\s·>\-/,:]+$'), '').trim();
+    }
+
+    if (bookId.isNotEmpty) {
+      final named = (_bookNameById[bookId] ?? '').trim();
+      if (named.isNotEmpty) return stripCourseAndUnit(named);
+    }
     for (final part in template.parts) {
       final value = (part.sourceUnitPath ?? '').trim();
-      if (value.isNotEmpty) return value;
+      if (value.isNotEmpty) return stripCourseAndUnit(value);
     }
     return '';
   }
 
+  String _assignmentCourseLabel(HomeworkRecentTemplate template) {
+    String normalizeCourse(String raw) {
+      final text = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (text.isEmpty) return '';
+      final compact = text.replaceAll(' ', '');
+      final numeric = RegExp(r'([1-6])[-\s]?([1-2])').firstMatch(text);
+      if (numeric != null) {
+        return '${numeric.group(1)}-${numeric.group(2)}';
+      }
+      for (final keyword in <String>[
+        '공통수학1',
+        '공통수학2',
+        '수학상',
+        '수학하',
+        '수학I',
+        '수학II',
+        '미적분1',
+        '미적분2',
+        '확률과통계',
+        '대수',
+      ]) {
+        if (compact.contains(keyword)) return keyword;
+      }
+      return text.split(RegExp(r'[·>/,]|\s{2,}')).first.trim();
+    }
+
+    final preset = _presetForTemplate(template);
+    final fromPreset = normalizeCourse(preset?.assignmentCourseLabel ?? '');
+    if (fromPreset.isNotEmpty) return fromPreset;
+    final rawBook = preset?.assignmentBookLabel.trim() ?? '';
+    final fromBook = normalizeCourse(rawBook);
+    if (fromBook.isNotEmpty && fromBook != rawBook) return fromBook;
+    for (final part in template.parts) {
+      final grade = (part.gradeLabel ?? '').trim();
+      final normalized = normalizeCourse(grade);
+      if (normalized.isNotEmpty) return normalized;
+      final source = normalizeCourse(part.sourceUnitPath ?? '');
+      if (source.isNotEmpty && source != (part.sourceUnitPath ?? '').trim()) {
+        return source;
+      }
+    }
+    return '';
+  }
+
+  String _assignmentBookCourseKey(HomeworkRecentTemplate template) {
+    final book = _assignmentBookLabel(template);
+    final course = _assignmentCourseLabel(template);
+    if (book.isEmpty && course.isEmpty) return '';
+    return '$book\t$course';
+  }
+
+  String _assignmentBookCourseLabel(HomeworkRecentTemplate template) {
+    final book = _assignmentBookLabel(template);
+    final course = _assignmentCourseLabel(template);
+    if (book.isEmpty && course.isEmpty) return '교재 없음';
+    if (book.isEmpty) return course;
+    if (course.isEmpty) return book;
+    return '$book $course';
+  }
+
   String _templateBookKey(HomeworkRecentTemplate template) {
     if (_isGeneratedAssignmentTemplate(template)) {
-      return _assignmentBookLabel(template);
+      return _assignmentBookCourseKey(template);
     }
     return template.primaryBookId.trim();
   }
 
   String _templateBookLabel(HomeworkRecentTemplate template) {
     if (_isGeneratedAssignmentTemplate(template)) {
-      final label = _assignmentBookLabel(template);
-      return label.isEmpty ? '교재 없음' : label;
+      return _assignmentBookCourseLabel(template);
     }
     final bookId = template.primaryBookId.trim();
     return bookId.isEmpty ? '교재 없음' : _bookName(bookId);
@@ -184,11 +268,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
 
   List<HomeworkRecentTemplate> _filteredTemplates() {
     final out = <HomeworkRecentTemplate>[];
+    final isAssignmentMode = _mode == _TemplateLibraryMode.assignments;
     for (final template in _activeTemplates()) {
       if (_bookFilter.isNotEmpty && _templateBookKey(template) != _bookFilter) {
         continue;
       }
-      if (_gradeFilter.isNotEmpty &&
+      if (!isAssignmentMode &&
+          _gradeFilter.isNotEmpty &&
           template.primaryGradeLabel != _gradeFilter) {
         continue;
       }
@@ -217,6 +303,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         : _templates;
     setState(() {
       _mode = mode;
+      if (mode == _TemplateLibraryMode.assignments) {
+        _gradeFilter = '';
+      }
       if (_bookFilter.isNotEmpty &&
           !nextTemplates.any((t) => _templateBookKey(t) == _bookFilter)) {
         _bookFilter = '';
@@ -282,6 +371,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     HomeworkRecentTemplate template, {
     required double width,
     required double sheetScale,
+    VoidCallback? onTitleTap,
   }) {
     final title =
         template.title.trim().isEmpty ? '(제목 없음)' : template.title.trim();
@@ -316,14 +406,31 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: kDlgText,
-              fontSize: titleFontSize,
-              fontWeight: FontWeight.w600,
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTitleTap,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: onTitleTap == null ? 0 : 2 * sheetScale,
+                  vertical: onTitleTap == null ? 0 : 1 * sheetScale,
+                ),
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: kDlgText,
+                    fontSize: titleFontSize,
+                    fontWeight: FontWeight.w600,
+                    decoration: onTitleTap == null
+                        ? TextDecoration.none
+                        : TextDecoration.underline,
+                    decorationColor: const Color(0xFF617777),
+                  ),
+                ),
+              ),
             ),
           ),
           SizedBox(height: titleToMetaGap),
@@ -402,11 +509,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     HomeworkRecentTemplate template, {
     required double width,
     required double sheetScale,
+    VoidCallback? onTitleTap,
   }) {
     final card = _buildTemplateCardSurface(
       template,
       width: width,
       sheetScale: sheetScale,
+      onTitleTap: onTitleTap,
     );
     return Draggable<HomeworkRecentTemplate>(
       data: template,
@@ -420,6 +529,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             template,
             width: width,
             sheetScale: sheetScale,
+            onTitleTap: onTitleTap,
           ),
         ),
       ),
@@ -452,6 +562,290 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     if (text == 'true' || text == '1' || text == 'yes') return true;
     if (text == 'false' || text == '0' || text == 'no') return false;
     return fallback;
+  }
+
+  List<String> _selectedQuestionUidsForPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) {
+    return preset.selectedQuestionUids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  String _sourceDocumentIdForPreset(
+      LearningProblemDocumentExportPreset preset) {
+    final sourceDocumentId = preset.sourceDocumentId.trim();
+    if (sourceDocumentId.isNotEmpty) return sourceDocumentId;
+    return preset.sourceDocumentIds.isEmpty
+        ? ''
+        : preset.sourceDocumentIds.first.trim();
+  }
+
+  Map<String, dynamic> _assignmentRenderConfigForPreset(
+    LearningProblemDocumentExportPreset preset, {
+    ProblemBankPreviewRefreshRequest? request,
+  }) {
+    final selectedUids = _selectedQuestionUidsForPreset(preset);
+    final patch = request == null
+        ? const <String, dynamic>{}
+        : _renderPatchForAssignmentPreview(
+            preset,
+            request,
+          );
+    return <String, dynamic>{
+      ...preset.renderConfig,
+      ...patch,
+      'selectedQuestionUidsOrdered': selectedUids,
+      'selectedQuestionIdsOrdered': selectedUids,
+      'questionModeByQuestionUid': preset.questionModeByQuestionUid,
+      'questionModeByQuestionId': preset.questionModeByQuestionUid,
+      'presetKind': 'assignment',
+      'assignmentLibraryKind': 'generated_assignment',
+      'disableAutoLabels': true,
+    };
+  }
+
+  Map<String, dynamic> _renderPatchForAssignmentPreview(
+    LearningProblemDocumentExportPreset preset,
+    ProblemBankPreviewRefreshRequest request,
+  ) {
+    final settings = LearningProblemExportSettings.fromPresetRenderConfig(
+      base: LearningProblemExportSettings.initial(),
+      renderConfig: preset.renderConfig,
+    );
+    final topText = request.titlePageTopText.trim();
+    final timeLimitText = request.timeLimitText.trim();
+    final patch = <String, dynamic>{
+      'subjectTitleText': request.subjectTitleText.trim().isEmpty
+          ? '수학 영역'
+          : request.subjectTitleText.trim(),
+      'titlePageTopText':
+          topText.isEmpty ? kLearningDefaultTitlePageTopText : topText,
+      'timeLimitText': timeLimitText,
+      'includeAcademyLogo': request.includeAcademyLogo,
+      'includeCoverPage': request.includeCoverPage,
+      'coverPageTexts': request.coverPageTexts,
+      'includeAnswerSheet': request.includeAnswerSheet,
+      'includeExplanation': request.includeExplanation,
+      'includeQuestionScore': request.includeQuestionScore,
+      'questionScoreByQuestionUid': request.questionScoreByQuestionId,
+      'questionScoreByQuestionId': request.questionScoreByQuestionId,
+      'mathEngine': request.mathEngine,
+      'disableAutoLabels': request.disableAutoLabels,
+    };
+    if (request.pageColumnQuestionCounts.isNotEmpty) {
+      patch['pageColumnQuestionCounts'] = request.pageColumnQuestionCounts;
+    }
+    if (settings.layoutColumnCount == 2) {
+      patch['layoutMode'] = 'custom_columns';
+      patch['columnLabelAnchors'] = request.columnLabelAnchors;
+      patch['titlePageIndices'] = request.titlePageIndices;
+      patch['titlePageHeaders'] = request.titlePageHeaders;
+    }
+    if (request.assignmentFlowName.trim().isNotEmpty) {
+      patch['assignmentFlowName'] = StudentFlow.normalizeName(
+        request.assignmentFlowName.trim(),
+      );
+    }
+    return patch;
+  }
+
+  List<Map<String, dynamic>> _readMapRows(dynamic primary, dynamic fallback) {
+    final source = primary is List ? primary : fallback;
+    if (source is! List) return const <Map<String, dynamic>>[];
+    return source
+        .whereType<Map>()
+        .map((e) => e.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic> _readCoverPageTexts(
+    dynamic primary,
+    dynamic fallback,
+  ) {
+    final source = primary is Map
+        ? primary
+        : (fallback is Map ? fallback : const <String, dynamic>{});
+    return source.map((key, value) => MapEntry('$key', value));
+  }
+
+  Map<String, double> _readScoreMap(dynamic primary, dynamic fallback) {
+    final source = primary is Map
+        ? primary
+        : (fallback is Map ? fallback : const <String, dynamic>{});
+    final out = <String, double>{};
+    for (final entry in source.entries) {
+      final id = '${entry.key}'.trim();
+      if (id.isEmpty) continue;
+      final raw = entry.value;
+      final score = raw is num ? raw.toDouble() : double.tryParse('$raw');
+      if (score == null || !score.isFinite || score < 0) continue;
+      out[id] = score;
+    }
+    return out;
+  }
+
+  List<int> _readPositiveIntList(
+    dynamic primary,
+    dynamic fallback, {
+    List<int> defaults = const <int>[1],
+  }) {
+    final source = primary is List ? primary : fallback;
+    if (source is! List) return defaults;
+    final out = source
+        .map((e) => int.tryParse('$e'))
+        .whereType<int>()
+        .where((e) => e > 0)
+        .toList(growable: false);
+    return out.isEmpty ? defaults : out;
+  }
+
+  bool _readBoolFlag(dynamic primary, dynamic fallback, bool defaultValue) {
+    var value = primary;
+    value ??= fallback;
+    if (value is bool) return value;
+    final text = '$value'.trim().toLowerCase();
+    if (text == 'true' || text == '1' || text == 'yes' || text == 'y') {
+      return true;
+    }
+    if (text == 'false' || text == '0' || text == 'no' || text == 'n') {
+      return false;
+    }
+    return defaultValue;
+  }
+
+  String _normalizeMathEngineValue(dynamic raw) {
+    final value = '$raw'.trim().toLowerCase();
+    return value == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
+  }
+
+  List<ProblemBankPreviewQuestionScoreEntry> _scoreEntriesForPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) {
+    final scores = _readScoreMap(
+      preset.renderConfig['questionScoreByQuestionUid'],
+      preset.renderConfig['questionScoreByQuestionId'],
+    );
+    return _selectedQuestionUidsForPreset(preset).asMap().entries.map((entry) {
+      final uid = entry.value;
+      return ProblemBankPreviewQuestionScoreEntry(
+        questionId: uid,
+        questionNumber: '${entry.key + 1}',
+        defaultScore: scores[uid] ?? 3,
+      );
+    }).toList(growable: false);
+  }
+
+  ProblemBankPreviewRefreshResult _previewResultFromJob(
+    LearningProblemExportJob job,
+    ProblemBankPreviewRefreshRequest request,
+  ) {
+    final result = job.resultSummary;
+    final options = job.options;
+    final mathEngine = _normalizeMathEngineValue(
+      result['mathEngine'] ?? options['mathEngine'] ?? request.mathEngine,
+    );
+    final titlePageTopText =
+        '${result['titlePageTopText'] ?? options['titlePageTopText'] ?? request.titlePageTopText}'
+            .trim();
+    final timeLimitText =
+        '${result['timeLimitText'] ?? options['timeLimitText'] ?? request.timeLimitText}'
+            .trim();
+    final questionScoreByUid = _readScoreMap(
+      result['questionScoreByQuestionUid'],
+      options['questionScoreByQuestionUid'],
+    );
+    final questionScoreById = _readScoreMap(
+      result['questionScoreByQuestionId'],
+      options['questionScoreByQuestionId'],
+    );
+    return ProblemBankPreviewRefreshResult(
+      pdfUrl: job.outputUrl,
+      mathEngine: mathEngine,
+      titlePageTopText: titlePageTopText.isEmpty
+          ? kLearningDefaultTitlePageTopText
+          : titlePageTopText,
+      timeLimitText: timeLimitText,
+      pageColumnQuestionCounts: _readMapRows(
+        result['pageColumnQuestionCounts'],
+        options['pageColumnQuestionCounts'],
+      ),
+      columnLabelAnchors: _readMapRows(
+        result['columnLabelAnchors'],
+        options['columnLabelAnchors'],
+      ),
+      titlePageIndices: _readPositiveIntList(
+        result['titlePageIndices'],
+        options['titlePageIndices'],
+      ),
+      titlePageHeaders: _readMapRows(
+        result['titlePageHeaders'],
+        options['titlePageHeaders'],
+      ),
+      coverPageTexts: _readCoverPageTexts(
+        result['coverPageTexts'],
+        options['coverPageTexts'],
+      ),
+      includeAcademyLogo: _readBoolFlag(
+        result['includeAcademyLogo'],
+        options['includeAcademyLogo'],
+        request.includeAcademyLogo,
+      ),
+      includeCoverPage: _readBoolFlag(
+        result['includeCoverPage'],
+        options['includeCoverPage'],
+        request.includeCoverPage,
+      ),
+      includeAnswerSheet: _readBoolFlag(
+        result['includeAnswerSheet'],
+        options['includeAnswerSheet'],
+        request.includeAnswerSheet,
+      ),
+      includeExplanation: _readBoolFlag(
+        result['includeExplanation'],
+        options['includeExplanation'],
+        request.includeExplanation,
+      ),
+      includeQuestionScore: _readBoolFlag(
+        result['includeQuestionScore'],
+        options['includeQuestionScore'],
+        request.includeQuestionScore,
+      ),
+      questionScoreByQuestionId: questionScoreByUid.isNotEmpty
+          ? questionScoreByUid
+          : questionScoreById,
+    );
+  }
+
+  Future<LearningProblemExportJob> _createAssignmentExportJob({
+    required String academyId,
+    required LearningProblemDocumentExportPreset preset,
+    required bool previewOnly,
+    ProblemBankPreviewRefreshRequest? request,
+  }) {
+    final sourceDocumentId = _sourceDocumentIdForPreset(preset);
+    final selectedUids = _selectedQuestionUidsForPreset(preset);
+    final renderConfig = _assignmentRenderConfigForPreset(
+      preset,
+      request: request,
+    );
+    return _problemBankService.createExportJob(
+      academyId: academyId,
+      documentId: sourceDocumentId,
+      templateProfile: preset.templateProfile.isEmpty
+          ? 'assignment'
+          : preset.templateProfile,
+      paperSize: preset.paperSize.isEmpty ? 'A4' : preset.paperSize,
+      includeAnswerSheet:
+          _boolFromConfig(renderConfig, 'includeAnswerSheet', true),
+      includeExplanation:
+          _boolFromConfig(renderConfig, 'includeExplanation', false),
+      selectedQuestionUids: selectedUids,
+      renderHash: buildLearningRenderHashFromConfig(renderConfig),
+      previewOnly: previewOnly,
+      options: renderConfig,
+    );
   }
 
   Future<LearningProblemExportJob?> _waitForAssignmentPrintJob(
@@ -574,6 +968,267 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     }
   }
 
+  Future<void> _previewGeneratedAssignmentPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    final safeAcademyId = (academyId ?? '').trim();
+    if (safeAcademyId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('학원 정보가 없어 과제를 볼 수 없습니다.')),
+      );
+      return;
+    }
+    final selectedUids = _selectedQuestionUidsForPreset(preset);
+    if (_sourceDocumentIdForPreset(preset).isEmpty || selectedUids.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('과제의 원본 문항 정보를 찾지 못했습니다.')),
+      );
+      return;
+    }
+
+    if (mounted) setState(() => _previewingPresetId = preset.id);
+    try {
+      final initialJob = await _createAssignmentExportJob(
+        academyId: safeAcademyId,
+        preset: preset,
+        previewOnly: true,
+      );
+      final completed =
+          await _waitForAssignmentPrintJob(safeAcademyId, initialJob);
+      if (!mounted) return;
+      if (completed == null ||
+          completed.status != 'completed' ||
+          completed.outputUrl.trim().isEmpty) {
+        final err = completed?.errorMessage.isNotEmpty == true
+            ? completed!.errorMessage
+            : (completed?.errorCode ?? completed?.status ?? 'unknown');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('과제 미리보기 생성 실패: $err')),
+        );
+        return;
+      }
+
+      final renderConfig = _assignmentRenderConfigForPreset(preset);
+      final settings = LearningProblemExportSettings.fromPresetRenderConfig(
+        base: LearningProblemExportSettings.initial(),
+        renderConfig: renderConfig,
+      );
+      final subjectTitle = '${renderConfig['subjectTitleText'] ?? ''}'.trim();
+      final titlePageTopText =
+          '${renderConfig['titlePageTopText'] ?? ''}'.trim();
+      final timeLimitText = '${renderConfig['timeLimitText'] ?? ''}'.trim();
+      final initialMathEngine = _normalizeMathEngineValue(
+        renderConfig['mathEngine'] ?? completed.resultSummary['mathEngine'],
+      );
+      await ProblemBankExportServerPreviewDialog.open(
+        context,
+        pdfUrl: completed.outputUrl.trim(),
+        titleText: '과제보기 (${selectedUids.length}문항)',
+        initialSubjectTitle: subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
+        initialTitlePageTopText: titlePageTopText.isEmpty
+            ? kLearningDefaultTitlePageTopText
+            : titlePageTopText,
+        initialTimeLimitText: timeLimitText,
+        layoutColumns: settings.layoutColumnCount,
+        maxQuestionsPerPage: settings.maxQuestionsPerPageCount,
+        totalQuestionCount: selectedUids.length,
+        initialPageColumnQuestionCounts: _readMapRows(
+          renderConfig['pageColumnQuestionCounts'],
+          completed.resultSummary['pageColumnQuestionCounts'],
+        ),
+        initialColumnLabelAnchors: _readMapRows(
+          renderConfig['columnLabelAnchors'],
+          completed.resultSummary['columnLabelAnchors'],
+        ),
+        initialTitlePageIndices: _readPositiveIntList(
+          renderConfig['titlePageIndices'],
+          completed.resultSummary['titlePageIndices'],
+        ),
+        initialTitlePageHeaders: _readMapRows(
+          renderConfig['titlePageHeaders'],
+          completed.resultSummary['titlePageHeaders'],
+        ),
+        initialCoverPageTexts: _readCoverPageTexts(
+          renderConfig['coverPageTexts'],
+          completed.resultSummary['coverPageTexts'],
+        ),
+        initialIncludeAcademyLogo: _readBoolFlag(
+          renderConfig['includeAcademyLogo'],
+          completed.resultSummary['includeAcademyLogo'],
+          settings.includeAcademyLogo,
+        ),
+        initialIncludeCoverPage: _readBoolFlag(
+          renderConfig['includeCoverPage'],
+          completed.resultSummary['includeCoverPage'],
+          false,
+        ),
+        initialIncludeAnswerSheet: _readBoolFlag(
+          renderConfig['includeAnswerSheet'],
+          completed.resultSummary['includeAnswerSheet'],
+          settings.includeAnswerSheet,
+        ),
+        initialIncludeExplanation: _readBoolFlag(
+          renderConfig['includeExplanation'],
+          completed.resultSummary['includeExplanation'],
+          settings.includeExplanation,
+        ),
+        initialIncludeQuestionScore: _readBoolFlag(
+          renderConfig['includeQuestionScore'],
+          completed.resultSummary['includeQuestionScore'],
+          settings.includeQuestionScore,
+        ),
+        initialMathEngine: initialMathEngine,
+        initialQuestionScoreByQuestionId: _readScoreMap(
+          renderConfig['questionScoreByQuestionUid'],
+          renderConfig['questionScoreByQuestionId'],
+        ),
+        questionScoreEntries: _scoreEntriesForPreset(preset),
+        initialEditingPresetId: preset.id,
+        initialEditingPresetName: preset.displayName,
+        assignmentFlowNames: StudentFlow.defaultNames,
+        onRefreshRequested: (request) async {
+          final job = await _createAssignmentExportJob(
+            academyId: safeAcademyId,
+            preset: preset,
+            previewOnly: true,
+            request: request,
+          );
+          final refreshed =
+              await _waitForAssignmentPrintJob(safeAcademyId, job);
+          if (!mounted || refreshed == null) return null;
+          if (refreshed.status != 'completed' ||
+              refreshed.outputUrl.trim().isEmpty) {
+            final err = refreshed.errorMessage.isNotEmpty
+                ? refreshed.errorMessage
+                : refreshed.errorCode;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '미리보기 생성 실패: ${err.isEmpty ? refreshed.status : err}',
+                ),
+              ),
+            );
+            return null;
+          }
+          return _previewResultFromJob(refreshed, request);
+        },
+        onGeneratePdfRequested: (request) async {
+          final job = await _createAssignmentExportJob(
+            academyId: safeAcademyId,
+            preset: preset,
+            previewOnly: false,
+            request: request,
+          );
+          final generated =
+              await _waitForAssignmentPrintJob(safeAcademyId, job);
+          if (!mounted || generated == null) return;
+          if (generated.status != 'completed' ||
+              generated.outputUrl.trim().isEmpty) {
+            final err = generated.errorMessage.isNotEmpty
+                ? generated.errorMessage
+                : generated.errorCode;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'PDF 생성 실패: ${err.isEmpty ? generated.status : err}',
+                ),
+              ),
+            );
+            return;
+          }
+          await _openPdfForPrint(generated.outputUrl.trim(), preset.id);
+        },
+        onSaveSettingsRequested: (request) async {
+          final renderConfig = _assignmentRenderConfigForPreset(
+            preset,
+            request: request,
+          );
+          final presetIdToUpdate = request.presetIdToUpdate.trim();
+          final displayName = request.presetDisplayName.trim().isEmpty
+              ? preset.displayName
+              : request.presetDisplayName.trim();
+          final result = await _problemBankService.saveExportSettingsAsDocument(
+            academyId: safeAcademyId,
+            sourceDocumentId: _sourceDocumentIdForPreset(preset),
+            selectedQuestionUidsOrdered: selectedUids,
+            questionModeByQuestionUid: preset.questionModeByQuestionUid,
+            renderConfig: renderConfig,
+            templateProfile: preset.templateProfile.isEmpty
+                ? 'assignment'
+                : preset.templateProfile,
+            paperSize: preset.paperSize.isEmpty ? 'A4' : preset.paperSize,
+            includeAnswerSheet:
+                _boolFromConfig(renderConfig, 'includeAnswerSheet', true),
+            includeExplanation:
+                _boolFromConfig(renderConfig, 'includeExplanation', false),
+            displayName: displayName,
+            presetId: presetIdToUpdate,
+            presetKind: 'assignment',
+          );
+          final savedPresetId = (result.preset?.id ?? presetIdToUpdate).trim();
+          if (savedPresetId.isNotEmpty) {
+            await _problemBankService.overwriteExportPresetRenderConfig(
+              academyId: safeAcademyId,
+              presetId: savedPresetId,
+              renderConfig: renderConfig,
+            );
+          }
+          LearningProblemBankService.generatedAssignmentChanged.add(null);
+          await _refreshTemplates();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                presetIdToUpdate.isNotEmpty
+                    ? '미리 만든 과제를 저장했습니다.'
+                    : '새 미리 만든 과제를 저장했습니다.',
+              ),
+            ),
+          );
+        },
+        onCreateAssignmentRequested: (request) async {
+          final renderConfig = _assignmentRenderConfigForPreset(
+            preset,
+            request: request,
+          );
+          final displayName = request.presetDisplayName.trim().isEmpty
+              ? preset.displayName
+              : request.presetDisplayName.trim();
+          await _problemBankService.createGeneratedAssignmentPreset(
+            academyId: safeAcademyId,
+            sourceDocumentId: _sourceDocumentIdForPreset(preset),
+            selectedQuestionUidsOrdered: selectedUids,
+            questionModeByQuestionUid: preset.questionModeByQuestionUid,
+            renderConfig: renderConfig,
+            templateProfile: preset.templateProfile.isEmpty
+                ? 'assignment'
+                : preset.templateProfile,
+            paperSize: preset.paperSize.isEmpty ? 'A4' : preset.paperSize,
+            includeAnswerSheet:
+                _boolFromConfig(renderConfig, 'includeAnswerSheet', true),
+            includeExplanation:
+                _boolFromConfig(renderConfig, 'includeExplanation', false),
+            displayName: displayName,
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('미리 만든 과제를 추가로 생성했습니다.')),
+          );
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('과제보기 실패: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _previewingPresetId = '');
+    }
+  }
+
   Future<void> _deleteGeneratedAssignmentPreset(
     LearningProblemDocumentExportPreset preset,
   ) async {
@@ -642,6 +1297,81 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     }
   }
 
+  Future<void> _renameGeneratedAssignmentPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    final presetId = preset.id.trim();
+    if (presetId.isEmpty) return;
+    final controller = TextEditingController(text: preset.displayName.trim());
+    final nextName = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          title: const Text(
+            '미리 만든 과제 이름 수정',
+            style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            style: const TextStyle(
+              color: kDlgText,
+              fontWeight: FontWeight.w700,
+            ),
+            decoration: const InputDecoration(
+              hintText: '과제 이름',
+              hintStyle: TextStyle(color: kDlgTextSub),
+            ),
+            onSubmitted: (value) => Navigator.of(ctx).pop(value.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+              child: const Text('저장'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    final normalized = (nextName ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty || normalized == preset.displayName.trim()) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      final safeAcademyId = (academyId ?? '').trim();
+      if (safeAcademyId.isEmpty) {
+        throw Exception('학원 정보를 찾지 못했습니다.');
+      }
+      await _problemBankService.renameExportPreset(
+        academyId: safeAcademyId,
+        presetId: presetId,
+        displayName: normalized,
+      );
+      LearningProblemBankService.generatedAssignmentChanged.add(null);
+      await _refreshTemplates();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('과제 이름을 수정했습니다.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('과제 이름 수정 실패: $e')),
+      );
+    }
+  }
+
   Widget _buildAssignmentCard(
     HomeworkRecentTemplate template, {
     required double width,
@@ -650,16 +1380,54 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final preset = _presetForTemplate(template);
     final presetId = preset?.id ?? '';
     final isPrinting = presetId.isNotEmpty && _printingPresetId == presetId;
+    final isPreviewing = presetId.isNotEmpty && _previewingPresetId == presetId;
+    final isBusy = isPrinting || isPreviewing;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildTemplateCard(template, width: width, sheetScale: sheetScale),
+        _buildTemplateCard(
+          template,
+          width: width,
+          sheetScale: sheetScale,
+          onTitleTap: preset == null || isBusy
+              ? null
+              : () => unawaited(_renameGeneratedAssignmentPreset(preset)),
+        ),
         SizedBox(height: 6 * sheetScale),
         Row(
-          mainAxisAlignment: MainAxisAlignment.end,
           children: [
             OutlinedButton.icon(
-              onPressed: preset == null || isPrinting
+              onPressed: preset == null || isBusy
+                  ? null
+                  : () => unawaited(_previewGeneratedAssignmentPreset(preset)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFE5F5FF),
+                disabledForegroundColor: const Color(0xFF7F9AA3),
+                side: const BorderSide(color: Color(0xFF2E5368), width: 1.1),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.symmetric(
+                  horizontal: 10 * sheetScale,
+                  vertical: 7 * sheetScale,
+                ),
+              ),
+              icon: isPreviewing
+                  ? SizedBox(
+                      width: 14 * sheetScale,
+                      height: 14 * sheetScale,
+                      child: const CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(Icons.article_outlined, size: 16 * sheetScale),
+              label: Text(
+                isPreviewing ? '여는 중' : '과제보기',
+                style: TextStyle(
+                  fontSize: 13 * sheetScale,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const Spacer(),
+            OutlinedButton.icon(
+              onPressed: preset == null || isBusy
                   ? null
                   : () => unawaited(_printGeneratedAssignmentPreset(preset)),
               style: OutlinedButton.styleFrom(
@@ -691,7 +1459,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             Tooltip(
               message: '삭제',
               child: IconButton(
-                onPressed: preset == null || isPrinting
+                onPressed: preset == null || isBusy
                     ? null
                     : () => unawaited(_deleteGeneratedAssignmentPreset(preset)),
                 visualDensity: VisualDensity.compact,
@@ -718,6 +1486,14 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final activeTemplates = _activeTemplates();
     final filteredTemplates = _filteredTemplates();
     final isAssignmentMode = _mode == _TemplateLibraryMode.assignments;
+    final bookFilterLabelByKey = <String, String>{};
+    for (final template in activeTemplates) {
+      final key = _templateBookKey(template);
+      if (key.trim().isEmpty || bookFilterLabelByKey.containsKey(key)) {
+        continue;
+      }
+      bookFilterLabelByKey[key] = _templateBookLabel(template);
+    }
     final bookIds = activeTemplates
         .map(_templateBookKey)
         .where((id) => id.trim().isNotEmpty)
@@ -725,12 +1501,14 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         .toList()
       ..sort((a, b) => (isAssignmentMode ? a : _bookName(a))
           .compareTo(isAssignmentMode ? b : _bookName(b)));
-    final gradeLabels = activeTemplates
-        .map((e) => e.primaryGradeLabel)
-        .where((e) => e.trim().isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
+    final gradeLabels = isAssignmentMode
+        ? <String>[]
+        : (activeTemplates
+            .map((e) => e.primaryGradeLabel)
+            .where((e) => e.trim().isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort());
     return Padding(
       padding: EdgeInsets.fromLTRB(
         12 * sheetScale,
@@ -791,7 +1569,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           Wrap(
             children: [
               _buildFilterChip(
-                label: '즐겨찾기',
+                label: '과제',
                 selected: _mode == _TemplateLibraryMode.favorites,
                 onTap: () => _selectMode(_TemplateLibraryMode.favorites),
                 sheetScale: sheetScale,
@@ -811,37 +1589,40 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                 Wrap(
                   children: [
                     _buildFilterChip(
-                      label: '전체 교재',
+                      label: isAssignmentMode ? '전체 교재/과정' : '전체 교재',
                       selected: _bookFilter.isEmpty,
                       onTap: () => setState(() => _bookFilter = ''),
                       sheetScale: sheetScale,
                     ),
                     for (final bookId in bookIds)
                       _buildFilterChip(
-                        label: isAssignmentMode ? bookId : _bookName(bookId),
+                        label: isAssignmentMode
+                            ? (bookFilterLabelByKey[bookId] ?? bookId)
+                            : _bookName(bookId),
                         selected: _bookFilter == bookId,
                         onTap: () => setState(() => _bookFilter = bookId),
                         sheetScale: sheetScale,
                       ),
                   ],
                 ),
-                Wrap(
-                  children: [
-                    _buildFilterChip(
-                      label: '전체 학년',
-                      selected: _gradeFilter.isEmpty,
-                      onTap: () => setState(() => _gradeFilter = ''),
-                      sheetScale: sheetScale,
-                    ),
-                    for (final grade in gradeLabels)
+                if (!isAssignmentMode)
+                  Wrap(
+                    children: [
                       _buildFilterChip(
-                        label: grade,
-                        selected: _gradeFilter == grade,
-                        onTap: () => setState(() => _gradeFilter = grade),
+                        label: '전체 학년',
+                        selected: _gradeFilter.isEmpty,
+                        onTap: () => setState(() => _gradeFilter = ''),
                         sheetScale: sheetScale,
                       ),
-                  ],
-                ),
+                      for (final grade in gradeLabels)
+                        _buildFilterChip(
+                          label: grade,
+                          selected: _gradeFilter == grade,
+                          onTap: () => setState(() => _gradeFilter = grade),
+                          sheetScale: sheetScale,
+                        ),
+                    ],
+                  ),
               ],
             ),
           ),

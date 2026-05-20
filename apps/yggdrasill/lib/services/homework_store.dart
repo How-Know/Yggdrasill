@@ -1604,6 +1604,57 @@ class HomeworkStore {
     return _normalizePositiveInt(int.tryParse(match.group(1) ?? ''));
   }
 
+  int _safeIntFromDynamic(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse('$raw') ?? 0;
+  }
+
+  int? _questionPageCountFromPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) {
+    final renderConfig = preset.renderConfig;
+    final rawPageRows = renderConfig['pageColumnQuestionCounts'];
+    if (rawPageRows is List) {
+      var maxPageIndex = 0;
+      for (final row in rawPageRows) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final pageIndex = _safeIntFromDynamic(
+          map['pageIndex'] ?? map['page'] ?? map['pageNo'] ?? map['pageNumber'],
+        );
+        final left = _safeIntFromDynamic(
+          map['left'] ?? map['leftCount'] ?? map['col1'],
+        );
+        final right = _safeIntFromDynamic(
+          map['right'] ?? map['rightCount'] ?? map['col2'],
+        );
+        if (pageIndex <= 0 || left + right <= 0) continue;
+        if (pageIndex > maxPageIndex) maxPageIndex = pageIndex;
+      }
+      if (maxPageIndex > 0) return maxPageIndex;
+    }
+
+    final questionCount = preset.selectedQuestionCount > 0
+        ? preset.selectedQuestionCount
+        : preset.selectedQuestionUids.length;
+    if (questionCount <= 0) return null;
+    final layoutColumns = _safeIntFromDynamic(renderConfig['layoutColumns']);
+    final defaultPerPage = layoutColumns == 2 ? 8 : 4;
+    final maxQuestionsPerPage =
+        _safeIntFromDynamic(renderConfig['maxQuestionsPerPage']);
+    final perPage =
+        maxQuestionsPerPage > 0 ? maxQuestionsPerPage : defaultPerPage;
+    if (perPage <= 0) return null;
+    return ((questionCount + perPage - 1) / perPage).floor();
+  }
+
+  String _pageRangeFromPageCount(int? pageCount) {
+    if (pageCount == null || pageCount <= 0) return '';
+    if (pageCount == 1) return '1';
+    return '1-$pageCount';
+  }
+
   HomeworkRecentTemplate templateFromGeneratedAssignmentPreset(
     LearningProblemDocumentExportPreset preset,
   ) {
@@ -1618,18 +1669,30 @@ class HomeworkStore {
             : '문제은행');
     final gradeLabel = preset.assignmentGradeLabel.trim();
     final courseLabel = preset.assignmentCourseLabel.trim();
-    final bookId = '${preset.renderConfig['assignmentBookId'] ?? ''}'.trim();
+    final bookId =
+        '${preset.renderConfig['assignmentBookId'] ?? preset.renderConfig['bookId'] ?? ''}'
+            .trim();
+    final bookGradeLabel =
+        '${preset.renderConfig['assignmentBookGradeLabel'] ?? ''}'.trim();
     final preferredFlowId =
         '${preset.renderConfig['assignmentFlowId'] ?? preset.renderConfig['flowId'] ?? ''}'
             .trim();
     final preferredFlowName =
-        '${preset.renderConfig['assignmentFlowName'] ?? ''}'
+        '${preset.renderConfig['assignmentFlowName'] ?? preset.renderConfig['flowName'] ?? preset.renderConfig['preferredFlowName'] ?? preset.renderConfig['assignmentFlow'] ?? ''}'
             .replaceAll(RegExp(r'\s+'), ' ')
             .trim();
+    final explicitPageRange =
+        '${preset.renderConfig['assignmentPageRange'] ?? ''}'.trim();
+    final pageRange = explicitPageRange.isNotEmpty
+        ? explicitPageRange
+        : _pageRangeFromPageCount(
+            _questionPageCountFromPreset(preset),
+          );
     final metaParts = <String>[
       if (bookLabel.isNotEmpty) bookLabel,
       if (gradeLabel.isNotEmpty) gradeLabel,
       if (courseLabel.isNotEmpty) courseLabel,
+      if (pageRange.isNotEmpty) 'p.$pageRange',
       if (preset.selectedQuestionCount > 0) '${preset.selectedQuestionCount}문항',
     ];
     final body = metaParts.isEmpty ? title : metaParts.join(' · ');
@@ -1642,6 +1705,7 @@ class HomeworkStore {
       type: '문제은행 과제',
       flowId: preferredFlowId.isEmpty ? null : preferredFlowId,
       preferredFlowName: preferredFlowName.isEmpty ? null : preferredFlowName,
+      page: pageRange.isEmpty ? null : pageRange,
       count: preset.selectedQuestionCount > 0
           ? preset.selectedQuestionCount
           : null,
@@ -1650,9 +1714,11 @@ class HomeworkStore {
       memo: preset.titlePageTopText,
       content: body,
       bookId: _uuidOrNull(bookId),
-      gradeLabel: gradeLabel.isNotEmpty
-          ? gradeLabel
-          : (courseLabel.isNotEmpty ? courseLabel : null),
+      gradeLabel: bookGradeLabel.isNotEmpty
+          ? bookGradeLabel
+          : (gradeLabel.isNotEmpty
+              ? gradeLabel
+              : (courseLabel.isNotEmpty ? courseLabel : null)),
       sourceUnitLevel: 'problem_bank_assignment',
       sourceUnitPath: bookLabel,
       createdAt: createdAt,

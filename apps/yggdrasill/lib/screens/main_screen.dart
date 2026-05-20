@@ -2444,8 +2444,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   message: _sideSheetBottomView ==
                                                           _SideSheetBottomView
                                                               .favoriteTemplates
-                                                      ? '즐겨찾기 닫기'
-                                                      : '즐겨찾기',
+                                                      ? '과제 닫기'
+                                                      : '과제',
                                                   child: IconButton(
                                                     icon: Icon(
                                                       Icons.star_rounded,

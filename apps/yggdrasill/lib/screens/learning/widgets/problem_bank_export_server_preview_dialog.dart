@@ -1265,7 +1265,25 @@ class _ProblemBankExportServerPreviewDialogState
   }
 
   List<Map<String, dynamic>> _pageColumnPayload() {
-    if (!_isTwoColumnLayout || _computedPageColumnCounts.isEmpty) {
+    if (!_isTwoColumnLayout) {
+      final total = widget.totalQuestionCount;
+      final perPage =
+          widget.maxQuestionsPerPage <= 0 ? 4 : widget.maxQuestionsPerPage;
+      if (total <= 0 || perPage <= 0) {
+        return const <Map<String, dynamic>>[];
+      }
+      final pageCount = (total / perPage).ceil();
+      return List<Map<String, dynamic>>.generate(pageCount, (index) {
+        final remaining = total - (index * perPage);
+        final count = remaining < perPage ? remaining : perPage;
+        return <String, dynamic>{
+          'pageIndex': index + 1,
+          'left': count,
+          'right': 0,
+        };
+      });
+    }
+    if (_computedPageColumnCounts.isEmpty) {
       return const <Map<String, dynamic>>[];
     }
     return _computedPageColumnCounts

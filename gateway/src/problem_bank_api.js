@@ -705,7 +705,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v81_display_math_block_outer_gap';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v85_inline_figure_zero_gap';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -2712,6 +2712,31 @@ async function saveSettingsAsDocument(body, res) {
     renderConfig.presetKind = presetKind;
     if (presetKind === 'assignment') {
       renderConfig.assignmentLibraryKind = 'generated_assignment';
+      const assignmentStringKeys = [
+        'assignmentBookLabel',
+        'assignmentBookName',
+        'assignmentBookId',
+        'assignmentBookGradeLabel',
+        'assignmentGradeLabel',
+        'assignmentCourseLabel',
+        'assignmentSchoolName',
+        'assignmentFlowName',
+        'assignmentFlowId',
+        'flowName',
+        'preferredFlowName',
+        'assignmentFlow',
+      ];
+      for (const key of assignmentStringKeys) {
+        const value = String(rawRenderConfig[key] || '').replace(/\s+/g, ' ').trim();
+        if (value) renderConfig[key] = value;
+      }
+      const assignmentQuestionCount = Number.parseInt(
+        String(rawRenderConfig.assignmentQuestionCount || ''),
+        10,
+      );
+      if (Number.isFinite(assignmentQuestionCount) && assignmentQuestionCount > 0) {
+        renderConfig.assignmentQuestionCount = assignmentQuestionCount;
+      }
     }
     const presetDisplayName = normalizePresetDisplayName(
       rawDisplayName,
@@ -4004,7 +4029,7 @@ function normalizeUnifiedAnswerKind(raw) {
 
 function normalizePbAnswerForUnifiedRender(questionRow) {
   const answerKind = normalizeUnifiedAnswerKind(questionRow?.question_type);
-  if (answerKind === 'objective' || answerKind === 'image') return '';
+  if (answerKind === 'image') return '';
   const subjective = normalizeAnswerValueForTexRender(questionRow?.subjective_answer);
   if (subjective) return subjective;
   return '';
@@ -4068,7 +4093,7 @@ function pbAnswerUnifiedDescriptor(questionRow) {
   return unifiedAnswerRenderDescriptor({
     sourceKind: 'pb_question',
     sourceId,
-    answerKind: questionRow?.question_type,
+    answerKind: 'subjective',
     answerText,
   });
 }

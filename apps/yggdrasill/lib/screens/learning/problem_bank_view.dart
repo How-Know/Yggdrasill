@@ -1961,9 +1961,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           //   (최초 렌더에는 이 패치가 전달되지 않으므로 default auto-gen 동작 유지)
           'disableAutoLabels': request.disableAutoLabels,
         };
+        if (request.pageColumnQuestionCounts.isNotEmpty) {
+          patch['pageColumnQuestionCounts'] = request.pageColumnQuestionCounts;
+        }
         if (_exportSettings.layoutColumnCount == 2) {
           patch['layoutMode'] = 'custom_columns';
-          patch['pageColumnQuestionCounts'] = request.pageColumnQuestionCounts;
           patch['columnLabelAnchors'] = request.columnLabelAnchors;
           patch['titlePageIndices'] = request.titlePageIndices;
           patch['titlePageHeaders'] = request.titlePageHeaders;
@@ -1976,18 +1978,42 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         String assignmentFlowName = '',
       }) {
         if (questions.isEmpty) return const <String, dynamic>{};
+        final textbookScope = questions.first.meta['textbook_scope'] ??
+            questions.first.meta['textbookScope'];
+        final textbookScopeMap = textbookScope is Map
+            ? textbookScope.map((key, value) => MapEntry('$key', value))
+            : const <String, dynamic>{};
         final first = questions.first;
-        final bookLabel = first.materialName.trim().isNotEmpty
-            ? first.materialName.trim()
-            : (first.schoolName.trim().isNotEmpty
-                ? first.schoolName.trim()
-                : first.documentId.trim());
+        final scopedBookName =
+            '${textbookScopeMap['book_name'] ?? textbookScopeMap['bookName'] ?? ''}'
+                .trim();
+        final bookLabel = scopedBookName.isNotEmpty
+            ? scopedBookName
+            : (first.materialName.trim().isNotEmpty
+                ? first.materialName.trim()
+                : (first.schoolName.trim().isNotEmpty
+                    ? first.schoolName.trim()
+                    : first.documentId.trim()));
         final gradeLabel = first.gradeLabel.trim();
-        final courseLabel = first.courseLabel.trim();
+        final scopedCourseLabel =
+            '${textbookScopeMap['course_label'] ?? textbookScopeMap['courseLabel'] ?? ''}'
+                .trim();
+        final courseLabel = first.courseLabel.trim().isNotEmpty
+            ? first.courseLabel.trim()
+            : scopedCourseLabel;
+        final assignmentBookId =
+            '${textbookScopeMap['book_id'] ?? textbookScopeMap['bookId'] ?? first.meta['book_id'] ?? first.meta['bookId'] ?? ''}'
+                .trim();
+        final assignmentBookGradeLabel =
+            '${textbookScopeMap['grade_label'] ?? textbookScopeMap['gradeLabel'] ?? ''}'
+                .trim();
         return <String, dynamic>{
           'presetKind': 'assignment',
           'assignmentLibraryKind': 'generated_assignment',
           'assignmentBookLabel': bookLabel,
+          if (assignmentBookId.isNotEmpty) 'assignmentBookId': assignmentBookId,
+          if (assignmentBookGradeLabel.isNotEmpty)
+            'assignmentBookGradeLabel': assignmentBookGradeLabel,
           'assignmentGradeLabel': gradeLabel,
           'assignmentCourseLabel': courseLabel,
           'assignmentSchoolName': first.schoolName.trim(),

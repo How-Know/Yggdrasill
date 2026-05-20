@@ -41,9 +41,9 @@ function measuredWrapMacroLines() {
     '    \\repeat',
     '  \\fi',
     '}',
-    '\\long\\def\\YggMeasuredWrapBegin#1#2#3{%',
+    '\\long\\def\\YggMeasuredWrapBegin#1#2#3#4{%',
     '  \\par\\begingroup',
-    '  \\setlength{\\columnsep}{1.80em}%',
+    '  \\setlength{\\columnsep}{#4}%',
     '  \\setlength{\\intextsep}{0pt}%',
     '  \\sbox{\\YggWrapObjectBox}{\\begin{minipage}{#2}\\vspace{0pt}#3\\end{minipage}}%',
     '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapObjectBox+\\dp\\YggWrapObjectBox+0.35\\baselineskip\\relax',
@@ -228,9 +228,15 @@ const RAW_TABLE_START_RE = /\[표시작\]/;
 const RAW_TABLE_END_RE = /\[표끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
 const BOGI_ITEM_SPLIT_RE =
-  /(?=(?:[ㄱ-ㅎ]\.\s|(?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|）)\s))/;
+  /(?=(?:[ㄱ-ㅎ]\.\s*|(?:\(|（)\s*[ㄱ-ㅎ가나다라마바사아자차카타파하]\s*(?:\)|）)\s*))/;
 const BOGI_ITEM_RE =
-  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
+  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([ㄱ-ㅎ가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
+
+function bogiLabelTextFromMatch(match) {
+  if (!match) return '';
+  const label = match[1] || match[2] || '';
+  return match[1] ? `${label}.` : `(${label})`;
+}
 
 function stripMarkers(text) {
   return String(text || '')
@@ -1416,11 +1422,8 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
     }
     const match = withFigs.match(BOGI_ITEM_RE);
     if (match) {
-      const label = match[1] || match[2];
       const text = withFigs.replace(BOGI_ITEM_RE, '').trim();
-      const labelTex = label.match(/^[ㄱ-ㅎ]$/)
-        ? `${label}.`
-        : `(${label})`;
+      const labelTex = bogiLabelTextFromMatch(match);
       // 대화형/조건제시박스와 동일한 \wd0 측정 방식으로 통일 → 정확히 "라벨 + 1공백" 폭.
       const labelFull = bogiLabelFullTex(labelTex);
       rendered.push(
@@ -1543,9 +1546,8 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
 
   const labelMatch = withFigs.match(BOGI_ITEM_RE);
   if (labelMatch) {
-    const label = labelMatch[1] || labelMatch[2];
     const rest = withFigs.replace(BOGI_ITEM_RE, '');
-    const labelTex = label.match(/^[ㄱ-ㅎ]$/) ? `${label}.` : `(${label})`;
+    const labelTex = bogiLabelTextFromMatch(labelMatch);
     const content = smartTexLine(rest, equations);
     // 레이블 + 1공백 폭(\wd0) 을 측정해 hangindent/첫줄 label 영역에 동일 적용 →
     // 내용 1행의 좌단과 2행+의 좌단이 정확히 일치.
@@ -1625,8 +1627,7 @@ function decoSectionLabelTex(rawLine) {
   if (symbol) return symbolLabelTex(symbol[1]);
   const labelMatch = line.match(BOGI_ITEM_RE);
   if (!labelMatch) return '';
-  const label = labelMatch[1] || labelMatch[2];
-  const labelText = label.match(/^[ㄱ-ㅎ]$/) ? `${label}.` : `(${label})`;
+  const labelText = bogiLabelTextFromMatch(labelMatch);
   return bogiLabelFullTex(labelText);
 }
 
@@ -3555,6 +3556,12 @@ function renderOneQuestion(question, {
     return raw;
   }
 
+  function inlineFigureOccupiedWidthEm(widthEm, offsetX) {
+    const base = Math.max(2, Math.min(50, Number(widthEm) || 20));
+    const extra = Math.abs(Number(offsetX) || 0);
+    return Math.max(2, Math.min(60, base + extra));
+  }
+
   function renderFigureLatex(i) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
@@ -3681,14 +3688,19 @@ function renderOneQuestion(question, {
     if (!text) return renderFigureLatex(i);
     const layout = layoutForIndex(i) || {};
     const offsetX = safeFigureOffsetX(layout);
-    const offset = Math.abs(offsetX) > 1e-3 ? `\\hspace*{${offsetX.toFixed(2)}em}` : '';
     const side = position === 'inline-right' ? 'r' : 'l';
     const widthEm = Math.max(2, Math.min(50, Number(expr.widthEm) || 20));
-    const objectFrac = Math.max(0.2, Math.min(0.58, widthEm / 42));
+    const occupiedWidthEm = inlineFigureOccupiedWidthEm(widthEm, offsetX);
+    const occupiedWidthExpr = `${occupiedWidthEm.toFixed(2)}em`;
+    const figureWrapGapEm = 0.00;
+    const objectFrac = Math.max(0.2, Math.min(0.70, (occupiedWidthEm + figureWrapGapEm) / 42));
     const textLines = estimateTextWrapLines(textSeg, 1 - objectFrac);
-    const object = `\\centering ${offset}${expr.include}`;
+    // offsetX moves inline figures toward the text column. Reserve the moved
+    // visual footprint, then place the image against the inner edge.
+    const objectAlign = position === 'inline-right' ? 'l' : 'r';
+    const object = `\\makebox[\\linewidth][${objectAlign}]{${expr.include}}`;
     return [
-      `\\YggMeasuredWrapBegin{${side}}{${expr.widthExpr}}{${object}}`,
+      `\\YggMeasuredWrapBegin{${side}}{${occupiedWidthExpr}}{${object}}{${figureWrapGapEm.toFixed(2)}em}`,
       `\\noindent ${text}`,
       `\\YggMeasuredWrapEnd{${textLines}}`,
     ].join('\n') + '\n';
@@ -3752,7 +3764,7 @@ function renderOneQuestion(question, {
     const side = position === 'inline-right' ? 'r' : 'l';
     const textLines = estimateTextWrapLines(textSeg, 1 - tableWidthFrac);
     return [
-      `\\YggMeasuredWrapBegin{${side}}{${tableWidth}}{${table}}`,
+      `\\YggMeasuredWrapBegin{${side}}{${tableWidth}}{${table}}{1.80em}`,
       `\\noindent ${text}`,
       `\\YggMeasuredWrapEnd{${textLines}}`,
     ].join('\n') + '\n';

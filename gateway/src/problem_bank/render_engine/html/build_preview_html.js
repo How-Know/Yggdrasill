@@ -272,8 +272,8 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .figure-anchor-right .figure-img { margin-left: auto; }
     .figure-anchor-top { text-align: center; }
     .figure-anchor-top .figure-img { margin: 0 auto; }
-    .figure-pos-inline-right { float: right; margin: 0 0 0.5em 0.5em; clear: right; }
-    .figure-pos-inline-left { float: left; margin: 0 0.5em 0.5em 0; clear: left; }
+    .figure-pos-inline-right { float: right; margin: 0 0 0.5em 0; clear: right; }
+    .figure-pos-inline-left { float: left; margin: 0 0 0.5em 0; clear: left; }
     .figure-group-horizontal {
       display: flex; flex-wrap: wrap; justify-content: center;
       align-items: flex-start; margin: 6pt 0;
@@ -284,8 +284,8 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .figure-inline-block .figure-img { max-width: 100%; height: auto; }
     .figure-inline-block.figure-anchor-left { text-align: left; }
     .figure-inline-block.figure-anchor-right { text-align: right; }
-    .figure-inline-block.figure-pos-inline-left { float: left; margin: 0 0.5em 0.5em 0; clear: left; text-align: left; }
-    .figure-inline-block.figure-pos-inline-right { float: right; margin: 0 0 0.5em 0.5em; clear: right; text-align: right; }
+    .figure-inline-block.figure-pos-inline-left { float: left; margin: 0 0 0.5em 0; clear: left; text-align: left; }
+    .figure-inline-block.figure-pos-inline-right { float: right; margin: 0 0 0.5em 0; clear: right; text-align: right; }
     .figure-inline-block.figure-group-horizontal { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item { flex-shrink: 0; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item .figure-img { width: 100%; }
