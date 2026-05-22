@@ -705,7 +705,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v85_inline_figure_zero_gap';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v86_box_math_line_break';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -5439,6 +5439,9 @@ async function handleTextbookVlmDetectProblems(body, res) {
   const academyId = String(body?.academy_id || '').trim();
   const bookId = String(body?.book_id || '').trim();
   const gradeLabel = String(body?.grade_label || '').trim();
+  const expectedStartNumber = normalizeTextbookExpectedStartNumber(
+    body?.expected_start_number ?? body?.expectedStartNumber,
+  );
   const rawSectionHint = String(body?.section_hint || '').trim();
   const sectionHint = ['basic_drill', 'type_practice', 'mastery'].includes(
     rawSectionHint,
@@ -5464,6 +5467,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      expectedStartNumber,
     });
   } catch (err) {
     const initialMessage = compact(err?.message || err);
@@ -5497,6 +5501,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
         apiKey,
         timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
         includeContentGroups: false,
+        expectedStartNumber,
       });
       usedFallbackPrompt = true;
     } catch (fallbackErr) {
@@ -5532,13 +5537,17 @@ async function handleTextbookVlmDetectProblems(body, res) {
     }
   }
 
-  const normalized = normalizeDetectResult(result.parsedJson, { sectionHint });
+  const normalized = normalizeDetectResult(result.parsedJson, {
+    sectionHint,
+    expectedStartNumber,
+  });
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
     display_page: displayPage,
     page_offset: pageOffset,
     page_offset_found: offsetFound,
+    expected_start_number: expectedStartNumber || null,
     content_group_fallback: usedFallbackPrompt,
     section: normalized.section,
     page_kind: normalized.page_kind,
@@ -5550,6 +5559,16 @@ async function handleTextbookVlmDetectProblems(body, res) {
     usage: result.usageMetadata || null,
     finish_reason: result.finishReason || '',
   });
+}
+
+function normalizeTextbookExpectedStartNumber(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/\d+/);
+  if (!match) return '';
+  const value = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(value) || value <= 0 || value > 9999) return '';
+  return String(value).padStart(4, '0');
 }
 
 // ---------------------------------------------------------------------------

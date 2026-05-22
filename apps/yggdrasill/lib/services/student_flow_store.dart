@@ -56,6 +56,43 @@ class StudentFlowStore {
       });
   }
 
+  List<Map<String, dynamic>> _missingDefaultRows({
+    required String academyId,
+    required String studentId,
+    required List<StudentFlow> persistedFlows,
+    required List<StudentFlow> normalizedFlows,
+  }) {
+    final persistedDefaultNames = persistedFlows
+        .map((flow) => StudentFlow.normalizeName(flow.name).trim())
+        .where(StudentFlow.isDefaultName)
+        .toSet();
+    final seen = <String>{};
+    final rows = <Map<String, dynamic>>[];
+    for (final flow in normalizedFlows) {
+      final name = StudentFlow.normalizeName(flow.name).trim();
+      if (!StudentFlow.isDefaultName(name)) continue;
+      if (persistedDefaultNames.contains(name)) continue;
+      if (!seen.add(name)) continue;
+      rows.add({
+        'id': flow.id,
+        'academy_id': academyId,
+        'student_id': studentId,
+        'name': name,
+        'enabled': true,
+        'order_index': flow.orderIndex,
+      });
+    }
+    return rows;
+  }
+
+  Future<void> _persistMissingDefaultRows(
+    SupabaseClient supa,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    if (rows.isEmpty) return;
+    await supa.from('student_flows').upsert(rows, onConflict: 'id');
+  }
+
   List<StudentFlow> cached(String studentId) {
     return List<StudentFlow>.from(
         _byStudentId[studentId] ?? const <StudentFlow>[]);
@@ -94,7 +131,17 @@ class StudentFlowStore {
           orderIndex: (row['order_index'] as int?) ?? 0,
         ));
       }
-      _byStudentId[studentId] = _withDefaultFlows(flows);
+      final normalizedFlows = _withDefaultFlows(flows);
+      await _persistMissingDefaultRows(
+        supa,
+        _missingDefaultRows(
+          academyId: academyId,
+          studentId: studentId,
+          persistedFlows: flows,
+          normalizedFlows: normalizedFlows,
+        ),
+      );
+      _byStudentId[studentId] = normalizedFlows;
       revision.value++;
       return cached(studentId);
     } catch (e, st) {
@@ -132,10 +179,22 @@ class StudentFlowStore {
               orderIndex: (row['order_index'] as int?) ?? 0,
             ));
       }
+      final missingRows = <Map<String, dynamic>>[];
+      final nextByStudentId = <String, List<StudentFlow>>{};
       for (final sid in studentIds) {
-        _byStudentId[sid] =
-            _withDefaultFlows(List<StudentFlow>.from(map[sid] ?? const []));
+        final persistedFlows =
+            List<StudentFlow>.from(map[sid] ?? const <StudentFlow>[]);
+        final normalizedFlows = _withDefaultFlows(persistedFlows);
+        missingRows.addAll(_missingDefaultRows(
+          academyId: academyId,
+          studentId: sid,
+          persistedFlows: persistedFlows,
+          normalizedFlows: normalizedFlows,
+        ));
+        nextByStudentId[sid] = normalizedFlows;
       }
+      await _persistMissingDefaultRows(supa, missingRows);
+      _byStudentId.addAll(nextByStudentId);
       revision.value++;
     } catch (e, st) {
       // ignore: avoid_print

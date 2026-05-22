@@ -48,11 +48,13 @@ export function buildDetectProblemsPrompt({
   displayPage,
   rawPage,
   includeContentGroups = true,
+  expectedStartNumber = '',
 }) {
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 교재 스캔본의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
       : `이 이미지는 교재 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
+  const expectedStart = normalizeExpectedStartNumber(expectedStartNumber);
 
   let lines = [
     '당신은 한국 중·고등 교재 스캔본에서 "문항 번호" 의 위치를 탐지하는 비전 AI 입니다.',
@@ -60,6 +62,16 @@ export function buildDetectProblemsPrompt({
     '',
     pageLine,
     '',
+    ...(expectedStart
+      ? [
+          '=== 번호 연속성 힌트 ===',
+          `이전 단원/파트의 마지막 문항번호 정보에 따르면, 이번 A 기본다잡기에서 처음 보일 문항번호는 "${expectedStart}"일 가능성이 높다.`,
+          `이 페이지가 이번 A 기본다잡기의 첫 문제 페이지라면 "${expectedStart}"부터 이어지는 4자리 번호를 특히 주의해서 찾아라.`,
+          `다만 "${expectedStart}"가 실제로 보이지 않으면 절대 만들어내지 말고, 보이는 문항번호만 items에 넣은 뒤 notes에 "expected_start_missing:${expectedStart}"라고 적어라.`,
+          '문항번호가 하나도 보이지 않는 개념/타이틀 페이지라면 기존 규칙대로 concept_page, items=[] 로 반환한다.',
+          '',
+        ]
+      : []),
     '=== 책 구조 (매우 중요) ===',
     '이 교재의 한 단원은 세 파트로 구성된다. 파트마다 문항 스타일이 달라서,',
     '세 스타일을 **모두** 탐지해야 한다. 특히 [A] 기본다잡기는 현재까지 자주 누락되는 케이스다.',
@@ -221,4 +233,14 @@ export function buildDetectProblemsPrompt({
     );
   }
   return lines.join('\n');
+}
+
+function normalizeExpectedStartNumber(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/\d+/);
+  if (!match) return '';
+  const n = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(n) || n <= 0 || n > 9999) return '';
+  return String(n).padStart(4, '0');
 }

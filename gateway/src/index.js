@@ -22,6 +22,8 @@ const GW_STALE_WARN_MS = Number.parseInt(process.env.GW_STALE_WARN_MS ?? '90000'
 const GW_STALE_HARD_RESET_MS = Number.parseInt(process.env.GW_STALE_HARD_RESET_MS ?? '180000', 10);
 const GW_STALE_ACTIVITY_WINDOW_MS = Number.parseInt(process.env.GW_STALE_ACTIVITY_WINDOW_MS ?? '600000', 10);
 const GW_RECOVERY_COOLDOWN_MS = Number.parseInt(process.env.GW_RECOVERY_COOLDOWN_MS ?? '60000', 10);
+const M5_FULL_RESYNC_DELAY_MS = Number.parseInt(process.env.M5_FULL_RESYNC_DELAY_MS ?? '1500', 10);
+const M5_FULL_RESYNC_COOLDOWN_MS = Number.parseInt(process.env.M5_FULL_RESYNC_COOLDOWN_MS ?? '30000', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE || !MQTT_URL) {
   console.error('[gateway] Missing envs');
@@ -47,7 +49,9 @@ const cfg = {
   staleWarnMs: validInt(GW_STALE_WARN_MS, 90000),
   staleHardMs: validInt(GW_STALE_HARD_RESET_MS, 180000),
   staleActivityWindowMs: validInt(GW_STALE_ACTIVITY_WINDOW_MS, 600000),
-  recoveryCooldownMs: validInt(GW_RECOVERY_COOLDOWN_MS, 60000)
+  recoveryCooldownMs: validInt(GW_RECOVERY_COOLDOWN_MS, 60000),
+  m5FullResyncDelayMs: validInt(M5_FULL_RESYNC_DELAY_MS, 1500),
+  m5FullResyncCooldownMs: validInt(M5_FULL_RESYNC_COOLDOWN_MS, 30000)
 };
 const GROUP_CMD_V2_DEVICE_ID = process.env.GROUP_CMD_V2_DEVICE_ID || 'm5-device-001';
 const GROUP_CMD_V2_LOG_TAG = 'GROUP_CMD_V2';
@@ -252,12 +256,18 @@ logEvent('log', '[gateway] mqtt runtime config', {
   staleWarnMs: cfg.staleWarnMs,
   staleHardMs: cfg.staleHardMs,
   staleActivityWindowMs: cfg.staleActivityWindowMs,
-  recoveryCooldownMs: cfg.recoveryCooldownMs
+  recoveryCooldownMs: cfg.recoveryCooldownMs,
+  m5FullResyncDelayMs: cfg.m5FullResyncDelayMs,
+  m5FullResyncCooldownMs: cfg.m5FullResyncCooldownMs
 });
 
 /** 학생 단위로 RPC+푸시를 직렬화해 빠른 연속 DB 이벤트 시 스냅샷 역전·중간 상태 유실 완화 */
 const homeworkPublishChains = new Map();
 const homeworkPublishCoalesce = new Map();
+let m5FullResyncTimer = null;
+let m5FullResyncInFlight = false;
+let m5FullResyncPendingReason = null;
+let m5FullResyncLastRunTs = 0;
 
 function sanitizeGroupsForDevicePayload(groups) {
   if (!Array.isArray(groups)) return [];
@@ -345,6 +355,111 @@ async function queueHomeworksToBoundDevices(academy_id, student_id, source = 'un
         .catch((err) => waiters.forEach((w) => w.reject(err)));
     }, HOMEWORK_PUSH_COALESCE_MS);
   });
+}
+
+async function runFullM5HomeworkResync(source = 'unknown') {
+  const startedAt = nowMs();
+  const { data: binds, error } = await supa
+    .from('m5_device_bindings')
+    .select('academy_id,student_id,device_id')
+    .eq('active', true);
+
+  if (error) {
+    console.error('[gateway][m5-resync] bindings query error', { source, error });
+    return;
+  }
+
+  const uniqueStudents = new Map();
+  for (const row of binds || []) {
+    const academy_id = (row?.academy_id || '').toString();
+    const student_id = (row?.student_id || '').toString();
+    if (!academy_id || !student_id) continue;
+    const key = `${academy_id}::${student_id}`;
+    const entry = uniqueStudents.get(key) || { academy_id, student_id, deviceCount: 0 };
+    entry.deviceCount += 1;
+    uniqueStudents.set(key, entry);
+  }
+
+  let okStudents = 0;
+  let failedStudents = 0;
+  let targetDevices = 0;
+  for (const entry of uniqueStudents.values()) {
+    targetDevices += entry.deviceCount;
+    try {
+      await publishHomeworksToBoundDevices(
+        entry.academy_id,
+        entry.student_id,
+        `full_resync:${source}`
+      );
+      okStudents += 1;
+    } catch (e) {
+      failedStudents += 1;
+      console.error('[gateway][m5-resync] student publish failed', {
+        source,
+        academy_id: entry.academy_id,
+        student_id: entry.student_id,
+        error: e?.message ?? e
+      });
+    }
+  }
+
+  console.log('[gateway][m5-resync] completed', {
+    source,
+    students: uniqueStudents.size,
+    targetDevices,
+    okStudents,
+    failedStudents,
+    elapsedMs: nowMs() - startedAt
+  });
+}
+
+function scheduleFullM5HomeworkResync(reason = 'unknown', force = false) {
+  const now = nowMs();
+  if (!force && m5FullResyncLastRunTs && now - m5FullResyncLastRunTs < cfg.m5FullResyncCooldownMs) {
+    logSampled(
+      `m5_resync_cooldown:${reason}`,
+      5000,
+      'log',
+      '[gateway][m5-resync] skip cooldown',
+      { reason, ageMs: now - m5FullResyncLastRunTs, cooldownMs: cfg.m5FullResyncCooldownMs }
+    );
+    return;
+  }
+
+  if (m5FullResyncTimer) {
+    m5FullResyncPendingReason = `${m5FullResyncPendingReason || 'pending'},${reason}`;
+    return;
+  }
+
+  m5FullResyncPendingReason = reason;
+  m5FullResyncTimer = setTimeout(async () => {
+    const source = m5FullResyncPendingReason || reason;
+    m5FullResyncTimer = null;
+    m5FullResyncPendingReason = null;
+
+    if (m5FullResyncInFlight) {
+      scheduleFullM5HomeworkResync(`inflight:${source}`, true);
+      return;
+    }
+
+    m5FullResyncInFlight = true;
+    m5FullResyncLastRunTs = nowMs();
+    console.log('[gateway][m5-resync] starting', { source });
+    try {
+      await runFullM5HomeworkResync(source);
+    } catch (e) {
+      console.error('[gateway][m5-resync] failed', { source, error: e?.message ?? e });
+    } finally {
+      m5FullResyncInFlight = false;
+    }
+  }, cfg.m5FullResyncDelayMs);
+}
+
+function handleRealtimeSubscribeStatus(label, status) {
+  console.log(`[gateway][rt] ${label}`, status);
+  if (status === 'SUBSCRIBED') {
+    scheduleFullM5HomeworkResync(`rt:${label}:subscribed`);
+  }
 }
 
 async function syncPauseAllRuntimeState(academy_id, student_id) {
@@ -762,7 +877,10 @@ client.on('offline', () => logSampled('mqtt_offline', 5000, 'warn', '[gateway] o
 // extra realtime connection lifecycle logs
 try {
   const rt = supa.realtime;
-  rt.onOpen(() => console.log('[gateway][rt] socket open'));
+  rt.onOpen(() => {
+    console.log('[gateway][rt] socket open');
+    scheduleFullM5HomeworkResync('rt:socket_open');
+  });
   rt.onClose(() => console.log('[gateway][rt] socket close'));
   rt.onError((e) => console.log('[gateway][rt] socket error', e));
 } catch (_) {}
@@ -788,7 +906,7 @@ try {
         }
       }
     )
-    .subscribe((status) => console.log('[gateway][rt]', status));
+    .subscribe((status) => handleRealtimeSubscribeStatus('homework_items', status));
   console.log('[gateway] realtime: homework_items subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime subscribe failed', e);
@@ -813,7 +931,7 @@ try {
         }
       }
     )
-    .subscribe((status) => console.log('[gateway][rt] homework_assignments', status));
+    .subscribe((status) => handleRealtimeSubscribeStatus('homework_assignments', status));
   console.log('[gateway] realtime: homework_assignments subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime homework_assignments subscribe failed', e);
@@ -838,7 +956,7 @@ try {
         }
       }
     )
-    .subscribe((status) => console.log('[gateway][rt] homework_groups', status));
+    .subscribe((status) => handleRealtimeSubscribeStatus('homework_groups', status));
   console.log('[gateway] realtime: homework_groups subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime homework_groups subscribe failed', e);
@@ -875,7 +993,7 @@ try {
         }
       }
     )
-    .subscribe((status) => console.log('[gateway][rt] homework_group_items', status));
+    .subscribe((status) => handleRealtimeSubscribeStatus('homework_group_items', status));
   console.log('[gateway] realtime: homework_group_items subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime homework_group_items subscribe failed', e);
@@ -894,13 +1012,20 @@ try {
           const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
           const academy_id = rec.academy_id;
           const student_id = rec.student_id;
+          logSampled(
+            `rt_homework_group_runtime:${academy_id}:${student_id}`,
+            5000,
+            'log',
+            '[gateway][rt] homework_group_runtime event',
+            { academy_id, student_id, group_id: rec.group_id, eventType: payload?.eventType }
+          );
           await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_group_runtime');
         } catch (e) {
           console.error('[gateway] realtime homework_group_runtime handler error', e);
         }
       }
     )
-    .subscribe((status) => console.log('[gateway][rt] homework_group_runtime', status));
+    .subscribe((status) => handleRealtimeSubscribeStatus('homework_group_runtime', status));
   console.log('[gateway] realtime: homework_group_runtime subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime homework_group_runtime subscribe failed', e);
@@ -943,11 +1068,13 @@ try {
         }
       }
     )
-    .subscribe((status) => console.log('[gateway][rt] m5_device_bindings', status));
+    .subscribe((status) => handleRealtimeSubscribeStatus('m5_device_bindings', status));
   console.log('[gateway] realtime: m5_device_bindings subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime m5_device_bindings subscribe failed', e);
 }
+
+scheduleFullM5HomeworkResync('startup', true);
 
 function shutdown(signal) {
   logEvent('warn', '[gateway] shutdown signal received', { signal });

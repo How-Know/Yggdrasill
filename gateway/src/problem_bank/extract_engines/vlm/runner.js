@@ -109,7 +109,9 @@ async function cropPdfFigureFromPagePng(pagePng, bbox1k) {
     return null;
   }
   const [y1, x1, y2, x2] = bbox1k;
-  const pad = Math.max(6, Math.round(Math.min(width, height) * 0.012));
+  // VLM bbox already includes the detected figure; keep only a small guard band
+  // so adjacent problem text is not pulled into the initial crop.
+  const pad = Math.max(4, Math.round(Math.min(width, height) * 0.006));
   const left = Math.max(0, Math.floor((x1 / 1000) * width) - pad);
   const top = Math.max(0, Math.floor((y1 / 1000) * height) - pad);
   const right = Math.min(width, Math.ceil((x2 / 1000) * width) + pad);

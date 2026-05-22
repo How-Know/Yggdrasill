@@ -726,6 +726,87 @@ class _TextbookUnitAuthoringDialogState
     return item.itemRegion;
   }
 
+  Future<String?> _expectedStartNumberForFocus(_SubFocus focus) async {
+    if (focus.subKey != 'A') return null;
+    try {
+      final rows = await _supa
+          .from('textbook_problem_crops')
+          .select('problem_number,set_to,big_order,mid_order,sub_key')
+          .eq('academy_id', widget.academyId)
+          .eq('book_id', widget.bookId)
+          .eq('grade_label', widget.gradeLabel)
+          .limit(5000);
+      var maxPrevious = 0;
+      for (final raw in rows) {
+        if (!_cropRowIsBeforeFocus(raw, focus)) continue;
+        final value = _problemNumberEndValue(raw);
+        if (value != null && value > maxPrevious) {
+          maxPrevious = value;
+        }
+      }
+      if (maxPrevious <= 0 || maxPrevious >= 9999) return null;
+      return _formatBasicDrillNumber(maxPrevious + 1);
+    } catch (e) {
+      debugPrint('[textbook-stage1] expected start lookup failed: $e');
+      return null;
+    }
+  }
+
+  bool _cropRowIsBeforeFocus(Map<dynamic, dynamic> row, _SubFocus focus) {
+    final bigOrder = int.tryParse('${row['big_order'] ?? ''}');
+    final midOrder = int.tryParse('${row['mid_order'] ?? ''}');
+    if (bigOrder == null || midOrder == null) return false;
+    if (bigOrder != focus.bigIndex) return bigOrder < focus.bigIndex;
+    if (midOrder != focus.midIndex) return midOrder < focus.midIndex;
+    return _subOrderOf('${row['sub_key'] ?? ''}') < _subOrderOf(focus.subKey);
+  }
+
+  int _subOrderOf(String subKey) {
+    switch (subKey.trim()) {
+      case 'A':
+        return 0;
+      case 'B':
+        return 1;
+      case 'C':
+        return 2;
+      default:
+        return 99;
+    }
+  }
+
+  int? _problemNumberEndValue(Map<dynamic, dynamic> row) {
+    final setTo = int.tryParse('${row['set_to'] ?? ''}');
+    if (setTo != null && setTo > 0 && setTo <= 9999) return setTo;
+    final rawNumber = '${row['problem_number'] ?? ''}';
+    final matches = RegExp(r'\d+').allMatches(rawNumber);
+    var out = 0;
+    for (final match in matches) {
+      final value = int.tryParse(match.group(0) ?? '');
+      if (value != null && value > out && value <= 9999) {
+        out = value;
+      }
+    }
+    return out > 0 ? out : null;
+  }
+
+  String _formatBasicDrillNumber(int value) =>
+      value.toString().padLeft(4, '0');
+
+  String? _expectedStartNumberForPage(
+    _SubFocus focus,
+    _SubRunState state,
+    int rawPage,
+    String? expectedStartNumber,
+  ) {
+    if (focus.subKey != 'A' || expectedStartNumber == null) return null;
+    final alreadySawProblemBeforePage = state.pageResults.any((row) =>
+        row.ok &&
+        row.rawPage < rawPage &&
+        row.section == 'basic_drill' &&
+        row.items.isNotEmpty);
+    return alreadySawProblemBeforePage ? null : expectedStartNumber;
+  }
+
   Future<void> _runFocusedAnalysis(_SubFocus focus) async {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
@@ -747,6 +828,7 @@ class _TextbookUnitAuthoringDialogState
     if (doc == null) return;
     final state = _ensureSubState(focus);
     if (state.running) return;
+    final expectedStartNumber = await _expectedStartNumberForFocus(focus);
     // Wipe prior manual edits for this sub before re-analysing — once the
     // VLM items change index the old keys can silently point at the wrong
     // problem, which is worse than asking the user to redo tweaks.
@@ -790,6 +872,12 @@ class _TextbookUnitAuthoringDialogState
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         sectionHint: _sectionForSubKey(focus.subKey),
+        expectedStartNumber: _expectedStartNumberForPage(
+          focus,
+          state,
+          rawPage,
+          expectedStartNumber,
+        ),
       );
     }
 
@@ -861,6 +949,7 @@ class _TextbookUnitAuthoringDialogState
     if (failed.isEmpty) return;
     final doc = await _ensurePdf();
     if (doc == null) return;
+    final expectedStartNumber = await _expectedStartNumberForFocus(focus);
     setState(() {
       state.running = true;
       state.cancelled = false;
@@ -889,6 +978,12 @@ class _TextbookUnitAuthoringDialogState
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         sectionHint: _sectionForSubKey(focus.subKey),
+        expectedStartNumber: _expectedStartNumberForPage(
+          focus,
+          state,
+          rawPage,
+          expectedStartNumber,
+        ),
       );
     }
 
@@ -1117,7 +1212,7 @@ class _TextbookUnitAuthoringDialogState
     }
     final regionHeight = ryMax - ryMin;
     final numberCenterY = (byMin + byMax) / 2;
-    if (regionHeight > 320) return false;
+    if (regionHeight > 380) return false;
     final regionStartsAfterNumber = bxMin < rxMin && bxMax <= rxMin + 60;
     final regionContainsNumber = rxMin <= bxMin + 8 && rxMax >= bxMax + 40;
     if (!regionStartsAfterNumber && !regionContainsNumber) return false;
@@ -3990,7 +4085,9 @@ class _PageAnalysisRow {
     return lower.contains('auto_guarded') ||
         lower.contains('basic_drill_candidate_filtered') ||
         lower.contains('basic_drill_sequence_filtered') ||
-        lower.contains('basic_drill_start_page_filtered');
+        lower.contains('basic_drill_start_page_filtered') ||
+        lower.contains('basic_drill_expected_start_missing') ||
+        lower.contains('basic_drill_expected_start_mismatch');
   }
 }
 

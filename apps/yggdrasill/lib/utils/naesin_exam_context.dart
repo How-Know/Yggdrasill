@@ -152,6 +152,36 @@ class NaesinExamContext {
     return courseKey.trim();
   }
 
+  /// 내신 셀 필터에서는 2015 개정 고등 과목을 2022 개정 과목과 같은 축으로 본다.
+  static String canonicalCourseKeyForNaesin(String courseKey) {
+    switch (courseKey.trim()) {
+      case 'H-math1':
+        return 'H-algebra';
+      case 'H-math2':
+        return 'H-calc1';
+      case 'H-calculus':
+        return 'H-calc2';
+      default:
+        return courseKey.trim();
+    }
+  }
+
+  static bool courseKeysEquivalentForNaesin(String a, String b) {
+    return canonicalCourseKeyForNaesin(a) == canonicalCourseKeyForNaesin(b);
+  }
+
+  static bool linkKeysEquivalentForNaesin(String a, String b) {
+    final left = parseNaesinLinkKey(a);
+    final right = parseNaesinLinkKey(b);
+    if (left == null || right == null) return a.trim() == b.trim();
+    return left.gradeKey == right.gradeKey &&
+        courseKeysEquivalentForNaesin(left.courseKey, right.courseKey) &&
+        left.examTerm == right.examTerm &&
+        left.school == right.school &&
+        left.year == right.year &&
+        left.cellLabel == right.cellLabel;
+  }
+
   /// 과제 빠른 추가 [_initNaesinFilterDefaults] 와 동일 규칙.
   static ({String gradeKey, String courseKey}) initialGradeCourseFromStudent(
     Student? student,

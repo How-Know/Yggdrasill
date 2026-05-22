@@ -26,7 +26,7 @@ const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv88_inline_figure_zero_gap';
+const PREVIEW_STYLE_VERSION = 'pv89_box_math_line_break';
 const DEBUG_MATH_DOTS = process.env.PB_DEBUG_MATH_DOTS === '1';
 
 function repoAssetPath(...segments) {

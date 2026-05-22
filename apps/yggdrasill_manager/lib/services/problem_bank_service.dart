@@ -3192,12 +3192,22 @@ List<String> _syncedCourseKeyLabels(String courseKey) {
       return const <String>['3-1', '중3-1'];
     case 'M3-2':
       return const <String>['3-2', '중3-2'];
+    case 'H1-math-upper':
+      return const <String>['수학(상)', '수학상', '고1'];
+    case 'H1-math-lower':
+      return const <String>['수학(하)', '수학하', '고1'];
     case 'H1-c1':
       return const <String>['공통수학1', '고1'];
     case 'H1-c2':
       return const <String>['공통수학2', '고1'];
+    case 'H-math1':
+      return const <String>['수학1', '수학Ⅰ'];
+    case 'H-math2':
+      return const <String>['수학2', '수학Ⅱ'];
     case 'H-algebra':
       return const <String>['대수'];
+    case 'H-calculus':
+      return const <String>['미적분'];
     case 'H-calc1':
       return const <String>['미적분1'];
     case 'H-probstats':

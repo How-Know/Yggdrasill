@@ -34,6 +34,7 @@ export async function detectProblemsOnPage({
   apiKey,
   timeoutMs = 90000,
   includeContentGroups = true,
+  expectedStartNumber = '',
   maxRetries = DEFAULT_MAX_RETRIES,
 }) {
   const key = String(apiKey || '').trim();
@@ -63,6 +64,7 @@ export async function detectProblemsOnPage({
               displayPage,
               pageOffset,
               includeContentGroups,
+              expectedStartNumber,
             }),
           },
         ],
@@ -284,7 +286,55 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   backfillBasicDrillItemRegions(out);
   backfillMissingBboxes(out);
   validateBasicDrillItems(out);
+  annotateExpectedBasicDrillStart(out, opts?.expectedStartNumber);
   return out;
+}
+
+function annotateExpectedBasicDrillStart(result, expectedStartNumber) {
+  const expected = normalizeExpectedStartNumber(expectedStartNumber);
+  if (
+    !expected ||
+    !result ||
+    result.section !== 'basic_drill' ||
+    result.page_kind === 'concept_page' ||
+    !Array.isArray(result.items) ||
+    result.items.length === 0
+  ) {
+    return;
+  }
+
+  const expectedValue = Number.parseInt(expected, 10);
+  const values = [];
+  for (const item of result.items) {
+    const number = String(item?.number || '').trim();
+    const range = parseBasicDrillRange(number);
+    if (range) {
+      for (let n = range.from; n <= range.to && n - range.from <= 60; n += 1) {
+        values.push(n);
+      }
+      continue;
+    }
+    const n = Number.parseInt(number, 10);
+    if (Number.isFinite(n)) values.push(n);
+  }
+  if (values.length === 0 || values.includes(expectedValue)) return;
+
+  const minValue = Math.min(...values);
+  const hasLater = values.some((v) => v > expectedValue);
+  const suffix = hasLater
+    ? `basic_drill_expected_start_missing=${expected}`
+    : `basic_drill_expected_start_mismatch=${expected}; detected_start=${String(minValue).padStart(4, '0')}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+}
+
+function normalizeExpectedStartNumber(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/\d+/);
+  if (!match) return '';
+  const n = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(n) || n <= 0 || n > 9999) return '';
+  return String(n).padStart(4, '0');
 }
 
 function backfillBasicDrillItemRegions(result) {
@@ -402,7 +452,7 @@ function isValidBasicDrillItem(item) {
   const numberCenterY = (byMin + byMax) / 2;
   const rowYMin = ryMin - 80;
   const rowYMax = ryMax + 80;
-  if (regionHeight > 320) return false;
+  if (regionHeight > 380) return false;
   const regionStartsAfterNumber = bxMin < rxMin && bxMax <= rxMin + 60;
   const regionContainsNumber = rxMin <= bxMin + 8 && rxMax >= bxMax + 40;
   if (!regionStartsAfterNumber && !regionContainsNumber) return false;

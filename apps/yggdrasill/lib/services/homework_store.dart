@@ -3754,6 +3754,7 @@ class HomeworkStore {
           }),
         ),
       );
+      await _reconcileGroupRuntimeForItems(academyId, confirmedIds);
       unawaited(_reloadStudent(studentId));
       if (recordAssignmentCheck) {
         for (final id in confirmedIds) {
@@ -3769,6 +3770,31 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][confirmBatch][ERROR] ' + e.toString());
       unawaited(_reloadStudent(studentId));
+    }
+  }
+
+  Future<void> _reconcileGroupRuntimeForItems(
+    String academyId,
+    Iterable<String> itemIds,
+  ) async {
+    final cleanedIds = itemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (cleanedIds.isEmpty) return;
+    try {
+      await Supabase.instance.client.rpc(
+        'homework_reconcile_group_runtime_for_items',
+        params: {
+          'p_academy_id': academyId,
+          'p_item_ids': cleanedIds,
+        },
+      );
+    } catch (e) {
+      // Confirm already succeeded; keep UI responsive and let realtime/reload recover.
+      // ignore: avoid_print
+      print('[HW][runtime_reconcile][WARN] $e');
     }
   }
 

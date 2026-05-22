@@ -912,6 +912,31 @@ function renderMathLineBreakContinuation(text, align, equations) {
   return `\\noindent\\hfill ${body}\\par`;
 }
 
+function renderBoxMathLineBreakLine(text, equations, labelTex = '') {
+  const pieces = splitByMathLineBreakMarkers(text);
+  if (pieces.length <= 1) return '';
+  const lines = [];
+  const firstTex = smartTexLine(pieces[0].text, equations);
+  if (firstTex.trim()) {
+    if (labelTex) {
+      lines.push(
+        `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${firstTex}\\par}`,
+      );
+    } else {
+      lines.push(`\\noindent ${firstTex}\\par`);
+    }
+  }
+  for (let idx = 1; idx < pieces.length; idx += 1) {
+    const rendered = renderMathLineBreakContinuation(
+      pieces[idx].text,
+      pieces[idx].align || 'right',
+      equations,
+    );
+    if (rendered) lines.push(rendered);
+  }
+  return lines.join('\\nobreak\\vspace{0.05em}\n');
+}
+
 function hasMathDisplayLineMarker(text) {
   MATH_DISPLAY_LINE_MARKER_RE.lastIndex = 0;
   return MATH_DISPLAY_LINE_MARKER_RE.test(String(text || ''));
@@ -1426,10 +1451,20 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
       const labelTex = bogiLabelTextFromMatch(match);
       // 대화형/조건제시박스와 동일한 \wd0 측정 방식으로 통일 → 정확히 "라벨 + 1공백" 폭.
       const labelFull = bogiLabelFullTex(labelTex);
+      if (text.includes('[수식줄바꿈')) {
+        const manual = renderBoxMathLineBreakLine(text, equations, labelFull);
+        if (manual.trim()) rendered.push(manual);
+        continue;
+      }
       rendered.push(
         `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${smartTexLine(text, equations)}\\par}`,
       );
     } else {
+      if (withFigs.includes('[수식줄바꿈')) {
+        const manual = renderBoxMathLineBreakLine(withFigs.trim(), equations);
+        if (manual.trim()) rendered.push(manual);
+        continue;
+      }
       const tex = smartTexLine(withFigs.trim(), equations);
       if (tex.trim()) rendered.push(`\\noindent ${tex}\\par`);
     }
@@ -1548,10 +1583,13 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
   if (labelMatch) {
     const rest = withFigs.replace(BOGI_ITEM_RE, '');
     const labelTex = bogiLabelTextFromMatch(labelMatch);
-    const content = smartTexLine(rest, equations);
     // 레이블 + 1공백 폭(\wd0) 을 측정해 hangindent/첫줄 label 영역에 동일 적용 →
     // 내용 1행의 좌단과 2행+의 좌단이 정확히 일치.
     const labelFull = bogiLabelFullTex(labelTex);
+    if (rest.includes('[수식줄바꿈')) {
+      return renderBoxMathLineBreakLine(rest, equations, labelFull);
+    }
+    const content = smartTexLine(rest, equations);
     return `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${content}\\par}`;
   }
 
@@ -1565,13 +1603,20 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
     const restPart = dialogueMatch[2];
     if (namePart) {
       const nameTex = smartTexLine(namePart, equations);
-      const contentTex = smartTexLine(restPart, equations);
       // "\ :\ " = 고정폭 공백 + 콜론 + 고정폭 공백. \hbox 내에서도 trailing space 손실 없이 폭이 보존됨.
       const labelTex = `${nameTex}\\ :\\ `;
+      if (restPart.includes('[수식줄바꿈')) {
+        return renderBoxMathLineBreakLine(restPart, equations, labelTex);
+      }
+      const contentTex = smartTexLine(restPart, equations);
       // \makebox[\wd0][l] 로 레이블 영역의 실제 폭을 고정 → 1행 content 의 좌측선과
       // hangindent 에 따른 2행+ 좌측선이 정확히 일치하도록 보장한다.
       return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
     }
+  }
+
+  if (withFigs.includes('[수식줄바꿈')) {
+    return renderBoxMathLineBreakLine(withFigs, equations);
   }
 
   return smartTexLine(withFigs, equations);
@@ -1590,6 +1635,7 @@ function boxContentIsCenteredOnly(lines) {
     .join('\n')
     .trim();
   if (!joined) return false;
+  if (joined.includes('[수식줄바꿈')) return false;
   if (/[가-힣ㄱ-ㅎ]/.test(joined)) return false;
   if (/\\(?:bullet|circ)\b/.test(joined)) return false;
   if (BOGI_ITEM_RE.test(joined)) return false;
@@ -1642,6 +1688,9 @@ function renderDecoContinuationLine(
   // 그림 블록은 자체 center 환경을 포함하므로 라벨 폭 들여쓰기와 섞지 않는다.
   if (/\\includegraphics/.test(withFigs)) {
     return renderDecoLine(rawLine, equations, replaceFigureMarkers);
+  }
+  if (withFigs.includes('[수식줄바꿈')) {
+    return renderBoxMathLineBreakLine(withFigs, equations, labelTex);
   }
   const contentTex = smartTexLine(withFigs, equations);
   if (!contentTex.trim()) return '';

@@ -125,7 +125,10 @@ class _HomeworkOverviewNaesinPastExamPanelState
       final parsed = NaesinExamContext.parseNaesinLinkKey(key);
       if (parsed == null) continue;
       if (parsed.gradeKey != _naesinGradeKey ||
-          parsed.courseKey != _naesinCourseKey ||
+          !NaesinExamContext.courseKeysEquivalentForNaesin(
+            parsed.courseKey,
+            _naesinCourseKey,
+          ) ||
           parsed.examTerm != _naesinExamTerm ||
           parsed.school != school ||
           parsed.year != year) {
@@ -214,8 +217,17 @@ class _HomeworkOverviewNaesinPastExamPanelState
       }
       final linkKey = (item.sourceUnitPath ?? '').trim();
       if (linkKey.isEmpty) continue;
-      if (linkedKeys.isNotEmpty && !linkedKeys.contains(linkKey)) continue;
-      grouped.putIfAbsent(linkKey, () => <HomeworkItem>[]).add(item);
+      final matchedLinkKey = linkedKeys.isEmpty
+          ? linkKey
+          : linkedKeys.firstWhere(
+              (key) => NaesinExamContext.linkKeysEquivalentForNaesin(
+                key,
+                linkKey,
+              ),
+              orElse: () => '',
+            );
+      if (matchedLinkKey.isEmpty) continue;
+      grouped.putIfAbsent(matchedLinkKey, () => <HomeworkItem>[]).add(item);
       final itemId = item.id.trim();
       if (itemId.isNotEmpty) itemIds.add(itemId);
     }

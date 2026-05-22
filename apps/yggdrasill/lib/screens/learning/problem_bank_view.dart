@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 
-import '../../models/education_level.dart';
 import '../../models/student_flow.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
@@ -49,6 +48,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     'mock_past': '모의고사 기출',
     'self_made': '자작문항',
   };
+  static const List<String> _rev2015HighCourseOptions = <String>[
+    '수학(상)',
+    '수학(하)',
+    '수학1',
+    '수학2',
+    '미적분',
+    '확률과 통계',
+    '기하',
+  ];
 
   static const List<String> _levelOptions = <String>['초', '중', '고'];
   static const String _kNaesinLinkConfigKey = 'naesinLinkKey';
@@ -174,6 +182,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   List<String> _resolveCourseOptions(String level, List<String> labels) {
+    if (_selectedCurriculumCode == 'rev_2015' && level == '고') {
+      return const <String>[
+        '전체',
+        ..._rev2015HighCourseOptions,
+      ];
+    }
     final filtered = labels
         .where((label) => _matchesLevelWithText(level, label))
         .toList(growable: false);
@@ -206,6 +220,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       ];
     }
     if (level == '고') {
+      if (_selectedCurriculumCode == 'rev_2015') {
+        return _rev2015HighCourseOptions;
+      }
       return const <String>[
         '고1',
         '고2',
@@ -241,6 +258,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (level == '고') {
       return merged.contains('고') ||
           merged.contains('공통수학') ||
+          merged.contains('수학(상)') ||
+          merged.contains('수학(하)') ||
+          merged.contains('수학1') ||
+          merged.contains('수학2') ||
+          merged.contains('수학Ⅰ') ||
+          merged.contains('수학Ⅱ') ||
           merged.contains('대수') ||
           merged.contains('미적분') ||
           merged.contains('확률') ||
@@ -1004,6 +1027,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     setState(() {
       _selectedCurriculumCode = value;
     });
+    await _loadDetailedCourseOptions(forceResetSelection: true);
     await _reloadSchoolsAndQuestions(resetSelection: true);
   }
 
@@ -2958,10 +2982,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return NaesinExamContext.linkSummaryLabel(rawKey);
   }
 
-  List<_NaesinGradeOption> _naesinGradeOptionsForLevel(String level) {
-    final el =
-        level.trim() == '고' ? EducationLevel.high : EducationLevel.middle;
-    return NaesinExamContext.gradeOptionsForLevel(el)
+  String _normalizeNaesinCurriculumCode(String raw) {
+    final normalized = raw.trim();
+    return normalized == 'rev_2015' ? 'rev_2015' : 'rev_2022';
+  }
+
+  List<_NaesinGradeOption> _naesinAllGradeOptions() {
+    return NaesinExamContext.allGradeOptions()
         .map((e) => _NaesinGradeOption(key: e.key, label: e.label))
         .toList();
   }
@@ -2983,6 +3010,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       }
       if (normalizedCourse.contains('공통수학2')) {
         return (gradeKey: 'H1', courseKey: 'H1-c2');
+      }
+      if (normalizedCourse.contains('수학1')) {
+        return (gradeKey: 'H2', courseKey: 'H-math1');
+      }
+      if (normalizedCourse.contains('수학2')) {
+        return (gradeKey: 'H2', courseKey: 'H-math2');
+      }
+      if (normalizedCourse.contains('미적분')) {
+        return (gradeKey: 'H2', courseKey: 'H-calculus');
       }
       if (normalizedCourse.contains('고2')) {
         return (gradeKey: 'H2', courseKey: 'H-algebra');
@@ -3444,8 +3480,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   .trim();
           final existing = _parseNaesinLinkKey(currentLinkKey);
           final gradeCourse = _deriveNaesinDefaultGradeCourse();
-          final levelKey = _selectedSchoolLevel.trim() == '고' ? '고' : '중';
-          final gradeOptions = _naesinGradeOptionsForLevel(levelKey);
+          final gradeOptions = _naesinAllGradeOptions();
           if (gradeOptions.isEmpty) {
             _showSnack('내신 연결을 위한 학년 옵션을 불러오지 못했습니다.');
             return;
@@ -3475,8 +3510,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           if (!NaesinExamContext.linkYears.contains(selectedYear)) {
             selectedYear = NaesinExamContext.linkYears.last;
           }
+          var selectedCurriculumCode = _normalizeNaesinCurriculumCode(
+            '${preset.renderConfig['naesinCurriculumCode'] ?? ''}'
+                    .trim()
+                    .isNotEmpty
+                ? preset.naesinCurriculumCode
+                : '${preset.renderConfig['curriculumCode'] ?? _selectedCurriculumCode}',
+          );
 
-          final nextLinkKey = await showDialog<String>(
+          final nextLink =
+              await showDialog<({String linkKey, String curriculumCode})>(
             context: dialogContext,
             builder: (ctx) {
               final cellNameController = TextEditingController(
@@ -3555,6 +3598,37 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                 fontSize: 12.2,
                                 fontWeight: FontWeight.w600,
                               ),
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<String>(
+                              value: selectedCurriculumCode,
+                              decoration: fieldDecoration('교육과정'),
+                              dropdownColor: const Color(0xFF141D22),
+                              style: fieldTextStyle,
+                              iconEnabledColor: _rsTextMuted,
+                              items: const [
+                                DropdownMenuItem<String>(
+                                  value: 'rev_2022',
+                                  child: Text(
+                                    '2022 개정',
+                                    style: fieldTextStyle,
+                                  ),
+                                ),
+                                DropdownMenuItem<String>(
+                                  value: 'rev_2015',
+                                  child: Text(
+                                    '2015 개정',
+                                    style: fieldTextStyle,
+                                  ),
+                                ),
+                              ],
+                              onChanged: (value) {
+                                if (value == null || value.isEmpty) return;
+                                setLinkState(() {
+                                  selectedCurriculumCode =
+                                      _normalizeNaesinCurriculumCode(value);
+                                });
+                              },
                             ),
                             const SizedBox(height: 12),
                             Row(
@@ -3733,7 +3807,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     actions: [
                       if (currentLinkKey.isNotEmpty)
                         TextButton(
-                          onPressed: () => Navigator.of(ctx).pop(''),
+                          onPressed: () => Navigator.of(ctx).pop((
+                            linkKey: '',
+                            curriculumCode: selectedCurriculumCode,
+                          )),
                           style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFFD38E8E),
                           ),
@@ -3753,13 +3830,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             cellNameController.text,
                           );
                           Navigator.of(ctx).pop(
-                            _buildNaesinLinkKey(
-                              gradeKey: selectedGradeKey,
-                              courseKey: selectedCourseKey,
-                              examTerm: selectedExamTerm,
-                              school: selectedSchool,
-                              year: selectedYear,
-                              cellLabel: cellLabel,
+                            (
+                              linkKey: _buildNaesinLinkKey(
+                                gradeKey: selectedGradeKey,
+                                courseKey: selectedCourseKey,
+                                examTerm: selectedExamTerm,
+                                school: selectedSchool,
+                                year: selectedYear,
+                                cellLabel: cellLabel,
+                              ),
+                              curriculumCode: selectedCurriculumCode,
                             ),
                           );
                         },
@@ -3775,7 +3855,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               );
             },
           );
-          if (nextLinkKey == null) return;
+          if (nextLink == null) return;
+          final nextLinkKey = nextLink.linkKey;
           setModalState(() {
             isWorking = true;
           });
@@ -3787,6 +3868,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               presetId: preset.id,
               naesinLinkKey: nextLinkKey.isEmpty ? null : nextLinkKey,
               naesinCellLabel: parsedNextLink?.cellLabel,
+              naesinCurriculumCode: nextLink.curriculumCode,
             );
             if (updated != null) {
               final next = presets

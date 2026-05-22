@@ -69,7 +69,6 @@ function bogiLabelTextFromMatch(match) {
 function cleanLine(line) {
   return line
     .replace(STRUCTURAL_STRIP, ' ')
-    .replace(MATH_LINE_BREAK_MARKER_RE, ' ')
     .replace(MATH_DISPLAY_LINE_MARKER_RE, ' ')
     .replace(MATH_DISPLAY_BLOCK_START_RE, ' ')
     .replace(MATH_DISPLAY_BLOCK_END_RE, ' ')
@@ -340,6 +339,33 @@ function normalizeLineAlign(value) {
   return 'left';
 }
 
+function renderBoxMathLineBreakHtml(text, lineAlign, mathRenderer, equations, opts) {
+  const parts = splitByMathLineBreakMarkers(text);
+  if (parts.length <= 1) return null;
+  const htmlParts = [];
+  let hasFraction = false;
+  for (let idx = 0; idx < parts.length; idx += 1) {
+    const part = parts[idx];
+    if (!part.text.trim()) continue;
+    const align = idx === 0
+      ? normalizeLineAlign(lineAlign)
+      : normalizeLineAlign(part.align || 'right');
+    const rendered = renderOneLine(part.text, mathRenderer, equations, opts);
+    if (!rendered?.html) continue;
+    if (rendered.hasFraction) hasFraction = true;
+    const alignClass =
+      align === 'left' || align === 'force-left'
+        ? ''
+        : ` bogi-line-${align}`;
+    htmlParts.push(`<div class="bogi-line${alignClass}">${rendered.html}</div>`);
+  }
+  if (htmlParts.length === 0) return null;
+  return {
+    html: htmlParts.join(''),
+    hasFraction,
+  };
+}
+
 function normalizeStemLineAligns(rawAligns, lineCount) {
   const src = Array.isArray(rawAligns) ? rawAligns : [];
   const out = [];
@@ -471,6 +497,20 @@ function renderBogiItems(lines, mathRenderer, equations, opts) {
     }
     const part = String(one?.text || '');
     const lineAlign = normalizeLineAlign(one?.align);
+    if (part.includes('[수식줄바꿈')) {
+      const manual = renderBoxMathLineBreakHtml(
+        part,
+        lineAlign,
+        mathRenderer,
+        equations,
+        opts,
+      );
+      if (manual) {
+        if (manual.hasFraction) hasFraction = true;
+        result.push(manual.html);
+      }
+      continue;
+    }
     const sectionLabel = sectionLabelForBogiPart(part);
     if (sectionLabel) {
       activeLabelHtml = sectionLabel.labelHtml;

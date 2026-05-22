@@ -85,6 +85,58 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     'middle': '중등',
     'high': '고등',
   };
+  static const List<TextbookCourseOption> _rev2015HighCourseOptions =
+      <TextbookCourseOption>[
+    TextbookCourseOption(
+      gradeKey: 'H1',
+      courseKey: 'H1-math-upper',
+      label: '수학(상)',
+      levelLabel: '고1',
+      orderIndex: 401,
+    ),
+    TextbookCourseOption(
+      gradeKey: 'H1',
+      courseKey: 'H1-math-lower',
+      label: '수학(하)',
+      levelLabel: '고1',
+      orderIndex: 402,
+    ),
+    TextbookCourseOption(
+      gradeKey: 'H2',
+      courseKey: 'H-math1',
+      label: '수학1',
+      levelLabel: '고2',
+      orderIndex: 501,
+    ),
+    TextbookCourseOption(
+      gradeKey: 'H2',
+      courseKey: 'H-math2',
+      label: '수학2',
+      levelLabel: '고2',
+      orderIndex: 502,
+    ),
+    TextbookCourseOption(
+      gradeKey: 'H2',
+      courseKey: 'H-calculus',
+      label: '미적분',
+      levelLabel: '고2',
+      orderIndex: 503,
+    ),
+    TextbookCourseOption(
+      gradeKey: 'H2',
+      courseKey: 'H-probstats',
+      label: '확률과 통계',
+      levelLabel: '고2',
+      orderIndex: 504,
+    ),
+    TextbookCourseOption(
+      gradeKey: 'H2',
+      courseKey: 'H-geometry',
+      label: '기하',
+      levelLabel: '고2',
+      orderIndex: 505,
+    ),
+  ];
 
   final ProblemBankService _service = ProblemBankService();
   late final TabController _topTabController;
@@ -549,6 +601,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (merged.contains('고') ||
         merged.startsWith('H') ||
         merged.contains('공통수학') ||
+        merged.contains('수학(상)') ||
+        merged.contains('수학(하)') ||
+        merged.contains('수학1') ||
+        merged.contains('수학2') ||
+        merged.contains('수학Ⅰ') ||
+        merged.contains('수학Ⅱ') ||
         merged.contains('대수') ||
         merged.contains('미적분') ||
         merged.contains('확률') ||
@@ -588,6 +646,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required String gradeLabel,
     required String courseLabel,
   }) {
+    final curriculumOption = _courseOptionByLabelForCurriculum(
+      _selectedCurriculumCode,
+      courseLabel,
+    );
+    if (curriculumOption != null && _selectedCurriculumCode == 'rev_2015') {
+      return curriculumOption.gradeKey;
+    }
     final grade = RegExp(r'[1-3]').firstMatch(gradeLabel.trim())?.group(0);
     if (schoolLevel == 'middle') {
       if (grade != null) return 'M$grade';
@@ -607,6 +672,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required String gradeLabel,
     required String courseLabel,
   }) {
+    final curriculumOption = _courseOptionByLabelForCurriculum(
+      _selectedCurriculumCode,
+      courseLabel,
+    );
+    if (curriculumOption != null && _selectedCurriculumCode == 'rev_2015') {
+      return curriculumOption.courseKey;
+    }
     final option = textbookCourseByLabel(courseLabel);
     if (option != null) return option.courseKey;
     if (schoolLevel == 'middle') {
@@ -623,15 +695,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   List<String> _courseLabelDropdownValues() {
     final selected = _selectedCourseLabel.trim();
-    final filtered = kTextbookCourseOptions.where((option) {
-      if (_selectedSchoolLevel == 'middle') {
-        return option.gradeKey.startsWith('M');
-      }
-      if (_selectedSchoolLevel == 'high') {
-        return option.gradeKey.startsWith('H');
-      }
-      return true;
-    });
+    final filtered = _courseOptionsForCurrentCurriculum();
     final values = <String>{
       '',
       ...filtered.map((option) => option.label),
@@ -644,13 +708,94 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final selected = _selectedCourseLabel.trim();
     return <String, String>{
       '': '미선택',
-      for (final option in kTextbookCourseOptions)
+      for (final option in _courseOptionsForCurrentCurriculum())
         option.label: option.gradeKey.startsWith('H')
             ? '고등 · ${option.label}'
             : option.displayLabel,
-      if (selected.isNotEmpty && textbookCourseByLabel(selected) == null)
+      if (selected.isNotEmpty &&
+          _courseOptionByLabelForCurriculum(
+                _selectedCurriculumCode,
+                selected,
+              ) ==
+              null)
         selected: selected,
     };
+  }
+
+  List<TextbookCourseOption> _courseOptionsForCurrentCurriculum() {
+    final highOptions = _selectedCurriculumCode == 'rev_2015'
+        ? _rev2015HighCourseOptions
+        : kTextbookCourseOptions
+            .where((option) => option.gradeKey.startsWith('H'))
+            .toList(growable: false);
+    final middleOptions = kTextbookCourseOptions
+        .where((option) => option.gradeKey.startsWith('M'))
+        .toList(growable: false);
+    if (_selectedSchoolLevel == 'middle') {
+      return middleOptions;
+    }
+    if (_selectedSchoolLevel == 'high') {
+      return highOptions;
+    }
+    return <TextbookCourseOption>[
+      ...middleOptions,
+      ...highOptions,
+    ];
+  }
+
+  bool _courseLabelAllowedForCurrentContext(String rawLabel) {
+    final label = rawLabel.trim();
+    if (label.isEmpty) return true;
+    final option =
+        _courseOptionByLabelForCurriculum(_selectedCurriculumCode, label);
+    if (option == null) {
+      return !_isKnownCourseLabel(label);
+    }
+    if (_selectedSchoolLevel == 'middle')
+      return option.gradeKey.startsWith('M');
+    if (_selectedSchoolLevel == 'high') return option.gradeKey.startsWith('H');
+    return true;
+  }
+
+  bool _isKnownCourseLabel(String rawLabel) {
+    if (textbookCourseByLabel(rawLabel) != null) return true;
+    final normalized = _normalizeCourseLabelForLookup(rawLabel);
+    return _rev2015HighCourseOptions.any(
+      (option) => _normalizeCourseLabelForLookup(option.label) == normalized,
+    );
+  }
+
+  TextbookCourseOption? _courseOptionByLabelForCurriculum(
+    String curriculumCode,
+    String? rawLabel,
+  ) {
+    final normalized = _normalizeCourseLabelForLookup(rawLabel);
+    if (normalized.isEmpty) return null;
+    final options = curriculumCode.trim() == 'rev_2015'
+        ? <TextbookCourseOption>[
+            ...kTextbookCourseOptions
+                .where((option) => option.gradeKey.startsWith('M')),
+            ..._rev2015HighCourseOptions,
+          ]
+        : kTextbookCourseOptions;
+    for (final option in options) {
+      if (_normalizeCourseLabelForLookup(option.label) == normalized ||
+          _normalizeCourseLabelForLookup(option.displayLabel) == normalized) {
+        return option;
+      }
+    }
+    if (normalized == '확률통계' || normalized == '확통') {
+      for (final option in options) {
+        if (option.courseKey == 'H-probstats') return option;
+      }
+    }
+    return null;
+  }
+
+  String _normalizeCourseLabelForLookup(String? raw) {
+    return normalizeTextbookCourseLabel(raw)
+        .replaceAll('Ⅰ', '1')
+        .replaceAll('Ⅱ', '2');
   }
 
   List<Map<String, dynamic>> _figureAssetsOf(ProblemBankQuestion q) {
@@ -5097,6 +5242,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               onChanged: (v) {
                 setState(() {
                   _selectedCurriculumCode = v;
+                  if (!_courseLabelAllowedForCurrentContext(
+                    _selectedCourseLabel,
+                  )) {
+                    _selectedCourseLabel = '';
+                  }
                 });
                 _markDocumentMetaDirty();
               },
@@ -5129,13 +5279,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               onChanged: (v) {
                 setState(() {
                   _selectedSchoolLevel = v;
-                  final selectedCourse = _selectedCourseLabel.trim();
-                  final option = textbookCourseByLabel(selectedCourse);
-                  final keepCourse = option == null ||
-                      (v == 'middle' && option.gradeKey.startsWith('M')) ||
-                      (v == 'high' && option.gradeKey.startsWith('H')) ||
-                      v.isEmpty;
-                  if (!keepCourse) {
+                  if (!_courseLabelAllowedForCurrentContext(
+                    _selectedCourseLabel,
+                  )) {
                     _selectedCourseLabel = '';
                   }
                 });

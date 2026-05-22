@@ -21,6 +21,7 @@ import '../services/learning_problem_bank_service.dart';
 import '../services/print_routing_service.dart';
 import '../services/right_sheet_answer_preload_service.dart';
 import '../services/textbook_pdf_service.dart';
+import '../utils/naesin_exam_context.dart';
 import '../models/attendance_record.dart';
 import '../models/student_flow.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
@@ -116,8 +117,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
   @override
   void dispose() {
-    homeBatchConfirmFabVisible.value = false;
-    rightSideSheetTestGradingSession.value = null;
+    final testGradingSessionToClear = rightSideSheetTestGradingSession.value;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      homeBatchConfirmFabVisible.value = false;
+      if (identical(
+        rightSideSheetTestGradingSession.value,
+        testGradingSessionToClear,
+      )) {
+        rightSideSheetTestGradingSession.value = null;
+      }
+    });
     _rightSheetPreloadDebounce?.cancel();
     HomeworkStore.instance.revision.removeListener(
       _onHomeworkStoreRevisionChanged,
@@ -12036,7 +12045,12 @@ Future<LearningProblemDocumentExportPreset?> _resolveNaesinPresetForPrint({
       final candidate =
           '${preset.renderConfig[_kNaesinLinkConfigKeyForPrint] ?? preset.naesinLinkKey}'
               .trim();
-      if (candidate == safeLinkKey) return preset;
+      if (NaesinExamContext.linkKeysEquivalentForNaesin(
+        candidate,
+        safeLinkKey,
+      )) {
+        return preset;
+      }
     }
   } catch (_) {}
   return null;
