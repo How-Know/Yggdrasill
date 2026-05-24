@@ -21,6 +21,15 @@ class PrintRoutingService {
   PrintRoutingService._internal();
   static final PrintRoutingService instance = PrintRoutingService._internal();
 
+  /// 연결 교재 PDF 홈메뉴 인쇄 시 raw TCP(9100 PJL) 대신 Windows 드라이버
+  /// (Acrobat / PrintTo) 경로를 우선한다.
+  ///
+  /// 일부 교재(예: 쎈 2-1) temp PDF는 PC 수동 인쇄는 되지만 raw TCP 직접 PDF
+  /// 전송에서만 복사기 RIP이 실패할 수 있다.
+  ///
+  /// 즉시 롤백: 아래 값을 `false`로 바꾸면 기존 raw TCP 우선 동작으로 복귀한다.
+  static const bool kTextbookHomeworkPrintPreferDriverSpooler = true;
+
   static const String _kGeneralPrinterKey = 'print_routing.general_printer';
   static const String _kTodoPrinterKey = 'print_routing.todo_printer';
 
@@ -726,6 +735,7 @@ class PrintRoutingService {
     PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
     String preferredPaperSize = '',
     String debugSource = 'unknown',
+    bool skipRawTcpFirst = false,
   }) async {
     final target = path.trim();
     if (target.isEmpty) {
@@ -737,7 +747,7 @@ class PrintRoutingService {
     final exists = await File(target).exists();
     _printLog(
       debugSource,
-      'printFile request channel=$channel exists=$exists duplex=${_duplexModeLabel(duplexMode)} paper=${_paperSizeLabel(preferredPaperSize)} printer="${configuredPrinter ?? ''}" path="$target"',
+      'printFile request channel=$channel exists=$exists duplex=${_duplexModeLabel(duplexMode)} paper=${_paperSizeLabel(preferredPaperSize)} skipRawTcpFirst=$skipRawTcpFirst printer="${configuredPrinter ?? ''}" path="$target"',
     );
     return _printWithRouting(
       target: target,
@@ -746,6 +756,7 @@ class PrintRoutingService {
       duplexMode: duplexMode,
       preferredPaperSize: preferredPaperSize,
       debugSource: debugSource,
+      skipRawTcpFirst: skipRawTcpFirst,
     );
   }
 
@@ -756,6 +767,7 @@ class PrintRoutingService {
     required PrintDuplexMode duplexMode,
     required String preferredPaperSize,
     required String debugSource,
+    bool skipRawTcpFirst = false,
   }) async {
     try {
       if (Platform.isWindows) {
@@ -763,7 +775,7 @@ class PrintRoutingService {
         final normalizedPrinter = (printerName ?? '').trim();
         _printLog(
           debugSource,
-          'Windows route start channel=$channel duplex=${_duplexModeLabel(duplexMode)} paper=${_paperSizeLabel(preferredPaperSize)} printer="${normalizedPrinter.isEmpty ? '(none)' : normalizedPrinter}"',
+          'Windows route start channel=$channel duplex=${_duplexModeLabel(duplexMode)} paper=${_paperSizeLabel(preferredPaperSize)} skipRawTcpFirst=$skipRawTcpFirst printer="${normalizedPrinter.isEmpty ? '(none)' : normalizedPrinter}"',
         );
         bool shouldRestoreDuplex = false;
         PrintDuplexMode? restoreDuplexMode;
@@ -797,8 +809,15 @@ class PrintRoutingService {
             // For prints with specific paper size or explicit duplex mode,
             // try raw TCP first. This bypasses Acrobat/PrintTo, which can
             // ignore the queue's current duplex setting on some drivers.
-            final shouldTryRawTcp = requestedPaperToken != null ||
-                duplexMode != PrintDuplexMode.systemDefault;
+            final shouldTryRawTcp = !skipRawTcpFirst &&
+                (requestedPaperToken != null ||
+                    duplexMode != PrintDuplexMode.systemDefault);
+            if (skipRawTcpFirst) {
+              _printLog(
+                debugSource,
+                'Raw TCP skipped: skipRawTcpFirst=true (driver spooler route).',
+              );
+            }
             if (shouldTryRawTcp) {
               final tcpMeta = await _loadWindowsPrinterMeta(normalizedPrinter);
               if (tcpMeta != null) {

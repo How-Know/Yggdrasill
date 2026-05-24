@@ -105,67 +105,6 @@ function runXeLatex(texPath, outDir) {
   });
 }
 
-const TEX_SP_PER_PT = 65536;
-
-function parsePairAnchorPositions(auxPath) {
-  if (!fs.existsSync(auxPath)) return {};
-  const text = fs.readFileSync(auxPath, 'utf-8');
-  const positions = {};
-  for (const line of text.split(/\r?\n/)) {
-    const labelMatch = line.match(/\\zref@newlabel\{([^}]+)\}\{(.+)\}/);
-    if (!labelMatch) continue;
-    const id = labelMatch[1];
-    if (!/^pair-[A-Z]+-\d+-[LR]$/.test(id)) continue;
-    const payload = labelMatch[2];
-    const x = Number.parseInt((payload.match(/\\posx\{(-?\d+)\}/) || [])[1] || '', 10);
-    const y = Number.parseInt((payload.match(/\\posy\{(-?\d+)\}/) || [])[1] || '', 10);
-    const page = Number.parseInt((payload.match(/\\abspage\{(-?\d+)\}/) || payload.match(/\\page\{(-?\d+)\}/) || [])[1] || '', 10);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    positions[id] = {
-      id,
-      x,
-      y,
-      page: Number.isFinite(page) ? page : null,
-    };
-  }
-  return positions;
-}
-
-function computePairAnchorOffsets(positions, {
-  thresholdPt = 0.2,
-  maxOffsetPt = 30,
-} = {}) {
-  const rows = new Map();
-  for (const [id, pos] of Object.entries(positions || {})) {
-    const match = id.match(/^pair-([A-Z]+)-(\d+)-([LR])$/);
-    if (!match) continue;
-    const rowKey = `${match[1]}-${match[2]}`;
-    const side = match[3];
-    if (!rows.has(rowKey)) rows.set(rowKey, {});
-    rows.get(rowKey)[side] = pos;
-  }
-
-  const offsets = {};
-  const summary = [];
-  for (const [rowKey, row] of rows.entries()) {
-    if (!row.L || !row.R) continue;
-    if (row.L.page !== null && row.R.page !== null && row.L.page !== row.R.page) continue;
-    const deltaSp = row.L.y - row.R.y;
-    const deltaPt = Math.abs(deltaSp) / TEX_SP_PER_PT;
-    if (!Number.isFinite(deltaPt) || deltaPt < thresholdPt) continue;
-    const clamped = Math.min(maxOffsetPt, deltaPt);
-    const targetId = deltaSp > 0 ? row.L.id : row.R.id;
-    offsets[targetId] = Number(clamped.toFixed(3));
-    summary.push({
-      rowKey,
-      targetId,
-      deltaPt: Number(deltaPt.toFixed(3)),
-      appliedPt: offsets[targetId],
-    });
-  }
-  return { offsets, summary };
-}
-
 function renderPdfPageWithPdftoppm(pdfPath, outDir, {
   dpi = 220,
   baseName = 'answer-page',
@@ -751,7 +690,8 @@ export async function renderPdfWithXeLatex({
       ? renderConfig.titlePageHeaders
       : [];
 
-    const baseBuildOptions = {
+    const layoutMeta = {};
+    const texSource = buildDocumentTexSource(questions || [], {
       paper: paper || 'B4',
       fontFamily,
       fontBold: fontBoldPath ? '' : `${fontFamily} Bold`,
@@ -794,54 +734,9 @@ export async function renderPdfWithXeLatex({
       reviewPdf: renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true,
       // 새로고침/PDF 생성 경로에서 auto 라벨 생성을 전면 중단.
       disableAutoLabels: renderConfig?.disableAutoLabels === true,
-    };
-    const buildTex = (extra = {}) => buildDocumentTexSource(questions || [], {
-      ...baseBuildOptions,
-      ...extra,
-    });
-
-    const pairAnchor2PassDisabled =
-      process.env.PB_DISABLE_PAIR_ANCHOR_2PASS === '1' ||
-      renderConfig?.disablePairAnchor2Pass === true ||
-      renderConfig?.pairAnchor2Pass === false;
-    const shouldMeasurePairAnchors =
-      !pairAnchor2PassDisabled &&
-      isMockProfile &&
-      cols >= 2 &&
-      !hideQuestionNumber &&
-      renderConfig?.reviewPdf !== true &&
-      renderConfig?.review_pdf !== true;
-
-    const layoutMeta = {};
-    let pairAnchorOffsets = null;
-    let pairAnchorSummary = [];
-    let pairAnchor2PassApplied = false;
-
-    if (shouldMeasurePairAnchors) {
-      const measureTexSource = buildTex({
-        layoutMeta: {},
-        pairAnchorMeasure: true,
-        pairAnchor2Pass: true,
-      });
-      fs.writeFileSync(texPath, measureTexSource, 'utf-8');
-      await runXeLatex(texPath, workDir);
-      const auxPath = path.join(workDir, 'document.aux');
-      const positions = parsePairAnchorPositions(auxPath);
-      const computed = computePairAnchorOffsets(positions);
-      pairAnchorOffsets = computed.offsets;
-      pairAnchorSummary = computed.summary;
-      pairAnchor2PassApplied = Object.keys(positions).length > 0;
-      console.log('[pb-xelatex-doc] pair anchor measure', {
-        positions: Object.keys(positions).length,
-        corrections: pairAnchorSummary.length,
-      });
-    }
-
-    const texSource = buildTex({
       layoutMeta,
-      pairAnchor2Pass: pairAnchor2PassApplied,
-      pairAnchorOffsets: pairAnchor2PassApplied ? pairAnchorOffsets : null,
     });
+
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
 
@@ -898,10 +793,6 @@ export async function renderPdfWithXeLatex({
       columnLabelAnchors: Array.isArray(layoutMeta.columnLabelAnchors)
         ? layoutMeta.columnLabelAnchors
         : (Array.isArray(renderConfig?.columnLabelAnchors) ? renderConfig.columnLabelAnchors : []),
-      pairAnchor2Pass: {
-        applied: pairAnchor2PassApplied,
-        corrections: pairAnchorSummary,
-      },
       titlePageIndices: titlePageIndices.length > 0 ? titlePageIndices : [1],
       titlePageHeaders,
       pageColumnQuestionCounts: [],

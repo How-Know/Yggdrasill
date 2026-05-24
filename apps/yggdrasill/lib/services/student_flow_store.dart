@@ -18,71 +18,87 @@ class StudentFlowStore {
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
   List<StudentFlow> _withDefaultFlows(List<StudentFlow> input) {
-    final normalized = input
-        .map(
-            (flow) => flow.copyWith(name: StudentFlow.normalizeName(flow.name)))
-        .toList(growable: true);
-    final names = normalized.map((flow) => flow.name.trim()).toSet();
+    // 현재 정책: 모든 학생은 동일한 기본 플로우만 사용한다.
+    // 기존 데이터에 중복/커스텀이 있어도 기본 이름별 대표 1개만 남겨 UI와 저장을 수렴시킨다.
+    final byName = <String, StudentFlow>{};
+    for (final flow in input) {
+      final name = StudentFlow.normalizeName(flow.name).trim();
+      if (!StudentFlow.isDefaultName(name)) continue;
+      byName.putIfAbsent(name, () => flow.copyWith(name: name));
+    }
+    final normalized = <StudentFlow>[];
     for (final defaultName in StudentFlow.defaultNames) {
-      if (names.contains(defaultName)) continue;
       normalized.add(
-        StudentFlow(
-          id: const Uuid().v4(),
+        (byName[defaultName] ??
+                StudentFlow(
+                  id: const Uuid().v4(),
+                  name: defaultName,
+                  enabled: true,
+                  orderIndex: StudentFlow.defaultPriority(defaultName),
+                ))
+            .copyWith(
           name: defaultName,
           enabled: true,
           orderIndex: StudentFlow.defaultPriority(defaultName),
         ),
       );
-      names.add(defaultName);
     }
-    return normalized.asMap().entries.map((entry) {
-      final flow = entry.value;
-      final priority = StudentFlow.defaultPriority(flow.name);
-      return flow.copyWith(
-        enabled:
-            priority < StudentFlow.defaultNames.length ? true : flow.enabled,
-        orderIndex: priority < StudentFlow.defaultNames.length
-            ? priority
-            : flow.orderIndex,
-      );
-    }).toList(growable: false)
-      ..sort((a, b) {
-        final pa = StudentFlow.defaultPriority(a.name);
-        final pb = StudentFlow.defaultPriority(b.name);
-        if (pa != pb) return pa.compareTo(pb);
-        final order = a.orderIndex.compareTo(b.orderIndex);
-        if (order != 0) return order;
-        return a.name.compareTo(b.name);
-      });
+    return normalized
+      ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
   }
 
-  List<Map<String, dynamic>> _missingDefaultRows({
-    required String academyId,
-    required String studentId,
-    required List<StudentFlow> persistedFlows,
-    required List<StudentFlow> normalizedFlows,
-  }) {
-    final persistedDefaultNames = persistedFlows
-        .map((flow) => StudentFlow.normalizeName(flow.name).trim())
-        .where(StudentFlow.isDefaultName)
-        .toSet();
-    final seen = <String>{};
-    final rows = <Map<String, dynamic>>[];
-    for (final flow in normalizedFlows) {
+  List<StudentFlow> _normalizeForSave(List<StudentFlow> flows) {
+    final byName = <String, StudentFlow>{};
+    for (final flow in flows) {
       final name = StudentFlow.normalizeName(flow.name).trim();
       if (!StudentFlow.isDefaultName(name)) continue;
-      if (persistedDefaultNames.contains(name)) continue;
-      if (!seen.add(name)) continue;
-      rows.add({
+      byName.putIfAbsent(name, () => flow.copyWith(name: name));
+    }
+    return [
+      for (var i = 0; i < StudentFlow.defaultNames.length; i++)
+        (byName[StudentFlow.defaultNames[i]] ??
+                StudentFlow(
+                  id: const Uuid().v4(),
+                  name: StudentFlow.defaultNames[i],
+                  enabled: true,
+                  orderIndex: i,
+                ))
+            .copyWith(
+          name: StudentFlow.defaultNames[i],
+          enabled: true,
+          orderIndex: i,
+        ),
+    ];
+  }
+
+  List<Map<String, dynamic>> _defaultRowsForStudent({
+    required String academyId,
+    required String studentId,
+    required List<StudentFlow> flows,
+  }) {
+    final normalized = _normalizeForSave(flows);
+    return normalized.map((flow) {
+      return {
         'id': flow.id,
         'academy_id': academyId,
         'student_id': studentId,
-        'name': name,
+        'name': flow.name,
         'enabled': true,
-        'order_index': flow.orderIndex,
-      });
-    }
-    return rows;
+        'order_index': StudentFlow.defaultPriority(flow.name),
+      };
+    }).toList(growable: false);
+  }
+
+  List<StudentFlow> _syntheticDefaults() {
+    return [
+      for (var i = 0; i < StudentFlow.defaultNames.length; i++)
+        StudentFlow(
+          id: const Uuid().v4(),
+          name: StudentFlow.defaultNames[i],
+          enabled: true,
+          orderIndex: i,
+        ),
+    ];
   }
 
   Future<void> _persistMissingDefaultRows(
@@ -90,7 +106,13 @@ class StudentFlowStore {
     List<Map<String, dynamic>> rows,
   ) async {
     if (rows.isEmpty) return;
-    await supa.from('student_flows').upsert(rows, onConflict: 'id');
+    await supa
+        .from('student_flows')
+        .upsert(
+          rows,
+          onConflict: 'academy_id,student_id,name',
+          ignoreDuplicates: true,
+        );
   }
 
   List<StudentFlow> cached(String studentId) {
@@ -134,11 +156,10 @@ class StudentFlowStore {
       final normalizedFlows = _withDefaultFlows(flows);
       await _persistMissingDefaultRows(
         supa,
-        _missingDefaultRows(
+        _defaultRowsForStudent(
           academyId: academyId,
           studentId: studentId,
-          persistedFlows: flows,
-          normalizedFlows: normalizedFlows,
+          flows: normalizedFlows,
         ),
       );
       _byStudentId[studentId] = normalizedFlows;
@@ -185,11 +206,10 @@ class StudentFlowStore {
         final persistedFlows =
             List<StudentFlow>.from(map[sid] ?? const <StudentFlow>[]);
         final normalizedFlows = _withDefaultFlows(persistedFlows);
-        missingRows.addAll(_missingDefaultRows(
+        missingRows.addAll(_defaultRowsForStudent(
           academyId: academyId,
           studentId: sid,
-          persistedFlows: persistedFlows,
-          normalizedFlows: normalizedFlows,
+          flows: normalizedFlows,
         ));
         nextByStudentId[sid] = normalizedFlows;
       }
@@ -207,21 +227,26 @@ class StudentFlowStore {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final normalizedFlows = _withDefaultFlows(flows);
+      final normalizedFlows = _normalizeForSave(flows);
       final rows = normalizedFlows.asMap().entries.map((e) {
         final flow = e.value;
-        final isDefault = StudentFlow.isDefaultName(flow.name);
         return {
           'id': flow.id,
           'academy_id': academyId,
           'student_id': studentId,
           'name': StudentFlow.normalizeName(flow.name),
-          'enabled': isDefault ? true : flow.enabled,
+          'enabled': true,
           'order_index': e.key,
         };
       }).toList();
       if (rows.isNotEmpty) {
-        await supa.from('student_flows').upsert(rows, onConflict: 'id');
+        await supa
+            .from('student_flows')
+            .upsert(
+              rows,
+              onConflict: 'academy_id,student_id,name',
+              ignoreDuplicates: true,
+            );
       }
       _byStudentId[studentId] = _withDefaultFlows(normalizedFlows);
       revision.value++;
@@ -237,21 +262,13 @@ class StudentFlowStore {
     final idx = flows.indexWhere((flow) => flow.name.trim() == _testFlowName);
     if (idx >= 0) {
       final existing = flows[idx];
-      if (existing.enabled) return existing;
-      final updated = existing.copyWith(enabled: true);
-      final next = List<StudentFlow>.from(flows);
-      next[idx] = updated;
-      await saveFlows(studentId, next);
-      return updated.copyWith(orderIndex: idx);
+      return existing.copyWith(enabled: true, orderIndex: idx);
     }
-    final created = StudentFlow(
-      id: const Uuid().v4(),
-      name: _testFlowName,
-      enabled: true,
-      orderIndex: flows.length,
-    );
-    final next = List<StudentFlow>.from(flows)..add(created);
+    final next = _withDefaultFlows(flows.isEmpty ? _syntheticDefaults() : flows);
     await saveFlows(studentId, next);
-    return created.copyWith(orderIndex: next.length - 1);
+    return next.firstWhere(
+      (flow) => flow.name.trim() == _testFlowName,
+      orElse: () => next[StudentFlow.defaultPriority(_testFlowName)],
+    );
   }
 }

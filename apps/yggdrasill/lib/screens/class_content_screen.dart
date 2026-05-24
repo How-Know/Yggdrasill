@@ -969,7 +969,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     hw: summary,
                                   );
                                 }
-                                return _runHomeworkGradingForCardWithCombo(
+                                if (group == null && children.length == 1) {
+                                  return _runHomeworkCheckDialogOnly(
+                                    context: context,
+                                    studentId: studentId,
+                                    hw: children.first,
+                                  );
+                                }
+                                return _runHomeworkCheckDialogForGroup(
                                   context: context,
                                   studentId: studentId,
                                   group: group,
@@ -4455,7 +4462,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required HomeworkItem hw,
     List<({String studentId, String itemId})>? targetKeys,
-    bool suppressCombo = false,
   }) async {
     final keys = (targetKeys == null || targetKeys.isEmpty)
         ? <({String studentId, String itemId})>[
@@ -4947,13 +4953,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         }
       });
       _batchConfirmService.syncPendingCount();
-      if (!suppressCombo && context.mounted) {
-        await _maybeOfferSubmittedGradingCombo(
-          context: context,
-          seed: hw,
-          keys: keys,
-        );
-      }
       return;
     }
 
@@ -5021,9 +5020,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       overlayEntries: overlayEntries,
     );
     if (!context.mounted) return;
-    final bool pdfActionCommitted =
-        action == HomeworkAnswerViewerAction.complete ||
-            action == HomeworkAnswerViewerAction.confirm;
     if (action == HomeworkAnswerViewerAction.complete) {
       setState(() {
         for (final key in keys) {
@@ -5039,44 +5035,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       });
       _batchConfirmService.syncPendingCount();
     }
-    if (!suppressCombo && pdfActionCommitted && context.mounted) {
-      await _maybeOfferSubmittedGradingCombo(
-        context: context,
-        seed: hw,
-        keys: keys,
-      );
-    }
-  }
-
-  Future<void> _maybeOfferSubmittedGradingCombo({
-    required BuildContext context,
-    required HomeworkItem seed,
-    required List<({String studentId, String itemId})> keys,
-  }) async {
-    final store = HomeworkStore.instance;
-    final seedChildren = <HomeworkItem>[];
-    for (final key in keys) {
-      final item = store.getById(key.studentId, key.itemId);
-      if (item != null) seedChildren.add(item);
-    }
-    final matchKey = _resolveGradingComboMatchKey(
-      summary: seed,
-      children: seedChildren,
-    );
-    if (matchKey == null) return;
-    final excluded = <String>{};
-    for (final key in keys) {
-      excluded.add('item:${key.itemId}');
-      final gid = store.groupIdOfItem(key.itemId);
-      if (gid != null && gid.isNotEmpty) {
-        excluded.add('group:$gid');
-      }
-    }
-    await _runSubmittedGradingComboAfter(
-      context: context,
-      matchKey: matchKey,
-      excludedKeys: excluded,
-    );
   }
 
   Future<void> _handleHomeworkCardTapForPending({
@@ -5479,145 +5437,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       assignmentByItemId: request.assignmentByItemId,
       preResolvedSourceByItemId: request.sourceByItemId,
     );
-  }
-
-  /// 채점 모드 홈에서 숙제 카드를 눌렀을 때 검사 다이얼로그를 실행하고,
-  /// 저장이 성공하면 같은 교재·같은 과제유형의 다음 후보를 콤보 다이얼로그로 이어서 검사한다.
-  Future<void> _runHomeworkGradingForCardWithCombo({
-    required BuildContext context,
-    required String studentId,
-    required HomeworkGroup? group,
-    required HomeworkItem summary,
-    required List<HomeworkItem> children,
-  }) async {
-    final excludedKeys = <String>{
-      if (group != null) 'group:${group.id}' else 'item:${summary.id}',
-    };
-    _GradingComboMatchKey? currentMatchKey = _resolveGradingComboMatchKey(
-      summary: summary,
-      children: children,
-    );
-
-    final firstOk = (group == null && children.length == 1)
-        ? await _runHomeworkCheckDialogOnly(
-            context: context,
-            studentId: studentId,
-            hw: children.first,
-          )
-        : await _runHomeworkCheckDialogForGroup(
-            context: context,
-            studentId: studentId,
-            group: group,
-            summary: summary,
-            children: children,
-          );
-
-    if (!mounted || !context.mounted) return;
-    if (!firstOk || currentMatchKey == null) return;
-
-    while (mounted && context.mounted) {
-      final attendingList = _computeAttendingStudentsRealtime();
-      final attendingIds =
-          attendingList.map((s) => s.id).toList(growable: false);
-      final namesById = <String, String>{
-        for (final s in attendingList) s.id: s.name,
-      };
-      final candidates = await _collectGradingComboCandidates(
-        attendingStudentIds: attendingIds,
-        studentNamesById: namesById,
-        matchKey: currentMatchKey!,
-        excludeUniqueKeys: excludedKeys,
-        section: _GradingComboSection.homework,
-      );
-      if (!mounted || !context.mounted) return;
-      if (candidates.isEmpty) return;
-
-      final picked = await _showGradingComboDialog(
-        context: context,
-        recommended: candidates.first,
-        candidates: candidates,
-        section: _GradingComboSection.homework,
-      );
-      if (!mounted || !context.mounted || picked == null) return;
-      excludedKeys.add(picked.uniqueKey);
-
-      final savedNext = picked.isGroup
-          ? await _runHomeworkCheckDialogForGroup(
-              context: context,
-              studentId: picked.studentId,
-              group: picked.group,
-              summary: picked.summary,
-              children: picked.children,
-            )
-          : await _runHomeworkCheckDialogOnly(
-              context: context,
-              studentId: picked.studentId,
-              hw: picked.summary,
-            );
-      if (!mounted || !context.mounted) return;
-      if (!savedNext) {
-        // 사용자가 검사 다이얼로그에서 취소했거나 저장 실패 → 콤보 체인 종료.
-        return;
-      }
-      // matchKey는 동일하게 유지(같은 교재·유형으로 계속 추천).
-    }
-  }
-
-  /// 제출(과제) 카드의 검사 동작이 의미 있게 완료된 뒤,
-  /// 같은 교재·같은 과제유형을 가진 다음 제출 과제를 이어서 검사할지 추천.
-  Future<void> _runSubmittedGradingComboAfter({
-    required BuildContext context,
-    required _GradingComboMatchKey matchKey,
-    required Set<String> excludedKeys,
-  }) async {
-    while (mounted && context.mounted) {
-      final attendingList = _computeAttendingStudentsRealtime();
-      final attendingIds =
-          attendingList.map((s) => s.id).toList(growable: false);
-      final namesById = <String, String>{
-        for (final s in attendingList) s.id: s.name,
-      };
-      final candidates = await _collectGradingComboCandidates(
-        attendingStudentIds: attendingIds,
-        studentNamesById: namesById,
-        matchKey: matchKey,
-        excludeUniqueKeys: excludedKeys,
-        section: _GradingComboSection.submitted,
-      );
-      if (!mounted || !context.mounted) return;
-      if (candidates.isEmpty) return;
-
-      final picked = await _showGradingComboDialog(
-        context: context,
-        recommended: candidates.first,
-        candidates: candidates,
-        section: _GradingComboSection.submitted,
-      );
-      if (!mounted || !context.mounted || picked == null) return;
-      excludedKeys.add(picked.uniqueKey);
-
-      // 제출 카드 탭과 동일한 플로우로 재진입한다.
-      final submittedChildren = picked.children
-          .where(_itemHasSubmittedCandidateForCombo)
-          .toList(growable: false);
-      if (submittedChildren.isEmpty) continue;
-      final pendingKeys = submittedChildren
-          .map((e) => (studentId: picked.studentId, itemId: e.id))
-          .toList(growable: false);
-      final seed = submittedChildren.firstWhere(
-        _hasDirectHomeworkTextbookLink,
-        orElse: () => submittedChildren.first,
-      );
-      await _handleSubmittedChipTapForPending(
-        context: context,
-        studentId: picked.studentId,
-        hw: seed,
-        targetKeys: pendingKeys,
-        suppressCombo: true,
-      );
-      if (!mounted || !context.mounted) return;
-      // 재귀적으로 다음 후보 추천을 계속 이어간다(matchKey 유지).
-    }
   }
 }
 
@@ -6747,398 +6566,6 @@ Future<bool> _runHomeworkCheckDialogForGroup({
     );
   }
   return true;
-}
-
-// ========== 채점 콤보(같은 교재·과제유형 연속 검사) ==========
-
-enum _GradingComboSection { homework, submitted }
-
-class _GradingComboMatchKey {
-  final String bookId;
-  final String typeLabel;
-  const _GradingComboMatchKey({
-    required this.bookId,
-    required this.typeLabel,
-  });
-}
-
-class _GradingComboCandidate {
-  final String studentId;
-  final String studentName;
-  final HomeworkGroup? group;
-  final HomeworkItem summary;
-  final List<HomeworkItem> children;
-  final String bookLabel;
-  final String typeLabel;
-  final String displayTitle;
-  final int? firstPageNumber;
-  final int orderIndex;
-
-  const _GradingComboCandidate({
-    required this.studentId,
-    required this.studentName,
-    required this.group,
-    required this.summary,
-    required this.children,
-    required this.bookLabel,
-    required this.typeLabel,
-    required this.displayTitle,
-    required this.firstPageNumber,
-    required this.orderIndex,
-  });
-
-  bool get isGroup => group != null;
-  String get uniqueKey => isGroup ? 'group:${group!.id}' : 'item:${summary.id}';
-}
-
-_GradingComboMatchKey? _resolveGradingComboMatchKey({
-  HomeworkItem? summary,
-  List<HomeworkItem> children = const [],
-}) {
-  String bookId = (summary?.bookId ?? '').trim();
-  String typeLabel = (summary?.type ?? '').trim();
-  for (final child in children) {
-    if (bookId.isEmpty) bookId = (child.bookId ?? '').trim();
-    if (typeLabel.isEmpty) typeLabel = (child.type ?? '').trim();
-    if (bookId.isNotEmpty && typeLabel.isNotEmpty) break;
-  }
-  if (bookId.isEmpty || typeLabel.isEmpty) return null;
-  return _GradingComboMatchKey(bookId: bookId, typeLabel: typeLabel);
-}
-
-int? _firstPageNumberOfHomework(HomeworkItem hw) {
-  final raw = (hw.page ?? '').trim();
-  if (raw.isEmpty) return null;
-  final match = RegExp(r'\d+').firstMatch(raw);
-  if (match == null) return null;
-  return int.tryParse(match.group(0) ?? '');
-}
-
-int? _earliestFirstPageOfChildren(List<HomeworkItem> children) {
-  int? best;
-  for (final child in children) {
-    final candidate = _firstPageNumberOfHomework(child);
-    if (candidate == null) continue;
-    if (best == null || candidate < best) best = candidate;
-  }
-  return best;
-}
-
-String _gradingComboBookLabelOf({
-  required HomeworkItem summary,
-  required List<HomeworkItem> children,
-}) {
-  final re = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)');
-  String? pick(HomeworkItem hw) {
-    final raw = (hw.content ?? '').trim();
-    if (raw.isEmpty) return null;
-    final m = re.firstMatch(raw)?.group(1);
-    if (m == null) return null;
-    final t = m.trim();
-    return t.isEmpty ? null : t;
-  }
-
-  final fromSummary = pick(summary);
-  if (fromSummary != null) return fromSummary;
-  for (final child in children) {
-    final v = pick(child);
-    if (v != null) return v;
-  }
-  final gradeLabel = (summary.gradeLabel ?? '').trim();
-  if (gradeLabel.isNotEmpty) return gradeLabel;
-  return summary.title.trim().isEmpty ? '(교재명 없음)' : summary.title.trim();
-}
-
-bool _itemHasSubmittedCandidateForCombo(HomeworkItem item) {
-  return item.status != HomeworkStatus.completed &&
-      item.phase == 3 &&
-      item.completedAt == null;
-}
-
-Future<List<_GradingComboCandidate>> _collectGradingComboCandidates({
-  required List<String> attendingStudentIds,
-  required Map<String, String> studentNamesById,
-  required _GradingComboMatchKey matchKey,
-  required Set<String> excludeUniqueKeys,
-  required _GradingComboSection section,
-}) async {
-  final store = HomeworkStore.instance;
-  final assignmentStore = HomeworkAssignmentStore.instance;
-  final out = <_GradingComboCandidate>[];
-  for (final studentId in attendingStudentIds) {
-    Set<String> assignedItemIds = <String>{};
-    try {
-      final assignments =
-          await assignmentStore.loadActiveAssignments(studentId);
-      for (final a in assignments) {
-        if ((a.note ?? '').trim() == HomeworkAssignmentStore.reservationNote) {
-          continue;
-        }
-        assignedItemIds.add(a.homeworkItemId);
-      }
-    } catch (_) {
-      // 오프라인 등 실패 시에는 숙제 할당 필터를 완화하지 않고 건너뛴다.
-      continue;
-    }
-
-    final coveredItemIds = <String>{};
-    final groups = store.groups(studentId);
-    for (final group in groups) {
-      final childrenAll = store
-          .itemsInGroup(studentId, group.id)
-          .where((e) => e.status != HomeworkStatus.completed)
-          .toList(growable: false);
-      if (childrenAll.isEmpty) continue;
-      coveredItemIds.addAll(childrenAll.map((e) => e.id));
-
-      final summarySource = childrenAll.first;
-      final groupBook = (summarySource.bookId ?? '').trim();
-      final groupType = (summarySource.type ?? '').trim();
-      if (groupBook != matchKey.bookId || groupType != matchKey.typeLabel) {
-        continue;
-      }
-
-      final hasSubmitted = childrenAll.any(_itemHasSubmittedCandidateForCombo);
-      final assignedChildren = childrenAll
-          .where((c) => assignedItemIds.contains(c.id) && c.phase != 0)
-          .toList(growable: false);
-
-      final include = section == _GradingComboSection.submitted
-          ? hasSubmitted
-          : (!hasSubmitted && assignedChildren.isNotEmpty);
-      if (!include) continue;
-
-      final uniqueKey = 'group:${group.id}';
-      if (excludeUniqueKeys.contains(uniqueKey)) continue;
-
-      final displayTitle = group.title.trim().isNotEmpty
-          ? group.title.trim()
-          : summarySource.title.trim();
-      out.add(_GradingComboCandidate(
-        studentId: studentId,
-        studentName: studentNamesById[studentId] ?? '학생',
-        group: group,
-        summary: summarySource,
-        children: childrenAll,
-        bookLabel: _gradingComboBookLabelOf(
-          summary: summarySource,
-          children: childrenAll,
-        ),
-        typeLabel: groupType,
-        displayTitle: displayTitle.isEmpty ? '그룹 과제' : displayTitle,
-        firstPageNumber: _earliestFirstPageOfChildren(childrenAll),
-        orderIndex: group.orderIndex,
-      ));
-    }
-
-    final looseItems = store
-        .items(studentId)
-        .where((e) => e.status != HomeworkStatus.completed)
-        .where((e) => !coveredItemIds.contains(e.id))
-        .toList(growable: false);
-    for (final item in looseItems) {
-      if ((item.bookId ?? '').trim() != matchKey.bookId) continue;
-      if ((item.type ?? '').trim() != matchKey.typeLabel) continue;
-      final uniqueKey = 'item:${item.id}';
-      if (excludeUniqueKeys.contains(uniqueKey)) continue;
-      final hasSubmitted = _itemHasSubmittedCandidateForCombo(item);
-      final hasHomeworkAssignment =
-          assignedItemIds.contains(item.id) && item.phase != 0;
-      final include = section == _GradingComboSection.submitted
-          ? hasSubmitted
-          : (!hasSubmitted && hasHomeworkAssignment);
-      if (!include) continue;
-      out.add(_GradingComboCandidate(
-        studentId: studentId,
-        studentName: studentNamesById[studentId] ?? '학생',
-        group: null,
-        summary: item,
-        children: [item],
-        bookLabel: _gradingComboBookLabelOf(
-          summary: item,
-          children: [item],
-        ),
-        typeLabel: (item.type ?? '').trim(),
-        displayTitle: item.title.trim().isEmpty ? '개별 숙제' : item.title.trim(),
-        firstPageNumber: _firstPageNumberOfHomework(item),
-        orderIndex: item.orderIndex,
-      ));
-    }
-  }
-
-  out.sort((a, b) {
-    final ap = a.firstPageNumber;
-    final bp = b.firstPageNumber;
-    if (ap != null && bp != null) {
-      final cmp = ap.compareTo(bp);
-      if (cmp != 0) return cmp;
-    } else if (ap != null && bp == null) {
-      return -1; // 페이지 있는 쪽이 먼저
-    } else if (ap == null && bp != null) {
-      return 1;
-    }
-    final oi = a.orderIndex.compareTo(b.orderIndex);
-    if (oi != 0) return oi;
-    final nameCmp = a.studentName.compareTo(b.studentName);
-    if (nameCmp != 0) return nameCmp;
-    return a.uniqueKey.compareTo(b.uniqueKey);
-  });
-  return out;
-}
-
-Future<_GradingComboCandidate?> _showGradingComboDialog({
-  required BuildContext context,
-  required _GradingComboCandidate recommended,
-  required List<_GradingComboCandidate> candidates,
-  required _GradingComboSection section,
-}) {
-  final sectionLabel = section == _GradingComboSection.submitted ? '제출' : '숙제';
-  return showDialog<_GradingComboCandidate?>(
-    context: context,
-    barrierDismissible: false,
-    builder: (ctx) {
-      String selectedKey = recommended.uniqueKey;
-      return StatefulBuilder(
-        builder: (ctx, setInner) {
-          return AlertDialog(
-            backgroundColor: kDlgBg,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            title: Text(
-              '이어서 검사할 $sectionLabel 과제',
-              style: const TextStyle(
-                color: kDlgText,
-                fontWeight: FontWeight.w800,
-                fontSize: 18,
-              ),
-            ),
-            content: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560, maxHeight: 440),
-              child: SizedBox(
-                width: 520,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '같은 교재 · 같은 유형(${recommended.typeLabel})의 후보입니다.',
-                      style: const TextStyle(
-                        color: kDlgTextSub,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: candidates.length,
-                        separatorBuilder: (_, __) => const Divider(
-                          height: 1,
-                          color: Color(0xFF23333D),
-                        ),
-                        itemBuilder: (ctx, i) {
-                          final c = candidates[i];
-                          final pageLabel = c.firstPageNumber == null
-                              ? '페이지 미정'
-                              : 'p.${c.firstPageNumber}';
-                          final meta = <String>[
-                            c.studentName,
-                            if (c.bookLabel.trim().isNotEmpty) c.bookLabel,
-                            if (c.typeLabel.trim().isNotEmpty) c.typeLabel,
-                            pageLabel,
-                          ].join(' · ');
-                          final isRecommended =
-                              c.uniqueKey == recommended.uniqueKey;
-                          return RadioListTile<String>(
-                            value: c.uniqueKey,
-                            groupValue: selectedKey,
-                            activeColor: kDlgAccent,
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: (v) {
-                              if (v == null) return;
-                              setInner(() {
-                                selectedKey = v;
-                              });
-                            },
-                            title: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    c.displayTitle,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: kDlgText,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 14.5,
-                                    ),
-                                  ),
-                                ),
-                                if (isRecommended)
-                                  Container(
-                                    margin: const EdgeInsets.only(left: 6),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: kDlgAccent.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: const Text(
-                                      '추천',
-                                      style: TextStyle(
-                                        color: kDlgAccent,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            subtitle: Text(
-                              meta,
-                              style: const TextStyle(
-                                color: kDlgTextSub,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(null),
-                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                child: const Text('중단'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final picked = candidates.firstWhere(
-                    (e) => e.uniqueKey == selectedKey,
-                    orElse: () => recommended,
-                  );
-                  Navigator.of(ctx).pop(picked);
-                },
-                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-                child: const Text('이 항목으로 계속'),
-              ),
-            ],
-          );
-        },
-      );
-    },
-  );
 }
 
 String _formatDateTime(DateTime dt) {
@@ -11888,6 +11315,7 @@ Future<bool> _openPrintDialogForPath(
   String path, {
   String preferredPaperSize = '',
   PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
+  bool skipRawTcpFirst = false,
 }) {
   return PrintRoutingService.instance.printFile(
     path: path,
@@ -11895,6 +11323,7 @@ Future<bool> _openPrintDialogForPath(
     duplexMode: duplexMode,
     preferredPaperSize: preferredPaperSize,
     debugSource: 'class_content.waiting_chip',
+    skipRawTcpFirst: skipRawTcpFirst,
   );
 }
 
@@ -13251,10 +12680,16 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
   }
 
   progressText?.value = '프린터로 전송 중입니다...';
+  final skipRawTcpForTextbookHomework = !resolvedSource.isProblemBank &&
+      PrintRoutingService.kTextbookHomeworkPrintPreferDriverSpooler;
+  if (skipRawTcpForTextbookHomework) {
+    print('[PRINT][route] textbookHomework driverSpoolerFirst=true');
+  }
   final printJobSentToSpooler = await _openPrintDialogForPath(
     pathToPrint,
     preferredPaperSize: effectivePaperSize,
     duplexMode: confirmResult.duplexMode,
+    skipRawTcpFirst: skipRawTcpForTextbookHomework,
   );
   if (printJobSentToSpooler) {
     _applyHomeworkTypePrintAfterSuccessfulPrint(

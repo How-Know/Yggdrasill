@@ -89,17 +89,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   bool _showGroupOverlay = false;
   bool _initialDetailsSeeded = false;
   final Map<String, List<StudentFlow>> _flowByStudentId = {};
-  final Uuid _flowIdGen = Uuid();
   final Set<String> _flowLoadingStudentIds = <String>{};
-  final Set<String> _flowSeededDefaults = <String>{};
-
-  String _nextFlowId() => _flowIdGen.v4();
 
   List<StudentFlow> _defaultFlows() {
+    const uuid = Uuid();
     return [
       for (var i = 0; i < StudentFlow.defaultNames.length; i++)
         StudentFlow(
-          id: _nextFlowId(),
+          id: uuid.v4(),
           name: StudentFlow.defaultNames[i],
           enabled: true,
           orderIndex: i,
@@ -121,48 +118,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     return _flowByStudentId.putIfAbsent(studentId, _defaultFlows);
   }
 
-  String _nextFlowName(List<StudentFlow> flows) {
-    const base = '플로우';
-    final existing = flows.map((f) => f.name).toSet();
-    var idx = 1;
-    var name = '$base $idx';
-    while (existing.contains(name)) {
-      idx += 1;
-      name = '$base $idx';
-    }
-    return name;
-  }
-
-  void _addFlowForStudent(String studentId) {
-    final flows = _flowsForStudent(studentId);
-    final name = _nextFlowName(flows);
-    setState(() {
-      flows.add(StudentFlow(id: _nextFlowId(), name: name, enabled: false));
-    });
-    unawaited(_persistFlows(studentId, flows));
-  }
-
-  void _toggleFlowForStudent(String studentId, String flowId, bool enabled) {
-    final flows = _flowByStudentId[studentId];
-    if (flows == null) return;
-    final idx = flows.indexWhere((f) => f.id == flowId);
-    if (idx == -1) return;
-    setState(() {
-      flows[idx] = flows[idx].copyWith(enabled: enabled);
-    });
-    unawaited(_persistFlows(studentId, flows));
-  }
-
-  Future<void> _persistFlows(String studentId, List<StudentFlow> flows) async {
-    try {
-      await StudentFlowStore.instance
-          .saveFlows(studentId, List<StudentFlow>.from(flows));
-    } catch (e) {
-      if (!mounted) return;
-      showAppSnackBar(context, '플로우 저장 실패');
-    }
-  }
-
   Future<void> _ensureFlowsLoaded(String studentId) async {
     if (_flowLoadingStudentIds.contains(studentId)) return;
     _flowLoadingStudentIds.add(studentId);
@@ -175,14 +130,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         });
         return;
       }
-      if (!_flowSeededDefaults.contains(studentId)) {
-        _flowSeededDefaults.add(studentId);
-        final defaults = _defaultFlows();
-        setState(() {
-          _flowByStudentId[studentId] = defaults;
-        });
-        unawaited(_persistFlows(studentId, defaults));
-      }
+      setState(() {
+        _flowByStudentId[studentId] = _defaultFlows();
+      });
     } finally {
       _flowLoadingStudentIds.remove(studentId);
     }
@@ -203,14 +153,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         }
       }
     });
-    for (final id in ids) {
-      final cached = StudentFlowStore.instance.cached(id);
-      if (cached.isNotEmpty) continue;
-      if (_flowSeededDefaults.contains(id)) continue;
-      final flows = _flowByStudentId[id] ?? _defaultFlows();
-      _flowSeededDefaults.add(id);
-      unawaited(_persistFlows(id, flows));
-    }
   }
 
   bool get _useImmediateDrag {
@@ -1291,13 +1233,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       return _EmbeddedStudentDetailsCard(
                                         studentWithInfo: selected,
                                         flows: flows,
-                                        onAddFlow: () => _addFlowForStudent(
-                                            selected.student.id),
-                                        onToggleFlow: (flowId, enabled) =>
-                                            _toggleFlowForStudent(
-                                                selected.student.id,
-                                                flowId,
-                                                enabled),
                                         onRequestCourseView:
                                             widget.onRequestCourseView,
                                         weekOffset: _detailsWeekOffset,
@@ -1991,8 +1926,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
   final List<StudentFlow> flows;
-  final VoidCallback onAddFlow;
-  final void Function(String flowId, bool enabled) onToggleFlow;
   final Function(StudentWithInfo) onRequestCourseView;
   final int weekOffset; // 0: 이번주, 1: 다음주 ...
   final ValueChanged<int> onWeekOffsetChanged;
@@ -2001,8 +1934,6 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   const _EmbeddedStudentDetailsCard({
     required this.studentWithInfo,
     required this.flows,
-    required this.onAddFlow,
-    required this.onToggleFlow,
     required this.onRequestCourseView,
     required this.weekOffset,
     required this.onWeekOffsetChanged,
@@ -2142,13 +2073,13 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
             Expanded(
               child: Text(flow.name, style: valueStyle),
             ),
-            Switch(
-              value: flow.enabled,
-              onChanged: (v) => onToggleFlow(flow.id, v),
-              activeColor: kDlgAccent,
-              activeTrackColor: kDlgAccent.withOpacity(0.35),
-              inactiveThumbColor: kDlgTextSub,
-              inactiveTrackColor: kDlgBorder,
+            const Text(
+              '공통',
+              style: TextStyle(
+                color: kDlgTextSub,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ));
@@ -2648,16 +2579,6 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                 section(
                   icon: Icons.account_tree_outlined,
                   title: '플로우',
-                  action: IconButton(
-                    tooltip: '플로우 추가',
-                    onPressed: onAddFlow,
-                    icon: const Icon(Icons.add,
-                        size: 18, color: Color(0xFF9FB3B3)),
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 28, minHeight: 28),
-                    splashRadius: 16,
-                  ),
                   children: flowChildren,
                 ),
                 const SizedBox(height: 12),

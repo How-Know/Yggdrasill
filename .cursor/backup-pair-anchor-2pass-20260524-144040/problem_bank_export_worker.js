@@ -55,7 +55,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v96_math_visual_center_box_gap';
+const RENDER_CONFIG_VERSION = 'pb_render_v87_korean_left_right_guard';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -4511,7 +4511,6 @@ async function processOneJob(job) {
         mathRenderedCount: rendered.mathRenderedCount || 0,
         mathFailedCount: rendered.mathFailedCount || 0,
         mathCacheHitCount: rendered.mathCacheHitCount || 0,
-        pairAnchor2Pass: rendered.pairAnchor2Pass || null,
         previewThumbnail: {
           bucket: previewThumbnail.bucket,
           path: previewThumbnail.path,
@@ -4587,7 +4586,6 @@ async function processOneJob(job) {
           mathRenderedCount: rendered.mathRenderedCount || 0,
           mathFailedCount: rendered.mathFailedCount || 0,
           mathCacheHitCount: rendered.mathCacheHitCount || 0,
-          pairAnchor2Pass: rendered.pairAnchor2Pass || null,
           previewThumbnail: {
             bucket: previewThumbnail.bucket,
             path: previewThumbnail.path,

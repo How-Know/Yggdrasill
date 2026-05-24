@@ -67,38 +67,7 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
     ];
   }
 
-  String _nextFlowName() {
-    const base = '플로우';
-    final existing = _flows.map((f) => f.name).toSet();
-    var idx = 1;
-    var name = '$base $idx';
-    while (existing.contains(name)) {
-      idx += 1;
-      name = '$base $idx';
-    }
-    return name;
-  }
-
-  void _addFlow() {
-    setState(() {
-      _flows.add(StudentFlow(
-        id: _uuid.v4(),
-        name: _nextFlowName(),
-        enabled: false,
-        orderIndex: _flows.length,
-      ));
-    });
-  }
-
-  void _toggleFlow(String id, bool enabled) {
-    setState(() {
-      final idx = _flows.indexWhere((f) => f.id == id);
-      if (idx == -1) return;
-      _flows[idx] = _flows[idx].copyWith(enabled: enabled);
-    });
-  }
-
-  bool get _hasEnabled => _flows.any((f) => f.enabled);
+  bool get _hasEnabled => true;
 
   Future<void> _save() async {
     if (_saving) return;
@@ -141,7 +110,7 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
               title: '플로우 목록',
             ),
             Text(
-              '플로우를 1개 이상 켜야 과제를 추가할 수 있어요.',
+              '모든 학생에게 공통 기본 플로우를 적용합니다.',
               style: TextStyle(color: kDlgTextSub.withValues(alpha: 0.9)),
             ),
             const SizedBox(height: 12),
@@ -177,8 +146,8 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
                             ),
                           ),
                           Switch(
-                            value: flow.enabled,
-                            onChanged: (v) => _toggleFlow(flow.id, v),
+                            value: true,
+                            onChanged: null,
                             activeThumbColor: kDlgAccent,
                             activeTrackColor:
                                 kDlgAccent.withValues(alpha: 0.35),
@@ -190,25 +159,6 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
                     ),
                 ],
               ),
-            const SizedBox(height: 6),
-            OutlinedButton.icon(
-              onPressed: _addFlow,
-              icon: const Icon(Icons.add, size: 18, color: kDlgTextSub),
-              label: const Text(
-                '플로우 추가',
-                style:
-                    TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: kDlgBorder),
-                backgroundColor: kDlgPanelBg,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
           ],
         ),
       ),

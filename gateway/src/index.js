@@ -4,6 +4,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'fs';
 import Ajv from 'ajv';
+import {
+  createM5HomeworksEnvelope,
+  sanitizeGroupsForDevicePayload as sanitizeM5GroupsForDevicePayload
+} from './m5_sync_fingerprint.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY;
@@ -264,21 +268,43 @@ logEvent('log', '[gateway] mqtt runtime config', {
 /** 학생 단위로 RPC+푸시를 직렬화해 빠른 연속 DB 이벤트 시 스냅샷 역전·중간 상태 유실 완화 */
 const homeworkPublishChains = new Map();
 const homeworkPublishCoalesce = new Map();
+const m5SyncSequences = new Map();
 let m5FullResyncTimer = null;
 let m5FullResyncInFlight = false;
 let m5FullResyncPendingReason = null;
 let m5FullResyncLastRunTs = 0;
 
 function sanitizeGroupsForDevicePayload(groups) {
-  if (!Array.isArray(groups)) return [];
-  const trimmed = groups.slice(0, M5_GROUP_COUNT_LIMIT);
-  return trimmed.map((group) => {
-    if (!group || typeof group !== 'object') return group;
-    const children = Array.isArray(group.children)
-      ? group.children.slice(0, M5_GROUP_CHILDREN_LIMIT)
-      : group.children;
-    return { ...group, children };
+  return sanitizeM5GroupsForDevicePayload(groups, {
+    groupLimit: M5_GROUP_COUNT_LIMIT,
+    childrenLimit: M5_GROUP_CHILDREN_LIMIT
   });
+}
+
+function nextM5SyncSeq(academy_id, device_id, student_id) {
+  const key = `${academy_id}::${device_id}::${student_id}`;
+  const next = ((m5SyncSequences.get(key) || 0) + 1) >>> 0;
+  m5SyncSequences.set(key, next);
+  return next;
+}
+
+function publishHomeworksToDevice(academy_id, student_id, device_id, groups, source = 'unknown') {
+  const payloadGroups = sanitizeGroupsForDevicePayload(groups || []);
+  const envelope = createM5HomeworksEnvelope({
+    academyId: academy_id,
+    deviceId: device_id,
+    studentId: student_id,
+    groups: payloadGroups,
+    source,
+    syncSeq: nextM5SyncSeq(academy_id, device_id, student_id)
+  });
+  publish(
+    `academies/${academy_id}/devices/${device_id}/homeworks`,
+    JSON.stringify(envelope),
+    { qos: 1, retain: false }
+  );
+  logEvent('log', '[gateway][m5-sync] publish', envelope.meta);
+  return envelope;
 }
 
 async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source = 'unknown') {
@@ -307,11 +333,7 @@ async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source
 
   for (const b of binds) {
     const device_id = b.device_id;
-    publish(
-      `academies/${academy_id}/devices/${device_id}/homeworks`,
-      JSON.stringify({ groups: payloadGroups }),
-      { qos: 1, retain: false }
-    );
+    publishHomeworksToDevice(academy_id, student_id, device_id, payloadGroups, source);
   }
 }
 
@@ -747,11 +769,7 @@ client.on('message', async (topic, payload) => {
         // after bind, ensure attendance and list homeworks
         const { data: groups, error: lerr } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
         if (lerr) console.error('[gateway] list_homework_groups error', lerr);
-        publish(
-          `academies/${academy_id}/devices/${device_id}/homeworks`,
-          JSON.stringify({ groups: sanitizeGroupsForDevicePayload(groups || []) }),
-          { qos: 1, retain: false }
-        );
+        publishHomeworksToDevice(academy_id, student_id, device_id, groups || [], 'bind');
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error && !lerr, action: 'bind', error: error?.message || lerr?.message, student_id }), { qos: 1, retain: false });
         return;
       }
@@ -794,11 +812,7 @@ client.on('message', async (topic, payload) => {
         const student_id = msg.student_id;
         const { data: groups, error } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
         if (error) { console.error('[gateway] list_homework_groups error', error); return; }
-        publish(
-          `academies/${academy_id}/devices/${device_id}/homeworks`,
-          JSON.stringify({ groups: sanitizeGroupsForDevicePayload(groups || []) }),
-          { qos: 1, retain: false }
-        );
+        publishHomeworksToDevice(academy_id, student_id, device_id, groups || [], 'list_homeworks');
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (groups||[]).length }), { qos: 1, retain: false });
         return;
       }

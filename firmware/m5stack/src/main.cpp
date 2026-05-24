@@ -465,6 +465,10 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     g_hw_pending = true;
     portEXIT_CRITICAL(&g_hw_mux);
     g_last_mqtt_rx_homeworks_ms = nowMs;
+    Serial.printf("[M5SYNC][rx] device=%s student=%s len=%u\n",
+                  deviceId.c_str(),
+                  studentId.c_str(),
+                  (unsigned)hw_acc.length());
     hw_acc.remove(0);
   }
   if (t == updateTopic) {
@@ -676,6 +680,34 @@ void fw_publish_create_descriptive_writing() {
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 
+static void publish_homeworks_sync_ack(JsonObject meta, unsigned int groupCount) {
+  const char* syncFp = meta["sync_fp"] | "";
+  if (!syncFp || !syncFp[0]) return;
+
+  DynamicJsonDocument doc(320);
+  doc["type"] = "homeworks_apply";
+  doc["ok"] = true;
+  doc["device_id"] = deviceId;
+  doc["student_id"] = studentId;
+  doc["meta_student_id"] = meta["student_id"] | "";
+  doc["sync_seq"] = meta["sync_seq"] | 0;
+  doc["sync_fp"] = syncFp;
+  doc["source"] = meta["source"] | "";
+  doc["group_count"] = groupCount;
+  doc["at"] = "";
+
+  String payload;
+  serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/sync_ack";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  Serial.printf("[M5SYNC][ack] device=%s student=%s sync_seq=%lu sync_fp=%s groups=%u\n",
+                deviceId.c_str(),
+                studentId.c_str(),
+                (unsigned long)(meta["sync_seq"] | 0),
+                syncFp,
+                groupCount);
+}
+
 void fw_publish_check_update() {
   DynamicJsonDocument doc(64);
   doc["action"] = "check_update";
@@ -837,7 +869,28 @@ void loop() {
     DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
     if (!err) {
       JsonArray arr = doc["groups"].as<JsonArray>();
+      JsonObject meta = doc["meta"].as<JsonObject>();
+      const char* syncFp = meta["sync_fp"] | "";
+      const char* source = meta["source"] | "";
+      const char* metaStudentId = meta["student_id"] | "";
+      const unsigned long syncSeq = meta["sync_seq"] | 0;
+      Serial.printf("[M5SYNC][apply] device=%s student=%s meta_student=%s sync_seq=%lu sync_fp=%s source=%s groups=%u len=%u\n",
+                    deviceId.c_str(),
+                    studentId.c_str(),
+                    metaStudentId,
+                    syncSeq,
+                    syncFp,
+                    source,
+                    (unsigned)arr.size(),
+                    (unsigned)json_copy.length());
       ui_port_update_homeworks(arr);
+      publish_homeworks_sync_ack(meta, (unsigned)arr.size());
+    } else {
+      Serial.printf("[M5SYNC][parse_error] device=%s student=%s err=%s len=%u\n",
+                    deviceId.c_str(),
+                    studentId.c_str(),
+                    err.c_str(),
+                    (unsigned)json_copy.length());
     }
   }
 

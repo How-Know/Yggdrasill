@@ -150,13 +150,21 @@ function splitRepeatedIndependentCommonStem(stem) {
   if (lines.length < 2) return null;
   const first = compact(lines[0]);
   if (!first) return null;
+  const commonPromptVerbs =
+    '(?:나타내시오|구하시오|답하시오|쓰시오|써넣으시오|계산하시오|완성하시오|고르시오|서술하시오|푸시오|이항하시오)';
   const looksLikeCommonPrompt =
-    /(?:다음|아래|보기).*(?:나타내시오|구하시오|답하시오|쓰시오|계산하시오|완성하시오|고르시오|서술하시오)\.?$/.test(first) ||
-    /(?:거듭제곱|제곱근|인수분해|소인수분해|식|값).*(?:나타내시오|구하시오|답하시오|쓰시오)\.?$/.test(first);
+    new RegExp(`(?:다음|아래|보기).*${commonPromptVerbs}\\.?$`).test(first) ||
+    new RegExp(`(?:거듭제곱|제곱근|인수분해|소인수분해|식|값).*${commonPromptVerbs}\\.?$`).test(first);
   if (!looksLikeCommonPrompt) return null;
   const rest = lines.slice(1).join('\n').trim();
   if (!rest) return null;
   return { commonStem: first, itemStem: rest };
+}
+
+function independentCommonStemCompareKey(commonStem) {
+  return compact(commonStem)
+    .replace(/\[+\s*공백\s*:\s*\d+\s*\]+/g, '[공백]')
+    .replace(/\s+/g, ' ');
 }
 
 function normalizeSetHeaderRange(crop) {
@@ -211,7 +219,8 @@ function normalizeIndependentSetPayloadQuestions(
     while (
       j < candidates.length &&
       candidates[j].split &&
-      candidates[j].split.commonStem === split.commonStem
+      independentCommonStemCompareKey(candidates[j].split.commonStem) ===
+        independentCommonStemCompareKey(split.commonStem)
     ) {
       j += 1;
     }

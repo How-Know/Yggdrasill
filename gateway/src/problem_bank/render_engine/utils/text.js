@@ -53,7 +53,7 @@ export function splitBySpaceMarkers(input) {
  * 닫힘 마커가 없으면 원문을 그대로 text 조각으로 돌려 렌더 실패를 피한다.
  */
 export function splitByUnderlineMarkers(input) {
-  const src = String(input ?? '');
+  const src = String(input ?? '').replace(/\[\\+밑줄\]/g, UNDERLINE_END_MARKER);
   if (!src.includes(UNDERLINE_START_MARKER)) {
     return src ? [{ type: 'text', value: src }] : [];
   }
@@ -338,6 +338,7 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
     braceYScale = 1,
     braceGap = '\\hspace{0.45em}',
     rowGap = '0.35em',
+    arrayStretch = '1',
   } = options || {};
 
   const src = String(value || '');
@@ -374,7 +375,7 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
     const latexRows = rows
       .map(applyDisplaystyleToCaseRow)
       .join(`\\\\[${rowGap}]`);
-    const arrayTex = `\\begin{array}{${colSpec}}${latexRows}\\end{array}`;
+    const arrayTex = `\\begingroup\\renewcommand{\\arraystretch}{${arrayStretch}}\\begin{array}{${colSpec}}${latexRows}\\end{array}\\endgroup`;
     if (thinBrace) {
       // XeLaTeX 전용: delimiter 두께를 직접 지정할 수 없으므로 brace만 가로로 살짝
       // 압축해 선을 얇게 보이게 한다. braceYScale 은 행간을 건드리지 않고

@@ -765,6 +765,7 @@ async function reconcileQuestionSetDeliveryUnits({
           source_meta: {
             set_type: 'independent_set',
             question_number: normalizeWhitespace(row?.question_number || ''),
+            common_stem: group.commonStem || '',
           },
         });
       }
@@ -868,7 +869,11 @@ async function reconcileQuestionSetDeliveryUnits({
               sub_label: item.sub_label,
             }],
             render_policy: { version: 1, mode: 'common_stem_plus_item' },
-            source_meta: { set_type: setType, question_number: questionNumber },
+            source_meta: {
+              set_type: setType,
+              question_number: questionNumber,
+              common_stem: commonStemOfSetRow(row),
+            },
           });
         }
       } else if (setType === 'mixed_set') {

@@ -942,14 +942,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     final documentId = _selectedDocumentId?.trim().isNotEmpty == true
         ? _selectedDocumentId!.trim()
         : questions.first.documentId.trim();
+    const thumbnailProfile = 'naesin';
+    const thumbnailPaperSize = 'A4';
 
     try {
       final urlMap = await _service.batchRenderThumbnails(
         academyId: _academyId!,
         questionIds: questionIds,
         documentId: documentId,
-        templateProfile: _exportSettings.templateProfile,
-        paperSize: _exportSettings.paperLabel,
+        templateProfile: thumbnailProfile,
+        paperSize: thumbnailPaperSize,
         questionModeByQuestionUid: _thumbnailModeMapForQuestions(questions),
       );
       if (!mounted) return;
@@ -2993,10 +2995,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         .toList();
   }
 
-  List<_NaesinCourseOption> _naesinCourseOptionsForGrade(String gradeKey) {
-    return NaesinExamContext.courseOptionsForGrade(gradeKey)
-        .map((e) => _NaesinCourseOption(key: e.key, label: e.label))
-        .toList();
+  List<_NaesinCourseOption> _naesinCourseOptionsForGradeAndCurriculum(
+    String gradeKey,
+    String curriculumCode,
+  ) {
+    return NaesinExamContext.courseOptionsForGradeAndCurriculum(
+      gradeKey,
+      curriculumCode,
+    ).map((e) => _NaesinCourseOption(key: e.key, label: e.label)).toList();
   }
 
   ({String gradeKey, String courseKey}) _deriveNaesinDefaultGradeCourse() {
@@ -3011,14 +3017,27 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       if (normalizedCourse.contains('공통수학2')) {
         return (gradeKey: 'H1', courseKey: 'H1-c2');
       }
-      if (normalizedCourse.contains('수학1')) {
-        return (gradeKey: 'H2', courseKey: 'H-math1');
-      }
-      if (normalizedCourse.contains('수학2')) {
-        return (gradeKey: 'H2', courseKey: 'H-math2');
-      }
-      if (normalizedCourse.contains('미적분')) {
-        return (gradeKey: 'H2', courseKey: 'H-calculus');
+      if (_selectedCurriculumCode == 'rev_2015') {
+        if (normalizedCourse.contains('수학(상)') ||
+            normalizedCourse.contains('수학상')) {
+          return (gradeKey: 'H1', courseKey: 'H1-math-upper');
+        }
+        if (normalizedCourse.contains('수학(하)') ||
+            normalizedCourse.contains('수학하')) {
+          return (gradeKey: 'H1', courseKey: 'H1-math-lower');
+        }
+        if (normalizedCourse.contains('수학1')) {
+          return (gradeKey: 'H2', courseKey: 'H-math1');
+        }
+        if (normalizedCourse.contains('수학2')) {
+          return (gradeKey: 'H2', courseKey: 'H-math2');
+        }
+        if (normalizedCourse.contains('미적분')) {
+          return (gradeKey: 'H2', courseKey: 'H-calculus');
+        }
+        if (normalizedCourse.contains('기하')) {
+          return (gradeKey: 'H2', courseKey: 'H-geometry');
+        }
       }
       if (normalizedCourse.contains('고2')) {
         return (gradeKey: 'H2', courseKey: 'H-algebra');
@@ -3561,7 +3580,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   }
 
                   final courseOptions =
-                      _naesinCourseOptionsForGrade(selectedGradeKey);
+                      _naesinCourseOptionsForGradeAndCurriculum(
+                    selectedGradeKey,
+                    selectedCurriculumCode,
+                  );
                   if (!courseOptions.any((e) => e.key == selectedCourseKey)) {
                     selectedCourseKey = courseOptions.first.key;
                   }

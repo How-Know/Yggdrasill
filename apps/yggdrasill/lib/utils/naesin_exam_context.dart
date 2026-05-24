@@ -101,8 +101,34 @@ class NaesinExamContext {
     ];
   }
 
-  /// H2는 4과목, H3는 프리셋 연결용 최소 옵션(대수).
   static List<NaesinCourseOption> courseOptionsForGrade(String gradeKey) {
+    return courseOptionsForGradeAndCurriculum(gradeKey, 'rev_2022');
+  }
+
+  static List<NaesinCourseOption> courseOptionsForGradeAndCurriculum(
+    String gradeKey,
+    String curriculumCode,
+  ) {
+    if (curriculumCode.trim() == 'rev_2015') {
+      switch (gradeKey) {
+        case 'H1':
+          return const <NaesinCourseOption>[
+            NaesinCourseOption(key: 'H1-math-upper', label: '수학(상)'),
+            NaesinCourseOption(key: 'H1-math-lower', label: '수학(하)'),
+          ];
+        case 'H2':
+        case 'H3':
+          return const <NaesinCourseOption>[
+            NaesinCourseOption(key: 'H-math1', label: '수학1'),
+            NaesinCourseOption(key: 'H-math2', label: '수학2'),
+            NaesinCourseOption(key: 'H-calculus', label: '미적분'),
+            NaesinCourseOption(key: 'H-probstats', label: '확률과 통계'),
+            NaesinCourseOption(key: 'H-geometry', label: '기하'),
+          ];
+        default:
+          break;
+      }
+    }
     switch (gradeKey) {
       case 'M1':
         return const <NaesinCourseOption>[
@@ -145,8 +171,13 @@ class NaesinExamContext {
 
   static String courseLabel(String courseKey) {
     for (final g in <String>['M1', 'M2', 'M3', 'H1', 'H2', 'H3']) {
-      for (final option in courseOptionsForGrade(g)) {
-        if (option.key == courseKey) return option.label;
+      for (final curriculumCode in <String>['rev_2022', 'rev_2015']) {
+        for (final option in courseOptionsForGradeAndCurriculum(
+          g,
+          curriculumCode,
+        )) {
+          if (option.key == courseKey) return option.label;
+        }
       }
     }
     return courseKey.trim();

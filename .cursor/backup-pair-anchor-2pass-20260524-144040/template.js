@@ -289,10 +289,6 @@ function escapeLatexText(text) {
 const KOREAN_SEG_RE =
   /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣][\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣\s,.\u3001\u3002?!:;·…\u00B7]*/g;
 
-function wrapHangulRunsForMath(input) {
-  return String(input || '').replace(KOREAN_SEG_RE, (match) => `\\text{${escapeLatexText(match)}}`);
-}
-
 function firstUnmatchedRightParenDelimiter(source) {
   const src = String(source || '');
   const re = /\\(left|right)\s*([()])/g;
@@ -502,94 +498,6 @@ function padSqrtFractionContent(math) {
   return out;
 }
 
-function findTopLevelSetBar(body) {
-  let braceDepth = 0;
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  for (let i = 0; i < body.length; i += 1) {
-    const ch = body[i];
-    if (ch === '\\') {
-      const command = body.slice(i).match(/^\\[A-Za-z]+/);
-      if (command) {
-        i += command[0].length - 1;
-        continue;
-      }
-      i += 1;
-      continue;
-    }
-    if (ch === '{') braceDepth += 1;
-    else if (ch === '}') braceDepth = Math.max(0, braceDepth - 1);
-    else if (ch === '(') parenDepth += 1;
-    else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
-    else if (ch === '[') bracketDepth += 1;
-    else if (ch === ']') bracketDepth = Math.max(0, bracketDepth - 1);
-    else if (ch === '|' && braceDepth === 0 && parenDepth === 0 && bracketDepth === 0) {
-      if (/\\middle\s*$/.test(body.slice(0, i))) continue;
-      return i;
-    }
-  }
-  return -1;
-}
-
-function normalizeSetBuilderBars(math) {
-  const src = String(math || '');
-  if (!src.includes('\\{') || !src.includes('|') || !src.includes('\\}')) return src;
-  let out = '';
-  let cursor = 0;
-  while (cursor < src.length) {
-    const start = src.indexOf('\\{', cursor);
-    if (start < 0) {
-      out += src.slice(cursor);
-      break;
-    }
-    out += src.slice(cursor, start);
-    if (/\\(?:left|right)\s*$/.test(src.slice(0, start))) {
-      out += '\\{';
-      cursor = start + 2;
-      continue;
-    }
-    let pos = start + 2;
-    let nested = 0;
-    let end = -1;
-    while (pos < src.length) {
-      if (src.startsWith('\\{', pos)) {
-        nested += 1;
-        pos += 2;
-        continue;
-      }
-      if (src.startsWith('\\}', pos)) {
-        if (nested === 0) {
-          end = pos;
-          break;
-        }
-        nested -= 1;
-        pos += 2;
-        continue;
-      }
-      pos += 1;
-    }
-    if (end < 0) {
-      out += src.slice(start);
-      break;
-    }
-    const body = src.slice(start + 2, end);
-    const bar = findTopLevelSetBar(body);
-    if (bar < 0) {
-      out += src.slice(start, end + 2);
-    } else {
-      const left = body.slice(0, bar).trim();
-      const right = body.slice(bar + 1).trim();
-      if (left && right) {
-        out += `\\YggSetBuilder{${wrapHangulRunsForMath(left)}}{${wrapHangulRunsForMath(right)}}`;
-      } else {
-        out += src.slice(start, end + 2);
-      }
-    }
-    cursor = end + 2;
-  }
-  return out;
-}
-
 function normalizeMathSegment(mathContent) {
   let out = String(mathContent || '');
 
@@ -663,18 +571,14 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\left\s+\\([a-zA-Z]+)/g, '\\left\\\\$1');
   out = out.replace(/\\right\s+\\([a-zA-Z]+)/g, '\\right\\\\$1');
 
-  out = normalizeSetBuilderBars(out);
-
   out = out.replace(/\\left\|/g, '\\left|\\,');
   out = out.replace(/\\right\|/g, '\\,\\right|');
   out = out.replace(/(?<!\\left|\\right)\|([^|]+)\|/g, '\\left|\\,$1\\,\\right|');
   out = expandCasesEnvironmentToDisplayArray(out, {
     thinBrace: true,
-    braceXScale: 0.58,
-    braceYScale: 0.76,
-    braceGap: '\\hspace{0.33em}',
-    rowGap: '0em',
-    arrayStretch: '0.88',
+    braceXScale: 0.65,
+    braceYScale: 0.72,
+    braceGap: '\\hspace{0.22em}',
   });
   out = padSqrtFractionContent(out);
 
@@ -868,73 +772,6 @@ function protectLatexBoxBlocks(input) {
   };
 }
 
-function protectLatexSetBuilderBlocks(input) {
-  const source = String(input || '');
-  if (!source.includes('\\{') || !source.includes('|') || !source.includes('\\}')) {
-    return {
-      text: source,
-      restore: (value) => value,
-    };
-  }
-
-  const blocks = [];
-  let out = '';
-  let cursor = 0;
-  while (cursor < source.length) {
-    const start = source.indexOf('\\{', cursor);
-    if (start < 0) {
-      out += source.slice(cursor);
-      break;
-    }
-    out += source.slice(cursor, start);
-    let pos = start + 2;
-    let nested = 0;
-    let end = -1;
-    while (pos < source.length) {
-      if (source.startsWith('\\{', pos)) {
-        nested += 1;
-        pos += 2;
-        continue;
-      }
-      if (source.startsWith('\\}', pos)) {
-        if (nested === 0) {
-          end = pos;
-          break;
-        }
-        nested -= 1;
-        pos += 2;
-        continue;
-      }
-      pos += 1;
-    }
-    if (end < 0) {
-      out += source.slice(start);
-      break;
-    }
-
-    const block = source.slice(start, end + 2);
-    if (block.includes('|') && /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(block)) {
-      const token = `\u0000LATEXSET${blocks.length}\u0000`;
-      blocks.push(block);
-      out += token;
-    } else {
-      out += block;
-    }
-    cursor = end + 2;
-  }
-
-  return {
-    text: out,
-    restore(value) {
-      let restored = String(value || '');
-      for (let i = 0; i < blocks.length; i += 1) {
-        restored = restored.replaceAll(`\u0000LATEXSET${i}\u0000`, blocks[i]);
-      }
-      return restored;
-    },
-  };
-}
-
 function normalizeLiteralEscapedNewlines(input) {
   const src = String(input || '');
   if (!src.includes('\\n')) return src;
@@ -998,8 +835,6 @@ function smartTexLineCore(text, equations, options = {}) {
   body = protectedText.text;
   const protectedBoxes = protectLatexBoxBlocks(body);
   body = protectedBoxes.text;
-  const protectedSetBuilders = protectLatexSetBuilderBlocks(body);
-  body = protectedSetBuilders.text;
 
   const parts = [];
   let lastEnd = 0;
@@ -1020,10 +855,6 @@ function smartTexLineCore(text, equations, options = {}) {
   downgradeKoreanSplitLeftRightParens(parts);
 
   const enableVisualLineTallMathPad = options?.visualLineTallMathPad === true;
-  const visualLineTallMathPadMinPrefix = Number.isFinite(Number(options?.visualLineTallMathPadMinPrefix))
-    ? Math.max(0, Number(options.visualLineTallMathPadMinPrefix))
-    : VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX;
-  const allowBreakAroundMath = options?.allowBreakAroundMath === true;
   let accumulatedVisualLength = 0;
   const result = parts
     .map((seg) => {
@@ -1037,14 +868,12 @@ function smartTexLineCore(text, equations, options = {}) {
       const trailSp = /\s$/.test(raw) ? ' ' : '';
       let math = raw.trim();
       if (!math) return (leadSp || trailSp) ? ' ' : '';
-      math = protectedSetBuilders.restore(math);
       math = protectedBoxes.restore(math);
       math = applyEquationLookup(math, lookup);
       math = normalizeMathSegment(math);
       const addVisualLinePad = enableVisualLineTallMathPad
-        && accumulatedVisualLength >= visualLineTallMathPadMinPrefix
+        && accumulatedVisualLength >= VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX
         && texHasTallInlineMath(math);
-      const addBreakAroundMath = allowBreakAroundMath && accumulatedVisualLength > 0;
       // 최상위 깊이의 ", "는 math mode 안에서 좁게 붙어서, 한글 띄어쓰기 폭과
       // 맞지 않는다. 괄호/대괄호/중괄호 밖 `, `는 math를 빠져나와 text mode
       // 콤마+공백으로 렌더한 뒤 다시 math 로 진입한다. (`x, y` → `$x$, $y$`)
@@ -1053,14 +882,14 @@ function smartTexLineCore(text, equations, options = {}) {
         .map((chunk) => `$\\displaystyle ${symmetrizeTallMathChunk(chunk)}$`)
         .join(', ');
       accumulatedVisualLength += visualLength(math);
-      return `${leadSp}${addBreakAroundMath ? '\\allowbreak{}' : ''}${addVisualLinePad ? '\\mtvisuallinetallpad{}' : ''}${rendered}${trailSp}`;
+      return `${leadSp}${addVisualLinePad ? '\\mtvisuallinetallpad{}' : ''}${rendered}${trailSp}`;
     })
     .join('');
 
   if (prefix) {
-    return protectedText.restore(protectedBoxes.restore(protectedSetBuilders.restore(`$\\displaystyle ${prefix}$${result}`)));
+    return protectedText.restore(protectedBoxes.restore(`$\\displaystyle ${prefix}$${result}`));
   }
-  return protectedText.restore(protectedBoxes.restore(protectedSetBuilders.restore(result)));
+  return protectedText.restore(protectedBoxes.restore(result));
 }
 
 /**
@@ -1120,8 +949,8 @@ function splitByMathLineBreakMarkers(input) {
   return out.filter((part) => part.text.trim() || part.align !== null);
 }
 
-function renderMathLineBreakContinuation(text, align, equations, texOptions = {}) {
-  const body = smartTexLine(text, equations, texOptions);
+function renderMathLineBreakContinuation(text, align, equations) {
+  const body = smartTexLine(text, equations);
   if (!body.trim()) return '';
   if (align === 'center') return `\\noindent\\makebox[\\linewidth][c]{${body}}\\par`;
   if (align === 'left') return `\\noindent ${body}\\par`;
@@ -1132,7 +961,7 @@ function renderBoxMathLineBreakLine(text, equations, labelTex = '') {
   const pieces = splitByMathLineBreakMarkers(text);
   if (pieces.length <= 1) return '';
   const lines = [];
-  const firstTex = smartTexLine(pieces[0].text, equations, BOX_TEX_OPTIONS);
+  const firstTex = smartTexLine(pieces[0].text, equations);
   if (firstTex.trim()) {
     if (labelTex) {
       lines.push(
@@ -1147,7 +976,6 @@ function renderBoxMathLineBreakLine(text, equations, labelTex = '') {
       pieces[idx].text,
       pieces[idx].align || 'right',
       equations,
-      BOX_TEX_OPTIONS,
     );
     if (rendered) lines.push(rendered);
   }
@@ -1175,7 +1003,7 @@ function renderDisplayMathStemLine(sub, equations, firstPrefix = '') {
   const body = smartTexLine(source, equations);
   if (!body.trim()) return '';
   const prefix = firstPrefix ? `${firstPrefix}\\hspace*{0.4em}` : '';
-  return `{\\setstretch{1.53}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=0.6em\\par\\vspace{0.38\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.38\\baselineskip}}`;
+  return `{\\setstretch{2.30}\\lineskiplimit=0.55em\\lineskip=0.85em\\par\\vspace{0.16\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.16\\baselineskip}}`;
 }
 
 function renderDisplayMathStemBlock(lines, equations) {
@@ -1198,38 +1026,6 @@ function texHasTallInlineMath(tex) {
   const value = String(tex || '');
   return /\\(?:dfrac|frac|tfrac|over|sqrt|mtsqrtpad|mtsymmathbox|mtlinesymbox|sum|prod|int|iint|iiint)\b/.test(value)
     || /\\begin\{(?:cases|array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}/.test(value);
-}
-
-function boxMathVisualCenterMacroLines() {
-  const boxFrac = (orig) => '\\mathchoice'
-    + `{\\raisebox{-0.07em}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle\\${orig}{\\,##1\\,}{\\,##2\\,}$}}`
-    + `{\\raisebox{-0.06em}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle\\${orig}{\\,##1\\,}{\\,##2\\,}$}}`
-    + `{\\raisebox{-0.04em}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle\\${orig}{\\,##1\\,}{\\,##2\\,}$}}`
-    + `{\\raisebox{-0.03em}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle\\${orig}{\\,##1\\,}{\\,##2\\,}$}}`;
-  return [
-    '\\newcommand{\\YggBoxMathVisualCenter}{%',
-    '  \\ifcsname origdfrac\\endcsname\\let\\YggBoxOrigDfrac\\origdfrac\\else\\let\\YggBoxOrigDfrac\\dfrac\\fi%',
-    '  \\ifcsname origfrac\\endcsname\\let\\YggBoxOrigFrac\\origfrac\\else\\let\\YggBoxOrigFrac\\frac\\fi%',
-    '  \\ifcsname origtfrac\\endcsname\\let\\YggBoxOrigTfrac\\origtfrac\\else\\let\\YggBoxOrigTfrac\\tfrac\\fi%',
-    `  \\renewcommand{\\dfrac}[2]{${boxFrac('YggBoxOrigDfrac')}}%`,
-    `  \\renewcommand{\\frac}[2]{${boxFrac('YggBoxOrigFrac')}}%`,
-    `  \\renewcommand{\\tfrac}[2]{${boxFrac('YggBoxOrigTfrac')}}%`,
-    '}',
-  ];
-}
-
-function setBuilderMacroLines() {
-  return [
-    '\\newcommand{\\YggSetBuilder}[2]{\\left\\{\\,#1\\;\\middle|\\;#2\\,\\right\\}}',
-  ];
-}
-
-function visualCenterMacroLines() {
-  return [
-    '\\newcommand{\\YggVisualCenterBox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\dimen2=\\dimexpr 0.5\\dp0-0.5\\ht0\\relax\\raisebox{\\dimen2}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
-    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\YggVisualCenterBox{$\\displaystyle #1$}}{\\YggVisualCenterBox{$\\textstyle #1$}}{\\YggVisualCenterBox{$\\scriptstyle #1$}}{\\YggVisualCenterBox{$\\scriptscriptstyle #1$}}}',
-    '\\newcommand{\\mtlinesymbox}[1]{\\YggVisualCenterBox{#1}}',
-  ];
 }
 
 /**
@@ -1653,16 +1449,6 @@ function parseStemSegments(stem, stemLineAligns = []) {
 /*  Box rendering: tcolorbox environments                              */
 /* ------------------------------------------------------------------ */
 
-const BOX_TEX_OPTIONS = {
-  visualLineTallMathPad: true,
-  visualLineTallMathPadMinPrefix: 0,
-  allowBreakAroundMath: true,
-};
-
-function boxTallLineTopPad(contentTex) {
-  return texHasTallInlineMath(contentTex) ? '\\vspace{0.16\\baselineskip}\n' : '';
-}
-
 function flattenBoxParagraphLines(lines, { stripBogi = false } = {}) {
   const out = [];
   for (const l of lines) {
@@ -1715,9 +1501,8 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
         if (manual.trim()) rendered.push(manual);
         continue;
       }
-      const contentTex = smartTexLine(text, equations, BOX_TEX_OPTIONS);
       rendered.push(
-        `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${contentTex}\\par}`,
+        `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${smartTexLine(text, equations)}\\par}`,
       );
     } else {
       if (withFigs.includes('[수식줄바꿈')) {
@@ -1725,8 +1510,8 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
         if (manual.trim()) rendered.push(manual);
         continue;
       }
-      const tex = smartTexLine(withFigs.trim(), equations, BOX_TEX_OPTIONS);
-      if (tex.trim()) rendered.push(`${boxTallLineTopPad(tex)}\\noindent ${tex}\\par`);
+      const tex = smartTexLine(withFigs.trim(), equations);
+      if (tex.trim()) rendered.push(`\\noindent ${tex}\\par`);
     }
   }
   return rendered.join('\n');
@@ -1809,13 +1594,12 @@ function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  left=8pt, right=8pt, top=12pt, bottom=12pt',
     ']',
     '\\setlength{\\parskip}{0pt}',
-    '\\setstretch{1.53}',
-    '\\lineskiplimit=0.4em\\lineskip=0.6em',
+    // lineskip/lineskiplimit 을 em 기반으로 지정해 폰트 크기에 비례 확장되도록 한다.
+    //   \dfrac 포함 줄의 추가 수직 간격은 \lineskip 에 의해 결정되며, 폰트가 클수록 간격도 커진다.
+    '\\lineskiplimit=0.4em\\lineskip=1.2em',
     // 〈보 기〉 타이틀이 윗변에 걸쳐 있으므로, 첫 항목과의 수직 간격을 미세하게 더 확보.
     '\\vspace*{2pt}',
-    '{\\YggBoxMathVisualCenter',
     content,
-    '}',
     '\\end{tcolorbox}',
   ].join('\n');
 }
@@ -1833,7 +1617,7 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
       if (/\\includegraphics/.test(seg)) {
         lines.push(seg.trim());
       } else {
-        const tex = smartTexLine(seg.trim(), equations, BOX_TEX_OPTIONS);
+        const tex = smartTexLine(seg.trim(), equations);
         if (tex.trim()) lines.push(`\\noindent ${tex}`);
       }
     }
@@ -1850,8 +1634,8 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
     if (rest.includes('[수식줄바꿈')) {
       return renderBoxMathLineBreakLine(rest, equations, labelFull);
     }
-    const content = smartTexLine(rest, equations, BOX_TEX_OPTIONS);
-    return `${boxTallLineTopPad(content)}{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${content}\\par}`;
+    const content = smartTexLine(rest, equations);
+    return `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${content}\\par}`;
   }
 
   // 대화형(이름 : 내용) 라인 처리.
@@ -1863,16 +1647,16 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
     const namePart = dialogueMatch[1].trim();
     const restPart = dialogueMatch[2];
     if (namePart) {
-      const nameTex = smartTexLine(namePart, equations, BOX_TEX_OPTIONS);
+      const nameTex = smartTexLine(namePart, equations);
       // "\ :\ " = 고정폭 공백 + 콜론 + 고정폭 공백. \hbox 내에서도 trailing space 손실 없이 폭이 보존됨.
       const labelTex = `${nameTex}\\ :\\ `;
       if (restPart.includes('[수식줄바꿈')) {
         return renderBoxMathLineBreakLine(restPart, equations, labelTex);
       }
-      const contentTex = smartTexLine(restPart, equations, BOX_TEX_OPTIONS);
+      const contentTex = smartTexLine(restPart, equations);
       // \makebox[\wd0][l] 로 레이블 영역의 실제 폭을 고정 → 1행 content 의 좌측선과
       // hangindent 에 따른 2행+ 좌측선이 정확히 일치하도록 보장한다.
-      return `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
+      return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
     }
   }
 
@@ -1880,7 +1664,7 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
     return renderBoxMathLineBreakLine(withFigs, equations);
   }
 
-  return smartTexLine(withFigs, equations, BOX_TEX_OPTIONS);
+  return smartTexLine(withFigs, equations);
 }
 
 // 박스(보기/조건) 내용에 "정렬 힌트가 될 만한 글자" — 한글 낱자(문장부호 제외), ㄱㄴㄷ 라벨,
@@ -1923,9 +1707,9 @@ function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) 
   const withFigs = replaceFigureMarkers
     ? replaceFigureMarkers(stripped)
     : stripped;
-  const contentTex = smartTexLine(withFigs, equations, BOX_TEX_OPTIONS);
+  const contentTex = smartTexLine(withFigs, equations);
   const labelTex = symbolLabelTex(symbol);
-  return `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
+  return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
 }
 
 function decoSectionLabelTex(rawLine) {
@@ -1953,9 +1737,9 @@ function renderDecoContinuationLine(
   if (withFigs.includes('[수식줄바꿈')) {
     return renderBoxMathLineBreakLine(withFigs, equations, labelTex);
   }
-  const contentTex = smartTexLine(withFigs, equations, BOX_TEX_OPTIONS);
+  const contentTex = smartTexLine(withFigs, equations);
   if (!contentTex.trim()) return '';
-  return `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelTex}}\\leftskip=\\wd0\\relax\\noindent ${contentTex}\\par}`;
+  return `{\\setbox0=\\hbox{${labelTex}}\\leftskip=\\wd0\\relax\\noindent ${contentTex}\\par}`;
 }
 
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
@@ -2042,11 +1826,9 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  before skip=0pt, after skip=0pt',
     ']',
     '\\setlength{\\parskip}{0pt}',
-    '\\setstretch{1.53}',
-    '\\lineskiplimit=0.4em\\lineskip=0.6em',
-    '{\\YggBoxMathVisualCenter',
+    // lineskip/lineskiplimit 을 em 기반으로 지정 (폰트 크기에 비례).
+    '\\lineskiplimit=0.27em\\lineskip=0.86em',
     contentParts.join('\n'),
-    '}',
     '\\end{tcolorbox}',
   ].join('\n');
 }
@@ -2769,7 +2551,6 @@ function buildPreamble({
   academyLogoPath = '',
   academyName = '',
   titlePageTopText = '',
-  pairAnchorSupport = false,
 }) {
   const isAssignmentForGeometry = profile === 'assignment';
   const geom = geometryOverride || (isAssignmentForGeometry
@@ -2861,9 +2642,8 @@ function buildPreamble({
   lines.push(`\\renewcommand{\\frac}[2]{${symFrac('origfrac')}}`);
   lines.push('\\let\\origtfrac\\tfrac');
   lines.push(`\\renewcommand{\\tfrac}[2]{${symFrac('origtfrac')}}`);
-  lines.push(...boxMathVisualCenterMacroLines());
-  lines.push(...setBuilderMacroLines());
-  lines.push(...visualCenterMacroLines());
+  lines.push('\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}');
+  lines.push('\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}');
   lines.push('\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}');
   lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
@@ -2916,14 +2696,6 @@ function buildPreamble({
   //   가용성 보장). 특정 페이지(제목페이지) 의 overlay 분기 플래그를
   //   shipout 타이밍에 세팅/리셋하는 데 사용.
   lines.push('\\usepackage{atbegshi}');
-  if (pairAnchorSupport) {
-    lines.push('\\usepackage{zref-savepos}');
-    lines.push('\\newcommand{\\YggPairAnchor}[1]{\\zsavepos{#1}}');
-    lines.push('\\newcommand{\\YggPairAnchorOffset}[1]{\\ifdim#1pt>0pt\\relax\\kern#1pt\\relax\\fi}');
-  } else {
-    lines.push('\\newcommand{\\YggPairAnchor}[1]{}');
-    lines.push('\\newcommand{\\YggPairAnchorOffset}[1]{}');
-  }
   lines.push('');
   lines.push(mainDirective);
   lines.push(hangulDirective);
@@ -3165,10 +2937,8 @@ function buildPreamble({
     // 사용자 요청 22차: 부제("2026학년도 …") 의 숫자 '2026' 이 한글과 다른 instance 로
     //   분기되는 이질감 제거를 위해 `\YggWithUnifiedDigits` 래퍼로 감싼다. 래퍼는 지역 scope
     //   에서만 0-9 의 charclass 를 HG 로 바꿨다가 즉시 원복하므로 본문 숫자에는 영향 없음.
-    lines.push('      \\ifx\\mockTitlePageSubtitle\\empty\\else%');
     lines.push(`      \\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{\\the\\dimexpr ${titleTopScale}\\mockTitleTopFontSize\\relax}{\\the\\dimexpr ${titleTopScale}\\mockTitleTopLead\\relax}`
       + '\\selectfont\\mockTitlePageSubtitle}}\\\\[15.21pt]%');
-    lines.push('      \\fi%');
     // 사용자 요청 23차: 제목페이지 메인 타이틀(기본 "수학 영역") 에 숫자가 올 수 있으므로
     //   `\YggWithUnifiedDigits` 로 감싸 한글-숫자 instance 통일. 래퍼 범위는 이 한 줄.
     // 사용자 요청 24차: `\bfseries` + 22pt ↑ 환경에서 한글 어간격이 시각적으로 좁아 보이는
@@ -3706,9 +3476,6 @@ function renderOneQuestion(question, {
   layoutColumns = 1,
   aboveNumberFontPtOverride = null,
   inlineNumberFontPtOverride = null,
-  pairAnchorId = '',
-  pairAnchorYOffsetPt = 0,
-  pairAnchorMeasure = false,
 } = {}) {
   if (question?.__render_kind === 'independent_set_group') {
     return renderIndependentSetGroupLatex(question, {
@@ -4283,21 +4050,6 @@ function renderOneQuestion(question, {
   //   - 라벨 박스 뒤에는 라벨-번호 시각적 간격을 위해 \vspace{10pt} 유지 (번호 라인만 내려감,
   //     라벨 자체의 top edge 는 그대로).
   const firstLineStrut = pairStrutMacro || '';
-  const safePairAnchorId = String(pairAnchorId || '').replace(/[^A-Za-z0-9_-]/g, '');
-  const safePairAnchorOffsetPt = Math.max(
-    0,
-    Math.min(48, Number.isFinite(Number(pairAnchorYOffsetPt)) ? Number(pairAnchorYOffsetPt) : 0),
-  );
-  const pairAnchorOffsetTex = safePairAnchorOffsetPt > 0
-    ? `\\YggPairAnchorOffset{${safePairAnchorOffsetPt.toFixed(3)}}`
-    : '';
-  const pairAnchorTex = pairAnchorMeasure && safePairAnchorId
-    ? `\\YggPairAnchor{${safePairAnchorId}}`
-    : '';
-  const pairAnchorFirstOffsetTex = sectionLabel ? pairAnchorOffsetTex : '';
-  const pairAnchorNumberOffsetTex = sectionLabel ? '' : pairAnchorOffsetTex;
-  const pairAnchorLabelTex = sectionLabel ? pairAnchorTex : '';
-  const pairAnchorNumberTex = sectionLabel ? '' : pairAnchorTex;
   if (sectionLabel) {
     const spaced = Array.from(String(sectionLabel)).map((c) => escapeLatexText(c)).join('\\,');
     // 10% 확대: 폰트 13.2pt(약 \large 의 1.1배), fboxsep 4.4pt, 좌우 \hspace 13.2pt, fboxrule 0.55pt.
@@ -4325,14 +4077,14 @@ function renderOneQuestion(question, {
     //   - 라벨박스 ↔ 문항번호 간격 (\vspace) 은 10pt → 7pt (30% 축소) 유지.
     const labelBox = `\\raisebox{0pt}[\\dimexpr\\height-2.3pt\\relax][\\depth]{${labelBoxInner}}`;
     parts.push(
-      `${pairAnchorFirstOffsetTex}\\noindent\\hspace{-1em}${pairAnchorLabelTex}${labelBox}\\par`,
+      `\\noindent\\hspace{-1em}${labelBox}\\par`,
       '\\vspace{7pt}',
     );
   }
 
   if (numberAbove && qNumDisplay) {
     parts.push(
-      `${pairAnchorNumberOffsetTex}\\noindent${pairAnchorNumberTex}{\\fontsize{${aboveNumberFontPt}pt}{${aboveNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}}\\par\\nobreak\\vspace{0.2pt}`,
+      `\\noindent{\\fontsize{${aboveNumberFontPt}pt}{${aboveNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}}\\par\\nobreak\\vspace{0.2pt}`,
     );
   } else if (showQuestionNumber && qNum) {
     // 라벨이 있으면 문항번호는 "두 번째 라인" → 이미 라벨 박스가 라인 ht 결정.
@@ -4344,10 +4096,10 @@ function renderOneQuestion(question, {
       inlineNumberFontPtOverride,
     });
     parts.push(
-      `${pairAnchorNumberOffsetTex}\\noindent\\hspace{-1em}${pairAnchorNumberTex}${strut}${inlineNumberTex}\\enspace`,
+      `\\noindent\\hspace{-1em}${strut}${inlineNumberTex}\\enspace`,
     );
   } else if (!sectionLabel && firstLineStrut) {
-    parts.push(`${pairAnchorNumberOffsetTex}\\noindent${pairAnchorNumberTex}${firstLineStrut}`);
+    parts.push(`\\noindent${firstLineStrut}`);
   }
 
   // 점수 표기는 더 이상 문항번호 뒤에 두지 않고 "stem 의 마지막 라인 끝" 에 붙인다.
@@ -4959,11 +4711,10 @@ export function buildTexSource(question, options = {}) {
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
-    ...visualCenterMacroLines(),
+    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
+    '\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
     '\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
-    ...boxMathVisualCenterMacroLines(),
-    ...setBuilderMacroLines(),
     '',
     `\\setmainfont{${fontFamily}}[`,
     `  BoldFont = ${fontBold},`,
@@ -5103,11 +4854,10 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
-    ...visualCenterMacroLines(),
+    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle #1$}}{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle #1$}}}',
+    '\\newcommand{\\mtlinesymbox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\raisebox{0pt}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
     '\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}',
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
-    ...boxMathVisualCenterMacroLines(),
-    ...setBuilderMacroLines(),
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
     hangulFontDirective(fontRegularPath, fontFamily, fontBold),
@@ -5365,9 +5115,6 @@ function renderMockSlotColumnBody(
     pairStrutMacros = [],          // \vphantom 스니펫 — 라벨 없는 slot 의 첫 hbox ht 동기화
     pairLabelStrutMacros = [],     // (deprecated) 과거 라벨 전용 strut
     topPadsPt = [],                // row 별 공통 상단 padding (pt). 짝 slot 과 동일 값이어야 함.
-    pairAnchorIds = [],
-    pairAnchorOffsetsPt = [],
-    pairAnchorMeasure = false,
     // 슬롯 개별 높이 표현식(LaTeX dimen 식 또는 길이 매크로). 길이는 slotCount 와 동일.
     // 지정되지 않은(또는 falsy) 원소는 slotHeightMacro 로 폴백.
     perSlotHeightExprs = [],
@@ -5395,9 +5142,6 @@ function renderMockSlotColumnBody(
         pairLabelStrutMacro: pairLabelStrutMacros[i] || null,
         topPadPt: Number(topPadsPt[i] || 0),
         layoutColumns: 2,
-        pairAnchorId: pairAnchorIds[i] || '',
-        pairAnchorYOffsetPt: Number(pairAnchorOffsetsPt[i] || 0),
-        pairAnchorMeasure,
       }));
     } else {
       lines.push('\\vspace*{0.6\\baselineskip}');
@@ -5523,9 +5267,6 @@ function renderMockGridPageLatex(
     sectionLabels = [],
     // 페이지 고유 prefix — 여러 페이지에서 중복되지 않는 LaTeX 매크로 이름을 만들기 위해.
     pageMacroPrefix = 'A',
-    pairAnchorMeasure = false,
-    pairAnchorOffsets = null,
-    pairAnchor2Pass = false,
   },
 ) {
   const safeLeftSlots = Math.max(1, Number(leftSlots || 1));
@@ -5565,10 +5306,6 @@ function renderMockGridPageLatex(
   const rightLabelStrutMacros = [];
   const leftTopPadsPt = [];
   const rightTopPadsPt = [];
-  const leftPairAnchorIds = [];
-  const rightPairAnchorIds = [];
-  const leftPairAnchorOffsetsPt = [];
-  const rightPairAnchorOffsetsPt = [];
   const pairProbePrelude = [];
   // 라벨 박스 probe — 실제 렌더 스타일과 1:1 동일해야 ht/dp 가 맞는다.
   //   사용자 요청 22차: 실제 labelBoxInner 와 똑같이 `\YggWithUnifiedDigits` 를 적용해야
@@ -5592,12 +5329,6 @@ function renderMockGridPageLatex(
     const labelR = rightLabels[r] || '';
     const qL = leftQuestions[r];
     const qR = rightQuestions[r];
-    const anchorL = `pair-${pageMacroPrefix}-${r}-L`;
-    const anchorR = `pair-${pageMacroPrefix}-${r}-R`;
-    leftPairAnchorIds.push(qL ? anchorL : '');
-    rightPairAnchorIds.push(qR ? anchorR : '');
-    leftPairAnchorOffsetsPt.push(pairAnchorOffsets && qL ? Number(pairAnchorOffsets[anchorL] || 0) : 0);
-    rightPairAnchorOffsetsPt.push(pairAnchorOffsets && qR ? Number(pairAnchorOffsets[anchorR] || 0) : 0);
 
     // --- case 1: row 에 라벨이 하나라도 있음 ---
     //
@@ -5622,8 +5353,8 @@ function renderMockGridPageLatex(
         `\\expandafter\\gdef\\csname ${macroName}\\endcsname{${buildLabelProbe(probeText)}}%`,
       );
       const strutSnippet = `\\raisebox{0pt}[\\dimexpr\\height-2.3pt\\relax][\\depth]{\\vphantom{\\csname ${macroName}\\endcsname}}`;
-      leftStrutMacros.push(pairAnchor2Pass ? '' : (labelL ? '' : strutSnippet));
-      rightStrutMacros.push(pairAnchor2Pass ? '' : (labelR ? '' : strutSnippet));
+      leftStrutMacros.push(labelL ? '' : strutSnippet);
+      rightStrutMacros.push(labelR ? '' : strutSnippet);
       leftLabelStrutMacros.push(null);
       rightLabelStrutMacros.push(null);
       leftTopPadsPt.push(LABEL_ROW_TOP_PAD_PT);
@@ -5654,9 +5385,7 @@ function renderMockGridPageLatex(
       `\\expandafter\\gdef\\csname ${macroL}\\endcsname{${probeL}}%`,
       `\\expandafter\\gdef\\csname ${macroR}\\endcsname{${probeR}}%`,
     );
-    const strutSnippet = pairAnchor2Pass
-      ? ''
-      : `{\\setbox0=\\hbox{\\csname ${macroL}\\endcsname\\csname ${macroR}\\endcsname}\\rule{0pt}{\\ht0}}`;
+    const strutSnippet = `{\\setbox0=\\hbox{\\csname ${macroL}\\endcsname\\csname ${macroR}\\endcsname}\\rule{0pt}{\\ht0}}`;
     leftStrutMacros.push(strutSnippet);
     rightStrutMacros.push(strutSnippet);
     leftLabelStrutMacros.push(null);
@@ -5698,9 +5427,6 @@ function renderMockGridPageLatex(
       pairStrutMacros: leftStrutMacros,
       pairLabelStrutMacros: leftLabelStrutMacros,
       topPadsPt: leftTopPadsPt,
-      pairAnchorIds: leftPairAnchorIds,
-      pairAnchorOffsetsPt: leftPairAnchorOffsetsPt,
-      pairAnchorMeasure,
       perSlotHeightExprs: leftPerSlotHeights,
     }),
     '\\end{minipage}',
@@ -5718,9 +5444,6 @@ function renderMockGridPageLatex(
       pairStrutMacros: rightStrutMacros,
       pairLabelStrutMacros: rightLabelStrutMacros,
       topPadsPt: rightTopPadsPt,
-      pairAnchorIds: rightPairAnchorIds,
-      pairAnchorOffsetsPt: rightPairAnchorOffsetsPt,
-      pairAnchorMeasure,
       perSlotHeightExprs: rightPerSlotHeights,
     }),
     '\\end{minipage}',
@@ -6357,9 +6080,6 @@ export function buildDocumentTexSource(questions, options = {}) {
     //   true 이면 모드 전환 기반 자동 라벨 생성(예: '5지선다형') 을 전면 중단하고,
     //   columnLabelAnchors 에 들어있는 항목들만 그대로 사용한다.
     disableAutoLabels = false,
-    pairAnchorMeasure = false,
-    pairAnchorOffsets = null,
-    pairAnchor2Pass = false,
     layoutMeta = null,
   } = options;
 
@@ -6382,7 +6102,6 @@ export function buildDocumentTexSource(questions, options = {}) {
     academyLogoPath,
     academyName,
     titlePageTopText,
-    pairAnchorSupport: pairAnchorMeasure || pairAnchor2Pass,
   });
 
   const parts = [preamble];
@@ -6743,9 +6462,6 @@ export function buildDocumentTexSource(questions, options = {}) {
           titleHeader,
           sectionLabels: pageLabels,
           pageMacroPrefix: toPageMacroPrefix(i),
-          pairAnchorMeasure,
-          pairAnchorOffsets,
-          pairAnchor2Pass,
         }),
       );
       parts.push('\n');
