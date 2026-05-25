@@ -60,7 +60,7 @@ const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
 const String kLearningRenderConfigVersion =
-    'pb_render_v96_math_visual_center_box_gap';
+    'pb_render_v104_par_first_pad_skip';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({

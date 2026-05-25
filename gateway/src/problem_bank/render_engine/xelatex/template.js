@@ -674,7 +674,8 @@ function normalizeMathSegment(mathContent) {
     braceYScale: 0.76,
     braceGap: '\\hspace{0.33em}',
     rowGap: '0em',
-    arrayStretch: '0.88',
+    // v98: cases 의 행간을 50% 더 넓힘 (이전 0.88 → 1.32).
+    arrayStretch: '1.32',
   });
   out = padSqrtFractionContent(out);
 
@@ -684,10 +685,18 @@ function normalizeMathSegment(mathContent) {
 function shouldSymmetrizeTallMathChunk(mathContent) {
   const src = String(mathContent || '');
   if (!src || src.includes('\\mtsymmathbox')) return false;
+  // 큰 수식(분수/극한/시그마/적분/루트/array/큰 집합 묶음 등)이 inline math 에
+  // 들어가면 자연 ht/dp 가 비대칭이라 줄 위/아래 간격이 어긋난다. 해당 chunk 를
+  // `\mtsymmathbox` 로 감싸 math axis 중심으로 ht=dp 정규화한다.
+  // `\b` 는 `_` 를 word char 로 보기 때문에 `\lim_{...}` 같은 subscript 직결 형태가
+  // 매치되지 않는다. → letter 만 boundary 로 인정하는 `(?![A-Za-z])` 사용.
   return (
-    /\\sqrt\b/.test(src) ||
+    /\\sqrt(?![A-Za-z])/.test(src) ||
     /\\left\\\{/.test(src) ||
-    /\\begin\{array\}/.test(src)
+    /\\begin\{array\}/.test(src) ||
+    /\\(?:dfrac|frac|tfrac|cfrac|binom|dbinom|tbinom)(?![A-Za-z])/.test(src) ||
+    /\\(?:lim|sum|prod|int|oint|iint|iiint|bigcup|bigcap|bigvee|bigwedge)(?![A-Za-z])/.test(src) ||
+    /\\(?:overbrace|underbrace)(?![A-Za-z])/.test(src)
   );
 }
 
@@ -976,7 +985,14 @@ function normalizeLiteralEscapedNewlines(input) {
   return out.replace(/[ \t]{2,}/g, ' ');
 }
 
-const VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX = 34;
+// 줄 내에 큰 수식(분수/√/lim/Σ 등)이 나타나면 위·아래에 vskip 을 추가하는 마커
+// `\mtvisuallinetallpad` 를 삽입한다. 과거에는 "수식 앞 텍스트가 34글자 이상" 일
+// 때만 삽입했지만 (페이지 첫 줄에 짧은 수식이 등장할 때 위로 튀는 것을 막기 위해),
+// 이로 인해 Q2 (= 수식이 줄 맨앞에 오는 경우)에서 패딩이 누락되어 [수식제시] 줄과
+// 비교했을 때 비대칭으로 보이는 문제가 발생했다. → 0 으로 낮춰서 줄 위치에
+// 상관없이 같은 규칙이 적용되도록 한다. (한 줄 내 중복 emit 은 아래 padEmitted
+// 플래그로 1회로 제한.)
+const VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX = 0;
 
 function smartTexLineCore(text, equations, options = {}) {
   // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
@@ -1025,6 +1041,9 @@ function smartTexLineCore(text, equations, options = {}) {
     : VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX;
   const allowBreakAroundMath = options?.allowBreakAroundMath === true;
   let accumulatedVisualLength = 0;
+  // 한 줄(=smartTexLineCore 1회 호출) 내에서 \mtvisuallinetallpad 는 단 한 번만
+  // emit. (여러 번 emit 되면 \vadjust pre/post 가 누적되어 패딩이 배가됨.)
+  let padEmittedThisLine = false;
   const result = parts
     .map((seg) => {
       if (seg.type === 'text') {
@@ -1042,8 +1061,10 @@ function smartTexLineCore(text, equations, options = {}) {
       math = applyEquationLookup(math, lookup);
       math = normalizeMathSegment(math);
       const addVisualLinePad = enableVisualLineTallMathPad
+        && !padEmittedThisLine
         && accumulatedVisualLength >= visualLineTallMathPadMinPrefix
         && texHasTallInlineMath(math);
+      if (addVisualLinePad) padEmittedThisLine = true;
       const addBreakAroundMath = allowBreakAroundMath && accumulatedVisualLength > 0;
       // 최상위 깊이의 ", "는 math mode 안에서 좁게 붙어서, 한글 띄어쓰기 폭과
       // 맞지 않는다. 괄호/대괄호/중괄호 밖 `, `는 math를 빠져나와 text mode
@@ -1175,7 +1196,23 @@ function renderDisplayMathStemLine(sub, equations, firstPrefix = '') {
   const body = smartTexLine(source, equations);
   if (!body.trim()) return '';
   const prefix = firstPrefix ? `${firstPrefix}\\hspace*{0.4em}` : '';
-  return `{\\setstretch{1.53}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=0.6em\\par\\vspace{0.38\\baselineskip}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\vspace{0.38\\baselineskip}}`;
+  // [Step 1+2+3] 시각적 위/아래 대칭 달성을 위한 토큰 구성.
+  //
+  //   Step 1 (\mtlinesymbox 의 phantom 정규화): 출력 hbox 의 ht=dp=M.
+  //   Step 2 (\prevdepth=0pt): \par 직후 prev_dp 를 0 으로 강제하여, 다음 vbox 가
+  //          paragraph 경계에서 받는 자동 baselineskip glue 의 prev_dp 의존성을 제거.
+  //          - 위 \par 뒤: prev=본문 마지막 라인 → math line 의 top auto-glue 가
+  //            본문 라인의 dp(=문자에 g/p/y 가 있냐 없냐) 와 무관해진다.
+  //          - 아래 \par 뒤: prev=math line → 다음 본문 라인의 top auto-glue 가
+  //            math line 의 dp 와 무관해진다.
+  //          ※ \nointerlineskip 과 달리 \prevdepth=0pt 는 명령 직후의 paragraph
+  //            경계에서만 효력이 있고 그 다음 paragraph 경계로 누설되지 않는다.
+  //   Step 3 (\YggDispMathBotPad): \mtlinesymbox 가 측정한 math line 의 정규화 ht=M
+  //          에 기반해 아래쪽 V_bot 을 동적으로 산출. 위쪽 자동 glue
+  //          = max(\baselineskip - M, \lineskip) 와, 아래쪽 자동 glue
+  //          = max(\baselineskip - 9pt[text_ht], \lineskip) 의 차이를 vspace 로
+  //          상쇄하여 시각적 대칭을 만든다.
+  return `\\par\\prevdepth=0pt\\nopagebreak\\vspace*{0.5em}\\noindent\\hspace*{2.55em}\\mtlinesymbox{${prefix}${body}}\\par\\prevdepth=0pt\\nopagebreak\\vspace*{\\YggDispMathBotPad}`;
 }
 
 function renderDisplayMathStemBlock(lines, equations) {
@@ -1214,6 +1251,13 @@ function boxMathVisualCenterMacroLines() {
     `  \\renewcommand{\\dfrac}[2]{${boxFrac('YggBoxOrigDfrac')}}%`,
     `  \\renewcommand{\\frac}[2]{${boxFrac('YggBoxOrigFrac')}}%`,
     `  \\renewcommand{\\tfrac}[2]{${boxFrac('YggBoxOrigTfrac')}}%`,
+    // 박스 내부에서는 \mtsymmathbox 의 ht/dp override 와 math-axis shift 를 끈다.
+    //   - 박스 안에서는 각 줄이 독립 paragraph 라 줄 높이 안정화가 필요 없고,
+    //     오히려 ht/dp override 가 글리프를 박스 위쪽으로 0.1em 정도 overflow 시켜
+    //     "큰 수식 줄 위쪽 vspace 가 시각적으로 잠식되어 비대칭" 문제가 생긴다.
+    //   - identity 로 두면 줄 높이 = 실제 글리프 ht/dp 가 되어, 위/아래 vspace 가
+    //     글리프 기준으로 동일하게 보인다.
+    '  \\renewcommand{\\mtsymmathbox}[1]{##1}%',
     '}',
   ];
 }
@@ -1224,11 +1268,92 @@ function setBuilderMacroLines() {
   ];
 }
 
+// 큰 수식 줄 위/아래 vskip(`\mtvisuallinetallpad`) 정의.
+//   - 기본 동작: 호출 위치를 둘러싼 줄의 위/아래에 0.5em vskip 을 동등하게 추가
+//                해 큰 수식 줄을 시각적으로 대칭 padding.
+//   - 짝슬롯 보호 예외:
+//       * `\vadjust pre {\vskip}` 가 paragraph 첫 줄에서 호출되면 paragraph
+//         baseline 자체가 vskip 만큼 minipage top 에서 떨어진다. minipage [t]
+//         의 reference baseline 도 같이 밀려서, 짝슬롯 두 쪽이 \hfill 로 묶일
+//         때 한쪽이 통째로 내려간 것처럼 보인다 (라벨/슬롯 시작 위치 어긋남).
+//       * 그래서 paragraph 안 *첫* `\mtvisuallinetallpad` 호출에서는 위/아래
+//         vskip 을 모두 생략한다. 그러면 paragraph baseline 이 안 밀려 짝슬롯
+//         정렬이 깨지지 않고, 동시에 위/아래 비대칭(위 좁고 아래 넓음)도 안
+//         생긴다 — 두 쪽 다 자연 lineskip 만 적용되어 좁지만 대칭이다.
+//       * 같은 paragraph 안의 둘째+ 호출은 paragraph baseline 에 영향을 주지
+//         않으므로 (해당 줄 위쪽 vskip 만 키움) 정상적으로 0.5em vskip 양쪽에
+//         추가한다.
+//   - `\everypar` 에 `\global\YggMtPadPendingtrue` 를 append 해 paragraph 진입
+//     시 flag 를 항상 다시 켠다 (\protected@edef 로 기존 \everypar 토큰을 보존).
+function visualLineTallMathPadMacroLines() {
+  return [
+    '\\newif\\ifYggMtPadPending',
+    '\\YggMtPadPendingtrue',
+    // LaTeX 2020+ 표준 hook API. \everypar 직접 확장은 다른 패키지의 catcode
+    // 약속(특히 listings 등의 \begin{document} hook)과 충돌해 "prefix with @"
+    // 에러를 일으킨다. `para/begin` hook 은 paragraph 시작 시점에 안전하게 발동.
+    '\\AddToHook{para/begin}{\\global\\YggMtPadPendingtrue}',
+    '\\newcommand{\\mtvisuallinetallpad}{%',
+    '  \\leavevmode',
+    '  \\ifYggMtPadPending',
+    '    \\global\\YggMtPadPendingfalse',
+    '  \\else',
+    '    \\vadjust pre{\\vskip0.5em}\\vadjust{\\vskip0.5em}%',
+    '  \\fi',
+    '}',
+  ];
+}
+
 function visualCenterMacroLines() {
   return [
-    '\\newcommand{\\YggVisualCenterBox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\dimen2=\\dimexpr 0.5\\dp0-0.5\\ht0\\relax\\raisebox{\\dimen2}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
-    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\YggVisualCenterBox{$\\displaystyle #1$}}{\\YggVisualCenterBox{$\\textstyle #1$}}{\\YggVisualCenterBox{$\\scriptstyle #1$}}{\\YggVisualCenterBox{$\\scriptscriptstyle #1$}}}',
-    '\\newcommand{\\mtlinesymbox}[1]{\\YggVisualCenterBox{#1}}',
+    // 디스플레이 수식 줄 측정용 sbox (preamble-only).
+    '\\newsavebox{\\YggDispMathBox}',
+    // V_bot 동적 vspace 값 (Step 3). \mtlinesymbox 가 매번 \xdef 로 갱신.
+    //   - 초기값 0.5em 은 \mtlinesymbox 가 호출되지 않은 경우 대비 default.
+    '\\newcommand{\\YggDispMathBotPad}{0.5em}',
+    // 인라인 수식용: ht/dp 를 (ht+dp)/2 로 override 해 줄 높이를 안정화하고,
+    //   math axis 만큼 위로 보정해 글리프의 시각 중심을 math axis 위치로 맞춘다.
+    //   - \fontdimen22\textfont2 = math axis height (텍스트 모드에서도 접근 가능).
+    '\\newcommand{\\YggInlineMathBox}[1]{\\begingroup\\setbox0=\\hbox{#1}\\dimen0=\\dimexpr 0.5\\ht0+0.5\\dp0\\relax\\dimen2=\\dimexpr 0.5\\dp0-0.5\\ht0+\\fontdimen22\\textfont2\\relax\\raisebox{\\dimen2}[\\dimen0][\\dimen0]{\\box0}\\endgroup}',
+    '\\newcommand{\\mtsymmathbox}[1]{\\mathchoice{\\YggInlineMathBox{$\\displaystyle #1$}}{\\YggInlineMathBox{$\\textstyle #1$}}{\\YggInlineMathBox{$\\scriptstyle #1$}}{\\YggInlineMathBox{$\\scriptscriptstyle #1$}}}',
+    // [Step 1+3] 디스플레이(수식제시) 줄용: vcenter axis 정렬 + ht=dp=M 정규화
+    //   + V_bot 동적 계산.
+    //
+    //   원리:
+    //   - paragraph 경계의 자동 baselineskip glue 는
+    //         max(\baselineskip - prev_dp - cur_ht, \lineskip)
+    //     이고, Step 2 의 \prevdepth=0pt 강제로 prev_dp=0 이 보장된다.
+    //   - 따라서 [수식제시] 줄 *위쪽* auto-glue   = max(\baselineskip - M, \lineskip)
+    //          [수식제시] 줄 *아래쪽* auto-glue = max(\baselineskip - 9pt, \lineskip)
+    //           (※ 9pt 는 일반 본문 한 줄의 ht 근사. CMR/Malgun Gothic 10pt 기준.)
+    //   - V_top = 0.5em 으로 고정하고 V_bot 을 아래와 같이 보정하면
+    //         total_top  = V_top + max(\baselineskip - M, \lineskip)
+    //         total_bot  = V_bot + max(\baselineskip - 9pt, \lineskip)
+    //     가 일치한다. → V_bot = V_top + max(\baselineskip-M, \lineskip) - max(\baselineskip-9pt, \lineskip).
+    //   - 단순 수식(M≈5pt): top auto-glue 크고 bottom 작음 → V_bot > V_top.
+    //     큰 수식(M≥\baselineskip): top auto-glue=lineskip, bottom 가변 → V_bot ≈ V_top - 5pt.
+    '\\newcommand{\\mtlinesymbox}[1]{%',
+    '  \\begingroup',
+    '  \\renewcommand{\\mtsymmathbox}[1]{##1}%',
+    '  \\setbox\\YggDispMathBox=\\hbox{$\\vcenter{\\hbox{#1}}$}%',
+    // \dimen@ 는 main tex 의 preamble 에서 @ 가 letter 가 아니므로(\makeatletter
+    // 미호출) 사용 불가 → "Missing number, treated as zero" 에러. \dimen0,2,4 만 사용.
+    '  \\ifdim\\ht\\YggDispMathBox>\\dp\\YggDispMathBox',
+    '    \\dimen0=\\ht\\YggDispMathBox',
+    '  \\else',
+    '    \\dimen0=\\dp\\YggDispMathBox',
+    '  \\fi',
+    '  \\dimen2=\\dimexpr\\baselineskip-\\dimen0\\relax',
+    '  \\ifdim\\dimen2<\\lineskip \\dimen2=\\lineskip\\fi',
+    '  \\dimen4=\\dimexpr\\baselineskip-9pt\\relax',
+    '  \\ifdim\\dimen4<\\lineskip \\dimen4=\\lineskip\\fi',
+    '  \\xdef\\YggDispMathBotPad{\\the\\dimexpr 0.5em + \\dimen2 - \\dimen4\\relax}%',
+    '  \\leavevmode',
+    '  \\hbox{\\rule[-\\dimen0]{0pt}{2\\dimen0}\\copy\\YggDispMathBox}%',
+    '  \\endgroup',
+    '}',
+    // 호환용: 외부에서 \YggVisualCenterBox 를 참조하는 경우를 대비해 기존 매크로 유지.
+    '\\newcommand{\\YggVisualCenterBox}[1]{\\YggInlineMathBox{#1}}',
   ];
 }
 
@@ -1254,7 +1379,8 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   //    일반 본문 행간까지 과도하게 늘어나지 않도록.)
   const STEM_STRETCH = '1.53';
   const allowTallMathTopPad = options?.allowTallMathTopPad === true;
-  const stemTexOptions = { visualLineTallMathPad: true };
+  const enableVisualLineTallMathPad = options?.visualLineTallMathPad !== false;
+  const stemTexOptions = { visualLineTallMathPad: enableVisualLineTallMathPad };
   const wrapStem = (inner, { tallMath = false } = {}) => {
     const tallMathTopPad = allowTallMathTopPad && tallMath
       ? '\\par\\vspace{0.10\\baselineskip}'
@@ -1654,13 +1780,32 @@ function parseStemSegments(stem, stemLineAligns = []) {
 /* ------------------------------------------------------------------ */
 
 const BOX_TEX_OPTIONS = {
-  visualLineTallMathPad: true,
+  // 박스 안에서는 인라인 \mtvisuallinetallpad 를 발생시키지 않는다.
+  // 대신 박스 라인 렌더 함수가 explicit \vspace 를 위/아래 동일하게 추가해
+  //   "큰 수식이 들어간 줄"의 시각 공백을 위/아래 대칭으로 만든다.
+  visualLineTallMathPad: false,
   visualLineTallMathPadMinPrefix: 0,
   allowBreakAroundMath: true,
 };
 
+// 박스 안에서 "큰 수식"이 들어간 라인 위/아래에 동일한 양의 explicit vspace 를
+// 추가하는 헬퍼. 위/아래 같은 값을 사용해 패딩이 반드시 대칭이 되도록 한다.
+const BOX_TALL_LINE_PAD_TEX = '\\vspace{0.18\\baselineskip}';
+
+function boxTallLinePad(contentTex) {
+  return texHasTallInlineMath(contentTex) ? BOX_TALL_LINE_PAD_TEX : '';
+}
+
+function wrapBoxLineWithTallPad(contentTex, inner) {
+  const pad = boxTallLinePad(contentTex);
+  if (!pad) return inner;
+  return `${pad}\n${inner}\n${pad}`;
+}
+
+// 하위 호환: 이전 호출부가 top-only 패딩을 기대하던 자리를 양쪽 패딩으로 교체했지만,
+// 일부 경로에서 여전히 top 만 호출할 가능성이 있어 보존한다. (현재는 wrap 으로 대체.)
 function boxTallLineTopPad(contentTex) {
-  return texHasTallInlineMath(contentTex) ? '\\vspace{0.16\\baselineskip}\n' : '';
+  return boxTallLinePad(contentTex) ? `${BOX_TALL_LINE_PAD_TEX}\n` : '';
 }
 
 function flattenBoxParagraphLines(lines, { stripBogi = false } = {}) {
@@ -1717,7 +1862,10 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
       }
       const contentTex = smartTexLine(text, equations, BOX_TEX_OPTIONS);
       rendered.push(
-        `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${contentTex}\\par}`,
+        wrapBoxLineWithTallPad(
+          contentTex,
+          `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${contentTex}\\par}`,
+        ),
       );
     } else {
       if (withFigs.includes('[수식줄바꿈')) {
@@ -1726,7 +1874,7 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
         continue;
       }
       const tex = smartTexLine(withFigs.trim(), equations, BOX_TEX_OPTIONS);
-      if (tex.trim()) rendered.push(`${boxTallLineTopPad(tex)}\\noindent ${tex}\\par`);
+      if (tex.trim()) rendered.push(wrapBoxLineWithTallPad(tex, `\\noindent ${tex}\\par`));
     }
   }
   return rendered.join('\n');
@@ -1851,7 +1999,10 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
       return renderBoxMathLineBreakLine(rest, equations, labelFull);
     }
     const content = smartTexLine(rest, equations, BOX_TEX_OPTIONS);
-    return `${boxTallLineTopPad(content)}{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${content}\\par}`;
+    return wrapBoxLineWithTallPad(
+      content,
+      `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${content}\\par}`,
+    );
   }
 
   // 대화형(이름 : 내용) 라인 처리.
@@ -1872,7 +2023,10 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
       const contentTex = smartTexLine(restPart, equations, BOX_TEX_OPTIONS);
       // \makebox[\wd0][l] 로 레이블 영역의 실제 폭을 고정 → 1행 content 의 좌측선과
       // hangindent 에 따른 2행+ 좌측선이 정확히 일치하도록 보장한다.
-      return `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
+      return wrapBoxLineWithTallPad(
+        contentTex,
+        `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`,
+      );
     }
   }
 
@@ -1925,7 +2079,10 @@ function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) 
     : stripped;
   const contentTex = smartTexLine(withFigs, equations, BOX_TEX_OPTIONS);
   const labelTex = symbolLabelTex(symbol);
-  return `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
+  return wrapBoxLineWithTallPad(
+    contentTex,
+    `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`,
+  );
 }
 
 function decoSectionLabelTex(rawLine) {
@@ -1955,7 +2112,10 @@ function renderDecoContinuationLine(
   }
   const contentTex = smartTexLine(withFigs, equations, BOX_TEX_OPTIONS);
   if (!contentTex.trim()) return '';
-  return `${boxTallLineTopPad(contentTex)}{\\setbox0=\\hbox{${labelTex}}\\leftskip=\\wd0\\relax\\noindent ${contentTex}\\par}`;
+  return wrapBoxLineWithTallPad(
+    contentTex,
+    `{\\setbox0=\\hbox{${labelTex}}\\leftskip=\\wd0\\relax\\noindent ${contentTex}\\par}`,
+  );
 }
 
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
@@ -2864,7 +3024,11 @@ function buildPreamble({
   lines.push(...boxMathVisualCenterMacroLines());
   lines.push(...setBuilderMacroLines());
   lines.push(...visualCenterMacroLines());
-  lines.push('\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}');
+  // 큰 수식이 포함된 인라인 행 위/아래 vskip(`\mtvisuallinetallpad`).
+  //   - 정의 본문은 visualLineTallMathPadMacroLines() 참조.
+  //   - 핵심: paragraph 안 *첫* 호출에서는 vskip 을 양쪽 모두 생략해 짝슬롯
+  //     첫 줄 baseline 이 안 밀리도록 보호한다. 둘째+ 호출은 0.5em 양쪽 vskip.
+  lines.push(...visualLineTallMathPadMacroLines());
   lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
   // 어절 중간에서 줄바꿈 금지: kotex 가 기본 설정한 ICU 한국어 줄바꿈 로케일을
@@ -2873,6 +3037,10 @@ function buildPreamble({
   lines.push('\\XeTeXlinebreakskip=0pt plus 0pt minus 0pt');
   // 자간(띄어쓰기 포함)은 항상 균일. 줄 끝에 공간이 남으면 \raggedright 로
   // 좌측 정렬한 채 비워둔다 (양쪽 정렬로 인한 공백 스트레칭 방지).
+  // 인라인 수식 내부에서 binary op(+,-,×,÷)/relation(=,<,>,≤,≥) 자리에서의
+  // 자동 줄바꿈을 전면 차단 → \{h(t)-2\}h(t-k) 같은 표현이 - 에서 끊기지 않는다.
+  lines.push('\\binoppenalty=10000');
+  lines.push('\\relpenalty=10000');
   lines.push('\\tolerance=9999');
   lines.push('\\emergencystretch=0pt');
   lines.push('\\usepackage{graphicx}');
@@ -4653,6 +4821,9 @@ function renderOneQuestion(question, {
             if (/\\includegraphics/.test(piece)) {
               parts.push(piece);
             } else {
+              // JS 의 "첫 텍스트 조각" 은 TeX 조판 후의 시각적 첫 줄이 아니다.
+              // 큰 수식 패딩은 항상 실제 렌더에 남기고, 짝슬롯 정렬은 2-pass anchor
+              // 좌표가 TeX 의 실제 줄 배치를 측정해서 보정하게 둔다.
               let rendered = renderStemTextLine(piece, equations, '', {
                 allowTallMathTopPad: emittedStemTextLineAny,
               });
@@ -4941,6 +5112,9 @@ export function buildTexSource(question, options = {}) {
     // 공백 폭을 절대 늘리지 않도록 tolerance/emergencystretch 를 0.
     '\\tolerance=9999',
     '\\emergencystretch=0pt',
+    // 인라인 수식 내부 binary op / relation 위치에서 자동 줄바꿈 차단.
+    '\\binoppenalty=10000',
+    '\\relpenalty=10000',
     '\\usepackage{graphicx}',
     '\\usepackage{wrapfig}',
     // adjustbox: \includegraphics 에 'max width' 같은 확장 키 사용.
@@ -4960,7 +5134,7 @@ export function buildTexSource(question, options = {}) {
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     ...visualCenterMacroLines(),
-    '\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}',
+    ...visualLineTallMathPadMacroLines(),
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
@@ -5093,6 +5267,9 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\XeTeXlinebreakskip=0pt plus 0pt minus 0pt',
     '\\tolerance=9999',
     '\\emergencystretch=0pt',
+    // 인라인 수식 내부 binary op / relation 위치에서 자동 줄바꿈 차단.
+    '\\binoppenalty=10000',
+    '\\relpenalty=10000',
     '\\usepackage{xcolor}',
     '\\usepackage{graphicx}',
     '\\usepackage{wrapfig}',
@@ -5104,7 +5281,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     ...visualCenterMacroLines(),
-    '\\newcommand{\\mtvisuallinetallpad}{\\vadjust pre{\\vskip0.16\\baselineskip}}',
+    ...visualLineTallMathPadMacroLines(),
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
@@ -5726,9 +5903,20 @@ function renderMockGridPageLatex(
     '\\end{minipage}',
   ].join('\n');
 
-  // --- 제목 페이지 경로: outer minipage(\linewidth × \textheight) 안에 헤더 + 좌/우 minipage. ---
+  // --- 제목 페이지 경로: outer minipage 안에 좌/우 minipage. ---
   // outer minipage 는 자기 높이가 고정이므로 중간에 페이지 breaker 가 끼어들지 않는다.
-  // 좌/우 minipage 높이는 outer 안에서 남은 공간(= \textheight - 헤더 박스 \ht+\dp - 여유) 로 계산.
+  //
+  // 주의:
+  //   outer 높이를 \textheight 로 잡으면, TeX page builder 입장에서는 minipage 한 줄의
+  //   line/depth/parskip 까지 더해져 첫 페이지가 약 5~6pt 초과할 수 있다. 이 경우 제목
+  //   fancyhdr/overlay 만 1페이지에 shipout 되고 실제 문항 minipage 는 2페이지로 밀린다.
+  //
+  // 해결:
+  //   슬롯 배치 기준인 \mockColumnHeight 는 기존과 동일하게 \textheight-8pt 로 유지하고,
+  //   outer minipage 높이도 같은 \mockColumnHeight 로 맞춘다. 그러면:
+  //   - 슬롯 시작 y 좌표: 변화 없음 (본문 top 에서 바로 시작)
+  //   - 상/하단 overlay 선 좌표: 변화 없음 (shipout overlay 는 \textheight/geometry 기반)
+  //   - 페이지 빌더가 보는 unbreakable box 높이만 8pt 감소 → 첫 페이지 밀림 방지
   if (titleHeader) {
     // 사용자 요청(5차): 제목페이지 타이틀/부제를 fancyhdr 의 `[C]` parbox[b] 로 이관.
     //   - 제목페이지 전용 `\newgeometry{...,headheight=72pt,headsep=14pt,...}` (호출부에서 적용).
@@ -5742,9 +5930,9 @@ function renderMockGridPageLatex(
       '\\begingroup',
       '\\setlength{\\mockSlotGap}{8pt}',
       '\\global\\setlength{\\mockHeaderBoxHeight}{0pt}%',
-      '\\noindent\\begin{minipage}[t][\\textheight][t]{\\linewidth}',
       '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-8pt\\relax}',
       '\\ifdim\\mockColumnHeight<180pt\\setlength{\\mockColumnHeight}{180pt}\\fi',
+      '\\noindent\\begin{minipage}[t][\\mockColumnHeight][t]{\\linewidth}',
       `\\setlength{\\mockLeftSlotHeight}{\\dimexpr(\\mockColumnHeight-${leftGapExpr})/${safeLeftSlots}\\relax}`,
       `\\setlength{\\mockRightSlotHeight}{\\dimexpr(\\mockColumnHeight-${rightGapExpr})/${safeRightSlots}\\relax}`,
       buildColumnsBlock('\\mockColumnHeight', '\\mockLeftSlotHeight', '\\mockRightSlotHeight'),

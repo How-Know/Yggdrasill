@@ -1377,10 +1377,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   void _setVisibleQuestionsMode(String mode) {
     final visible = _visibleQuestions;
-    if (visible.isEmpty) return;
+    final target = visible
+        .where((q) => _selectedQuestionIds.contains(q.id))
+        .toList(growable: false);
+    if (target.isEmpty) {
+      _showSnack('변경할 문항을 먼저 체크해주세요.');
+      return;
+    }
     var changed = false;
     setState(() {
-      for (final question in visible) {
+      for (final question in target) {
         if (!selectableQuestionModesOf(question).contains(mode)) continue;
         final next = normalizeQuestionModeSelection(
           question,
@@ -1393,9 +1399,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       }
     });
     if (!changed) {
-      _showSnack('현재 표시 문항 중 변경 가능한 문항이 없습니다.');
+      _showSnack('체크된 문항 중 변경 가능한 문항이 없습니다.');
     } else {
-      unawaited(_fetchQuestionPreviews(visible));
+      unawaited(_fetchQuestionPreviews(target));
     }
   }
 
@@ -1514,19 +1520,45 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     });
   }
 
-  int _countQuestionsAllowing(String mode) {
+  List<LearningProblemQuestion> get _checkedVisibleQuestions {
     return _visibleQuestions
+        .where((q) => _selectedQuestionIds.contains(q.id))
+        .toList(growable: false);
+  }
+
+  int _countQuestionsUsingMode(
+    List<LearningProblemQuestion> questions,
+    String mode,
+  ) {
+    return questions.where((q) => _selectedModeOfQuestion(q) == mode).length;
+  }
+
+  int _countQuestionsAllowing(
+    List<LearningProblemQuestion> questions,
+    String mode,
+  ) {
+    return questions
         .where((q) => selectableQuestionModesOf(q).contains(mode))
         .length;
   }
 
   Widget _buildRangeSummaryControls({required bool isBusy}) {
-    final total = _visibleQuestions.length;
+    final visible = _visibleQuestions;
+    final checked = _checkedVisibleQuestions;
+    final checkedTotal = checked.length;
+    final visibleTotal = visible.length;
     final objectiveCount =
-        _countQuestionsAllowing(kLearningQuestionModeObjective);
+        _countQuestionsUsingMode(checked, kLearningQuestionModeObjective);
     final subjectiveCount =
-        _countQuestionsAllowing(kLearningQuestionModeSubjective);
-    final essayCount = _countQuestionsAllowing(kLearningQuestionModeEssay);
+        _countQuestionsUsingMode(checked, kLearningQuestionModeSubjective);
+    final essayCount =
+        _countQuestionsUsingMode(checked, kLearningQuestionModeEssay);
+    final possibleObjectiveCount =
+        _countQuestionsAllowing(checked, kLearningQuestionModeObjective);
+    final possibleSubjectiveCount =
+        _countQuestionsAllowing(checked, kLearningQuestionModeSubjective);
+    final possibleEssayCount =
+        _countQuestionsAllowing(checked, kLearningQuestionModeEssay);
     const labelStyle = TextStyle(
       color: Color(0xFF9FB3B3),
       fontSize: 11,
@@ -1665,20 +1697,20 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          stat('총 문항', '$total'),
-          stat('객관식', '$objectiveCount'),
-          stat('주관식', '$subjectiveCount'),
-          stat('서술형', '$essayCount'),
+          stat('총 문항', '$checkedTotal (가능 $visibleTotal)'),
+          stat('객관식', '$objectiveCount (가능 $possibleObjectiveCount)'),
+          stat('주관식', '$subjectiveCount (가능 $possibleSubjectiveCount)'),
+          stat('서술형', '$essayCount (가능 $possibleEssayCount)'),
           actionButton(
             label: '가능 문항 객관식',
-            onPressed: objectiveCount == 0
+            onPressed: possibleObjectiveCount == 0
                 ? null
                 : () =>
                     _setVisibleQuestionsMode(kLearningQuestionModeObjective),
           ),
           actionButton(
             label: '가능 문항 주관식',
-            onPressed: subjectiveCount == 0
+            onPressed: possibleSubjectiveCount == 0
                 ? null
                 : () =>
                     _setVisibleQuestionsMode(kLearningQuestionModeSubjective),
