@@ -463,6 +463,7 @@ class _TextbookAuthoringStageDialogState
         fileId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         kind: 'ans',
+        requireMigratedStorage: true,
       );
       final url = target.url;
       if (url.isEmpty) throw Exception('empty_download_url');
@@ -515,6 +516,7 @@ class _TextbookAuthoringStageDialogState
         fileId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         kind: 'sol',
+        requireMigratedStorage: true,
       );
       final url = target.url;
       if (url.isEmpty) throw Exception('empty_download_url');

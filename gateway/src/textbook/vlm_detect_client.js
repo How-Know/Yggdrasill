@@ -5,11 +5,12 @@
 //
 // Node >= 18 의 global fetch / AbortController 만 사용한다. 외부 의존성 없음.
 
-import { buildDetectProblemsPrompt } from './vlm_detect_prompt.js';
+import { buildDetectProblemsPrompt, VLM_DETECT_LABELS } from './vlm_detect_prompt.js';
 import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
+const ALLOWED_LABELS = new Set(VLM_DETECT_LABELS);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -238,7 +239,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     if (!raw || typeof raw !== 'object') continue;
     const number = String(raw.number ?? '').trim();
     if (!number) continue;
-    const label = String(raw.label ?? '').trim();
+    const label = normalizeDifficultyLabel(raw.label);
     const inferredSetRange = parseBasicDrillRange(number);
     const isSet = Boolean(raw.is_set_header) || Boolean(inferredSetRange);
     let setRange = null;
@@ -335,6 +336,15 @@ function normalizeExpectedStartNumber(input) {
   const n = Number.parseInt(match[0], 10);
   if (!Number.isFinite(n) || n <= 0 || n > 9999) return '';
   return String(n).padStart(4, '0');
+}
+
+function normalizeDifficultyLabel(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\s+/g, '');
+  if (!compact || compact === '사고의기술') return '';
+  if (compact === '교육청기출') return '교육청기출';
+  return ALLOWED_LABELS.has(compact) ? compact : '';
 }
 
 function backfillBasicDrillItemRegions(result) {

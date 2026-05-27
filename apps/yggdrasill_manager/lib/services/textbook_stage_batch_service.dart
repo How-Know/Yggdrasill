@@ -146,6 +146,7 @@ class TextbookStageBatchService {
       fileId: bookId,
       gradeLabel: gradeLabel,
       kind: kind,
+      requireMigratedStorage: true,
     );
     if (target.url.isEmpty) throw Exception('${kind}_pdf_url_empty');
     final tempDir = await getTemporaryDirectory();

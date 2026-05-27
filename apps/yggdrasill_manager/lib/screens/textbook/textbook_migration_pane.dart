@@ -250,8 +250,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           bookId: link.fileId,
           gradeLabel: link.gradeLabel,
         );
-        final payload =
-            (row?['payload'] as Map?)?.cast<String, dynamic>();
+        final payload = (row?['payload'] as Map?)?.cast<String, dynamic>();
         final scopes = _unitStageScopesFromPayload(payload);
         final summary = scopes.isEmpty
             ? const _UnitProgressSummary.noUnitInfo()
@@ -617,6 +616,10 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   }
 
   Future<void> _openUnitAuthoring(_MigLink link) async {
+    if (!_canOpenUnitAuthoring(link)) {
+      _toast('단원·분석은 migrated 상태의 서버 PDF만 열 수 있습니다.', error: true);
+      return;
+    }
     final book = _resolveBookForLink(link);
     await TextbookUnitAuthoringDialog.show(
       context,
@@ -1210,8 +1213,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     final ready = summary.totalUnits > 0 &&
         summary.completedStage3Units >= summary.totalUnits;
     return _UnitProgressBadge(
-      label:
-          '총 ${summary.totalUnits}개 · ${summary.completedStage3Units}개 완료',
+      label: '총 ${summary.totalUnits}개 · ${summary.completedStage3Units}개 완료',
       color: ready ? const Color(0xFF7CC67C) : const Color(0xFF9FB3B3),
       icon: ready ? Icons.verified_outlined : Icons.account_tree_outlined,
     );
@@ -1224,11 +1226,13 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         style: TextStyle(color: Color(0xFF5A5A5A), fontSize: 12),
       );
     }
-    final hasCover = (_coverUrlByScope[_unitProgressKey(link)] ?? '').isNotEmpty;
+    final hasCover =
+        (_coverUrlByScope[_unitProgressKey(link)] ?? '').isNotEmpty;
     return _UnitProgressBadge(
       label: hasCover ? '표지 있음' : '표지 없음',
       color: hasCover ? const Color(0xFF7CC67C) : const Color(0xFF8A8A8A),
-      icon: hasCover ? Icons.image_outlined : Icons.image_not_supported_outlined,
+      icon:
+          hasCover ? Icons.image_outlined : Icons.image_not_supported_outlined,
     );
   }
 
@@ -1270,15 +1274,21 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
               ? null
               : () => unawaited(_pickAndUploadCover(link)),
         ));
-        widgets.add(const SizedBox(width: 6));
-        widgets.add(_ActionButton(
-          icon: Icons.account_tree_outlined,
-          label: '단원·분석',
-          onPressed: () => unawaited(_openUnitAuthoring(link)),
-        ));
+        if (_canOpenUnitAuthoring(link)) {
+          widgets.add(const SizedBox(width: 6));
+          widgets.add(_ActionButton(
+            icon: Icons.account_tree_outlined,
+            label: '단원·분석',
+            onPressed: () => unawaited(_openUnitAuthoring(link)),
+          ));
+        }
       }
     }
     return widgets;
+  }
+
+  bool _canOpenUnitAuthoring(_MigLink link) {
+    return link.kind == 'body' && link.isMigratedStorageLink;
   }
 
   _MigBook _resolveBookForLink(_MigLink link) {
@@ -1707,4 +1717,10 @@ class _MigLink {
   final int fileSizeBytes;
   final String contentHash;
   final String uploadedAt;
+
+  bool get isMigratedStorageLink =>
+      migrationStatus.trim().toLowerCase() == 'migrated' &&
+      storageDriver.trim().isNotEmpty &&
+      storageBucket.trim().isNotEmpty &&
+      storageKey.trim().isNotEmpty;
 }

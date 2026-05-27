@@ -116,6 +116,7 @@ export async function callGeminiWithPdf({
   timeoutMs = 180000,
   textbookScope = null,
   expectedQuestionNumbers = null,
+  expectedIndependentSetRanges = null,
 }) {
   const key = String(apiKey || '').trim();
   if (!key) throw new Error('vlm_gemini_api_key_missing');
@@ -138,7 +139,13 @@ export async function callGeminiWithPdf({
               data: pdfBuffer.toString('base64'),
             },
           },
-          { text: buildPrompt({ textbookScope, expectedQuestionNumbers }) },
+          {
+            text: buildPrompt({
+              textbookScope,
+              expectedQuestionNumbers,
+              expectedIndependentSetRanges,
+            }),
+          },
         ],
       },
     ],

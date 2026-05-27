@@ -454,7 +454,7 @@ class ProblemBankService {
     int? bodyLinkId,
   }) async {
     dynamic query = _client.from('resource_file_links').select(
-        'id, storage_bucket, storage_key, file_size_bytes, content_hash');
+        'id, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash');
     if (bodyLinkId != null) {
       query = query.eq('id', bodyLinkId);
     } else {
@@ -465,7 +465,14 @@ class ProblemBankService {
     }
     final row = await query.maybeSingle();
     if (row is Map) {
-      return row.map((k, dynamic v) => MapEntry('$k', v));
+      final mapped = row.map((k, dynamic v) => MapEntry('$k', v));
+      final status = '${mapped['migration_status'] ?? ''}'.trim();
+      final storageBucket = '${mapped['storage_bucket'] ?? ''}'.trim();
+      final storageKey = '${mapped['storage_key'] ?? ''}'.trim();
+      if (status != 'migrated' || storageBucket.isEmpty || storageKey.isEmpty) {
+        throw Exception('문제은행 본문 추출은 migrated 상태의 서버 PDF만 사용할 수 있습니다');
+      }
+      return mapped;
     }
     throw Exception('교재 본문 PDF 링크를 찾지 못했습니다');
   }

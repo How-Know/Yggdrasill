@@ -245,6 +245,7 @@ class TextbookPdfService {
     String? fileId,
     String? gradeLabel,
     String? kind,
+    bool requireMigratedStorage = false,
   }) async {
     final qp = <String, String>{
       if (linkId != null) 'link_id': '$linkId',
@@ -264,7 +265,7 @@ class TextbookPdfService {
         'download_url_failed(${res.statusCode}): ${json['error'] ?? res.body}',
       );
     }
-    return TextbookDownloadTarget(
+    final target = TextbookDownloadTarget(
       kind: '${json['kind'] ?? ''}',
       url: '${json['url'] ?? ''}',
       migrationStatus: '${json['migration_status'] ?? ''}',
@@ -279,6 +280,14 @@ class TextbookPdfService {
           ? (json['expires_in'] as num).toInt()
           : null,
     );
+    if (requireMigratedStorage && !target.isMigratedStorage) {
+      throw Exception(
+        '서버 저장 완료(migrated) PDF만 사용할 수 있습니다. '
+        '현재 상태: ${target.migrationStatus.isEmpty ? '-' : target.migrationStatus}, '
+        '해결 경로: ${target.kind.isEmpty ? '-' : target.kind}',
+      );
+    }
+    return target;
   }
 
   Future<List<TextbookStageScopeStatus>> fetchStageStatuses({
@@ -520,6 +529,10 @@ class TextbookDownloadTarget {
   final int? fileSizeBytes;
   final String? contentHash;
   final int? expiresIn;
+
+  bool get isMigratedStorage =>
+      kind.trim().toLowerCase() == 'storage' &&
+      migrationStatus.trim().toLowerCase() == 'migrated';
 }
 
 class TextbookUploadTarget {

@@ -1405,15 +1405,25 @@ function withBaselineGuide(tex) {
   return `\\YggVtwoBaselineGuide{}${value}`;
 }
 
-function renderDisplayMathStemLine(sub, equations, firstPrefix = '') {
+function fontSelectTex(sizePt) {
+  const size = Math.max(7, Number(sizePt) || 11);
+  const lead = Math.max(size * 1.18, size + 1);
+  return `\\fontsize{${size.toFixed(2)}pt}{${lead.toFixed(2)}pt}\\selectfont`;
+}
+
+function stretchWithFontTex(stretch, sizePt) {
+  return `\\setstretch{${stretch}}${fontSelectTex(sizePt)}`;
+}
+
+function renderDisplayMathStemLine(sub, equations, firstPrefix = '', options = {}) {
   const source = stripMathDisplayLineMarker(sub).trim();
   const body = smartTexLine(source, equations);
   if (!body.trim()) return '';
   const prefix = firstPrefix ? `${firstPrefix}\\hspace*{0.4em}` : '';
-  return `{\\setstretch{1.53}\\lineskiplimit=0.4em\\lineskip=0.8em\\parskip=0pt\\par\\noindent\\hspace*{2.55em}\\YggVtwoBaselineGuide{}${prefix}${body}\\par}`;
+  return `{${stretchWithFontTex('1.53', options.fontSizePt)}\\lineskiplimit=0.4em\\lineskip=0.8em\\parskip=0pt\\par\\noindent\\hspace*{2.55em}\\YggVtwoBaselineGuide{}${prefix}${body}\\par}`;
 }
 
-function renderDisplayMathStemBlock(lines, equations) {
+function renderDisplayMathStemBlock(lines, equations, options = {}) {
   const renderedLines = (Array.isArray(lines) ? lines : [])
     .flatMap((line) => stripMathDisplayBlockMarkers(line).split(/\r?\n/))
     .map((line) => smartTexLine(line.trim(), equations))
@@ -1421,7 +1431,7 @@ function renderDisplayMathStemBlock(lines, equations) {
     .map((line) => `\\noindent\\hspace*{2.55em}\\YggVtwoBaselineGuide{}${line}\\par`);
   if (renderedLines.length === 0) return '';
   return [
-    '{\\setstretch{1.53}\\lineskiplimit=0.4em\\lineskip=0.8em\\parskip=0pt',
+    `{${stretchWithFontTex('1.53', options.fontSizePt)}\\lineskiplimit=0.4em\\lineskip=0.8em\\parskip=0pt`,
     '\\par',
     '\\noindent\\begin{minipage}[t]{\\linewidth}',
     renderedLines.join('\n'),
@@ -1512,7 +1522,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   const STEM_STRETCH = '1.53';
   const enableVisualLineTallMathPad = false;
   const stemTexOptions = { visualLineTallMathPad: enableVisualLineTallMathPad };
-  const wrapStem = (inner) => `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.8em${withBaselineGuide(inner)}\\par}`;
+  const wrapStem = (inner) => `{${stretchWithFontTex(STEM_STRETCH, options.fontSizePt)}\\lineskiplimit=0.4em\\lineskip=0.8em${withBaselineGuide(inner)}\\par}`;
   const renderManualMathLineBreak = (source, manualFirstPrefix = '') => {
     const pieces = splitByMathLineBreakMarkers(source);
     if (pieces.length <= 1) return '';
@@ -1542,7 +1552,9 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
       return renderManualMathLineBreak(subQ[2], labelTex);
     }
     if (hasMathDisplayLineMarker(subQ[2])) {
-      return renderDisplayMathStemLine(subQ[2], equations, labelTex);
+      return renderDisplayMathStemLine(subQ[2], equations, labelTex, {
+        fontSizePt: options.fontSizePt,
+      });
     }
     const restTex = smartTexLine(subQ[2], equations, stemTexOptions);
     return wrapStem(
@@ -1554,7 +1566,9 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     return renderManualMathLineBreak(sub, firstPrefix);
   }
   if (hasMathDisplayLineMarker(sub)) {
-    return renderDisplayMathStemLine(sub, equations, firstPrefix);
+    return renderDisplayMathStemLine(sub, equations, firstPrefix, {
+      fontSizePt: options.fontSizePt,
+    });
   }
   // 대화형 "이름 : 내용" (이름은 12자 이내).
   const dialogue = sub.match(/^([^:\n]{1,12}?)\s*:\s+(.*)$/);
@@ -2017,7 +2031,7 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
   return rendered.join('\n');
 }
 
-function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
+function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
   let content = renderBogiItems(lines, equations, replaceFigureMarkers);
   // 보기박스 본문에 "정렬 힌트가 될 글자" 가 전혀 없으면 가운데 정렬.
   // (예: Q5 보기박스의 `-0.7, -\frac{6}{3}, 0, ...` 처럼 숫자/수식만 있는 케이스)
@@ -2094,7 +2108,7 @@ function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  left=8pt, right=8pt, top=12pt, bottom=12pt',
     ']',
     '\\setlength{\\parskip}{0pt}',
-    '\\setstretch{1.53}',
+    stretchWithFontTex('1.53', options.fontSizePt),
     '\\lineskiplimit=0.4em\\lineskip=0.8em',
     '\\raggedright',
     '\\rightskip=0pt plus 1fil\\relax',
@@ -2195,16 +2209,18 @@ function boxContentIsCenteredOnly(lines) {
   if (joined.includes('[수식줄바꿈')) return false;
   if (/[가-힣ㄱ-ㅎ]/.test(joined)) return false;
   if (/\\(?:bullet|circ)\b/.test(joined)) return false;
+  if (/[❶❷❸❹❺❻❼❽❾❿]/.test(joined)) return false;
   if (BOGI_ITEM_RE.test(joined)) return false;
   return true;
 }
 
 // "\bullet" / "\circ" 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
-const SYMBOL_LABEL_LINE_RE = /^\s*\\(bullet|circ)\b\s*/;
+const SYMBOL_LABEL_LINE_RE = /^\s*(?:\\(bullet|circ)\b|([❶❷❸❹❺❻❼❽❾❿]))\s*/;
 const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
 
 function symbolLabelTex(symbol) {
   if (symbol === 'circ') return `$\\circ$\\ `;
+  if (/^[❶❷❸❹❺❻❼❽❾❿]$/.test(symbol)) return `${escapeLatexText(symbol)}\\hspace{0.45em}`;
   return `$\\bullet$\\ `;
 }
 
@@ -2214,7 +2230,7 @@ function symbolLabelTex(symbol) {
 //   - \ (backslash-space) 를 뒤에 붙여 기호 뒤 1공백을 LaTeX 에서 절대 소멸하지 않도록 보장
 function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) {
   const match = String(rawLine || '').match(SYMBOL_LABEL_LINE_RE);
-  const symbol = match ? match[1] : 'bullet';
+  const symbol = match ? (match[1] || match[2]) : 'bullet';
   const stripped = String(rawLine || '').replace(SYMBOL_LABEL_LINE_RE, '');
   const withFigs = replaceFigureMarkers
     ? replaceFigureMarkers(stripped)
@@ -2230,7 +2246,7 @@ function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) 
 function decoSectionLabelTex(rawLine) {
   const line = String(rawLine || '').trim();
   const symbol = line.match(SYMBOL_LABEL_LINE_RE);
-  if (symbol) return symbolLabelTex(symbol[1]);
+  if (symbol) return symbolLabelTex(symbol[1] || symbol[2]);
   const labelMatch = line.match(BOGI_ITEM_RE);
   if (!labelMatch) return '';
   const labelText = bogiLabelTextFromMatch(labelMatch);
@@ -2260,7 +2276,7 @@ function renderDecoContinuationLine(
   );
 }
 
-function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
+function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
   // 1) 박스 내부의 "본문 라인" 목록을 평탄화하되, [문단] 마커는 간격 sentinel 로 보존한다.
   const rawFlatLines = flattenBoxParagraphLines(lines);
   let forcedAlign = '';
@@ -2344,7 +2360,7 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  before skip=0pt, after skip=0pt',
     ']',
     '\\setlength{\\parskip}{0pt}',
-    '\\setstretch{1.53}',
+    stretchWithFontTex('1.53', options.fontSizePt),
     '\\lineskiplimit=0.4em\\lineskip=0.8em',
     '\\raggedright',
     '\\rightskip=0pt plus 1fil\\relax',
@@ -2894,8 +2910,8 @@ function blankChoiceColumnScales(question, columnCount) {
   });
 }
 
-function renderBlankChoicesLatex(question, choices, equations) {
-  if (!Array.isArray(choices) || choices.length !== 5) return renderChoicesLatex(choices, equations);
+function renderBlankChoicesLatex(question, choices, equations, options = {}) {
+  if (!Array.isArray(choices) || choices.length !== 5) return renderChoicesLatex(choices, equations, 1, options);
   const labels = blankChoiceLabels(question);
   const widthScale = blankChoiceWidthScale(question);
   const columnScales = blankChoiceColumnScales(question, labels.length);
@@ -2918,7 +2934,7 @@ function renderBlankChoicesLatex(question, choices, equations) {
     return [label].concat(cells).join(' & ');
   });
   return [
-    '{\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em',
+    `{${stretchWithFontTex('1.7', options.fontSizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em`,
     `\\setlength{\\tabcolsep}{${tabColSepPt}pt}`,
     '\\noindent\\begin{tabular}{@{}lccc@{}}',
     header + ' \\\\',
@@ -2927,7 +2943,7 @@ function renderBlankChoicesLatex(question, choices, equations) {
   ].join('\n');
 }
 
-function renderChoicesLatex(choices, equations, layoutColumns = 1) {
+function renderChoicesLatex(choices, equations, layoutColumns = 1, options = {}) {
   if (!Array.isArray(choices) || choices.length === 0) return '';
 
   const renderItem = (c, idx) => {
@@ -2940,7 +2956,7 @@ function renderChoicesLatex(choices, equations, layoutColumns = 1) {
   // 본문(setstretch 1.7) 과 동일 줄 간격을 사용해 분수/위첨자 포함 줄의
   // 베이스라인 간격이 두 영역에서 동일하게 맞추도록 한다.
   // lineskip / lineskiplimit 을 em 기반으로 → 폰트 크기에 비례해 분수 포함 줄의 여유 간격도 스케일.
-  const CHOICE_STRETCH = '\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em';
+  const CHOICE_STRETCH = `${stretchWithFontTex('1.7', options.fontSizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em`;
 
   if (choices.length === 5) {
     const cells = choices.map((c, i) => renderItem(c, i));
@@ -3949,7 +3965,9 @@ function renderIndependentSetGroupLatex(group, {
   for (const rawLine of commonStemLines) {
     const line = String(rawLine || '').trim();
     if (!line) continue;
-    lines.push(renderStemTextLine(line, equations, renderedAnyCommonLine ? '' : header));
+    lines.push(renderStemTextLine(line, equations, renderedAnyCommonLine ? '' : header, {
+      fontSizePt: commonFontSizePt,
+    }));
     renderedAnyCommonLine = true;
   }
   lines.push('\\vspace{\\baselineskip}');
@@ -4026,6 +4044,8 @@ function renderOneQuestion(question, {
   );
   const aboveNumberFontPt = (aboveNumberBaseFontPt + 1.0).toFixed(2);
   const aboveNumberLeadPt = (Number(aboveNumberFontPt) * 1.08).toFixed(2);
+  const questionFontSizePt = Math.max(7, Number(stemSizePt) || 11);
+  const questionLeadPt = Math.max(questionFontSizePt * 1.18, questionFontSizePt + 1).toFixed(2);
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
@@ -4289,7 +4309,9 @@ function renderOneQuestion(question, {
           }
         }
         pendingEmpty = 0;
-        const rendered = renderStemTextLine(sub, equations);
+        const rendered = renderStemTextLine(sub, equations, '', {
+          fontSizePt: questionFontSizePt,
+        });
         if (rendered.trim()) out.push(rendered);
       }
     }
@@ -4527,8 +4549,6 @@ function renderOneQuestion(question, {
   const parts = [];
 
   parts.push('\\begingroup');
-  const questionFontSizePt = Math.max(7, Number(stemSizePt) || 11);
-  const questionLeadPt = Math.max(questionFontSizePt * 1.18, questionFontSizePt + 1).toFixed(2);
   parts.push(`\\fontsize{${questionFontSizePt.toFixed(2)}pt}{${questionLeadPt}pt}\\selectfont`);
   // minipage/multicols 내부에서도 자간이 늘어나지 않도록 raggedright 의 파라미터를 명시.
   parts.push('\\rightskip=0pt plus 1fil\\relax');
@@ -4954,6 +4974,7 @@ function renderOneQuestion(question, {
               // 좌표가 TeX 의 실제 줄 배치를 측정해서 보정하게 둔다.
               let rendered = renderStemTextLine(piece, equations, '', {
                 allowTallMathTopPad: emittedStemTextLineAny,
+                fontSizePt: questionFontSizePt,
               });
               if (
                 hasSubQMarker
@@ -4967,7 +4988,7 @@ function renderOneQuestion(question, {
                   visualLineTallMathPad: false,
                 });
                 if (contentTex.trim()) {
-                  rendered = `{\\setstretch{1.53}\\lineskiplimit=0.4em\\lineskip=0.8em${renderBoxLabelContinuationParagraph(subQuestionLabelTex(currentSubQ), contentTex)}\\par}`;
+                  rendered = `{${stretchWithFontTex('1.53', questionFontSizePt)}\\lineskiplimit=0.4em\\lineskip=0.8em${renderBoxLabelContinuationParagraph(subQuestionLabelTex(currentSubQ), contentTex)}\\par}`;
                 }
               }
               if (rendered.trim()) {
@@ -4997,14 +5018,20 @@ function renderOneQuestion(question, {
         }
       }
     } else if (seg.type === 'display_math_block') {
-      parts.push(renderDisplayMathStemBlock(seg.lines, equations));
+      parts.push(renderDisplayMathStemBlock(seg.lines, equations, {
+        fontSizePt: questionFontSizePt,
+      }));
     } else if (seg.type === 'bogi') {
-      const rendered = renderBogiBoxLatex(seg.lines, equations, replaceFigureMarkers);
+      const rendered = renderBogiBoxLatex(seg.lines, equations, replaceFigureMarkers, {
+        fontSizePt: questionFontSizePt,
+      });
       parts.push(currentSubQ > 0
         ? renderSubQuestionIndentedBlock(subQuestionLabelTex(currentSubQ), rendered)
         : rendered);
     } else if (seg.type === 'deco') {
-      const rendered = renderDecoBoxLatex(seg.lines, equations, replaceFigureMarkers);
+      const rendered = renderDecoBoxLatex(seg.lines, equations, replaceFigureMarkers, {
+        fontSizePt: questionFontSizePt,
+      });
       parts.push(currentSubQ > 0
         ? renderSubQuestionIndentedBlock(subQuestionLabelTex(currentSubQ), rendered)
         : rendered);
@@ -5225,10 +5252,14 @@ function renderOneQuestion(question, {
     parts.push(`% DBG choices-gap: trailingBigType=${trailingBigType} gap=${choiceGap.replace(/\\/g, '\\\\')}`);
     parts.push(choiceGap);
     parts.push(isBlankChoiceQuestion(question)
-      ? renderBlankChoicesLatex(question, choices, equations)
+      ? renderBlankChoicesLatex(question, choices, equations, {
+        fontSizePt: questionFontSizePt,
+      })
       : (isImageChoice
         ? renderImageChoicesLatex()
-        : renderChoicesLatex(choices, equations, layoutColumns)));
+        : renderChoicesLatex(choices, equations, layoutColumns, {
+          fontSizePt: questionFontSizePt,
+        })));
   }
 
   parts.push('\\par');
@@ -6703,10 +6734,10 @@ export function buildDocumentTexSource(questions, options = {}) {
   const logoEnabled = includeAcademyLogo && !!academyLogoPath;
   const isAssignmentProfile = profile === 'assignment';
   const effectiveStemSizePt = isAssignmentProfile
-    ? Math.max(8, Number(fontSize || 11) - 2.0)
+    ? Math.max(8, Number(fontSize || 11) - 1.0)
     : Math.max(8, Number(fontSize || 11) - 0.5);
   const assignmentAboveNumberFontPt = isAssignmentProfile
-    ? Math.max(8, ((Number(fontSize || 11) + 1) * 1.21) - 2.0)
+    ? Math.max(8, ((Number(fontSize || 11) + 1) * 1.21) - 1.0)
     : null;
 
   const preamble = buildPreamble({

@@ -8,6 +8,7 @@
 export function buildPrompt({
   textbookScope = null,
   expectedQuestionNumbers = null,
+  expectedIndependentSetRanges = null,
 } = {}) {
   const scope = textbookScope && typeof textbookScope === 'object'
     ? textbookScope
@@ -40,12 +41,37 @@ export function buildPrompt({
         '',
       ]
     : [];
+  const independentSetRanges = Array.isArray(expectedIndependentSetRanges)
+    ? expectedIndependentSetRanges
+      .map((range) => {
+        const label = String(range?.label || '').trim();
+        const from = String(range?.from || '').trim();
+        const to = String(range?.to || '').trim();
+        const page = String(range?.rawPage || range?.displayPage || '').trim();
+        if (!label && (!from || !to)) return '';
+        const span = label || `${from}~${to}`;
+        return page ? `${span} (page ${page})` : span;
+      })
+      .filter(Boolean)
+    : [];
+  const independentSetLines = independentSetRanges.length > 0
+    ? [
+        '=== Stage 1 기준 독립세트 범위 ===',
+        `아래 범위 라벨은 앞 단계에서 세트 헤더로 탐지된 독립형 세트이다: ${independentSetRanges.join(', ')}`,
+        '각 범위에 포함된 문항은 모두 is_set_question=true, set_type="independent_set" 으로 둔다.',
+        '범위 라벨(예: 0658~0661) 오른쪽/옆/아래에 인쇄된 지시문을 공통 발문으로 정확히 복사해 questions[].stem 에 넣어라.',
+        '각 문항의 실제 식/본문은 sub_questions=[{"label":"", "text":"..."}] 의 text 에 넣고, stem 에 반복해서 섞지 마라.',
+        '공통 발문이 짧아도 절대 빈 문자열로 두지 마라. 예: "다음 방정식을 풀어라.", "다음 연립방정식을 풀어라."',
+        '',
+      ]
+    : [];
   return [
     '당신은 한국 중·고등학교 수학 시험지 PDF 를 분석해 문항을 "Yggdrasill stem 포맷" 의 구조화 JSON 으로 추출하는 AI 입니다.',
     '반드시 다음 JSON 스키마만 출력합니다. 설명 문장·마크다운 금지. JSON 외 어떤 텍스트도 출력하지 마세요.',
     '',
     ...scopeLines,
     ...expectedLines,
+    ...independentSetLines,
     '=== 출력 스키마 ===',
     '{',
     '  "document_meta": {',

@@ -570,6 +570,7 @@ class _TextbookUnitAuthoringDialogState
         fileId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         kind: 'body',
+        requireMigratedStorage: true,
       );
       final url = target.url;
       if (url.isEmpty) throw Exception('empty_download_url');
@@ -789,8 +790,7 @@ class _TextbookUnitAuthoringDialogState
     return out > 0 ? out : null;
   }
 
-  String _formatBasicDrillNumber(int value) =>
-      value.toString().padLeft(4, '0');
+  String _formatBasicDrillNumber(int value) => value.toString().padLeft(4, '0');
 
   String? _expectedStartNumberForPage(
     _SubFocus focus,
@@ -1492,7 +1492,8 @@ class _TextbookUnitAuthoringDialogState
       (s) => s.preset.key == focus.subKey,
       orElse: () => mid.subs.first,
     );
-    final displayStart = displayStartOverride ?? _positiveInt(sub.startCtrl.text);
+    final displayStart =
+        displayStartOverride ?? _positiveInt(sub.startCtrl.text);
     final displayEnd = displayEndOverride ?? _positiveInt(sub.endCtrl.text);
     final rawStart =
         displayStart == null ? null : _rawPageForDisplayPage(displayStart);
@@ -1560,7 +1561,9 @@ class _TextbookUnitAuthoringDialogState
                         hint: '시작 페이지',
                         dense: true,
                         keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly
+                        ],
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1570,7 +1573,9 @@ class _TextbookUnitAuthoringDialogState
                         hint: '끝 페이지',
                         dense: true,
                         keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly
+                        ],
                       ),
                     ),
                   ],
@@ -1595,7 +1600,9 @@ class _TextbookUnitAuthoringDialogState
     if (confirmed != true) return;
     final displayStart = _positiveInt(startCtrl.text);
     final displayEnd = _positiveInt(endCtrl.text);
-    if (displayStart == null || displayEnd == null || displayEnd < displayStart) {
+    if (displayStart == null ||
+        displayEnd == null ||
+        displayEnd < displayStart) {
       _toast('문항추출 페이지 범위를 확인하세요', error: true);
       return;
     }

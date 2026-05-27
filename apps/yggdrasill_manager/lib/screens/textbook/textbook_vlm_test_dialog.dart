@@ -160,6 +160,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
         fileId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         kind: widget.kind,
+        requireMigratedStorage: true,
       );
       final downloadUrl = target.url;
       if (downloadUrl.isEmpty) {
@@ -694,9 +695,8 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
       if (rect == null) continue;
       final isFocused = focusedIndex == i;
       final isDimmed = focusedIndex != null && !isFocused;
-      final regionColor = item.isSetHeader
-          ? const Color(0xFFFFB44A)
-          : const Color(0xFF5AA6FF);
+      final regionColor =
+          item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFF5AA6FF);
       out.add(Positioned(
         left: rect.left,
         top: rect.top,
@@ -708,14 +708,12 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
               border: Border.all(
                 color: isDimmed
                     ? regionColor.withValues(alpha: 0.25)
-                    : regionColor.withValues(
-                        alpha: isFocused ? 1.0 : 0.85),
+                    : regionColor.withValues(alpha: isFocused ? 1.0 : 0.85),
                 width: isFocused ? 3 : 1.5,
               ),
               color: isDimmed
                   ? regionColor.withValues(alpha: 0.03)
-                  : regionColor.withValues(
-                      alpha: isFocused ? 0.10 : 0.05),
+                  : regionColor.withValues(alpha: isFocused ? 0.10 : 0.05),
             ),
           ),
         ),
@@ -732,9 +730,8 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
       if (rect == null) continue;
       final isFocused = focusedIndex == i;
       final isDimmed = focusedIndex != null && !isFocused;
-      final color = item.isSetHeader
-          ? const Color(0xFFFFB44A)
-          : const Color(0xFFFF4D4F);
+      final color =
+          item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFFFF4D4F);
       out.add(Positioned(
         left: rect.left,
         top: rect.top,
@@ -747,9 +744,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: isDimmed
-                        ? color.withValues(alpha: 0.35)
-                        : color,
+                    color: isDimmed ? color.withValues(alpha: 0.35) : color,
                     width: 2,
                   ),
                   color: isDimmed
@@ -761,11 +756,9 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
                 left: -2,
                 top: -18,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 4, vertical: 1),
-                  color: isDimmed
-                      ? color.withValues(alpha: 0.5)
-                      : color,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  color: isDimmed ? color.withValues(alpha: 0.5) : color,
                   child: Text(
                     item.label.isEmpty
                         ? item.number
@@ -872,9 +865,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
   Widget _buildRangeProgressBar() {
     final total = _rangeRunning
         ? (_rangeEnd - _rangeStart + 1)
-        : ((_rangeDone + _rangeFailed) == 0
-            ? 1
-            : (_rangeDone + _rangeFailed));
+        : ((_rangeDone + _rangeFailed) == 0 ? 1 : (_rangeDone + _rangeFailed));
     final progressed = _rangeDone + _rangeFailed;
     final ratio = total <= 0 ? 0.0 : (progressed / total).clamp(0.0, 1.0);
     final percentTxt = (ratio * 100).toStringAsFixed(0);
@@ -916,8 +907,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
                     value: _rangeRunning && ratio == 0 ? null : ratio,
                     minHeight: 4,
                     backgroundColor: const Color(0xFF2A2A2A),
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(_kAccent),
+                    valueColor: const AlwaysStoppedAnimation<Color>(_kAccent),
                   ),
                 ),
                 if (_rangeLastError != null)
@@ -1083,8 +1073,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
                 'mastery',
                 'unknown',
               ])
-                if (counts[s]! > 0)
-                  _sectionChip(s, counts[s]!),
+                if (counts[s]! > 0) _sectionChip(s, counts[s]!),
               if (setHeaders > 0)
                 _miniTag('세트형 $setHeaders건', const Color(0xFF3A2A1A)),
             ],
@@ -1144,8 +1133,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
           runSpacing: 4,
           children: [
             _sectionChip(result.section, null),
-            _miniTag(
-                'PDF ${result.rawPage}p → 책면 ${result.displayPage}p',
+            _miniTag('PDF ${result.rawPage}p → 책면 ${result.displayPage}p',
                 const Color(0xFF234A34)),
             _miniTag(
               'offset ${result.pageOffset}${result.pageOffsetFound ? '' : '(없음)'}',
@@ -1264,9 +1252,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(vertical: 4),
               decoration: BoxDecoration(
-                color: item.isSetHeader
-                    ? const Color(0xFFFFB44A)
-                    : _kAccent,
+                color: item.isSetHeader ? const Color(0xFFFFB44A) : _kAccent,
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
@@ -1297,10 +1283,11 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
                       if (item.column != null)
                         Text(
                           '단 ${item.column}',
-                          style: const TextStyle(
-                              color: _kTextSub, fontSize: 11),
+                          style:
+                              const TextStyle(color: _kTextSub, fontSize: 11),
                         ),
-                      if (item.isSetHeader && item.setFrom != null &&
+                      if (item.isSetHeader &&
+                          item.setFrom != null &&
                           item.setTo != null) ...[
                         const SizedBox(width: 10),
                         Text(
@@ -1363,7 +1350,8 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
       decoration: BoxDecoration(
         color: _kCard,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF5AA6FF).withValues(alpha: 0.5)),
+        border:
+            Border.all(color: const Color(0xFF5AA6FF).withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1375,9 +1363,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
                 height: 22,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: item.isSetHeader
-                      ? const Color(0xFFFFB44A)
-                      : _kAccent,
+                  color: item.isSetHeader ? const Color(0xFFFFB44A) : _kAccent,
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -1428,8 +1414,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
                       padding: EdgeInsets.all(10),
                       child: Text(
                         '영역 정보 없음',
-                        style: TextStyle(
-                            color: _kTextSub, fontSize: 12),
+                        style: TextStyle(color: _kTextSub, fontSize: 12),
                       ),
                     )
                   : Image.memory(

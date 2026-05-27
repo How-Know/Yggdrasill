@@ -73,8 +73,7 @@ class TextbookCropExtractDialog extends StatefulWidget {
       _TextbookCropExtractDialogState();
 }
 
-class _TextbookCropExtractDialogState
-    extends State<TextbookCropExtractDialog> {
+class _TextbookCropExtractDialogState extends State<TextbookCropExtractDialog> {
   static const _kBg = Color(0xFF15171C);
   static const _kCard = Color(0xFF1F1F1F);
   static const _kBorder = Color(0xFF2A2A2A);
@@ -134,14 +133,14 @@ class _TextbookCropExtractDialogState
         fileId: widget.bookId,
         gradeLabel: widget.gradeLabel,
         kind: widget.kind,
+        requireMigratedStorage: true,
       );
       final downloadUrl = target.url;
       if (downloadUrl.isEmpty) {
         throw Exception('empty_download_url');
       }
       final tempDir = await getTemporaryDirectory();
-      final safeBook =
-          widget.bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final safeBook = widget.bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
       final file = File(p.join(
         tempDir.path,
         'crop_${safeBook}_${widget.gradeLabel}_${widget.kind}.pdf',
@@ -327,11 +326,8 @@ class _TextbookCropExtractDialogState
 
     final safeBook =
         widget.bookName.replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_');
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .split('.')
-        .first;
+    final stamp =
+        DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
     final folderName =
         '${safeBook}_${widget.gradeLabel}_${widget.kind}_p${out.pageNumber}_$stamp';
     final outDir = Directory(p.join(dir, folderName));
@@ -357,8 +353,7 @@ class _TextbookCropExtractDialogState
 
     for (final entry in out.crops) {
       final item = entry.item;
-      final safeNum =
-          item.number.replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_');
+      final safeNum = item.number.replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_');
       final labelPart = item.label.isEmpty
           ? ''
           : '_${item.label.replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_')}';
@@ -527,8 +522,8 @@ class _TextbookCropExtractDialogState
                 hintStyle: const TextStyle(color: Color(0xFF5C5C5C)),
                 border: const OutlineInputBorder(),
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 12),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
               ),
               keyboardType: TextInputType.number,
               onSubmitted: (_) => _runPipeline(),
@@ -591,8 +586,9 @@ class _TextbookCropExtractDialogState
           ),
           const SizedBox(width: 8),
           OutlinedButton.icon(
-            onPressed:
-                (_outcome == null || _outcome!.crops.isEmpty) ? null : _exportToFolder,
+            onPressed: (_outcome == null || _outcome!.crops.isEmpty)
+                ? null
+                : _exportToFolder,
             icon: const Icon(Icons.folder_zip_outlined, size: 16),
             label: const Text('폴더로 내보내기'),
             style: OutlinedButton.styleFrom(
@@ -609,8 +605,7 @@ class _TextbookCropExtractDialogState
     return Row(
       children: [
         Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
             color: _running ? const Color(0xFF234A34) : const Color(0xFF333333),
             borderRadius: BorderRadius.circular(10),
@@ -716,12 +711,11 @@ class _TextbookCropExtractDialogState
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: item.isSetHeader
-                        ? const Color(0xFFFFB44A)
-                        : _kAccent,
+                    color:
+                        item.isSetHeader ? const Color(0xFFFFB44A) : _kAccent,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -770,8 +764,8 @@ class _TextbookCropExtractDialogState
                       padding: EdgeInsets.all(10),
                       child: Text(
                         '영역 정보 없음 (item_region 없음)',
-                        style: TextStyle(
-                            color: Color(0xFF6A6A6A), fontSize: 11),
+                        style:
+                            TextStyle(color: Color(0xFF6A6A6A), fontSize: 11),
                       ),
                     )
                   : Image.memory(
@@ -856,17 +850,15 @@ class _CropPreviewDialog extends StatelessWidget {
         child: Column(
           children: [
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Row(
                 children: [
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: item.isSetHeader
-                          ? const Color(0xFFFFB44A)
-                          : _kAccent,
+                      color:
+                          item.isSetHeader ? const Color(0xFFFFB44A) : _kAccent,
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
@@ -891,8 +883,7 @@ class _CropPreviewDialog extends StatelessWidget {
                   const SizedBox(width: 12),
                   Text(
                     'PDF ${pageNumber}p → 책 ${displayPage}p · section=$section',
-                    style:
-                        const TextStyle(color: _kTextSub, fontSize: 11),
+                    style: const TextStyle(color: _kTextSub, fontSize: 11),
                   ),
                   const Spacer(),
                   IconButton(
@@ -938,9 +929,7 @@ class _CropPreviewDialog extends StatelessWidget {
             child: Text(
               '크롭 결과',
               style: TextStyle(
-                  color: _kTextSub,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700),
+                  color: _kTextSub, fontSize: 11, fontWeight: FontWeight.w700),
             ),
           ),
           const Divider(height: 1, color: _kBorder),
@@ -966,8 +955,7 @@ class _CropPreviewDialog extends StatelessWidget {
           ),
           if (entry.crop != null)
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: _buildCropMeta(entry.crop!),
             ),
         ],
@@ -1021,9 +1009,7 @@ class _CropPreviewDialog extends StatelessWidget {
             child: Text(
               '분석 원본 (스큐 보정 후) · 이 문항 영역을 강조',
               style: TextStyle(
-                  color: _kTextSub,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700),
+                  color: _kTextSub, fontSize: 11, fontWeight: FontWeight.w700),
             ),
           ),
           const Divider(height: 1, color: _kBorder),

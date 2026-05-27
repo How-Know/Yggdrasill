@@ -387,7 +387,7 @@ class TextbookVlmAnswerItem {
         if (mapped == null) return '';
         if (!normalized.contains(mapped)) normalized.add(mapped);
       }
-      return normalized.join('/');
+      return normalized.join(', ');
     }
 
     var problemNumber = '${map['problem_number'] ?? ''}'.trim();

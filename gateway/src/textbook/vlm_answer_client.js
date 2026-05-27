@@ -287,7 +287,7 @@ function normalizeObjectiveChoiceText(input) {
     if (!mapped) return '';
     normalized.push(mapped);
   }
-  return Array.from(new Set(normalized)).join('/');
+  return Array.from(new Set(normalized)).join(', ');
 }
 
 export function normalizeAnswerResult(parsedJson, opts = {}) {

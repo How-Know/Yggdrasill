@@ -637,6 +637,7 @@ async function callGeminiChunkWithRetry({
         timeoutMs,
         textbookScope: input.textbookScope,
         expectedQuestionNumbers: input.expectedQuestionNumbers,
+        expectedIndependentSetRanges: input.expectedIndependentSetRanges,
       });
       const chunkQuestions = Array.isArray(result?.parsedJson?.questions)
         ? result.parsedJson.questions
@@ -1105,6 +1106,27 @@ function expectedQuestionNumbersForInput(cropPagesByNumber, input) {
   return rows.map((row) => row.problemNumber).filter(Boolean);
 }
 
+function expectedIndependentSetRangesForInput(setHeaderRanges, input) {
+  const ranges = Array.isArray(setHeaderRanges) ? setHeaderRanges : [];
+  if (ranges.length === 0) return [];
+  const pageRange = input?.pageRange || null;
+  return ranges
+    .filter((range) => {
+      const rawPage = Number(range?.rawPage);
+      if (!Number.isFinite(rawPage) || rawPage <= 0) return true;
+      if (!pageRange) return true;
+      return rawPage >= Number(pageRange.start) && rawPage <= Number(pageRange.end);
+    })
+    .map((range) => ({
+      label: compact(range?.headerNumber) || `${range?.from || ''}~${range?.to || ''}`,
+      from: range?.from,
+      to: range?.to,
+      rawPage: range?.rawPage,
+      displayPage: range?.displayPage,
+    }))
+    .filter((range) => range.label || (range.from && range.to));
+}
+
 // VLM question 하나를 "buildQuestionWritePayload" 가 먹을 수 있는 형태로 변환한다.
 // existingRow 가 있으면 그쪽의 figure_assets / figure_layout / question_uid 등을 보존.
 function toPayloadQuestion({
@@ -1269,6 +1291,10 @@ export async function runVlmExtraction({
       cropPagesByNumber,
       input,
     );
+    input.expectedIndependentSetRanges = expectedIndependentSetRangesForInput(
+      setHeaderRanges,
+      input,
+    );
   }
 
   if (typeof log === 'function') {
@@ -1292,6 +1318,9 @@ export async function runVlmExtraction({
         pdfBytes: input.buffer.length,
         expectedQuestionCount: Array.isArray(input.expectedQuestionNumbers)
           ? input.expectedQuestionNumbers.length
+          : 0,
+        independentSetRangeCount: Array.isArray(input.expectedIndependentSetRanges)
+          ? input.expectedIndependentSetRanges.length
           : 0,
       })),
       model,
