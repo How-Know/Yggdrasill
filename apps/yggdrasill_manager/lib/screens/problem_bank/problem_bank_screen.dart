@@ -751,8 +751,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (option == null) {
       return !_isKnownCourseLabel(label);
     }
-    if (_selectedSchoolLevel == 'middle')
+    if (_selectedSchoolLevel == 'middle') {
       return option.gradeKey.startsWith('M');
+    }
     if (_selectedSchoolLevel == 'high') return option.gradeKey.startsWith('H');
     return true;
   }
@@ -9424,7 +9425,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (!mounted) return;
     final screen = MediaQuery.sizeOf(context);
     final isImageChoice = _isImageChoiceQuestion(q);
-    final hasFigures = !isImageChoice && q.figureRefs.isNotEmpty;
+    final figureAssets = _orderedFigureAssetsOf(q);
+    final hasFigures = !isImageChoice &&
+        (q.figureRefs.isNotEmpty || figureAssets.isNotEmpty);
     final tableEntries = _parseTableEntries(q);
     final hasTables = tableEntries.isNotEmpty;
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);

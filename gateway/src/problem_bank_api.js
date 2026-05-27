@@ -239,7 +239,8 @@ function normalizePaper(raw) {
 
 function normalizeMathEngine(raw) {
   const v = String(raw || '').trim().toLowerCase();
-  return v === 'xelatex' ? 'xelatex' : 'mathjax-svg';
+  if (v === 'mathjax-svg') return 'mathjax-svg';
+  return 'xelatex-v2';
 }
 
 function normalizeNumeric(raw, fallback, min, max) {
@@ -705,7 +706,12 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v104_par_first_pad_skip';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_stable_01';
+// V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. V1 의 캐시/렌더 결과와 절대로 충돌하지
+//   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
+//   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
+//   캐시 키 prefix 로 쓰인다.
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_assignment_font_01';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -868,10 +874,18 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     src.renumberQuestions ?? src.renumber_questions,
     normalizeBool(defaults.renumberQuestions ?? defaults.renumber_questions, false),
   );
+  // mathEngine 을 미리 결정해 V2 (xelatex-v2) 엔진이 선택되면 렌더 캐시 namespace 자체를
+  //   별도(EXPORT_RENDER_CONFIG_VERSION_V2)로 분리한다. V1 결과물이 절대로 V2 캐시에
+  //   섞이지 않도록 한다.
+  const mathEngineRaw = String(src.mathEngine || '').trim().toLowerCase();
+  const mathEngineNormalized = mathEngineRaw === 'mathjax-svg' ? 'mathjax-svg' : 'xelatex-v2';
+  const isV2Engine = mathEngineNormalized === 'xelatex-v2';
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
-    renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
+    renderConfigVersion: isV2Engine
+      ? EXPORT_RENDER_CONFIG_VERSION_V2
+      : EXPORT_RENDER_CONFIG_VERSION,
     layoutColumns,
     maxQuestionsPerPage,
     layoutMode,
@@ -914,7 +928,7 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     questionModeByQuestionId: questionModeByQuestionUid,
     questionScoreByQuestionId: questionScoreByQuestionUid,
     hideDocumentHeader: hidePreviewHeader,
-    mathEngine: String(src.mathEngine || '').trim() || undefined,
+    mathEngine: mathEngineNormalized || undefined,
     disableAutoLabels,
   };
 }

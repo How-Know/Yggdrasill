@@ -192,43 +192,54 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
         return _addMonthsEom(reg, cycle - 1);
       }
 
-      // 대략적인 cycle 범위(월 단위) + 여유 버퍼
-      final approxStartCycle = _monthsBetween(reg, start) + 1;
-      final approxEndCycle = _monthsBetween(reg, effectiveEnd) + 1;
-      int minCycle = (approxStartCycle < approxEndCycle ? approxStartCycle : approxEndCycle) - 6;
-      int maxCycle = (approxStartCycle > approxEndCycle ? approxStartCycle : approxEndCycle) + 6;
-      if (minCycle < 1) minCycle = 1;
-      if (maxCycle < 1) continue;
-
-      final candidateCycles = <int>{};
-      for (int c = minCycle; c <= maxCycle; c++) {
-        candidateCycles.add(c);
-      }
-      // ✅ 예외 케이스: 연기(postpone) 등으로 due_date가 크게 이동한 레코드는 실제 due_date 범위로 보강
-      for (final r in recordsSorted) {
-        final d = _dateOnly(r.dueDate);
-        if (!d.isBefore(start) && !d.isAfter(effectiveEnd)) {
-          candidateCycles.add(r.cycle);
-        }
-      }
-
       final items = <_PaymentItem>[];
-      for (final cycle in candidateCycles) {
-        if (cycle < 1) continue;
-        final due = resolveDueDateForCycle(cycle);
-        if (due.isBefore(start) || due.isAfter(effectiveEnd)) continue;
-        final prevDue = cycle <= 1 ? reg : resolveDueDateForCycle(cycle - 1);
+      void addItemForCycle(int cycle, DateTime due, PaymentRecord? rec) {
+        if (cycle < 1) return;
+        if (due.isBefore(start) || due.isAfter(effectiveEnd)) return;
+        final prevDue =
+            cycle <= 1 ? reg : resolveDueDateForCycle(cycle - 1);
         final nextDue = resolveDueDateForCycle(cycle + 1);
-        final rec = byCycle[cycle];
         items.add(_PaymentItem(
           studentWithInfo: studentWithInfo,
           dueDate: due,
           prevDueDate: prevDue,
           nextDueDate: nextDue,
           cycle: cycle,
-          paidDate: rec?.paidDate == null ? null : _dateOnly(rec!.paidDate!),
+          paidDate:
+              rec?.paidDate == null ? null : _dateOnly(rec!.paidDate!),
         ));
       }
+
+      // DB 레코드 기준(면제 후 회차 재번호). 달력 월→회차 합성은 사용하지 않음.
+      for (final r in recordsSorted) {
+        if (r.waivedAt != null) continue;
+        addItemForCycle(r.cycle, _dateOnly(r.dueDate), r);
+      }
+
+      if (recordsSorted.isNotEmpty) {
+        final PaymentRecord last = recordsSorted.last;
+        if (last.waivedAt == null) {
+          for (int i = 1; i <= 3; i++) {
+            final nextCycle = last.cycle + i;
+            if (byCycle.containsKey(nextCycle)) continue;
+            final due = _addMonthsEom(_dateOnly(last.dueDate), i);
+            addItemForCycle(nextCycle, due, null);
+          }
+        }
+      } else {
+        // 등록만 있고 결제 레코드가 없을 때: 기존 달력 기반 후보
+        final approxStartCycle = _monthsBetween(reg, start) + 1;
+        final approxEndCycle = _monthsBetween(reg, effectiveEnd) + 1;
+        int minCycle =
+            (approxStartCycle < approxEndCycle ? approxStartCycle : approxEndCycle);
+        int maxCycle =
+            (approxStartCycle > approxEndCycle ? approxStartCycle : approxEndCycle) + 3;
+        if (minCycle < 1) minCycle = 1;
+        for (int c = minCycle; c <= maxCycle; c++) {
+          addItemForCycle(c, resolveDueDateForCycle(c), byCycle[c]);
+        }
+      }
+
       if (items.isEmpty) continue;
 
       final unpaidItems = items.where((i) => !i.isPaid).toList();

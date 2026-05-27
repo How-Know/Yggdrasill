@@ -717,7 +717,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
 
   String _normalizeMathEngineValue(dynamic raw) {
     final value = '$raw'.trim().toLowerCase();
-    return value == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
+    if (value == 'mathjax-svg') return 'mathjax-svg';
+    if (value == 'xelatex-v2') return 'xelatex-v2';
+    return 'xelatex';
   }
 
   List<ProblemBankPreviewQuestionScoreEntry> _scoreEntriesForPreset(

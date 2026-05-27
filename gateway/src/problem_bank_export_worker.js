@@ -55,7 +55,11 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v104_par_first_pad_skip';
+const RENDER_CONFIG_VERSION = 'pb_render_v103_stable_01';
+// V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
+//   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
+//   동일 입력 → 동일 캐시 키가 산출된다.
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_assignment_font_01';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -2508,9 +2512,19 @@ function buildRenderConfigFromJob(job) {
     options.disableAutoLabels ?? options.suppressAutoLabels ?? options.disableAutoColumnLabels,
     false,
   );
+  // mathEngine 을 먼저 결정해 V2 엔진이 선택되면 캐시 namespace 자체를 분리한다.
+  //   review_compact / reviewPdf 경로는 항상 V1(xelatex) 로 강제하던 기존 규칙은 그대로.
+  const isReviewForcedXeLatex =
+    profileHint === 'review_compact' ||
+    normalizeBool(options.reviewPdf ?? options.review_pdf, false);
+  const requestedMathEngine = String(options.mathEngine || '').trim().toLowerCase();
+  const mathEngineFinal = isReviewForcedXeLatex
+    ? 'xelatex'
+    : (requestedMathEngine === 'mathjax-svg' ? 'mathjax-svg' : 'xelatex-v2');
+  const isV2Engine = mathEngineFinal === 'xelatex-v2';
   return {
     // Always normalize to current renderer version on worker side.
-    renderConfigVersion: RENDER_CONFIG_VERSION,
+    renderConfigVersion: isV2Engine ? RENDER_CONFIG_VERSION_V2 : RENDER_CONFIG_VERSION,
     templateProfile: profileHint,
     paperSize: normalizePaper(job.paper_size),
     includeAnswerSheet: job.include_answer_sheet === true,
@@ -2548,11 +2562,7 @@ function buildRenderConfigFromJob(job) {
     subjectTitleText,
     titlePageTopText,
     timeLimitText,
-    mathEngine:
-      profileHint === 'review_compact' ||
-      normalizeBool(options.reviewPdf ?? options.review_pdf, false)
-        ? 'xelatex'
-        : (String(options.mathEngine || '').trim() || undefined),
+    mathEngine: mathEngineFinal,
     reviewPdf: normalizeBool(options.reviewPdf ?? options.review_pdf, false),
     disableAutoLabels,
   };
@@ -4495,6 +4505,10 @@ async function processOneJob(job) {
         renderConfigVersion:
           rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
         renderHash,
+        // Flutter dialog 가 응답 mathEngine 을 검증할 때 가장 먼저 보는 필드.
+        //   pb_exports.options 는 job 생성 시점 값이라 V1->V2 전환 시 stale 일 수 있어
+        //   result_summary 에 *실제로 렌더에 사용된* 엔진을 명시한다.
+        mathEngine: rendered.mathEngine || renderConfig?.mathEngine || undefined,
         questionCount: exportQuestions.length,
         figureAppliedCount,
         figureDegradedCount,
@@ -4571,6 +4585,10 @@ async function processOneJob(job) {
           renderConfigVersion:
             rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
           renderHash,
+          // Flutter dialog 가 응답 mathEngine 을 검증할 때 가장 먼저 보는 필드.
+          //   pb_exports.options 는 job 생성 시점 값이라 V1->V2 전환 시 stale 일 수 있어
+          //   result_summary 에 *실제로 렌더에 사용된* 엔진을 명시한다.
+          mathEngine: rendered.mathEngine || renderConfig?.mathEngine || undefined,
           questionCount: exportQuestions.length,
           figureAppliedCount,
           figureDegradedCount,

@@ -5,6 +5,7 @@ class PaymentRecord {
   final DateTime dueDate; // 수업료를 내야하는 날짜
   final DateTime? paidDate; // 실제로 납부한 날짜
   final String? postponeReason; // 연기 사유
+  final DateTime? waivedAt; // 면제(휴원 등) 처리일
 
   PaymentRecord({
     this.id,
@@ -13,6 +14,7 @@ class PaymentRecord {
     required this.dueDate,
     this.paidDate,
     this.postponeReason,
+    this.waivedAt,
   });
 
   Map<String, dynamic> toMap() {
@@ -23,6 +25,7 @@ class PaymentRecord {
       'due_date': dueDate.millisecondsSinceEpoch,
       'paid_date': paidDate?.millisecondsSinceEpoch,
       'postpone_reason': postponeReason,
+      'waived_at': waivedAt?.millisecondsSinceEpoch,
     };
   }
 
@@ -36,6 +39,9 @@ class PaymentRecord {
         ? DateTime.fromMillisecondsSinceEpoch(map['paid_date'])
         : null,
       postponeReason: map['postpone_reason'] as String?,
+      waivedAt: map['waived_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['waived_at'])
+          : null,
     );
   }
 
@@ -46,6 +52,7 @@ class PaymentRecord {
     DateTime? dueDate,
     DateTime? paidDate,
     String? postponeReason,
+    DateTime? waivedAt,
   }) {
     return PaymentRecord(
       id: id ?? this.id,
@@ -54,6 +61,7 @@ class PaymentRecord {
       dueDate: dueDate ?? this.dueDate,
       paidDate: paidDate ?? this.paidDate,
       postponeReason: postponeReason ?? this.postponeReason,
+      waivedAt: waivedAt ?? this.waivedAt,
     );
   }
 }

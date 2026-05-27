@@ -33,7 +33,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.questionScoreByQuestionId,
     this.presetDisplayName = '',
     this.presetIdToUpdate = '',
-    this.mathEngine = 'xelatex',
+    this.mathEngine = 'xelatex-v2',
     this.disableAutoLabels = false,
     this.assignmentFlowName = '',
   });
@@ -113,7 +113,7 @@ class ProblemBankPreviewRefreshRequest {
 class ProblemBankPreviewRefreshResult {
   const ProblemBankPreviewRefreshResult({
     required this.pdfUrl,
-    this.mathEngine = 'xelatex',
+    this.mathEngine = 'xelatex-v2',
     this.titlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.timeLimitText = '',
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
@@ -194,7 +194,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialIncludeAnswerSheet = true,
     this.initialIncludeExplanation = false,
     this.initialIncludeQuestionScore = false,
-    this.initialMathEngine = 'xelatex',
+    this.initialMathEngine = 'xelatex-v2',
     this.initialQuestionScoreByQuestionId = const <String, double>{},
     this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
     this.initialEditingPresetId = '',
@@ -260,7 +260,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     bool initialIncludeAnswerSheet = true,
     bool initialIncludeExplanation = false,
     bool initialIncludeQuestionScore = false,
-    String initialMathEngine = 'xelatex',
+    String initialMathEngine = 'xelatex-v2',
     Map<String, double> initialQuestionScoreByQuestionId =
         const <String, double>{},
     List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries =
@@ -374,7 +374,7 @@ class _ProblemBankExportServerPreviewDialogState
   bool _isGeneratingPdf = false;
   bool _isSavingSettings = false;
   bool _isCreatingAssignment = false;
-  String _mathEngine = 'xelatex';
+  String _mathEngine = 'xelatex-v2';
   String? _previewFailureMessage;
   String _lastPresetDisplayName = '';
   // 프리셋 카드에서 진입했을 때 해당 프리셋을 "덮어쓰기" 하기 위한 참조.
@@ -406,7 +406,12 @@ class _ProblemBankExportServerPreviewDialogState
     super.initState();
     _currentPdfUrl = widget.pdfUrl;
     final initialEngine = widget.initialMathEngine.trim().toLowerCase();
-    _mathEngine = initialEngine == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
+    // V2 (xelatex-v2) 는 한글-수식 시각 정렬·줄간격 대칭을 새로 잡는 별도 파이프라인.
+    //   V1 (xelatex) 캐시·매크로와 완전히 격리되어 동작하므로, V2 가 명시적으로 들어오면
+    //   그대로 보존한다.
+    _mathEngine = initialEngine == 'mathjax-svg'
+        ? 'mathjax-svg'
+        : 'xelatex-v2';
     _previewFailureMessage = null;
     _editingPresetId = widget.initialEditingPresetId.trim();
     _editingPresetName = widget.initialEditingPresetName.trim();
@@ -3616,9 +3621,9 @@ class _ProblemBankExportServerPreviewDialogState
                           icon: Icon(Icons.code_rounded, size: 16),
                         ),
                         ButtonSegment<String>(
-                          value: 'xelatex',
-                          label: Text('XeLaTeX'),
-                          icon: Icon(Icons.description_rounded, size: 16),
+                          value: 'xelatex-v2',
+                          label: Text('XeLaTeX V2'),
+                          icon: Icon(Icons.science_rounded, size: 16),
                         ),
                       ],
                       selected: <String>{_mathEngine},

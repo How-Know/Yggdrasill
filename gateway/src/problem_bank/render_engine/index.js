@@ -6,8 +6,12 @@ import { renderHtmlToPdfBuffer, renderHtmlToImageBuffer } from './chrome/render_
 import { createMathSvgRenderer } from './math/mathjax_svg_renderer.js';
 import { normalizeWhitespace } from './utils/text.js';
 import { renderQuestionWithXeLatex, renderPdfWithXeLatex } from './xelatex/renderer.js';
+import {
+  renderQuestionWithXeLatex as renderQuestionWithXeLatexV2,
+  renderPdfWithXeLatex as renderPdfWithXeLatexV2,
+} from './xelatex_v2/renderer.js';
 
-const VALID_MATH_ENGINES = new Set(['mathjax-svg', 'xelatex']);
+const VALID_MATH_ENGINES = new Set(['mathjax-svg', 'xelatex', 'xelatex-v2']);
 function normalizeMathEngine(raw) {
   const v = String(raw || '').trim().toLowerCase();
   return VALID_MATH_ENGINES.has(v) ? v : 'mathjax-svg';
@@ -588,8 +592,11 @@ export async function renderPdfWithHtmlEngine({
 }) {
   const mathEngine = normalizeMathEngine(rawEngine);
 
-  if (mathEngine === 'xelatex') {
-    return renderPdfWithXeLatex({
+  if (mathEngine === 'xelatex' || mathEngine === 'xelatex-v2') {
+    const render = mathEngine === 'xelatex-v2'
+      ? renderPdfWithXeLatexV2
+      : renderPdfWithXeLatex;
+    const rendered = await render({
       questions,
       renderConfig,
       profile,
@@ -609,6 +616,12 @@ export async function renderPdfWithHtmlEngine({
       fontSize,
       supabaseClient,
     });
+    // 응답 mathEngine 을 *요청한 엔진과 동일*하게 강제 주입한다.
+    //   클라이언트(Flutter) 가 응답의 mathEngine 과 요청 mathEngine 을 비교해
+    //   mismatch 시 미리보기를 차단하므로, V2 path 의 내부 hardcode 누락에 대비한
+    //   이중 안전망. (V2 renderer 가 V1 복사본이라 'xelatex' hardcode 가 남아있을 수
+    //   있음.)
+    return { ...rendered, mathEngine };
   }
 
   const mathRenderer = createMathSvgRenderer();
@@ -778,8 +791,11 @@ export async function renderQuestionPreview({
 }) {
   const mathEngine = normalizeMathEngine(rawEngine);
 
-  if (mathEngine === 'xelatex') {
-    const { pngBuffer, texSource } = await renderQuestionWithXeLatex({
+  if (mathEngine === 'xelatex' || mathEngine === 'xelatex-v2') {
+    const render = mathEngine === 'xelatex-v2'
+      ? renderQuestionWithXeLatexV2
+      : renderQuestionWithXeLatex;
+    const { pngBuffer, texSource } = await render({
       question,
       viewportWidth,
       deviceScaleFactor,

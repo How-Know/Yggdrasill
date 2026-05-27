@@ -60,7 +60,12 @@ const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
 const String kLearningRenderConfigVersion =
-    'pb_render_v104_par_first_pad_skip';
+    'pb_render_v103_stable_01';
+// V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. 서버 측
+//   EXPORT_RENDER_CONFIG_VERSION_V2 / RENDER_CONFIG_VERSION_V2 와 일치해야 한다.
+//   클라이언트가 mathEngine='xelatex-v2' 로 요청하면 서버 normalize 단계에서
+//   renderConfigVersion 이 이 값으로 덮어써져 V1 캐시와 자동 격리된다.
+const String kLearningRenderConfigVersionV2 = 'pb_render_v2_assignment_font_01';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({

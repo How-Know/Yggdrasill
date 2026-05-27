@@ -6252,7 +6252,8 @@ class DataManager {
             await TenantService.instance.ensureActiveAcademy();
         final data = await Supabase.instance.client
             .from('payment_records')
-            .select('id,student_id,cycle,due_date,paid_date,postpone_reason')
+            .select(
+                'id,student_id,cycle,due_date,paid_date,postpone_reason,waived_at')
             .eq('academy_id', academyId)
             .order('student_id')
             .order('cycle');
@@ -6262,12 +6263,17 @@ class DataManager {
           final String? dueStr =
               m['due_date'] as String?; // DATE → 'YYYY-MM-DD'
           final String? paidStr = m['paid_date'] as String?; // nullable
+          final String? waivedStr = m['waived_at'] as String?;
           final DateTime due = (dueStr != null && dueStr.isNotEmpty)
               ? DateTime.parse(dueStr)
               : DateTime.now();
           final DateTime? paid = (paidStr != null && paidStr.isNotEmpty)
               ? DateTime.parse(paidStr)
               : null;
+          final DateTime? waived =
+              (waivedStr != null && waivedStr.isNotEmpty)
+                  ? DateTime.parse(waivedStr)
+                  : null;
           return PaymentRecord(
             id: null, // local autoincrement와 다르게 서버는 별도 UUID. 필요 시 확장
             studentId: sid,
@@ -6275,6 +6281,7 @@ class DataManager {
             dueDate: due,
             paidDate: paid,
             postponeReason: m['postpone_reason'] as String?,
+            waivedAt: waived,
           );
         }).toList();
         paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
@@ -6412,6 +6419,51 @@ class DataManager {
       await loadPaymentRecords();
     } catch (e, st) {
       print('[ERROR] postpone_due_date RPC 실패: $e\n$st');
+    }
+  }
+
+  Future<void> updatePaidDate(
+      String studentId, int cycle, DateTime paidDate) async {
+    if (!TagPresetService.preferSupabaseRead) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('update_paid_date', params: {
+        'p_student_id': studentId,
+        'p_cycle': cycle,
+        'p_paid': paidDate.toIso8601String().substring(0, 10),
+        'p_academy_id': academyId,
+      });
+      await loadPaymentRecords();
+    } catch (e, st) {
+      print('[ERROR] update_paid_date RPC 실패: $e\n$st');
+      rethrow;
+    }
+  }
+
+  /// 미납 회차 면제(휴원 등). DB 행을 삭제하지 않고 waived_at을 기록한다.
+  Future<void> waivePaymentCycle(
+    String studentId,
+    int cycle, {
+    DateTime? dueDate,
+  }) async {
+    if (!TagPresetService.preferSupabaseRead) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final params = <String, dynamic>{
+        'p_student_id': studentId,
+        'p_cycle': cycle,
+        'p_academy_id': academyId,
+      };
+      if (dueDate != null) {
+        params['p_due'] = dueDate.toIso8601String().substring(0, 10);
+      }
+      await Supabase.instance.client.rpc('waive_payment_cycle', params: params);
+      await loadPaymentRecords();
+    } catch (e, st) {
+      print('[ERROR] waive_payment_cycle RPC 실패: $e\n$st');
+      rethrow;
     }
   }
 

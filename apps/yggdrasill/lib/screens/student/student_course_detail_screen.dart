@@ -23,6 +23,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   DateTime _currentDate = DateTime.now();
   int _selectedTabIndex = 0; // 0: Payment, 1: Attendance, 2: History
   final ScrollController _attendanceScrollController = ScrollController();
+  final ScrollController _paymentHistoryScrollController = ScrollController();
 
   @override
   void initState() {
@@ -173,6 +174,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   @override
   void dispose() {
     _attendanceScrollController.dispose();
+    _paymentHistoryScrollController.dispose();
     super.dispose();
   }
 
@@ -905,6 +907,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final student = widget.studentWithInfo.student;
     final payments = DataManager.instance
         .getPaymentRecordsForStudent(student.id)
+        .where((r) => r.waivedAt == null)
+        .toList()
       ..sort((a, b) => b.dueDate.compareTo(a.dueDate));
     final DateTime now = DateTime.now();
     final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
@@ -913,10 +917,12 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     if (payments.isNotEmpty) {
       upcoming = payments.lastWhere(
         (record) =>
-            record.paidDate == null && !record.dueDate.isBefore(nextMonthStart),
+            record.paidDate == null &&
+            record.waivedAt == null &&
+            !record.dueDate.isBefore(nextMonthStart),
         orElse: () {
           return payments.firstWhere(
-            (record) => record.paidDate == null,
+            (record) => record.paidDate == null && record.waivedAt == null,
             orElse: () => payments.first,
           );
         },
@@ -1006,7 +1012,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
             width: double.infinity,
             child: OutlinedButton(
               onPressed: () =>
-                  _showPaymentDatePicker(upcoming, markAsPaid: false),
+                  _showPaymentDatePicker(upcoming,
+                      mode: _PaymentDatePickerMode.dueDate),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF9FB3B3),
                 side: const BorderSide(color: Color(0xFF4D5A5A)),
@@ -1112,11 +1119,76 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     );
   }
 
+  List<_PaymentHistoryListEntry> _paymentHistoryEntries(String studentId) {
+    final registrationDate = widget.studentWithInfo.basicInfo.registrationDate;
+    final activeRecords = DataManager.instance
+        .getPaymentRecordsForStudent(studentId)
+        .where((r) => r.waivedAt == null)
+        .toList();
+
+    final entries = <_PaymentHistoryListEntry>[
+      for (final r in activeRecords)
+        _PaymentHistoryListEntry(
+          record: r,
+          isWaived: false,
+          dueDate: r.dueDate,
+          displayCycle: r.cycle,
+        ),
+    ];
+
+    if (registrationDate != null) {
+      final regDate = DateTime(
+        registrationDate.year,
+        registrationDate.month,
+        registrationDate.day,
+      );
+      var month = DateTime(regDate.year, regDate.month, 1);
+      var endMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+      if (activeRecords.isNotEmpty) {
+        final latestDue = activeRecords
+            .map((r) => r.dueDate)
+            .reduce((a, b) => a.isAfter(b) ? a : b);
+        final latestMonth =
+            DateTime(latestDue.year, latestDue.month, 1);
+        if (latestMonth.isAfter(endMonth)) endMonth = latestMonth;
+      }
+
+      while (!month.isAfter(endMonth)) {
+        if (_paymentRecordForDueMonth(studentId, month) == null) {
+          final monthAnchor = DateTime(month.year, month.month, 1);
+          final hasLaterBilling = activeRecords.any(
+            (r) => DateTime(r.dueDate.year, r.dueDate.month, 1)
+                .isAfter(monthAnchor),
+          );
+          if (hasLaterBilling) {
+            entries.add(
+              _PaymentHistoryListEntry(
+                isWaived: true,
+                dueDate: _getActualPaymentDateForMonth(
+                  studentId,
+                  regDate,
+                  month,
+                ),
+                displayCycle: _calculateCycleNumber(regDate, month),
+              ),
+            );
+          }
+        }
+        if (month.month == 12) {
+          month = DateTime(month.year + 1, 1, 1);
+        } else {
+          month = DateTime(month.year, month.month + 1, 1);
+        }
+      }
+    }
+
+    entries.sort((a, b) => b.dueDate.compareTo(a.dueDate));
+    return entries;
+  }
+
   Widget _buildPaymentHistoryList({double? maxHeight}) {
     final studentId = widget.studentWithInfo.student.id;
-    final entries = DataManager.instance
-        .getPaymentRecordsForStudent(studentId)
-      ..sort((a, b) => b.cycle.compareTo(a.cycle));
+    final entries = _paymentHistoryEntries(studentId);
 
     if (entries.isEmpty) {
       return Container(
@@ -1140,13 +1212,69 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final double chipFontSize = 14;
 
     final listView = ListView.separated(
+      controller: _paymentHistoryScrollController,
       padding: const EdgeInsets.symmetric(vertical: 8),
       physics: const BouncingScrollPhysics(),
       itemCount: entries.length,
       separatorBuilder: (_, __) =>
           const Divider(color: Color(0xFF223131), height: 1),
       itemBuilder: (context, index) {
-        final record = entries[index];
+        final entry = entries[index];
+        if (entry.isWaived) {
+          const Color waiveColor = Color(0xFF6B7A7A);
+          return Opacity(
+            opacity: 0.48,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              child: Row(
+                children: [
+                  Text(
+                    '${entry.displayCycle}회차',
+                    style: labelStyle.copyWith(color: Colors.white38),
+                  ),
+                  const SizedBox(width: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 6),
+                    child: Text(
+                      DateFormat('yyyy.MM.dd').format(entry.dueDate),
+                      style: dateStyle.copyWith(color: Colors.white38),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 6),
+                    child: Text(
+                      '—',
+                      style: dateStyle.copyWith(color: Colors.white24),
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: waiveColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: waiveColor.withOpacity(0.35)),
+                    ),
+                    child: Text(
+                      '면제',
+                      style: TextStyle(
+                        color: waiveColor.withOpacity(0.9),
+                        fontSize: chipFontSize,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final record = entry.record!;
         final bool isPaid = record.paidDate != null;
         final bool isUpcoming = !isPaid && record.dueDate.isAfter(today);
         String statusText;
@@ -1163,18 +1291,19 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         }
 
         final canEditDueDate = !isPaid;
+        final bool isOverdue = statusText == '미납';
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           child: Row(
             children: [
               Text('${record.cycle}회차', style: labelStyle),
-              const SizedBox(width: 20),
+              const SizedBox(width: 16),
               InkWell(
                 onTap: canEditDueDate
                     ? () => _showPaymentDatePicker(
                           record,
-                          markAsPaid: false,
+                          mode: _PaymentDatePickerMode.dueDate,
                         )
                     : null,
                 borderRadius: BorderRadius.circular(8),
@@ -1197,14 +1326,39 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   ),
                 ),
               ),
+              const SizedBox(width: 16),
+              InkWell(
+                onTap: () => _showPaymentDatePicker(
+                  record,
+                  mode: _PaymentDatePickerMode.paidDate,
+                ),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Text(
+                    isPaid
+                        ? DateFormat('yyyy.MM.dd').format(record.paidDate!)
+                        : '—',
+                    style: dateStyle.copyWith(
+                      color: isPaid
+                          ? const Color(0xFF33A373)
+                          : Colors.white54,
+                      fontWeight: FontWeight.w600,
+                      decoration:
+                          isPaid ? TextDecoration.underline : TextDecoration.none,
+                      decorationColor: isPaid
+                          ? const Color(0xFF33A373)
+                          : null,
+                    ),
+                  ),
+                ),
+              ),
               const Spacer(),
               InkWell(
-                onTap: isPaid
-                    ? null
-                    : () => _showPaymentDatePicker(
-                          record,
-                          markAsPaid: true,
-                        ),
+                onTap: isOverdue
+                    ? () => _confirmDeletePaymentRecord(record)
+                    : null,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
                   padding:
@@ -1229,7 +1383,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       },
     );
 
-    final scrollable = Scrollbar(child: listView);
+    final scrollable = Scrollbar(
+      controller: _paymentHistoryScrollController,
+      child: listView,
+    );
     final content = maxHeight != null
         ? SizedBox(height: maxHeight, child: scrollable)
         : scrollable;
@@ -1280,26 +1437,52 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     return all;
   }
 
+  PaymentRecord? _paymentRecordForDueMonth(String studentId, DateTime month) {
+    final records =
+        DataManager.instance.getPaymentRecordsForStudent(studentId);
+    for (final r in records) {
+      if (r.waivedAt != null) continue;
+      if (r.dueDate.year == month.year && r.dueDate.month == month.month) {
+        return r;
+      }
+    }
+    return null;
+  }
+
   _MonthlyDotInfo _resolveMonthlyStatus(
       String studentId, DateTime registrationDate, DateTime month) {
     final DateTime regDate = DateTime(
         registrationDate.year, registrationDate.month, registrationDate.day);
     final DateTime monthAnchor = DateTime(month.year, month.month, 1);
-    final int cycle = _calculateCycleNumber(regDate, monthAnchor);
-    if (cycle <= 0) {
+    if (monthAnchor.isBefore(DateTime(regDate.year, regDate.month, 1))) {
       return const _MonthlyDotInfo(
           color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
+
+    final record = _paymentRecordForDueMonth(studentId, month);
+    if (record != null) {
+      if (record.paidDate != null) {
+        return const _MonthlyDotInfo(color: Color(0xFF33A373), caption: '납부');
+      }
+      final DateTime now = DateTime.now();
+      if (record.dueDate.isAfter(now)) {
+        return const _MonthlyDotInfo(color: Color(0xFFF2B45B), caption: '예정');
+      }
+      return const _MonthlyDotInfo(color: Color(0xFFE57373), caption: '미납');
+    }
+
+    final records =
+        DataManager.instance.getPaymentRecordsForStudent(studentId);
+    final hasLaterBilling = records.any((r) =>
+        r.waivedAt == null &&
+        DateTime(r.dueDate.year, r.dueDate.month, 1).isAfter(monthAnchor));
+    if (hasLaterBilling) {
+      return const _MonthlyDotInfo(
+          color: Color(0xFF3C4747), caption: '면제', dimmed: true);
+    }
+
     final DateTime dueDate =
         _getActualPaymentDateForMonth(studentId, regDate, month);
-    if (dueDate.isBefore(regDate)) {
-      return const _MonthlyDotInfo(
-          color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
-    }
-    final record = DataManager.instance.getPaymentRecord(studentId, cycle);
-    if (record?.paidDate != null) {
-      return const _MonthlyDotInfo(color: Color(0xFF33A373), caption: '납부');
-    }
     final DateTime now = DateTime.now();
     if (dueDate.isAfter(now)) {
       return const _MonthlyDotInfo(color: Color(0xFFF2B45B), caption: '예정');
@@ -1358,12 +1541,84 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     return DateFormat('HH:mm').format(dt);
   }
 
-  Future<void> _showPaymentDatePicker(PaymentRecord record,
-      {required bool markAsPaid}) async {
+  Future<void> _confirmDeletePaymentRecord(PaymentRecord record) async {
+    final dueLabel = DateFormat('yyyy.MM.dd').format(record.dueDate);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0B1112),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF223131)),
+          ),
+          title: const Text(
+            '납부 회차 면제',
+            style: TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Text(
+            '${record.cycle}회차($dueLabel 예정)를 면제 처리합니다.\n'
+            '이후 회차 번호가 다시 매겨지며, 휴원 등 해당 월 청구가 없을 때 사용합니다.',
+            style: const TextStyle(color: Colors.white70, fontSize: 15),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text(
+                '면제',
+                style: TextStyle(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await DataManager.instance.waivePaymentCycle(
+        record.studentId,
+        record.cycle,
+        dueDate: record.dueDate,
+      );
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${record.cycle}회차가 면제 처리되었습니다.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('면제 처리에 실패했습니다: $e')),
+      );
+    }
+  }
+
+  Future<void> _showPaymentDatePicker(
+    PaymentRecord record, {
+    required _PaymentDatePickerMode mode,
+  }) async {
+    final bool isPaid = record.paidDate != null;
+    final DateTime initialDate = switch (mode) {
+      _PaymentDatePickerMode.dueDate => record.dueDate,
+      _PaymentDatePickerMode.paidDate =>
+        record.paidDate ?? DateTime.now(),
+    };
+
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate:
-          markAsPaid ? (record.paidDate ?? DateTime.now()) : record.dueDate,
+      initialDate: initialDate,
       firstDate: DateTime(record.dueDate.year - 1, 1, 1),
       lastDate: DateTime(record.dueDate.year + 2, 12, 31),
       builder: (context, child) {
@@ -1381,39 +1636,52 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         );
       },
     );
-    if (picked != null) {
-      if (markAsPaid) {
-        // 미납/예정 항목 터치 시 실제 납부일을 기록
-        await DataManager.instance
-            .recordPayment(record.studentId, record.cycle, picked);
-      } else {
-        // 예정일 카드에서 수정 시 납부 처리 없이 예정일만 변경
-        await DataManager.instance.postponeDueDate(
-          record.studentId,
-          record.cycle,
-          picked,
-          'manual_due_edit',
-        );
+    if (picked == null) return;
+
+    try {
+      switch (mode) {
+        case _PaymentDatePickerMode.dueDate:
+          await DataManager.instance.postponeDueDate(
+            record.studentId,
+            record.cycle,
+            picked,
+            'manual_due_edit',
+          );
+        case _PaymentDatePickerMode.paidDate:
+          if (isPaid) {
+            await DataManager.instance.updatePaidDate(
+              record.studentId,
+              record.cycle,
+              picked,
+            );
+          } else {
+            await DataManager.instance.recordPayment(
+              record.studentId,
+              record.cycle,
+              picked,
+            );
+          }
       }
       if (mounted) setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('저장에 실패했습니다: $e')),
+      );
     }
   }
 
   DateTime _getActualPaymentDateForMonth(
       String studentId, DateTime registrationDate, DateTime targetMonth) {
-    // registrationDate는 날짜만 사용 (시간 비교 오차 방지)
     final regDate = DateTime(
         registrationDate.year, registrationDate.month, registrationDate.day);
-    final monthAnchor = DateTime(targetMonth.year, targetMonth.month, 1);
-    final cycle = _calculateCycleNumber(regDate, monthAnchor);
+    final record = _paymentRecordForDueMonth(studentId, targetMonth);
+    if (record != null) return record.dueDate;
+
     final int daysInMonth =
         DateUtils.getDaysInMonth(targetMonth.year, targetMonth.month);
     final int dueDay = regDate.day > daysInMonth ? daysInMonth : regDate.day;
-    final defaultDate =
-        DateTime(targetMonth.year, targetMonth.month, dueDay);
-    final record = DataManager.instance.getPaymentRecord(studentId, cycle);
-    if (record != null) return record.dueDate;
-    return defaultDate;
+    return DateTime(targetMonth.year, targetMonth.month, dueDay);
   }
 
   int _calculateCycleNumber(DateTime registrationDate, DateTime paymentDate) {
@@ -1424,6 +1692,22 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         1;
   }
 }
+
+class _PaymentHistoryListEntry {
+  final PaymentRecord? record;
+  final bool isWaived;
+  final DateTime dueDate;
+  final int displayCycle;
+
+  const _PaymentHistoryListEntry({
+    this.record,
+    this.isWaived = false,
+    required this.dueDate,
+    required this.displayCycle,
+  });
+}
+
+enum _PaymentDatePickerMode { dueDate, paidDate }
 
 class _MonthlyDotInfo {
   final Color color;

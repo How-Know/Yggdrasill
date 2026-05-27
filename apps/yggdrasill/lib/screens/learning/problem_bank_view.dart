@@ -115,7 +115,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   int _figureLoadVersion = 0;
   LearningProblemExportSettings _exportSettings =
       LearningProblemExportSettings.initial();
-  String _previewMathEngine = 'xelatex';
+  String _previewMathEngine = 'xelatex-v2';
   LearningProblemExportJob? _activeExportJob;
   _QuestionOrderSaveRequest? _queuedQuestionOrderSave;
   bool _questionOrderSaveInFlight = false;
@@ -1991,7 +1991,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
       String normalizeMathEngineValue(dynamic raw) {
         final v = '$raw'.trim().toLowerCase();
-        return v == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
+        if (v == 'mathjax-svg') return 'mathjax-svg';
+        if (v == 'xelatex-v2') return 'xelatex-v2';
+        return 'xelatex-v2';
       }
 
       Map<String, dynamic> buildRenderPatch(
@@ -2090,8 +2092,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           .toSet();
       final isPresetEditFlow =
           explicitPreset != null || editingPresetId.trim().isNotEmpty;
+      final initialPreviewMathEngine =
+          isPresetEditFlow ? _previewMathEngine : 'xelatex-v2';
       var initialRenderPatch = <String, dynamic>{
-        'mathEngine': _previewMathEngine,
+        'mathEngine': initialPreviewMathEngine,
         // 프리셋 카드에서 들어온 편집 경로는 저장된 라벨을 그대로 복원해야 하므로
         // 최초 렌더부터 서버의 자동 라벨 생성을 막는다.
         if (isPresetEditFlow) 'disableAutoLabels': true,
@@ -2270,7 +2274,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final initialMathEngine = normalizeMathEngineValue(
         initialPrimary('mathEngine') ??
             initialFallback('mathEngine') ??
-            _previewMathEngine,
+            initialPreviewMathEngine,
       );
       if (mounted) {
         setState(() {
@@ -3251,7 +3255,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
         String normalizeMathEngineValue(dynamic raw) {
           final v = '$raw'.trim().toLowerCase();
-          return v == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
+          if (v == 'mathjax-svg') return 'mathjax-svg';
+          if (v == 'xelatex-v2') return 'xelatex-v2';
+          return 'xelatex-v2';
         }
 
         Future<void> applyPresetAndOpenPreview(
