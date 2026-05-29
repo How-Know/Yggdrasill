@@ -30,7 +30,7 @@ import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'learning/models/problem_bank_export_models.dart'
-    show previewAnswerForMode;
+    show kLearningQuestionModeObjective, previewAnswerForMode;
 import '../widgets/dialog_tokens.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../widgets/homework_overview_naesin_past_exam_panel.dart';
@@ -3318,18 +3318,39 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         questionByKey.putIfAbsent(id, () => question);
       }
     }
-    final answerRenderByQuestionId =
-        await _problemBankService.loadUnifiedAnswerRenderAssets(
-      academyId: academyId,
-      sourceKind: 'pb_question',
-      sourceIds: questions.map((question) => question.id),
-    );
+    final modeByUid = preset.questionModeByQuestionUid;
+    String answerRenderKindForMode(String mode) {
+      final normalized = mode.trim().toLowerCase();
+      if (normalized == 'essay' || normalized.contains('서술')) return 'essay';
+      return 'subjective';
+    }
+
+    final sourceIdsByRenderKind = <String, Set<String>>{};
+    for (final uid in selectedUids) {
+      final question = questionByKey[uid];
+      if (question == null) continue;
+      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      if (answerMode == kLearningQuestionModeObjective) continue;
+      sourceIdsByRenderKind
+          .putIfAbsent(answerRenderKindForMode(answerMode), () => <String>{})
+          .add(question.id);
+    }
+    final answerRenderByQuestionIdByKind =
+        <String, Map<String, LearningProblemAnswerRender>>{};
+    for (final entry in sourceIdsByRenderKind.entries) {
+      answerRenderByQuestionIdByKind[entry.key] =
+          await _problemBankService.loadUnifiedAnswerRenderAssets(
+        academyId: academyId,
+        sourceKind: 'pb_question',
+        answerKind: entry.key,
+        sourceIds: entry.value,
+      );
+    }
     final textbookSourceContext = await _loadProblemBankTextbookSourceContext(
       questions: questions,
       homeworkId: baseItem.id,
     );
 
-    final modeByUid = preset.questionModeByQuestionUid;
     final presetScoreByUid = preset.questionScoreByQuestionUid;
 
     // 프리셋(renderConfig)에 저장된 페이지별 문항 수 레이아웃을 우선 사용한다.
@@ -3379,7 +3400,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
       final answer = previewAnswerForMode(question, answerMode).trim();
-      final answerRender = answerRenderByQuestionId[question.id.trim()];
+      final answerRenderKind = answerRenderKindForMode(answerMode);
+      final answerRender =
+          answerRenderByQuestionIdByKind[answerRenderKind]?[question.id.trim()];
       final textbookSourceRow =
           textbookSourceContext.rowsByQuestionId[question.id.trim()];
 
@@ -3422,6 +3445,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               answerImagePixelRatio: answerRender?.pixelRatio,
               answerSourceKind: 'pb_question',
               answerSourceId: question.id.trim(),
+              answerRenderPolicy: answerRenderKind,
               answerAssetKind:
                   answerRender == null ? '' : 'unified_answer_render',
               answerRenderStyleVersion: answerRender?.styleVersion ?? '',

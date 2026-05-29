@@ -711,7 +711,7 @@ const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_stable_01';
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_assignment_font_02';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_cases_condition_stack_01';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -4049,6 +4049,64 @@ function normalizePbAnswerForUnifiedRender(questionRow) {
   return '';
 }
 
+function answerTokenToChoiceIndex(token) {
+  const trimmed = String(token || '').trim();
+  if (!trimmed) return null;
+  const circled = new Map([
+    ['①', 0],
+    ['②', 1],
+    ['③', 2],
+    ['④', 3],
+    ['⑤', 4],
+    ['⑥', 5],
+    ['⑦', 6],
+    ['⑧', 7],
+    ['⑨', 8],
+    ['⑩', 9],
+  ]);
+  if (circled.has(trimmed)) return circled.get(trimmed);
+  const numeric = Number.parseInt(trimmed.replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric - 1 : null;
+}
+
+function normalizeChoiceLine(raw) {
+  return normalizeAnswerValueForTexRender(raw).replace(/\s+/g, ' ').trim();
+}
+
+function pbSubjectiveAnswerFromObjectiveChoiceText(questionRow) {
+  const answer = normalizeAnswerValueForTexRender(questionRow?.objective_answer_key);
+  if (!answer) return '';
+  const choices = Array.isArray(questionRow?.objective_choices) && questionRow.objective_choices.length > 0
+    ? questionRow.objective_choices
+    : (Array.isArray(questionRow?.choices) ? questionRow.choices : []);
+  if (choices.length === 0) return answer;
+  const tokens = answer
+    .split(/[,\s/]+/)
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return answer;
+  const converted = tokens.map((token) => {
+    const idx = answerTokenToChoiceIndex(token);
+    if (idx != null && idx >= 0 && idx < choices.length) {
+      const choice = choices[idx];
+      const text = normalizeChoiceLine(
+        typeof choice === 'string' ? choice : (choice?.text || choice?.label || ''),
+      );
+      if (text) return text;
+    }
+    return token;
+  });
+  return normalizeAnswerValueForTexRender(converted.join(', '));
+}
+
+function pbAnswerTextForUnifiedRenderKind(questionRow, answerKindRaw) {
+  const answerKind = normalizeUnifiedAnswerKind(answerKindRaw);
+  if (answerKind === 'objective' || answerKind === 'image') return '';
+  const subjective = normalizePbAnswerForUnifiedRender(questionRow);
+  if (subjective) return subjective;
+  return pbSubjectiveAnswerFromObjectiveChoiceText(questionRow);
+}
+
 function unifiedAnswerRenderDescriptor({
   sourceKind,
   sourceId,
@@ -4100,16 +4158,21 @@ function textbookAnswerUnifiedDescriptor(answerRow) {
   });
 }
 
-function pbAnswerUnifiedDescriptor(questionRow) {
+function pbAnswerUnifiedDescriptors(questionRow) {
   const sourceId = String(questionRow?.id || '').trim();
-  const answerText = normalizePbAnswerForUnifiedRender(questionRow);
-  if (!isUuid(sourceId) || !answerText) return null;
-  return unifiedAnswerRenderDescriptor({
-    sourceKind: 'pb_question',
-    sourceId,
-    answerKind: 'subjective',
-    answerText,
-  });
+  if (!isUuid(sourceId)) return [];
+  const out = [];
+  for (const answerKind of ['subjective', 'essay']) {
+    const answerText = pbAnswerTextForUnifiedRenderKind(questionRow, answerKind);
+    const descriptor = unifiedAnswerRenderDescriptor({
+      sourceKind: 'pb_question',
+      sourceId,
+      answerKind,
+      answerText,
+    });
+    if (descriptor) out.push(descriptor);
+  }
+  return out;
 }
 
 async function createUnifiedAnswerRenderSignedUrl(storagePath) {
@@ -4164,6 +4227,9 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     .map((style) => String(style || '').trim())
     .filter(Boolean);
   const orderedStyles = [UNIFIED_ANSWER_RENDER_STYLE_VERSION];
+  const requestedAnswerKind = normalizeUnifiedAnswerKind(
+    body?.answer_kind || body?.answerKind || 'subjective',
+  );
 
   if (!isUuid(academyId)) {
     sendJson(res, 400, { ok: false, error: 'academy_id(uuid) required' });
@@ -4177,15 +4243,20 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     sendJson(res, 200, { ok: true, renders: [] });
     return;
   }
+  if (!['subjective', 'essay', 'unknown'].includes(requestedAnswerKind)) {
+    sendJson(res, 400, { ok: false, error: 'answer_kind must be subjective, essay, or unknown' });
+    return;
+  }
 
   const { data, error } = await supa
     .from('answer_render_assets')
     .select(
-      'source_id, engine, storage_bucket, storage_path, width_px, height_px, '
+      'source_id, answer_kind, engine, storage_bucket, storage_path, width_px, height_px, '
       + 'pixel_ratio, style_version, render_error',
     )
     .eq('academy_id', academyId)
     .eq('source_kind', sourceKind)
+    .eq('answer_kind', requestedAnswerKind)
     .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
     .eq('render_error', '')
     .in('source_id', sourceIds)
@@ -4217,6 +4288,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     renders.push({
       key: sourceId,
       source_id: sourceId,
+      answer_kind: String(row.answer_kind || '').trim(),
       url,
       width: Number(row.width_px || 0),
       height: Number(row.height_px || 0),
@@ -4233,6 +4305,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     ok: true,
     style_versions: orderedStyles,
     source_kind: sourceKind,
+    answer_kind: requestedAnswerKind,
     requested: sourceIds.length,
     renders,
   });
@@ -4294,7 +4367,7 @@ async function upsertUnifiedAnswerRenderAsset({
         render_error: '',
         rendered_at: new Date().toISOString(),
       }, {
-        onConflict: 'academy_id,source_kind,source_id,engine,style_version',
+        onConflict: 'academy_id,source_kind,source_id,answer_kind,engine,style_version',
       });
     if (error) throw error;
     return {
@@ -4314,7 +4387,7 @@ async function upsertUnifiedAnswerRenderAsset({
           render_error: compact(err?.message || err, 500),
           rendered_at: new Date().toISOString(),
         }, {
-          onConflict: 'academy_id,source_kind,source_id,engine,style_version',
+          onConflict: 'academy_id,source_kind,source_id,answer_kind,engine,style_version',
         });
     } catch (_) {
       // Migration may not be deployed yet; keep save/backfill resilient.
@@ -4381,7 +4454,7 @@ async function filterUnifiedDescriptorsNeedingRender({
     if (group.length === 0) continue;
     const { data, error } = await supa
       .from('answer_render_assets')
-      .select('source_id, source_hash, render_error')
+      .select('source_id, answer_kind, source_hash, render_error')
       .eq('academy_id', academyId)
       .eq('source_kind', sourceKind)
       .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
@@ -4394,10 +4467,11 @@ async function filterUnifiedDescriptorsNeedingRender({
     const existingBySourceId = new Map();
     for (const asset of Array.isArray(data) ? data : []) {
       const sourceId = String(asset?.source_id || '').trim();
-      if (sourceId) existingBySourceId.set(sourceId, asset);
+      const answerKind = normalizeUnifiedAnswerKind(asset?.answer_kind);
+      if (sourceId) existingBySourceId.set(`${sourceId}\n${answerKind}`, asset);
     }
     for (const item of group) {
-      const asset = existingBySourceId.get(item.sourceId);
+      const asset = existingBySourceId.get(`${item.sourceId}\n${item.answerKind}`);
       const storedHash = String(asset?.source_hash || '').trim();
       const renderError = String(asset?.render_error || '').trim();
       if (!asset || storedHash !== item.sourceHash || renderError.length > 0) {
@@ -6344,6 +6418,7 @@ async function syncTextbookAnswersToProblemBankScope({
   }
 
   let updated = 0;
+  const updatedQuestionIds = [];
   for (const question of questions || []) {
     const key = textbookProblemNumberKey(question?.question_number);
     const answer = key ? answerByNumber.get(key) : null;
@@ -6358,9 +6433,15 @@ async function syncTextbookAnswersToProblemBankScope({
       throw new Error(`sync_pb_question_update_failed: ${updateErr.message || updateErr}`);
     }
     updated += 1;
+    updatedQuestionIds.push(questionId);
   }
 
-  return { updated, documentId, status: String(run?.status || '').trim() };
+  return {
+    updated,
+    updatedQuestionIds,
+    documentId,
+    status: String(run?.status || '').trim(),
+  };
 }
 
 async function handleTextbookAnswersBatchUpsert(body, res) {
@@ -6643,7 +6724,10 @@ async function fetchUnifiedPbAnswerDescriptors({
 }) {
   let query = supa
     .from('pb_questions')
-    .select('id, question_uid, question_type, objective_answer_key, subjective_answer, updated_at, created_at')
+    .select(
+      'id, question_uid, question_type, choices, objective_choices, '
+      + 'objective_answer_key, subjective_answer, updated_at, created_at',
+    )
     .eq('academy_id', academyId);
   if (Array.isArray(sourceIds) && sourceIds.length > 0) {
     query = query.in('id', sourceIds);
@@ -6659,9 +6743,7 @@ async function fetchUnifiedPbAnswerDescriptors({
   return {
     rawFetched: rawRows.length,
     hasMore: sourceIds.length === 0 && rawRows.length >= limit,
-    descriptors: rawRows
-      .map(pbAnswerUnifiedDescriptor)
-      .filter(Boolean),
+    descriptors: rawRows.flatMap(pbAnswerUnifiedDescriptors).filter(Boolean),
   };
 }
 
@@ -6795,12 +6877,38 @@ async function handleTextbookAnswersSyncProblemBank(body, res) {
       gradeLabel,
       scope,
     });
+    let renderAssets = { attempted: 0, rendered: 0, failed: 0, errors: [] };
+    const updatedQuestionIds = Array.isArray(result.updatedQuestionIds)
+      ? result.updatedQuestionIds
+      : [];
+    if (updatedQuestionIds.length > 0) {
+      const descriptorPage = await fetchUnifiedPbAnswerDescriptors({
+        academyId,
+        limit: updatedQuestionIds.length,
+        offset: 0,
+        sourceIds: updatedQuestionIds,
+      });
+      const descriptors = descriptorPage.descriptors || [];
+      const targets = await filterUnifiedDescriptorsNeedingRender({
+        academyId,
+        descriptors,
+      });
+      renderAssets = await renderUnifiedAnswerAssetsForDescriptors({
+        academyId,
+        descriptors: targets,
+      });
+      renderAssets = {
+        ...renderAssets,
+        skipped_existing: descriptors.length - targets.length,
+      };
+    }
     sendJson(res, 200, {
       ok: true,
       scope,
       pb_document_id: result.documentId || '',
       status: result.status || '',
       updated_questions: result.updated || 0,
+      render_assets: renderAssets,
       skipped: result.skipped || '',
     });
   } catch (err) {

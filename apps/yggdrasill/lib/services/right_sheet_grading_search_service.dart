@@ -566,14 +566,35 @@ class RightSheetGradingSearchService {
         questionByKey.putIfAbsent(id, () => question);
       }
     }
-    final answerRenderByQuestionId =
-        await _problemBankService.loadUnifiedAnswerRenderAssets(
-      academyId: academyId,
-      sourceKind: 'pb_question',
-      sourceIds: questions.map((question) => question.id),
-    );
-
     final modeByUid = preset.questionModeByQuestionUid;
+    String answerRenderKindForMode(String mode) {
+      final normalized = mode.trim().toLowerCase();
+      if (normalized == 'essay' || normalized.contains('서술')) return 'essay';
+      return 'subjective';
+    }
+
+    final sourceIdsByRenderKind = <String, Set<String>>{};
+    for (final uid in selectedUids) {
+      final question = questionByKey[uid];
+      if (question == null) continue;
+      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      if (answerMode == kLearningQuestionModeObjective) continue;
+      sourceIdsByRenderKind
+          .putIfAbsent(answerRenderKindForMode(answerMode), () => <String>{})
+          .add(question.id);
+    }
+    final answerRenderByQuestionIdByKind =
+        <String, Map<String, LearningProblemAnswerRender>>{};
+    for (final entry in sourceIdsByRenderKind.entries) {
+      answerRenderByQuestionIdByKind[entry.key] =
+          await _problemBankService.loadUnifiedAnswerRenderAssets(
+        academyId: academyId,
+        sourceKind: 'pb_question',
+        answerKind: entry.key,
+        sourceIds: entry.value,
+      );
+    }
+
     final presetScoreByUid = preset.questionScoreByQuestionUid;
 
     // 홈 채점모드와 동일하게 프리셋(renderConfig)의 실제 출력 레이아웃을 우선한다.
@@ -622,7 +643,9 @@ class RightSheetGradingSearchService {
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
       final answer = previewAnswerForMode(question, answerMode).trim();
-      final answerRender = answerRenderByQuestionId[question.id.trim()];
+      final answerRenderKind = answerRenderKindForMode(answerMode);
+      final answerRender =
+          answerRenderByQuestionIdByKind[answerRenderKind]?[question.id.trim()];
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
         while (
@@ -661,6 +684,7 @@ class RightSheetGradingSearchService {
               answerImagePixelRatio: answerRender?.pixelRatio,
               answerSourceKind: 'pb_question',
               answerSourceId: question.id.trim(),
+              answerRenderPolicy: answerRenderKind,
               answerAssetKind:
                   answerRender == null ? '' : 'unified_answer_render',
               answerRenderStyleVersion: answerRender?.styleVersion ?? '',

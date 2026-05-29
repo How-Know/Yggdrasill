@@ -59,6 +59,20 @@ function measuredWrapMacroLines() {
     '    \\vspace{-0.15\\baselineskip}',
     '  \\end{wrapfigure}',
     '}',
+    '\\long\\def\\YggMeasuredWrapBeginFixed#1#2#3#4#5{%',
+    '  \\par\\begingroup',
+    '  \\setlength{\\columnsep}{#4}%',
+    '  \\setlength{\\intextsep}{0pt}%',
+    '  \\sbox{\\YggWrapObjectBox}{\\begin{minipage}{#2}\\vspace{0pt}#3\\end{minipage}}%',
+    '  \\YggWrapLineCount=#5\\relax',
+    '  \\ifnum\\YggWrapLineCount<2 \\YggWrapLineCount=2\\fi',
+    '  \\ifnum\\YggWrapLineCount>16 \\YggWrapLineCount=16\\fi',
+    '  \\begin{wrapfigure}[\\the\\YggWrapLineCount]{#1}{#2}',
+    '    \\vspace{-0.35\\baselineskip}',
+    '    \\usebox{\\YggWrapObjectBox}',
+    '    \\vspace{-0.15\\baselineskip}',
+    '  \\end{wrapfigure}',
+    '}',
     '\\newcommand{\\YggMeasuredWrapEnd}[1]{%',
     '  \\YggWrapClearRemaining{\\the\\YggWrapLineCount}{#1}%',
     '  \\par\\endgroup',
@@ -668,6 +682,10 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\left\|/g, '\\left|\\,');
   out = out.replace(/\\right\|/g, '\\,\\right|');
   out = out.replace(/(?<!\\left|\\right)\|([^|]+)\|/g, '\\left|\\,$1\\,\\right|');
+  out = out.replace(
+    /\\left\s*(?:\\\{|\\lbrace)\s*\\begin\{array\}\{[^}]*\}([\s\S]*?)\\end\{array\}\s*\\right\s*\./g,
+    (_, body) => `\\begin{cases}${body}\\end{cases}`,
+  );
   out = expandCasesEnvironmentToDisplayArray(out, {
     thinBrace: true,
     braceXScale: 0.58,
@@ -676,6 +694,7 @@ function normalizeMathSegment(mathContent) {
     rowGap: '0em',
     // v98: cases 의 행간을 50% 더 넓힘 (이전 0.88 → 1.32).
     arrayStretch: '1.32',
+    wrapCaseConditionCells: true,
   });
   out = padSqrtFractionContent(out);
 
@@ -985,6 +1004,14 @@ function normalizeLiteralEscapedNewlines(input) {
   return out.replace(/[ \t]{2,}/g, ' ');
 }
 
+function normalizeSoftLineBreakArtifacts(input) {
+  return String(input || '')
+    // Some extracted rows preserve a visual line break before a plain function
+    // call as leading "n\" on the continued line. The intended content is the
+    // function call itself: n\f(12) -> f(12).
+    .replace(/(^|[\r\n])\s*n\\(?=\s*[A-Za-z]\s*\()/g, '$1');
+}
+
 // 줄 내에 큰 수식(분수/√/lim/Σ 등)이 나타나면 위·아래에 vskip 을 추가하는 마커
 // `\mtvisuallinetallpad` 를 삽입한다. 과거에는 "수식 앞 텍스트가 34글자 이상" 일
 // 때만 삽입했지만 (페이지 첫 줄에 짧은 수식이 등장할 때 위로 튀는 것을 막기 위해),
@@ -997,7 +1024,9 @@ const VISUAL_LINE_TALL_MATH_PAD_MIN_PREFIX = 0;
 function smartTexLineCore(text, equations, options = {}) {
   // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
   const clean = normalizeBlankBoxNotation(
-    normalizeLiteralEscapedNewlines(stripMathDelimiters(stripMarkers(text))).trim(),
+    normalizeSoftLineBreakArtifacts(
+      normalizeLiteralEscapedNewlines(stripMathDelimiters(stripMarkers(text))),
+    ).trim(),
   );
   if (!clean) return '';
 
@@ -4101,6 +4130,17 @@ function renderOneQuestion(question, {
     return Math.max(2, Math.min(60, base + extra));
   }
 
+  function estimateFigureWrapLineCount(i, widthEm) {
+    const info = figureInfos[i] || {};
+    const widthPx = Number(info.widthPx || info.width_px || info.width || 0);
+    const heightPx = Number(info.heightPx || info.height_px || info.height || 0);
+    if (!Number.isFinite(widthPx) || !Number.isFinite(heightPx) || widthPx <= 0 || heightPx <= 0) {
+      return 0;
+    }
+    const heightEm = Math.max(0.1, (Math.max(2, Number(widthEm) || 20) * heightPx) / widthPx);
+    return Math.max(2, Math.min(16, Math.ceil(heightEm / 1.70)));
+  }
+
   function renderFigureLatex(i) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
@@ -4238,8 +4278,12 @@ function renderOneQuestion(question, {
     // visual footprint, then place the image against the inner edge.
     const objectAlign = position === 'inline-right' ? 'l' : 'r';
     const object = `\\makebox[\\linewidth][${objectAlign}]{${expr.include}}`;
+    const fixedWrapLines = estimateFigureWrapLineCount(i, widthEm);
+    const beginMacro = fixedWrapLines > 0
+      ? `\\YggMeasuredWrapBeginFixed{${side}}{${occupiedWidthExpr}}{${object}}{${figureWrapGapEm.toFixed(2)}em}{${fixedWrapLines}}`
+      : `\\YggMeasuredWrapBegin{${side}}{${occupiedWidthExpr}}{${object}}{${figureWrapGapEm.toFixed(2)}em}`;
     return [
-      `\\YggMeasuredWrapBegin{${side}}{${occupiedWidthExpr}}{${object}}{${figureWrapGapEm.toFixed(2)}em}`,
+      beginMacro,
       `\\noindent ${text}`,
       `\\YggMeasuredWrapEnd{${textLines}}`,
     ].join('\n') + '\n';
@@ -6213,9 +6257,13 @@ function renderQuickAnswerTableLatex(questions) {
     return hasParens ? `\\left(${frac}\\right)` : frac;
   }
 
+  function answerMathLatex(raw) {
+    return `$\\displaystyle ${normalizeMathSegment(String(raw || '').trim())}$`;
+  }
+
   function formatAnswerSegmentTextMode(raw) {
     const src = String(raw || '');
-    const inlineMathRe = /\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?|[A-Za-z0-9]+(?:\s*(?:\\(?:leq?|geq?|neq?|times|div|cdot|pm|mp)|[=+\-*/^_<>])\s*[-A-Za-z0-9{}\\.]+)+/g;
+    const inlineMathRe = /\\begin\{(cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}[\s\S]*?\\end\{\1\}|\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?|[A-Za-z0-9]+(?:\s*(?:\\(?:leq?|geq?|neq?|times|div|cdot|pm|mp)|[=+\-*/^_<>])\s*[-A-Za-z0-9{}\\.]+)+/g;
     const out = [];
     let last = 0;
     let match;
@@ -6225,7 +6273,7 @@ function renderQuickAnswerTableLatex(questions) {
       const renderedFraction = textFractionLatex(match[0]);
       out.push(renderedFraction
         ? `$\\displaystyle ${renderedFraction}$`
-        : `$\\displaystyle ${match[0].trim()}$`);
+        : answerMathLatex(match[0]));
       last = match.index + match[0].length;
     }
     const tail = src.slice(last);
@@ -6238,6 +6286,9 @@ function renderQuickAnswerTableLatex(questions) {
     const src = String(raw || '');
     if (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(src)) {
       return formatAnswerSegmentTextMode(src);
+    }
+    if (/\\(?:begin\{(?:cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}|left\s*(?:\\\{|\\lbrace))/.test(src)) {
+      return answerMathLatex(src);
     }
     const fractionRe = /\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?/g;
     const out = [];
@@ -6408,7 +6459,7 @@ function renderQuickAnswerTableLatex(questions) {
   }
   function quickAnswerHasTallContent(q) {
     const answer = resolveAnswer(q);
-    return /\\(?:dfrac|tfrac|frac)\b|\\left|\\right|\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/i.test(answer);
+    return /\\(?:dfrac|tfrac|frac)\b|\\begin\{(?:cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}|\\left|\\right|\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/i.test(answer);
   }
   function spanSpec(span) {
     const extraTabColSep = Math.max(0, (span - 1) * 2);

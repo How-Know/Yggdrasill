@@ -11700,7 +11700,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         : (q.confidence >= 0.8
             ? const Color(0xFFE3B341)
             : const Color(0xFFDE6A73));
-    final typeText = q.questionType.trim().isEmpty ? '미분류' : q.questionType;
+    final typeText = _primaryTypeBucket(q);
     final isViewBlock = _isViewBlockQuestion(q);
     final isBlankChoice = _isBlankChoiceQuestion(q);
     final isImageChoice = _isImageChoiceQuestion(q);

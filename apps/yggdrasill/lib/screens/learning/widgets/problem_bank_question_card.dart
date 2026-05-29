@@ -292,6 +292,12 @@ class ProblemBankQuestionCard extends StatelessWidget {
 
   String _difficultyLabel() {
     String readString(Object? value) => value == null ? '' : '$value'.trim();
+    String normalizeLabel(String raw) {
+      final compact = raw.trim().replaceAll(RegExp(r'\s+'), '');
+      if (compact == '대표문제') return '대표 문제';
+      return raw.trim();
+    }
+
     Map<String, dynamic> mapOf(Object? value) {
       if (value is Map<String, dynamic>) return value;
       if (value is Map) {
@@ -306,13 +312,13 @@ class ProblemBankQuestionCard extends StatelessWidget {
           meta['difficulty_label'] ??
           meta['difficultyLabel'],
     );
-    if (direct.isNotEmpty) return direct;
+    if (direct.isNotEmpty) return normalizeLabel(direct);
 
     final crop = mapOf(meta['textbook_crop'] ?? meta['textbookCrop']);
     final cropLabel = readString(
       crop['difficulty_label'] ?? crop['difficultyLabel'] ?? crop['label'],
     );
-    if (cropLabel.isNotEmpty) return cropLabel;
+    if (cropLabel.isNotEmpty) return normalizeLabel(cropLabel);
 
     final cropPage =
         mapOf(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
@@ -321,7 +327,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
           cropPage['difficultyLabel'] ??
           cropPage['label'],
     );
-    return cropPageLabel;
+    return normalizeLabel(cropPageLabel);
   }
 
   String _metaSummaryText() {

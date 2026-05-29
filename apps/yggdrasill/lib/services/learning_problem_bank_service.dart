@@ -2887,6 +2887,7 @@ class LearningProblemBankService {
     required String academyId,
     required String sourceKind,
     required Iterable<String> sourceIds,
+    String answerKind = 'subjective',
     String styleVersion = kUnifiedAnswerRenderStyleVersion,
     List<String> fallbackStyleVersions =
         kUnifiedAnswerRenderStyleVersionFallbacks,
@@ -2902,6 +2903,7 @@ class LearningProblemBankService {
       return const <String, LearningProblemAnswerRender>{};
     }
     if (!hasGateway) return const <String, LearningProblemAnswerRender>{};
+    final safeAnswerKind = _normalizeUnifiedAnswerKind(answerKind);
     try {
       final result = await _gatewayPost(
         '/answers/render-assets/resolve',
@@ -2909,6 +2911,7 @@ class LearningProblemBankService {
           'academyId': safeAcademyId,
           'sourceKind': safeSourceKind,
           'sourceIds': ids,
+          'answerKind': safeAnswerKind,
           'styleVersions': <String>[styleVersion],
         },
       );
@@ -2932,6 +2935,13 @@ class LearningProblemBankService {
     } catch (_) {
       return const <String, LearningProblemAnswerRender>{};
     }
+  }
+
+  String _normalizeUnifiedAnswerKind(String raw) {
+    final kind = raw.trim().toLowerCase();
+    if (kind == 'essay' || kind.contains('서술')) return 'essay';
+    if (kind == 'subjective' || kind.contains('주관')) return 'subjective';
+    return 'subjective';
   }
 
   Future<Map<String, String>> fetchQuestionPreviews({

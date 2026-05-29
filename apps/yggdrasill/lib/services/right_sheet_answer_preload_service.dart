@@ -86,14 +86,16 @@ class RightSheetAnswerPreloadService {
     required String academyId,
     required String sourceKind,
     required String sourceId,
+    required String answerKind,
     required String styleVersion,
   }) {
-    return '${academyId.trim()}|${sourceKind.trim()}|${styleVersion.trim()}|${sourceId.trim()}';
+    return '${academyId.trim()}|${sourceKind.trim()}|${answerKind.trim()}|${styleVersion.trim()}|${sourceId.trim()}';
   }
 
   String _requestKey({
     required String academyId,
     required String sourceKind,
+    required String answerKind,
     required Iterable<String> sourceIds,
     required String styleVersion,
   }) {
@@ -102,7 +104,23 @@ class RightSheetAnswerPreloadService {
         .where((e) => e.isNotEmpty)
         .toList()
       ..sort();
-    return '${academyId.trim()}|${sourceKind.trim()}|${styleVersion.trim()}|${ids.join(',')}';
+    return '${academyId.trim()}|${sourceKind.trim()}|${answerKind.trim()}|${styleVersion.trim()}|${ids.join(',')}';
+  }
+
+  String _normalizeAnswerRenderKind(String raw) {
+    final kind = raw.trim().toLowerCase();
+    if (kind == 'essay' || kind.contains('서술')) return 'essay';
+    if (kind == 'subjective' || kind.contains('주관')) return 'subjective';
+    return 'subjective';
+  }
+
+  String _answerRenderKindForRawCell(Map rawCell) {
+    final explicit =
+        '${rawCell['answerRenderKind'] ?? rawCell['answer_render_kind'] ?? rawCell['answerRenderPolicy'] ?? rawCell['answer_render_policy'] ?? rawCell['answerKind'] ?? rawCell['answer_kind'] ?? ''}'
+            .trim();
+    if (explicit.isNotEmpty) return _normalizeAnswerRenderKind(explicit);
+    final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}';
+    return _normalizeAnswerRenderKind(answerMode);
   }
 
   void _pruneIfNeeded() {
@@ -121,10 +139,12 @@ class RightSheetAnswerPreloadService {
     required String academyId,
     required String sourceKind,
     required Iterable<String> sourceIds,
+    String answerKind = 'subjective',
     String styleVersion = kUnifiedAnswerRenderStyleVersion,
   }) async {
     final safeAcademyId = academyId.trim();
     final safeSourceKind = sourceKind.trim();
+    final safeAnswerKind = _normalizeAnswerRenderKind(answerKind);
     final ids = sourceIds
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
@@ -143,6 +163,7 @@ class RightSheetAnswerPreloadService {
         academyId: safeAcademyId,
         sourceKind: safeSourceKind,
         sourceId: id,
+        answerKind: safeAnswerKind,
         styleVersion: styleVersion,
       );
       final cached = _assetCache[key];
@@ -161,6 +182,7 @@ class RightSheetAnswerPreloadService {
     final requestKey = _requestKey(
       academyId: safeAcademyId,
       sourceKind: safeSourceKind,
+      answerKind: safeAnswerKind,
       sourceIds: missing,
       styleVersion: styleVersion,
     );
@@ -170,6 +192,7 @@ class RightSheetAnswerPreloadService {
           academyId: safeAcademyId,
           sourceKind: safeSourceKind,
           sourceIds: missing,
+          answerKind: safeAnswerKind,
           styleVersion: styleVersion,
         );
       } finally {
@@ -185,6 +208,7 @@ class RightSheetAnswerPreloadService {
         academyId: safeAcademyId,
         sourceKind: safeSourceKind,
         sourceId: id,
+        answerKind: safeAnswerKind,
         styleVersion: styleVersion,
       );
       if (render != null && render.hasImage) {
@@ -277,7 +301,7 @@ class RightSheetAnswerPreloadService {
     required RightSideSheetTestGradingSession session,
     int maxQuestions = 60,
   }) async {
-    final sourceIdsByKind = <String, Set<String>>{};
+    final sourceIdsByLookup = <String, Set<String>>{};
     var scanned = 0;
     for (final rawPage in session.gradingPages) {
       final rawCells = rawPage['cells'];
@@ -311,14 +335,20 @@ class RightSheetAnswerPreloadService {
             '${rawCell['answerSourceId'] ?? rawCell['answer_source_id'] ?? rawCell['sourceId'] ?? rawCell['source_id'] ?? ''}'
                 .trim();
         if (sourceKind.isEmpty || sourceId.isEmpty) continue;
-        sourceIdsByKind.putIfAbsent(sourceKind, () => <String>{}).add(sourceId);
+        final answerKind = _answerRenderKindForRawCell(rawCell);
+        sourceIdsByLookup
+            .putIfAbsent('$sourceKind\n$answerKind', () => <String>{})
+            .add(sourceId);
       }
       if (scanned >= maxQuestions) break;
     }
-    for (final entry in sourceIdsByKind.entries) {
+    for (final entry in sourceIdsByLookup.entries) {
+      final parts = entry.key.split('\n');
+      if (parts.length != 2) continue;
       await loadUnifiedAnswerRenderAssets(
         academyId: academyId,
-        sourceKind: entry.key,
+        sourceKind: parts[0],
+        answerKind: parts[1],
         sourceIds: entry.value,
       );
     }

@@ -1411,7 +1411,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       '하': 0,
       '중': 1,
       '상': 2,
-      '대표문제': 3,
+      '대표 문제': 3,
       '창의문제': 4,
       '서술형': 5,
     };
@@ -4488,9 +4488,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   String _difficultyLabelOf(LearningProblemQuestion q) {
     final meta = q.meta;
     final direct = '${meta['textbook_difficulty_label'] ?? ''}'.trim();
-    if (direct.isNotEmpty) return direct;
+    if (direct.isNotEmpty) return _normalizeDifficultyLabel(direct);
     final cropPage = _mapFromDynamic(meta['textbook_crop_page']);
-    return '${cropPage['difficulty_label'] ?? cropPage['label'] ?? ''}'.trim();
+    return _normalizeDifficultyLabel(
+      '${cropPage['difficulty_label'] ?? cropPage['label'] ?? ''}',
+    );
+  }
+
+  String _normalizeDifficultyLabel(String raw) {
+    final compact = raw.trim().replaceAll(RegExp(r'\s+'), '');
+    if (compact == '대표문제') return '대표 문제';
+    return raw.trim();
   }
 
   List<String> get _typeFilterOptions {
@@ -4510,7 +4518,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       '하': 0,
       '중': 1,
       '상': 2,
-      '대표문제': 3,
+      '대표 문제': 3,
       '창의문제': 4,
       '서술형': 5,
     };

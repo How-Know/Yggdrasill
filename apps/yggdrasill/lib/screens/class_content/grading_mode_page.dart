@@ -638,14 +638,6 @@ class _GradingModePageState extends State<GradingModePage> {
       );
     }
     out.sort((a, b) {
-      final ad = a.dueDate;
-      final bd = b.dueDate;
-      if (ad == null && bd != null) return 1;
-      if (ad != null && bd == null) return -1;
-      if (ad != null && bd != null) {
-        final dueCmp = ad.compareTo(bd);
-        if (dueCmp != 0) return dueCmp;
-      }
       final t = a.homeworkTime.compareTo(b.homeworkTime);
       if (t != 0) return t;
       final nameCmp = a.studentName.compareTo(b.studentName);

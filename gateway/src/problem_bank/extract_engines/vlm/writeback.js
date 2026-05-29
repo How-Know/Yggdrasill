@@ -30,6 +30,29 @@ function normalizeDegreeUnitLatex(input) {
 }
 
 const VLM_TABLE_BLOCK_RE = /(\[표시작\][\s\S]*?\[표끝\])/g;
+const LATEX_ROW_ENV_NAMES = [
+  'tabular',
+  'cases',
+  'array',
+  'aligned',
+  'alignedat',
+  'gathered',
+  'matrix',
+  'pmatrix',
+  'bmatrix',
+  'Bmatrix',
+  'vmatrix',
+  'Vmatrix',
+  'smallmatrix',
+  'split',
+  'align',
+  'alignat',
+  'gather',
+];
+const LATEX_ROW_ENV_PATTERN = new RegExp(
+  `\\\\begin\\{(${LATEX_ROW_ENV_NAMES.join('|')})\\}`,
+  'g',
+);
 
 function protectTableBlocks(input) {
   const source = String(input || '');
@@ -51,6 +74,96 @@ function protectTableBlocks(input) {
       let restored = String(value || '');
       for (let i = 0; i < blocks.length; i += 1) {
         restored = restored.replaceAll(`\u0000VLMTABLE${i}\u0000`, blocks[i]);
+      }
+      return restored;
+    },
+  };
+}
+
+function findLatexEnvironmentEnd(source, envName, bodyStart) {
+  const beginNeedle = `\\begin{${envName}}`;
+  const endNeedle = `\\end{${envName}}`;
+  let depth = 1;
+  let cursor = bodyStart;
+  while (cursor < source.length) {
+    const nextBegin = source.indexOf(beginNeedle, cursor);
+    const nextEnd = source.indexOf(endNeedle, cursor);
+    if (nextEnd < 0) return null;
+    if (nextBegin >= 0 && nextBegin < nextEnd) {
+      depth += 1;
+      cursor = nextBegin + beginNeedle.length;
+      continue;
+    }
+    depth -= 1;
+    if (depth === 0) {
+      return nextEnd + endNeedle.length;
+    }
+    cursor = nextEnd + endNeedle.length;
+  }
+  return null;
+}
+
+function normalizeLatexRowEnvironmentBreaks(block) {
+  const src = String(block || '');
+  let out = '';
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '\\' && next === '\\') {
+      out += '\\\\';
+      i += 1;
+      continue;
+    }
+    if (ch === '\\' && next && /\s/.test(next)) {
+      // In row-based LaTeX environments, a lone control-space is almost always
+      // a VLM-mangled row separator. Keep real commands such as \left untouched.
+      out += '\\\\';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function protectLatexRowEnvironmentBlocks(input) {
+  const source = String(input || '');
+  if (!source.includes('\\begin{')) {
+    return {
+      text: source,
+      restore: (value) => value,
+    };
+  }
+
+  const blocks = [];
+  let text = '';
+  let cursor = 0;
+  LATEX_ROW_ENV_PATTERN.lastIndex = 0;
+  while (true) {
+    LATEX_ROW_ENV_PATTERN.lastIndex = cursor;
+    const match = LATEX_ROW_ENV_PATTERN.exec(source);
+    if (!match) break;
+    const start = match.index;
+    const envName = match[1];
+    const bodyStart = start + match[0].length;
+    const endAfter = findLatexEnvironmentEnd(source, envName, bodyStart);
+    if (!endAfter) {
+      break;
+    }
+
+    text += source.slice(cursor, start);
+    const token = `\u0000VLMLATEXROW${blocks.length}\u0000`;
+    blocks.push(normalizeLatexRowEnvironmentBreaks(source.slice(start, endAfter)));
+    text += token;
+    cursor = endAfter;
+  }
+  text += source.slice(cursor);
+
+  return {
+    text,
+    restore(value) {
+      let restored = String(value || '');
+      for (let i = 0; i < blocks.length; i += 1) {
+        restored = restored.replaceAll(`\u0000VLMLATEXROW${i}\u0000`, blocks[i]);
       }
       return restored;
     },
@@ -101,15 +214,17 @@ function normalizeVlmStructuralLineBreaks(input) {
     .replace(/\r/g, '\n')
     .replace(/\u2028|\u2029|\u000b/g, '\n');
   s = normalizeLiteralJsonNewlineText(s);
+  const protectedLatexRows = protectLatexRowEnvironmentBlocks(s);
+  s = protectedLatexRows.text;
   // VLM sometimes uses LaTeX row breaks for visual line breaks in boxes.
-  // The Yggdrasill stem contract uses real LF/[문단]; keep tabular rows protected.
+  // The Yggdrasill stem contract uses real LF/[문단]; keep LaTeX row environments protected.
   s = s.replace(/[ \t]*\\\\[ \t]*(?:\n|$)/g, '\n');
   s = s
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-  return protectedTables.restore(s);
+  return protectedTables.restore(protectedLatexRows.restore(s));
 }
 
 function normalizeCompactFractionCommands(input) {
@@ -556,6 +671,13 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   const vlmType = deriveQuestionType(vlmQ);
   const existingType = String(existingRow?.question_type || '').trim();
   const isSet = vlmQ.is_set_question === true;
+  const textbookLabel = String(
+    vlmQ?.textbook_difficulty_label ||
+      vlmQ?.textbook_crop_page?.difficulty_label ||
+      vlmQ?.textbook_crop_page?.label ||
+      '',
+  ).trim();
+  const labelMarksEssay = /서술|논술/.test(textbookLabel);
   const requestedSetType = String(vlmQ?.set_type || '').trim();
   const setType = ALLOWED_SET_TYPES.has(requestedSetType)
     ? requestedSetType
@@ -566,11 +688,14 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   const commonStem = isIndependentSet ? String(vlmQ?.stem || '').trim() : '';
   const subs = Array.isArray(vlmQ?.sub_questions) ? vlmQ.sub_questions : [];
   const independentSetItemOnly = isIndependentSet && subs.length === 1;
-  const qType = isSet
+  const qType = labelMarksEssay
+    ? '서술형'
+    : isSet
     ? '주관식'
     : opts.keepTypeFromDb && existingType
       ? existingType
       : vlmType;
+  const allowEssay = labelMarksEssay || /서술|논술/.test(qType);
   const rawVlmFigures = Array.isArray(vlmQ.figures) ? vlmQ.figures : [];
   const rawStemForFigureMarkers = [
     vlmQ?.stem,
@@ -775,6 +900,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     objective_answer_key: allowObjective ? objectiveAnswerKey : '',
     allow_objective: allowObjective,
     allow_subjective: allowSubjective || isSet,
+    allow_essay: allowEssay || existingMeta.allow_essay === true,
     subjective_answer: subjectiveAnswer,
     ...(answerFigureAssets.length > 0
       ? {

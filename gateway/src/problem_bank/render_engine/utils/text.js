@@ -286,16 +286,58 @@ function countUnescapedAmpersands(row) {
   return Math.max(0, splitLatexTopLevelAmpersands(row).length - 1);
 }
 
-function applyDisplaystyleToCaseRow(row) {
-  return splitLatexTopLevelAmpersands(row)
-    .map((cell) => {
-      const trimmed = cell.trim();
-      if (!trimmed) return trimmed;
-      if (/^\\(?:displaystyle|textstyle|scriptstyle|scriptscriptstyle)\b/.test(trimmed)) {
-        return trimmed;
-      }
-      return `\\displaystyle ${trimmed}`;
-    })
+function shouldStackCaseConditionCell(cell, options = {}) {
+  const {
+    wrapCaseConditionCells = false,
+    caseConditionMinChars = 34,
+  } = options || {};
+  if (!wrapCaseConditionCells) return false;
+
+  const trimmed = String(cell || '').trim();
+  if (trimmed.length < caseConditionMinChars) return false;
+
+  // 오른쪽 조건 칸 안의 자연어 연결 지점이 있는 긴 조건만 대상으로 한다.
+  // 렌더러 경로에서는 \text{...} 가 \x00LATEXTEXT...\x00 보호 토큰인 상태일 수 있다.
+  const breakRe = /(?:\\text\{\s*(?:또는|이고|이며|단|if|otherwise)\s*\}|\x00LATEXTEXT\d+\x00)/;
+  const match = breakRe.exec(trimmed);
+  return Boolean(match && match.index > 0);
+}
+
+function formatCaseConditionStackRow(conditionCell, colCount) {
+  const trimmed = String(conditionCell || '').trim();
+  const span = Math.max(1, Number(colCount || 1));
+  return `\\multicolumn{${span}}{@{}r@{}}{\\displaystyle ${trimmed}}`;
+}
+
+function formatCaseCell(cell, cellIndex, options = {}) {
+  const trimmed = String(cell || '').trim();
+  if (!trimmed) return trimmed;
+  if (/^\\(?:displaystyle|textstyle|scriptstyle|scriptscriptstyle)\b/.test(trimmed)) {
+    return trimmed;
+  }
+  return `\\displaystyle ${trimmed}`;
+}
+
+function applyDisplaystyleToCaseRow(row, options = {}, colCount = 1) {
+  const cells = splitLatexTopLevelAmpersands(row);
+  const longConditionIndex = cells.findIndex((cell, cellIndex) => (
+    cellIndex > 0 && shouldStackCaseConditionCell(cell, options)
+  ));
+  if (longConditionIndex > 0) {
+    const mainCells = cells.map((cell, cellIndex) => (
+      cellIndex === longConditionIndex
+        ? ''
+        : formatCaseCell(cell, cellIndex, options)
+    ));
+    const stackGap = options.caseConditionStackGap || '-0.10em';
+    return [
+      mainCells.join(' & '),
+      `\\\\[${stackGap}]`,
+      formatCaseConditionStackRow(cells[longConditionIndex], colCount),
+    ].join('');
+  }
+  return cells
+    .map((cell, cellIndex) => formatCaseCell(cell, cellIndex, options))
     .join(' & ');
 }
 
@@ -373,7 +415,7 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
     );
     const colSpec = `@{}${Array.from({ length: colCount }, () => 'l').join('@{\\quad}')}@{}`;
     const latexRows = rows
-      .map(applyDisplaystyleToCaseRow)
+      .map((row) => applyDisplaystyleToCaseRow(row, options, colCount))
       .join(`\\\\[${rowGap}]`);
     const arrayTex = `\\begingroup\\renewcommand{\\arraystretch}{${arrayStretch}}\\begin{array}{${colSpec}}${latexRows}\\end{array}\\endgroup`;
     if (thinBrace) {

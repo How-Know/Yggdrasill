@@ -45,17 +45,30 @@ async function normalizeFigureAssetForXeLatex(bytes) {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
       return { bytes, ext: '', mimeType: '' };
     }
-    const stripHeight = Math.max(1, Math.min(3, Math.round(height * 0.004)));
-    const bottomWhiteStrip = Buffer.from(
-      `<svg width="${width}" height="${stripHeight}" xmlns="http://www.w3.org/2000/svg">`
-      + '<rect width="100%" height="100%" fill="#fff"/></svg>',
-    );
-    const normalized = await sharp(bytes, { failOn: 'none' })
+    const trimmed = await sharp(bytes, { failOn: 'none' })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .composite([{ input: bottomWhiteStrip, left: 0, top: height - stripHeight }])
+      .trim({ background: { r: 255, g: 255, b: 255 }, threshold: 10 })
       .png({ compressionLevel: 9, adaptiveFiltering: true })
       .toBuffer();
-    return { bytes: normalized, ext: 'png', mimeType: 'image/png' };
+    const trimmedMeta = await sharp(trimmed, { failOn: 'none' }).metadata();
+    const normalizedWidth = Number(trimmedMeta.width || 0) || width;
+    const normalizedHeight = Number(trimmedMeta.height || 0) || height;
+    const stripHeight = Math.max(1, Math.min(3, Math.round(normalizedHeight * 0.004)));
+    const bottomWhiteStrip = Buffer.from(
+      `<svg width="${normalizedWidth}" height="${stripHeight}" xmlns="http://www.w3.org/2000/svg">`
+      + '<rect width="100%" height="100%" fill="#fff"/></svg>',
+    );
+    const normalized = await sharp(trimmed, { failOn: 'none' })
+      .composite([{ input: bottomWhiteStrip, left: 0, top: normalizedHeight - stripHeight }])
+      .png({ compressionLevel: 9, adaptiveFiltering: true })
+      .toBuffer();
+    return {
+      bytes: normalized,
+      ext: 'png',
+      mimeType: 'image/png',
+      width: normalizedWidth,
+      height: normalizedHeight,
+    };
   } catch (_) {
     return { bytes, ext: '', mimeType: '' };
   }
@@ -281,6 +294,8 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
             figureIndex: Number.isFinite(figIdx) && figIdx > 0 ? figIdx : ordinal,
             ordinal,
             mimeType: normalizedFigure.mimeType || asset.mime_type || 'image/png',
+            widthPx: Number(normalizedFigure.width || asset?.width_px || asset?.width || 0) || null,
+            heightPx: Number(normalizedFigure.height || asset?.height_px || asset?.height || 0) || null,
           });
           appliedCount += 1;
         } catch (_) {

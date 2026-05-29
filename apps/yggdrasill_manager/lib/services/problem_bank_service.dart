@@ -2328,6 +2328,18 @@ class ProblemBankService {
   }) async {
     var nextMeta = meta;
     if (nextMeta != null) {
+      Map<String, dynamic>? currentMetaCache;
+      Future<Map<String, dynamic>> loadCurrentMeta() async {
+        if (currentMetaCache != null) return currentMetaCache!;
+        final row = await _client
+            .from('pb_questions')
+            .select('meta')
+            .eq('id', questionId)
+            .maybeSingle();
+        currentMetaCache = _mapFromDynamic(row?['meta']);
+        return currentMetaCache!;
+      }
+
       final isImageChoiceQuestion =
           nextMeta['is_image_choice_question'] == true ||
               '${nextMeta['choice_layout'] ?? ''}' == 'image_table';
@@ -2336,12 +2348,7 @@ class ProblemBankService {
           incomingAssets is List && incomingAssets.isNotEmpty;
       if (isImageChoiceQuestion && !hasIncomingAssets) {
         try {
-          final row = await _client
-              .from('pb_questions')
-              .select('meta')
-              .eq('id', questionId)
-              .maybeSingle();
-          final currentMeta = _mapFromDynamic(row?['meta']);
+          final currentMeta = await loadCurrentMeta();
           final currentAssets = currentMeta['figure_assets'];
           if (currentAssets is List && currentAssets.isNotEmpty) {
             nextMeta = <String, dynamic>{
@@ -2349,6 +2356,43 @@ class ProblemBankService {
               'figure_assets': currentAssets,
               'figure_count':
                   currentMeta['figure_count'] ?? currentAssets.length,
+              if (currentMeta.containsKey('figure_review_required'))
+                'figure_review_required': currentMeta['figure_review_required'],
+              if (currentMeta.containsKey('figure_last_generated_at'))
+                'figure_last_generated_at':
+                    currentMeta['figure_last_generated_at'],
+            };
+          }
+        } catch (_) {
+          // Best-effort preservation only; normal update should still proceed.
+        }
+      }
+      if (hasIncomingAssets) {
+        try {
+          final currentMeta = await loadCurrentMeta();
+          final currentAssets = currentMeta['figure_assets'];
+          final currentList =
+              currentAssets is List ? currentAssets : const <dynamic>[];
+          final incomingList = incomingAssets;
+          final currentHasManual = currentList.any((asset) {
+            final item = _mapFromDynamic(asset);
+            final source = '${item['source'] ?? ''}'.trim();
+            final status = '${item['status'] ?? ''}'.trim();
+            return source == 'manual_upload' || status == 'manual_replaced';
+          });
+          final incomingHasSameManual = incomingList.any((asset) {
+            final item = _mapFromDynamic(asset);
+            final source = '${item['source'] ?? ''}'.trim();
+            final status = '${item['status'] ?? ''}'.trim();
+            return source == 'manual_upload' || status == 'manual_replaced';
+          });
+          if (currentHasManual && !incomingHasSameManual) {
+            nextMeta = <String, dynamic>{
+              ...nextMeta!,
+              'figure_assets': currentList,
+              'figure_count': currentMeta['figure_count'] ?? currentList.length,
+              if (currentMeta.containsKey('figure_crop_source'))
+                'figure_crop_source': currentMeta['figure_crop_source'],
               if (currentMeta.containsKey('figure_review_required'))
                 'figure_review_required': currentMeta['figure_review_required'],
               if (currentMeta.containsKey('figure_last_generated_at'))

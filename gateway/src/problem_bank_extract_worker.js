@@ -2553,7 +2553,7 @@ function normalizeGeminiDrafts(payload) {
     const numberRaw = safeToString(
       q.question_number || q.number || q.no || q.index || '',
     );
-    const numberMatch = numberRaw.match(/\d{1,3}/);
+    const numberMatch = numberRaw.match(/\d{1,4}/);
     const questionNumber = numberMatch ? numberMatch[0] : String(i + 1);
     const stem = normalizeWhitespace(
       safeToString(q.stem || q.question || q.prompt || q.body || q.text || ''),
@@ -2950,7 +2950,7 @@ function normalizeGeminiObjectiveDrafts(payload) {
     const numberRaw = safeToString(
       q.question_number || q.number || q.no || q.index || '',
     );
-    const numberMatch = numberRaw.match(/\d{1,3}/);
+    const numberMatch = numberRaw.match(/\d{1,4}/);
     const questionNumber = numberMatch ? numberMatch[0] : String(i + 1);
     const correctText = normalizeWhitespace(
       safeToString(q.correct_text || q.correct || q.answer || q.correct_choice || ''),
@@ -3073,6 +3073,27 @@ function buildFallbackDistractors(correctText) {
   const answer = normalizeWhitespace(correctText || '');
   if (!answer) return [];
 
+  const chainedInequality = answer.match(
+    /^(.+?)\s*(<|>|\\leq?|\\geq?)\s*([A-Za-z])\s*(<|>|\\leq?|\\geq?)\s*(.+)$/,
+  );
+  if (chainedInequality) {
+    const [, left, leftOp, variable, rightOp, right] = chainedInequality;
+    const toggleBoundary = (op) => {
+      if (op === '<') return '\\le';
+      if (op === '>') return '\\ge';
+      if (/^\\leq?$/.test(op)) return '<';
+      if (/^\\geq?$/.test(op)) return '>';
+      return op;
+    };
+    const formatInequality = (...parts) => parts.map((part) => String(part || '').trim()).join(' ');
+    return [
+      formatInequality(left, toggleBoundary(leftOp), variable, rightOp, right),
+      formatInequality(left, leftOp, variable, toggleBoundary(rightOp), right),
+      formatInequality(variable, leftOp, left),
+      formatInequality(variable, rightOp, right),
+    ];
+  }
+
   const frac = answer.match(/^(-?\d+)\s*\/\s*(-?\d+)$/);
   if (frac) {
     const a = Number.parseInt(frac[1], 10);
@@ -3087,7 +3108,8 @@ function buildFallbackDistractors(correctText) {
     }
   }
 
-  const numeric = Number.parseFloat(answer);
+  const numericMatch = answer.match(/^-?(?:\d+(?:\.\d+)?|\.\d+)$/);
+  const numeric = numericMatch ? Number.parseFloat(answer) : NaN;
   if (Number.isFinite(numeric)) {
     return [
       String(numeric + 1),
@@ -3294,6 +3316,7 @@ async function enrichQuestionsWithDualMode({
       answer_key: rawAnswerKey,
       allow_objective: q.allow_objective !== false,
       allow_subjective: q.allow_subjective !== false,
+      allow_essay: /서술|논술/.test(String(q.question_type || '')),
       objective_answer_key: normalizeWhitespace(String(q.objective_answer_key || '')),
       subjective_answer: rawSubjective,
       objective_generated: q.objective_generated === true,

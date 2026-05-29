@@ -343,6 +343,8 @@ function normalizeDifficultyLabel(input) {
   if (!raw) return '';
   const compact = raw.replace(/\s+/g, '');
   if (!compact || compact === '사고의기술') return '';
+  if (compact.includes('서술형') || compact.includes('논술')) return '서술형';
+  if (compact === '대표문제') return '대표 문제';
   if (compact === '교육청기출') return '교육청기출';
   return ALLOWED_LABELS.has(compact) ? compact : '';
 }

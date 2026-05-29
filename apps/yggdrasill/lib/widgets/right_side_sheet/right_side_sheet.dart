@@ -3287,7 +3287,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     RightSideSheetTestGradingSession session,
   ) async {
     final requestSeq = ++_answerRenderRequestSeq;
-    final sourceIdsByKind = <String, Set<String>>{};
+    final sourceIdsByLookup = <String, Set<String>>{};
     final cellKeysBySourceLookup = <String, List<String>>{};
     final expectedAssetKeys = <String>{};
     final missingSourceKeys = <String>{};
@@ -3324,12 +3324,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             '${rawCell['answerSourceId'] ?? rawCell['answer_source_id'] ?? rawCell['sourceId'] ?? rawCell['source_id'] ?? ''}'
                 .trim();
         if (answerSourceKind.isNotEmpty && answerSourceId.isNotEmpty) {
-          sourceIdsByKind
-              .putIfAbsent(answerSourceKind, () => <String>{})
+          final answerKind = _answerRenderKindForRawCell(rawCell);
+          final lookupKey = '$answerSourceKind\n$answerKind';
+          sourceIdsByLookup
+              .putIfAbsent(lookupKey, () => <String>{})
               .add(answerSourceId);
           cellKeysBySourceLookup
-              .putIfAbsent(
-                  '$answerSourceKind\n$answerSourceId', () => <String>[])
+              .putIfAbsent('$lookupKey\n$answerSourceId', () => <String>[])
               .add(key);
         } else {
           missingSourceKeys.add(key);
@@ -3344,11 +3345,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       final academyId = await _resolveActiveAcademyId();
       if (academyId.isEmpty) return;
       final storedRendersByKey = <String, LearningProblemAnswerRender>{};
-      for (final entry in sourceIdsByKind.entries) {
+      for (final entry in sourceIdsByLookup.entries) {
+        final lookupParts = entry.key.split('\n');
+        if (lookupParts.length != 2) continue;
+        final sourceKind = lookupParts[0];
+        final answerKind = lookupParts[1];
         final rendersBySourceId = await RightSheetAnswerPreloadService.instance
             .loadUnifiedAnswerRenderAssets(
           academyId: academyId,
-          sourceKind: entry.key,
+          sourceKind: sourceKind,
+          answerKind: answerKind,
           sourceIds: entry.value,
         );
         for (final renderEntry in rendersBySourceId.entries) {
@@ -5612,6 +5618,23 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final compact = answer.trim().replaceAll(RegExp(r'[\s,;/]+'), '');
     return compact.isNotEmpty &&
         RegExp(r'^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]+$').hasMatch(compact);
+  }
+
+  String _normalizeAnswerRenderKind(String raw) {
+    final kind = raw.trim().toLowerCase();
+    if (kind == 'essay' || kind.contains('서술')) return 'essay';
+    if (kind == 'subjective' || kind.contains('주관')) return 'subjective';
+    return 'subjective';
+  }
+
+  String _answerRenderKindForRawCell(Map rawCell) {
+    final explicit =
+        '${rawCell['answerRenderKind'] ?? rawCell['answer_render_kind'] ?? rawCell['answerRenderPolicy'] ?? rawCell['answer_render_policy'] ?? rawCell['answerKind'] ?? rawCell['answer_kind'] ?? ''}'
+            .trim();
+    if (explicit.isNotEmpty) return _normalizeAnswerRenderKind(explicit);
+    return _normalizeAnswerRenderKind(
+      '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}',
+    );
   }
 
   int? _circledObjectiveNumber(String value) {
