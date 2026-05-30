@@ -643,9 +643,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             child: ValueListenableBuilder<List<AttendanceRecord>>(
               valueListenable: DataManager.instance.attendanceRecordsNotifier,
               builder: (context, _records, __) {
+                return ValueListenableBuilder<DateTime>(
+                  valueListenable: attendanceAnchorDateNotifier,
+                  builder: (context, anchorDate, ___) {
                 // sessionOverrides 변화도 함께 트리거
                 final _ = DataManager.instance.sessionOverridesNotifier.value;
-                final list = _computeAttendingStudentsRealtime();
+                final list =
+                    _computeAttendingStudentsForDate(anchorDate);
+                final headerDateTime = _headerDisplayDateTime(anchorDate);
                 final attendingStudentIds =
                     list.map((s) => s.id).toList(growable: false);
                 final studentNamesById = <String, String>{
@@ -695,7 +700,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     color: Colors.white70,
                                   ),
                                   Text(
-                                    _formatDateWithWeekdayAndTime(_now),
+                                    _formatDateWithWeekdayAndTime(
+                                        headerDateTime),
                                     style: TextStyle(
                                       color: Colors.white,
                                       fontSize: dateTimeFontSize,
@@ -703,6 +709,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       height: 1.0,
                                     ),
                                   ),
+                                  if (!isAttendanceAnchorToday(anchorDate))
+                                    Text(
+                                      '슬라이드시트 기준일',
+                                      style: TextStyle(
+                                        color: Colors.white38,
+                                        fontSize: (14 * headerScale)
+                                            .clamp(11.0, 14.0),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                 ],
                               );
                               final Widget statsLine = Wrap(
@@ -752,7 +768,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           color: Colors.white70,
                                         ),
                                         Text(
-                                          _formatDateWithWeekdayAndTime(_now),
+                                          _formatDateWithWeekdayAndTime(
+                                              headerDateTime),
                                           style: TextStyle(
                                             color: Colors.white,
                                             fontSize: dateTimeFontSize,
@@ -1021,6 +1038,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             ),
                     ),
                   ],
+                );
+                  },
                 );
               },
             ),
@@ -1628,13 +1647,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
-  // 리얼타임 반영: 출석 레코드/세션 오버라이드 변경에 따라 즉시 갱신
-  List<_AttendingStudent> _computeAttendingStudentsRealtime() {
-    // DataManager의 attendanceRecordsNotifier와 sessionOverridesNotifier를 묶음 관찰
-    // 여기서는 단순히 값을 소비만 하고, 상위에서 ValueListenableBuilder로 재빌드 유도
+  DateTime _headerDisplayDateTime(DateTime anchorDate) {
+    if (isAttendanceAnchorToday(anchorDate)) return _now;
+    return DateTime(
+      anchorDate.year,
+      anchorDate.month,
+      anchorDate.day,
+      23,
+      59,
+    );
+  }
+
+  // 슬라이드시트와 동일 기준일: 등원·미하원 학생
+  List<_AttendingStudent> _computeAttendingStudentsForDate(DateTime anchorDate) {
     final _ = DataManager.instance.attendanceRecordsNotifier.value;
     final __ = DataManager.instance.sessionOverridesNotifier.value;
-    return _computeAttendingStudentsStatic();
+    return _computeAttendingStudentsStatic(anchorDate);
   }
 
   int _countSubmittedHomeworkItems(List<_AttendingStudent> attendingStudents) {
@@ -1650,9 +1678,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return submittedItemCount;
   }
 
-  List<_AttendingStudent> _computeAttendingStudentsStatic() {
+  List<_AttendingStudent> _computeAttendingStudentsStatic(DateTime anchorDate) {
     final List<_AttendingStudent> result = [];
-    final now = DateTime.now();
+    final anchor = attendanceDateOnly(anchorDate);
     bool sameDay(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day;
     final students =
@@ -1663,7 +1691,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             rec.isPresent &&
             rec.arrivalTime != null &&
             rec.departureTime == null &&
-            sameDay(rec.classDateTime, now))
+            sameDay(rec.classDateTime, anchor))
         .toList()
       ..sort((a, b) => a.arrivalTime!.compareTo(b.arrivalTime!));
 
@@ -9587,7 +9615,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       final childCount = child.count;
       if (childCount != null && childCount > 0) totalCount += childCount;
       final p = (child.page ?? '').trim();
-      if (p.isNotEmpty && pages.length < 4) pages.add(p);
+      if (p.isNotEmpty) pages.add(p);
       final updated = child.updatedAt;
       if (updated != null &&
           (latestUpdated == null || updated.isAfter(latestUpdated))) {
@@ -9624,8 +9652,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         hasFreshRuntimeSnapshot ? runtimePhase : childDerivedPhase;
     final pageSummary = () {
       if (pages.isEmpty) return '';
-      if (pages.length <= 3) return pages.join(', ');
-      return '${pages.take(3).join(', ')}, ...';
+      // 그룹 과제 페이지는 자식 페이지의 합집합을 연속 구간으로 압축해 표시한다.
+      // 예: 1-5(1단원) + 6-10(2단원) -> "1-10", 1-5 + 8-10 -> "1-5,8-10"
+      final merged = mergeHomeworkPageRawStrings(pages);
+      return merged.isEmpty ? pages.join(', ') : merged;
     }();
     final normalizedChildTypes = <String>{
       for (final child in children)

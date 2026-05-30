@@ -59,7 +59,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_stable_01';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_cases_condition_stack_01';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_numeric_box_labels_01';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -78,10 +78,16 @@ const FIGURE_MAX_DPI = Math.max(
   300,
   Number.parseInt(process.env.PB_EXPORT_FIGURE_MAX_DPI || '1200', 10),
 );
+// 직접 실행(node src/..)뿐 아니라 PM2 fork 실행도 감지한다.
+// PM2 는 ProcessContainerFork.js 를 통해 모듈로 로드하므로 process.argv[1] 이
+// 워커 스크립트가 아니다. 이때는 PM2 가 설정하는 pm_exec_path 로 판별한다.
 const IS_DIRECT_RUN =
-  typeof process.argv[1] === 'string' &&
-  process.argv[1].length > 0 &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+  (typeof process.argv[1] === 'string' &&
+    process.argv[1].length > 0 &&
+    import.meta.url === pathToFileURL(process.argv[1]).href) ||
+  (typeof process.env.pm_exec_path === 'string' &&
+    process.env.pm_exec_path.length > 0 &&
+    import.meta.url === pathToFileURL(process.env.pm_exec_path).href);
 
 if ((!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) && IS_DIRECT_RUN) {
   console.error(
@@ -3997,7 +4003,10 @@ async function fetchQuestionsForJob(job, renderConfig) {
 
   if (selectedUidSet.size > 0) {
     const fetchedUidSet = new Set(
-      rows.map((row) => String(row.question_uid || '').trim()).filter((uid) => uid.length > 0),
+      rows.flatMap((row) => [
+        String(row.question_uid || '').trim(),
+        String(row.id || '').trim(),
+      ]).filter((uid) => uid.length > 0),
     );
     for (const uid of selectedUids) {
       if (!fetchedUidSet.has(uid)) {
@@ -4007,11 +4016,13 @@ async function fetchQuestionsForJob(job, renderConfig) {
     const selectedOrder = new Map(selectedUids.map((uid, idx) => [uid, idx]));
     const docOrder = new Map(sourceDocumentIds.map((id, idx) => [id, idx]));
     rows.sort((a, b) => {
-      const ai = selectedOrder.has(a.question_uid)
-        ? selectedOrder.get(a.question_uid)
+      const aSelectedKey = selectedOrder.has(a.question_uid) ? a.question_uid : a.id;
+      const bSelectedKey = selectedOrder.has(b.question_uid) ? b.question_uid : b.id;
+      const ai = selectedOrder.has(aSelectedKey)
+        ? selectedOrder.get(aSelectedKey)
         : Number.MAX_SAFE_INTEGER;
-      const bi = selectedOrder.has(b.question_uid)
-        ? selectedOrder.get(b.question_uid)
+      const bi = selectedOrder.has(bSelectedKey)
+        ? selectedOrder.get(bSelectedKey)
         : Number.MAX_SAFE_INTEGER;
       if (ai !== bi) return ai - bi;
       const ad = docOrder.has(a.document_id) ? docOrder.get(a.document_id) : Number.MAX_SAFE_INTEGER;
@@ -4311,7 +4322,7 @@ async function renderPdfFirstPageThumbnailBuffer(pdfBytes, widthPx = PREVIEW_THU
     await execFileAsync(
       'pdftoppm',
       ['-png', '-f', '1', '-l', '1', '-r', String(dpi), '-singlefile', tmpPdf, tmpPngBase],
-      { timeout: 15000 },
+      { timeout: 15000, windowsHide: true },
     );
     const pngPath = `${tmpPngBase}.png`;
     if (!fs.existsSync(pngPath)) throw new Error('pdftoppm produced no output');
@@ -4787,6 +4798,7 @@ export {
   normalizeFigureQuality,
   applyQuestionModeForQuestion,
   applyQuestionModesForExport,
+  processOneJob,
   normalizeQuestionModeSelection,
   normalizeQuestionMode,
 };

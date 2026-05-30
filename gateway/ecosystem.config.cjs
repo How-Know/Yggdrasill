@@ -6,7 +6,10 @@ module.exports = {
       script: 'src/index.js',
       exec_mode: 'fork',
       instances: 1,
-      watch: false,
+      // 개발 편의: 게이트웨이 소스 수정 시 자동 재시작 (M5 게이트웨이 본체만 감시)
+      watch: ['src/index.js', 'src/m5_sync_fingerprint.js'],
+      ignore_watch: ['node_modules', 'logs', 'output', 'tmp', '.git'],
+      watch_options: { usePolling: true, interval: 1000 },
       autorestart: true,
       max_restarts: 20,
       min_uptime: '10s',
@@ -50,6 +53,81 @@ module.exports = {
         NODE_ENV: 'production',
         MAKEUP_ALIMTALK_ENABLED: process.env.MAKEUP_ALIMTALK_ENABLED || '0'
       }
+    },
+    // === 문제은행(서버 PDF) API + 워커들 ===
+    // 렌더링 산출물 파일 쓰기로 인한 watch 재시작 루프를 피하기 위해 watch=false.
+    // (게이트웨이 본체만 편집 시 자동 재시작. 워커 코드 수정 후엔 `pm2 restart`).
+    {
+      name: 'ygg-pb-api',
+      cwd: __dirname,
+      script: 'src/problem_bank_api.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      max_memory_restart: '700M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      env: { NODE_ENV: 'production' }
+    },
+    {
+      name: 'ygg-pb-extract',
+      cwd: __dirname,
+      script: 'src/problem_bank_extract_worker.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      max_memory_restart: '700M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      env: { NODE_ENV: 'production' }
+    },
+    {
+      name: 'ygg-pb-figure',
+      cwd: __dirname,
+      script: 'src/problem_bank_figure_worker.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      max_memory_restart: '700M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      env: { NODE_ENV: 'production' }
+    },
+    {
+      name: 'ygg-pb-export',
+      cwd: __dirname,
+      script: 'src/problem_bank_export_worker.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      max_memory_restart: '900M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      env: { NODE_ENV: 'production' }
     }
   ]
 };

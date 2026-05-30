@@ -428,6 +428,19 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     Serial.print("DEV_ACK: "); Serial.println(da_acc);
     handle_group_transition_device_ack(da_acc.c_str());
     ui_port_on_device_ack_json(da_acc.c_str());
+    {
+      StaticJsonDocument<256> ackDoc;
+      if (deserializeJson(ackDoc, da_acc.c_str()) == DeserializationError::Ok) {
+        const char* ackAction = ackDoc["action"] | "";
+        if (strcmp(ackAction, "bind") == 0) {
+          bool ok = ackDoc["ok"] | false;
+          const char* reason = ackDoc["reason"] | "";
+          int attempts_left = ackDoc["attempts_left"] | -1;
+          int locked_seconds = ackDoc["locked_seconds"] | -1;
+          ui_port_on_bind_ack(ok, reason, attempts_left, locked_seconds);
+        }
+      }
+    }
     da_acc.remove(0);
   }
   if (t == todayListTopic) {
@@ -510,11 +523,12 @@ void sendCommand(const char* action, const char* itemId) {
 }
 
 // ===== UI publish bridge implementations =====
-void fw_publish_bind(const char* studentIdArg) {
+// bind ack 성공 후에만 로컬 바인딩 상태를 확정한다 (NVS + LittleFS).
+void fw_commit_bind(const char* studentIdArg) {
   if (!studentIdArg || !*studentIdArg) return;
   studentId = studentIdArg; // track bound student on device
   persist_student_id_nvs(studentId);
-  
+
   // LittleFS에 바인딩된 학생 ID 저장 (재시작 후 복원용)
   if (LittleFS.begin()) {
     File f = LittleFS.open("/student_id.txt", "w");
@@ -525,14 +539,33 @@ void fw_publish_bind(const char* studentIdArg) {
     }
     LittleFS.end();
   }
-  
+  g_mqtt_bind_announced = true;
+}
+
+// 재접속 재announce 전용: 이미 바인딩된 학생을 서버에 다시 알림 (서버는 same-device를 ok로 처리)
+void fw_publish_bind(const char* studentIdArg) {
+  if (!studentIdArg || !*studentIdArg) return;
+  fw_commit_bind(studentIdArg);
+
   DynamicJsonDocument doc(128);
   doc["action"] = "bind";
   doc["student_id"] = studentIdArg;
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
-  g_mqtt_bind_announced = true;
+}
+
+// 인터랙티브 로그인: 로컬 상태를 바꾸지 않고 bind 커맨드만 발행. ack 성공 시 fw_commit_bind로 확정.
+void fw_request_bind(const char* studentIdArg, const char* pin) {
+  if (!studentIdArg || !*studentIdArg) return;
+  DynamicJsonDocument doc(192);
+  doc["action"] = "bind";
+  doc["student_id"] = studentIdArg;
+  if (pin && *pin) doc["pin"] = pin;
+  String payload; serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  Serial.printf("[BIND] request bind (await ack) student=%s pin=%s\n", studentIdArg, (pin && *pin) ? "set" : "none");
 }
 
 void fw_publish_unbind() {

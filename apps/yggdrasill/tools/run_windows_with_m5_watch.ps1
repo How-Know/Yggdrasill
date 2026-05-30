@@ -1,5 +1,6 @@
 param(
-  [string]$DeviceId = "m5-device-006",
+  [string[]]$DeviceIds = @("m5-device-001", "m5-device-002", "m5-device-003", "m5-device-004", "m5-device-006", "m5-device-007", "m5-device-008", "m5-device-010", "m5-device-012"),
+  [string]$DeviceId = "",
   [string]$FlutterDevice = "windows",
   [switch]$PubGet,
   [switch]$SkipPubGet,
@@ -18,40 +19,23 @@ if (-not (Test-Path $watchScript)) {
   throw "M5 sync watcher script not found: $watchScript"
 }
 
+if (-not [string]::IsNullOrWhiteSpace($DeviceId)) {
+  $DeviceIds = @($DeviceId)
+}
+$DeviceIds = @($DeviceIds | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($DeviceIds.Count -eq 0) {
+  throw "At least one M5 device id is required."
+}
+
 New-Item -ItemType Directory -Force $logsDir | Out-Null
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$watchLog = Join-Path $logsDir "m5-sync-$DeviceId-$stamp.log"
-$watchErr = Join-Path $logsDir "m5-sync-$DeviceId-$stamp.err.log"
-New-Item -ItemType File -Force $watchLog | Out-Null
-New-Item -ItemType File -Force $watchErr | Out-Null
-$watchArgs = @(
-  "-NoProfile",
-  "-ExecutionPolicy", "Bypass",
-  "-File", "`"$watchScript`"",
-  "-DeviceId", $DeviceId,
-  "-Wireless"
-)
+$watchers = @()
 
-Write-Host "[run] starting M5 sync watcher for $DeviceId"
-Write-Host "[run] watcher log: $watchLog"
-
-$watchProcess = Start-Process `
-  -FilePath "powershell" `
-  -ArgumentList $watchArgs `
-  -WorkingDirectory $repoRoot `
-  -RedirectStandardOutput $watchLog `
-  -RedirectStandardError $watchErr `
-  -PassThru `
-  -WindowStyle Hidden
-
-Start-Sleep -Milliseconds 750
-if ($watchProcess.HasExited) {
-  throw "M5 sync watcher exited during startup. See: $watchErr"
-}
-
-$alertTailJob = Start-Job -ArgumentList $watchLog -ScriptBlock {
-  param($path)
+function Start-AlertTailJob {
+  param([string]$Path, [string]$DeviceId)
+  Start-Job -ArgumentList $Path, $DeviceId -ScriptBlock {
+  param($path, $deviceId)
   $offset = 0
   while ($true) {
     Start-Sleep -Seconds 2
@@ -68,7 +52,7 @@ $alertTailJob = Start-Job -ArgumentList $watchLog -ScriptBlock {
       while (-not $reader.EndOfStream) {
         $line = $reader.ReadLine()
         if ($line -match "^AGENT_M5_SYNC_ALERT") {
-          Write-Output $line
+          Write-Output "[$deviceId] $line"
         }
       }
       $offset = $stream.Position
@@ -77,27 +61,70 @@ $alertTailJob = Start-Job -ArgumentList $watchLog -ScriptBlock {
     }
   }
 }
+}
+
+foreach ($device in $DeviceIds) {
+  $watchLog = Join-Path $logsDir "m5-sync-$device-$stamp.log"
+  $watchErr = Join-Path $logsDir "m5-sync-$device-$stamp.err.log"
+  New-Item -ItemType File -Force $watchLog | Out-Null
+  New-Item -ItemType File -Force $watchErr | Out-Null
+  $watchArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", "`"$watchScript`"",
+    "-DeviceId", $device,
+    "-Wireless"
+  )
+
+  Write-Host "[run] starting M5 sync watcher for $device"
+  Write-Host "[run] watcher log: $watchLog"
+
+  $watchProcess = Start-Process `
+    -FilePath "powershell" `
+    -ArgumentList $watchArgs `
+    -WorkingDirectory $repoRoot `
+    -RedirectStandardOutput $watchLog `
+    -RedirectStandardError $watchErr `
+    -PassThru `
+    -WindowStyle Hidden
+
+  Start-Sleep -Milliseconds 750
+  if ($watchProcess.HasExited) {
+    throw "M5 sync watcher exited during startup for $device. See: $watchErr"
+  }
+
+  $alertTailJob = Start-AlertTailJob -Path $watchLog -DeviceId $device
+  $watchers += [pscustomobject]@{
+    DeviceId = $device
+    Process = $watchProcess
+    AlertTailJob = $alertTailJob
+    WatchLog = $watchLog
+    WatchErr = $watchErr
+  }
+}
 
 function Stop-Watcher {
-  if ($null -ne $alertTailJob) {
-    Stop-Job $alertTailJob -ErrorAction SilentlyContinue
-    Remove-Job $alertTailJob -Force -ErrorAction SilentlyContinue
-  }
-
-  if ($null -eq $watchProcess -or $watchProcess.HasExited) {
-    return
-  }
-
-  Write-Host "[run] stopping M5 sync watcher pid=$($watchProcess.Id)"
-  try {
-    $children = Get-CimInstance Win32_Process |
-      Where-Object { $_.ParentProcessId -eq $watchProcess.Id }
-    foreach ($child in $children) {
-      Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+  foreach ($watcher in $watchers) {
+    if ($null -ne $watcher.AlertTailJob) {
+      Stop-Job $watcher.AlertTailJob -ErrorAction SilentlyContinue
+      Remove-Job $watcher.AlertTailJob -Force -ErrorAction SilentlyContinue
     }
-    Stop-Process -Id $watchProcess.Id -Force -ErrorAction SilentlyContinue
-  } catch {
-    Write-Warning "[run] failed to stop watcher cleanly: $($_.Exception.Message)"
+
+    if ($null -eq $watcher.Process -or $watcher.Process.HasExited) {
+      continue
+    }
+
+    Write-Host "[run] stopping M5 sync watcher for $($watcher.DeviceId) pid=$($watcher.Process.Id)"
+    try {
+      $children = Get-CimInstance Win32_Process |
+        Where-Object { $_.ParentProcessId -eq $watcher.Process.Id }
+      foreach ($child in $children) {
+        Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+      Stop-Process -Id $watcher.Process.Id -Force -ErrorAction SilentlyContinue
+    } catch {
+      Write-Warning "[run] failed to stop watcher for $($watcher.DeviceId) cleanly: $($_.Exception.Message)"
+    }
   }
 }
 
@@ -127,15 +154,20 @@ try {
   }
 }
 finally {
-  Receive-Job $alertTailJob -ErrorAction SilentlyContinue |
-    ForEach-Object { Write-Warning "[m5-sync-alert] $_" }
+  foreach ($watcher in $watchers) {
+    Receive-Job $watcher.AlertTailJob -ErrorAction SilentlyContinue |
+      ForEach-Object { Write-Warning "[m5-sync-alert] $_" }
+  }
   Pop-Location
   Stop-Watcher
 
-  if (Test-Path $watchLog) {
-    $alerts = Select-String -Path $watchLog -Pattern "^AGENT_M5_SYNC_ALERT" -ErrorAction SilentlyContinue
+  foreach ($watcher in $watchers) {
+    if (-not (Test-Path $watcher.WatchLog)) {
+      continue
+    }
+    $alerts = Select-String -Path $watcher.WatchLog -Pattern "^AGENT_M5_SYNC_ALERT" -ErrorAction SilentlyContinue
     if ($alerts) {
-      Write-Warning "[run] M5 sync alerts were detected. See: $watchLog"
+      Write-Warning "[run] M5 sync alerts were detected for $($watcher.DeviceId). See: $($watcher.WatchLog)"
     }
   }
 }

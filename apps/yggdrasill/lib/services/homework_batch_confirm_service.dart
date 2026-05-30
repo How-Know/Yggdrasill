@@ -73,6 +73,8 @@ class HomeworkBatchConfirmService {
       final key = entry.key;
       final hw = HomeworkStore.instance.getById(key.studentId, key.itemId);
       if (hw == null) continue;
+      // '완료'(value=true)면 완료 예정으로 마킹. confirm/confirmBatch가
+      // _autoCompleteOnNextWaiting을 기준으로 서버 pending_complete를 설정한다.
       if (entry.value) {
         HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
       }

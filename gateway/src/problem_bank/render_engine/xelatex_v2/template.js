@@ -164,6 +164,42 @@ const SUBQ_MARKER_LINE_RE = /^\s*\[\s*소문항\s*\d+\s*\]\s*$/;
 //   capture group 1: 값이 있으면 PB_FIG itemID, 없으면 plain 마커.
 const FIGURE_MARKER_RE = /\[\[PB_FIG_([^\]]+)\]\]|\[(?:그림|도형|도표)\]/g;
 
+function normalizeLiteralJsonNewlineText(input) {
+  const src = String(input || '');
+  if (!src.includes('\\n')) return src;
+  const preserves = [
+    /^abla(?![A-Za-z])/,
+    /^atural(?![A-Za-z])/,
+    /^e(?![A-Za-z])/,
+    /^eq(?![A-Za-z])/,
+    /^eg(?![A-Za-z])/,
+    /^i(?![A-Za-z])/,
+    /^ot(?![A-Za-z])/,
+    /^u(?![A-Za-z])/,
+    /^ew(?:command|length|page|line|theorem)\b/,
+    /^oindent\b/,
+    /^onumber\b/,
+    /^ormal(?:font|size)\b/,
+    /^obreakspace\b/,
+    /^ull\b/,
+  ];
+  let out = '';
+  for (let i = 0; i < src.length; i += 1) {
+    if (src[i] === '\\' && src[i + 1] === 'n') {
+      const rest = src.slice(i + 2);
+      if (preserves.some((re) => re.test(rest))) {
+        out += '\\n';
+      } else {
+        out += '\n';
+      }
+      i += 1;
+      continue;
+    }
+    out += src[i];
+  }
+  return out;
+}
+
 // tabular 셀을 안전한 수식/텍스트 모드로 변환.
 //   - "\text{...}" 셀: 그대로 (LaTeX 가 tabular 바깥 mode 에서도 문제없이 처리)
 //   - "$...$"   셀: 그대로
@@ -173,6 +209,7 @@ const FIGURE_MARKER_RE = /\[\[PB_FIG_([^\]]+)\]\]|\[(?:그림|도형|도표)\]/g
 //   - 빈 셀 / 단순 숫자·기호 셀: 그대로 둠.
 function autoWrapTabularCells(rawTexBlock) {
   return rawTexBlock.replace(/\\begin\{tabular\}(\{[^}]*\})([\s\S]*?)\\end\{tabular\}/g, (_, colSpec, body) => {
+    body = normalizeLiteralJsonNewlineText(body);
     const rows = body.split(/\\\\/); // 행 구분은 \\ (LaTeX)
     const patchedRows = rows.map((row) => {
       // tabular 맨 끝의 공백/개행 row 는 그대로.
@@ -248,7 +285,7 @@ const BOGI_RE = /<\s*보\s*기\s*>/;
 const BOGI_ITEM_SPLIT_RE =
   /(?=(?:[ㄱ-ㅎ]\.\s*|(?:\(|（)\s*[ㄱ-ㅎ가나다라마바사아자차카타파하]\s*(?:\)|）)\s*))/;
 const BOGI_ITEM_RE =
-  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([ㄱ-ㅎ가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
+  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([ㄱ-ㅎ가나다라마바사아자차카타파하]|\d{1,2})\s*(?:\)|）)\s*)/;
 
 function bogiLabelTextFromMatch(match) {
   if (!match) return '';
@@ -786,6 +823,7 @@ function normalizeMathSegment(mathContent) {
   // undefined command (\circC), so separate the unit letter before compile.
   out = out.replace(/℃/g, '^{\\circ}C');
   out = out.replace(/\\circ(?=[CFKcfk]\b)/g, '\\circ ');
+  out = out.replace(/\\pi(?=(?:cm|mm|m|km|g|kg)\b)/g, '\\pi ');
   out = out.replace(/[∅]/g, '\\YggEmptySet{}');
   out = out.replace(/\\(?:emptyset|varnothing)(?![A-Za-z])/g, '\\YggEmptySet{}');
   out = normalizeCompactFractionCommands(out);

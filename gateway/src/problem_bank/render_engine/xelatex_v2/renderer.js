@@ -98,7 +98,7 @@ function runXeLatex(texPath, outDir) {
         `-output-directory=${outDir}`,
         texPath,
       ],
-      { timeout: XELATEX_TIMEOUT_MS, cwd: outDir },
+      { timeout: XELATEX_TIMEOUT_MS, cwd: outDir, windowsHide: true },
       (err, stdout, stderr) => {
         if (err) {
           let logTail = '';
@@ -188,7 +188,7 @@ function renderPdfPageWithPdftoppm(pdfPath, outDir, {
     execFile(
       'pdftoppm',
       ['-f', '1', '-singlefile', '-png', '-r', String(dpi), pdfPath, pngBase],
-      { timeout: 120_000, cwd: outDir },
+      { timeout: 120_000, cwd: outDir, windowsHide: true },
       (err) => {
         if (err) {
           reject(new Error(`pdftoppm failed: ${err.message}`));

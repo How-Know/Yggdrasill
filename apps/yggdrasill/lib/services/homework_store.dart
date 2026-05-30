@@ -3687,6 +3687,9 @@ class HomeworkStore {
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
+      // '완료 예정'(_autoCompleteOnNextWaiting) 여부를 confirm 직전에 서버
+      // pending_complete에 반영 → M5 인디케이터 확인(3칸)/완료(4칸) 구분.
+      await setPendingComplete([id], _autoCompleteOnNextWaiting.contains(id));
       await Supabase.instance.client.rpc('homework_confirm', params: {
         'p_item_id': id,
         'p_academy_id': academyId,
@@ -3745,6 +3748,16 @@ class HomeworkStore {
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
+      // '완료 예정'(_autoCompleteOnNextWaiting) 여부를 confirm 직전에 서버
+      // pending_complete에 반영 → M5 인디케이터 확인(3칸)/완료(4칸) 구분.
+      final trueIds = confirmedIds
+          .where((id) => _autoCompleteOnNextWaiting.contains(id))
+          .toList(growable: false);
+      final falseIds = confirmedIds
+          .where((id) => !_autoCompleteOnNextWaiting.contains(id))
+          .toList(growable: false);
+      if (trueIds.isNotEmpty) await setPendingComplete(trueIds, true);
+      if (falseIds.isNotEmpty) await setPendingComplete(falseIds, false);
       await Future.wait(
         confirmedIds.map(
           (id) => Supabase.instance.client.rpc('homework_confirm', params: {
@@ -3770,6 +3783,34 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][confirmBatch][ERROR] ' + e.toString());
       unawaited(_reloadStudent(studentId));
+    }
+  }
+
+  /// '완료'(pending complete) 의도를 서버 homework_items.pending_complete에 기록한다.
+  /// M5는 확인(phase 4) 카드 중 pending_complete=true인 그룹을 인디케이터 4칸으로,
+  /// 그 외(단순 확인)는 3칸으로 표시한다. value=false면 의도를 해제(확인)한다.
+  Future<void> setPendingComplete(Iterable<String> itemIds, bool value) async {
+    final ids = itemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc(
+        'homework_set_pending_complete',
+        params: {
+          'p_academy_id': academyId,
+          'p_item_ids': ids,
+          'p_value': value,
+        },
+      );
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][setPendingComplete][WARN] $e');
     }
   }
 

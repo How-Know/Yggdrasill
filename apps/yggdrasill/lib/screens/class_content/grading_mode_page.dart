@@ -891,7 +891,7 @@ class _GradingModePageState extends State<GradingModePage> {
       totalAccumulatedMs += child.accumulatedMs;
       totalCycleBaseMs += child.cycleBaseAccumulatedMs;
       final page = (child.page ?? '').trim();
-      if (page.isNotEmpty && pages.length < 4) pages.add(page);
+      if (page.isNotEmpty) pages.add(page);
       latestUpdated = _latestDate(latestUpdated, child.updatedAt);
       latestSubmitted = _latestDate(latestSubmitted, child.submittedAt);
       latestConfirmed = _latestDate(latestConfirmed, child.confirmedAt);
@@ -906,8 +906,9 @@ class _GradingModePageState extends State<GradingModePage> {
         : (group.title.trim().isNotEmpty ? group.title.trim() : first.title);
     final pageSummary = () {
       if (pages.isEmpty) return (first.page ?? '').trim();
-      if (pages.length <= 3) return pages.join(', ');
-      return '${pages.take(3).join(', ')}, ...';
+      // 그룹 페이지는 자식 페이지의 합집합을 연속 구간으로 압축해 표시한다.
+      final merged = mergeHomeworkPageRawStrings(pages);
+      return merged.isEmpty ? pages.join(', ') : merged;
     }();
     final normalizedChildTypes = <String>{
       for (final child in children)

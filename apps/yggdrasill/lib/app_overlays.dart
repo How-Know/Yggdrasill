@@ -175,6 +175,36 @@ final ValueNotifier<int> homeBatchConfirmPendingCount = ValueNotifier<int>(0);
 /// 홈(수업 내용) 일괄 확인 실행 액션.
 AsyncUiAction? homeBatchConfirmAction;
 
+/// 왼쪽 출석 슬라이드시트·홈(수업 내용)이 함께 보는 기준일 (date-only, 로컬).
+final ValueNotifier<DateTime> attendanceAnchorDateNotifier = ValueNotifier<DateTime>(
+  DateTime(
+    DateTime.now().year,
+    DateTime.now().month,
+    DateTime.now().day,
+  ),
+);
+
+DateTime attendanceDateOnly(DateTime d) =>
+    DateTime(d.year, d.month, d.day);
+
+bool isAttendanceAnchorToday(DateTime anchor) {
+  final today = attendanceDateOnly(DateTime.now());
+  return anchor.year == today.year &&
+      anchor.month == today.month &&
+      anchor.day == today.day;
+}
+
+void setAttendanceAnchorDate(DateTime date) {
+  final normalized = attendanceDateOnly(date);
+  final current = attendanceAnchorDateNotifier.value;
+  if (current.year == normalized.year &&
+      current.month == normalized.month &&
+      current.day == normalized.day) {
+    return;
+  }
+  attendanceAnchorDateNotifier.value = normalized;
+}
+
 /// 전역 오른쪽 사이드시트 열림 방지 (성향 탭 등에서 사용)
 final ValueNotifier<bool> blockRightSideSheetOpen = ValueNotifier<bool>(false);
 

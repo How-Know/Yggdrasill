@@ -5961,10 +5961,14 @@ async function main() {
 }
 
 import { pathToFileURL } from 'node:url';
+// 직접 실행 + PM2 fork 실행(둘 다) 감지. PM2 는 모듈로 로드하므로 pm_exec_path 로 판별.
 const _IS_DIRECT_RUN =
-  typeof process.argv[1] === 'string' &&
-  process.argv[1].length > 0 &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+  (typeof process.argv[1] === 'string' &&
+    process.argv[1].length > 0 &&
+    import.meta.url === pathToFileURL(process.argv[1]).href) ||
+  (typeof process.env.pm_exec_path === 'string' &&
+    process.env.pm_exec_path.length > 0 &&
+    import.meta.url === pathToFileURL(process.env.pm_exec_path).href);
 
 if (_IS_DIRECT_RUN) {
   main().catch((err) => {

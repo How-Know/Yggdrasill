@@ -88,7 +88,7 @@ async function renderPdfPageToPng(pdfBuffer, pageNumber, { dpi = 220 } = {}) {
     await execFileAsync(
       'pdftoppm',
       ['-png', '-f', String(page), '-l', String(page), '-singlefile', '-r', String(dpi), pdfPath, outBase],
-      { timeout: 60_000, cwd: dir },
+      { timeout: 60_000, cwd: dir, windowsHide: true },
     );
     const pngPath = `${outBase}.png`;
     if (!fs.existsSync(pngPath)) return null;
@@ -166,6 +166,39 @@ function independentCommonStemCompareKey(commonStem) {
   return compact(commonStem)
     .replace(/\[+\s*공백\s*:\s*\d+\s*\]+/g, '[공백]')
     .replace(/\s+/g, ' ');
+}
+
+function contentLinesWithoutStructuralMarkers(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => compact(line))
+    .filter((line) => line && !/^\[(?:문단|박스시작|박스끝)\]$/.test(line));
+}
+
+function trimTrailingStructuralMarkers(value) {
+  const lines = String(value || '')
+    .split(/\r?\n/)
+    .map((line) => compact(line))
+    .filter(Boolean);
+  while (lines.length > 0 && /^\[(?:문단|박스시작|박스끝)\]$/.test(lines[lines.length - 1])) {
+    lines.pop();
+  }
+  return lines.join('\n').trim();
+}
+
+function stripItemStemFromIndependentCommonStem(commonStem, itemStem) {
+  const common = compact(commonStem);
+  if (!common) return '';
+  const itemLines = contentLinesWithoutStructuralMarkers(itemStem);
+  if (itemLines.length === 0) return trimTrailingStructuralMarkers(common);
+  const itemText = itemLines.join('\n').trim();
+  const commonLines = contentLinesWithoutStructuralMarkers(common);
+  const commonText = commonLines.join('\n').trim();
+  if (!itemText || !commonText.endsWith(itemText)) {
+    return trimTrailingStructuralMarkers(common);
+  }
+  const prefix = commonText.slice(0, commonText.length - itemText.length).trim();
+  return trimTrailingStructuralMarkers(prefix || common);
 }
 
 function normalizeSetHeaderRange(crop) {
@@ -287,7 +320,10 @@ function normalizeIndependentSetPayloadQuestions(
         ? row.meta.set_model
         : {};
       const setKey = compact(setModel.set_key || setModel.setKey);
-      const common = compact(setModel.common_stem || setModel.commonStem);
+      const common = stripItemStemFromIndependentCommonStem(
+        setModel.common_stem || setModel.commonStem,
+        row?.stem,
+      );
       if (setKey && common && !commonBySetKey.has(setKey)) {
         commonBySetKey.set(setKey, common);
       }
@@ -304,7 +340,11 @@ function normalizeIndependentSetPayloadQuestions(
       const prevSet = prevMeta.set_model && typeof prevMeta.set_model === 'object'
         ? prevMeta.set_model
         : {};
-      const commonStem = compact(prevSet.common_stem || prevSet.commonStem)
+      const ownCommonStem = stripItemStemFromIndependentCommonStem(
+        prevSet.common_stem || prevSet.commonStem,
+        row?.stem,
+      );
+      const commonStem = ownCommonStem
         || commonBySetKey.get(range.setKey)
         || commonByHeaderSetKey.get(range.setKey)
         || '';

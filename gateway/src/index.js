@@ -307,6 +307,59 @@ function publishHomeworksToDevice(academy_id, student_id, device_id, groups, sou
   return envelope;
 }
 
+// Active homework groups + take-home (숙제) groups merged. The homework-only
+// RPC is additive; if it's not deployed yet we degrade gracefully to active-only.
+async function listM5GroupsWithHomework(academy_id, student_id) {
+  const [act, hw, flags, pcFlags] = await Promise.all([
+    supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id }),
+    supa.rpc('m5_list_homework_only_groups', { p_academy_id: academy_id, p_student_id: student_id }),
+    supa.rpc('m5_group_test_naesin_flags', { p_academy_id: academy_id, p_student_id: student_id }),
+    supa.rpc('m5_group_pending_complete_flags', { p_academy_id: academy_id, p_student_id: student_id })
+  ]);
+  if (act.error) return { data: null, error: act.error };
+  const missingFnRe = /42883|PGRST202|does not exist|could not find the function|schema cache/i;
+  // group_id → { is_test, is_naesin }
+  const flagMap = new Map();
+  if (flags.error) {
+    const msg = `${flags.error.code || ''} ${flags.error.message || ''}`;
+    if (!missingFnRe.test(msg)) {
+      console.warn('[gateway] group_test_naesin_flags error', flags.error);
+    }
+  } else if (Array.isArray(flags.data)) {
+    for (const f of flags.data) flagMap.set(f.group_id, { is_test: !!f.is_test, is_naesin: !!f.is_naesin });
+  }
+  // group_id → pending_complete (확인 vs 완료 구분: 완료 예정이면 인디케이터 4칸)
+  const pendingCompleteMap = new Map();
+  if (pcFlags.error) {
+    const msg = `${pcFlags.error.code || ''} ${pcFlags.error.message || ''}`;
+    if (!missingFnRe.test(msg)) {
+      console.warn('[gateway] group_pending_complete_flags error', pcFlags.error);
+    }
+  } else if (Array.isArray(pcFlags.data)) {
+    for (const f of pcFlags.data) pendingCompleteMap.set(f.group_id, !!f.pending_complete);
+  }
+  const applyFlags = (g) => {
+    const f = flagMap.get(g.group_id);
+    return {
+      ...g,
+      is_test: !!(f && f.is_test),
+      is_naesin: !!(f && f.is_naesin),
+      pending_complete: !!pendingCompleteMap.get(g.group_id)
+    };
+  };
+  const active = (Array.isArray(act.data) ? act.data : []).map(applyFlags);
+  let homework = [];
+  if (hw.error) {
+    const msg = `${hw.error.code || ''} ${hw.error.message || ''}`;
+    if (!/42883|PGRST202|does not exist|could not find the function|schema cache/i.test(msg)) {
+      console.warn('[gateway] homework_only_groups error', hw.error);
+    }
+  } else if (Array.isArray(hw.data)) {
+    homework = hw.data.map((g) => ({ ...applyFlags(g), is_homework: true }));
+  }
+  return { data: [...active, ...homework], error: null };
+}
+
 async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source = 'unknown') {
   const { data: binds, error: bErr } = await supa
     .from('m5_device_bindings')
@@ -321,10 +374,7 @@ async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source
   }
   if (!binds || binds.length === 0) return;
 
-  const { data: groups, error } = await supa.rpc('m5_list_homework_groups', {
-    p_academy_id: academy_id,
-    p_student_id: student_id
-  });
+  const { data: groups, error } = await listM5GroupsWithHomework(academy_id, student_id);
   if (error) {
     console.error('[gateway] realtime list_homework_groups error', { source, error });
     return;
@@ -334,6 +384,54 @@ async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source
   for (const b of binds) {
     const device_id = b.device_id;
     publishHomeworksToDevice(academy_id, student_id, device_id, payloadGroups, source);
+  }
+}
+
+// Publish today's student list to a single device, excluding students that are
+// actively bound to OTHER devices (matches the historic list_today filter).
+async function publishStudentsTodayToDevice(academy_id, device_id, source = 'list') {
+  const { data, error } = await supa.rpc('m5_get_students_today_basic', { p_academy_id: academy_id });
+  if (error) { console.error('[gateway] students_today error', { source, error }); return 0; }
+  const { data: binds, error: bErr } = await supa
+    .from('m5_device_bindings')
+    .select('student_id,device_id')
+    .eq('academy_id', academy_id)
+    .eq('active', true);
+  if (bErr) { console.error('[gateway] students_today bindings error', { source, error: bErr }); return 0; }
+  const boundToOther = new Set(
+    (binds || []).filter(b => b.device_id !== device_id).map(b => b.student_id)
+  );
+  const filtered = (data || []).filter(s => !boundToOther.has(s.student_id));
+  publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
+  return filtered.length;
+}
+
+// After any bind/unbind, push a fresh student list to every UNBOUND online device
+// so the just-(un)bound student appears/disappears immediately on all selectors.
+async function republishStudentListToUnboundDevices(academy_id, source = 'rebind') {
+  try {
+    const [studentsRes, devicesRes, bindsRes] = await Promise.all([
+      supa.rpc('m5_get_students_today_basic', { p_academy_id: academy_id }),
+      supa.from('m5_devices').select('device_id').eq('academy_id', academy_id).eq('is_online', true),
+      supa.from('m5_device_bindings').select('student_id,device_id').eq('academy_id', academy_id).eq('active', true)
+    ]);
+    if (studentsRes.error) { console.error('[gateway][list-resync] students error', { source, error: studentsRes.error }); return; }
+    if (devicesRes.error) { console.error('[gateway][list-resync] devices error', { source, error: devicesRes.error }); return; }
+    if (bindsRes.error) { console.error('[gateway][list-resync] bindings error', { source, error: bindsRes.error }); return; }
+    const binds = bindsRes.data || [];
+    const boundStudents = new Set(binds.map(b => b.student_id));
+    const boundDevices = new Set(binds.map(b => b.device_id));
+    const filtered = (studentsRes.data || []).filter(s => !boundStudents.has(s.student_id));
+    const targets = (devicesRes.data || [])
+      .map(d => d.device_id)
+      .filter(id => id && !boundDevices.has(id));
+    const payload = JSON.stringify({ students: filtered });
+    for (const device_id of targets) {
+      publish(`academies/${academy_id}/devices/${device_id}/students_today`, payload, { qos: 1, retain: false });
+    }
+    console.log('[gateway][list-resync] republished', { source, targets: targets.length, students: filtered.length });
+  } catch (e) {
+    console.error('[gateway][list-resync] error', { source, error: e?.message || e });
   }
 }
 
@@ -761,28 +859,64 @@ client.on('message', async (topic, payload) => {
       }
       if (action === 'bind') {
         const student_id = msg.student_id;
-        const { error } = await supa.rpc('m5_bind_device', { p_academy_id: academy_id, p_device_id: device_id, p_student_id: student_id });
-        if (error) console.error('[gateway] bind rpc error', error);
+        const pin = (msg.pin === undefined || msg.pin === null) ? null : String(msg.pin);
+        let status = 'ok';
+        let bindMeta = {};
+        const { data: bindRes, error: bindErr } = await supa.rpc('m5_bind_device_safe', {
+          p_academy_id: academy_id, p_device_id: device_id, p_student_id: student_id, p_pin: pin
+        });
+        if (bindErr) {
+          // Rollout safety: if the safe-bind RPC isn't migrated yet, fall back to the
+          // legacy bind so logins keep working (no PIN / no race guard in that case).
+          const missingFn = bindErr.code === '42883' || bindErr.code === 'PGRST202'
+            || /does not exist|could not find the function|schema cache/i.test(bindErr.message || '');
+          if (missingFn) {
+            console.warn('[gateway] m5_bind_device_safe unavailable → legacy bind fallback');
+            const { error: legErr } = await supa.rpc('m5_bind_device', { p_academy_id: academy_id, p_device_id: device_id, p_student_id: student_id });
+            if (legErr) {
+              console.error('[gateway] legacy bind rpc error', legErr);
+              publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: false, action: 'bind', reason: 'server_error', error: legErr.message, student_id }), { qos: 1, retain: false });
+              return;
+            }
+            status = 'ok';
+          } else {
+            console.error('[gateway] bind_safe rpc error', bindErr);
+            publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: false, action: 'bind', reason: 'server_error', error: bindErr.message, student_id }), { qos: 1, retain: false });
+            return;
+          }
+        } else {
+          status = (bindRes && bindRes.status) || 'error';
+          bindMeta = bindRes || {};
+        }
+        if (status !== 'ok') {
+          // bind refused (already_bound / pin_invalid / locked / pin_setup_required):
+          // surface the reason and refresh THIS device's (possibly stale) list.
+          console.log('[gateway] bind refused', { device_id, student_id, status });
+          publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({
+            ok: false, action: 'bind', reason: status,
+            attempts_left: bindMeta.attempts_left, locked_seconds: bindMeta.locked_seconds,
+            student_id
+          }), { qos: 1, retain: false });
+          await publishStudentsTodayToDevice(academy_id, device_id, `bind:${status}`);
+          return;
+        }
         // Record arrival time (upsert attendance)
         const { error: arrivalErr } = await supa.rpc('m5_record_arrival', { p_academy_id: academy_id, p_student_id: student_id });
         if (arrivalErr) console.error('[gateway] record_arrival error', arrivalErr);
-        // after bind, ensure attendance and list homeworks
-        const { data: groups, error: lerr } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
+        // after bind, ensure attendance and list homeworks (active + 숙제)
+        const { data: groups, error: lerr } = await listM5GroupsWithHomework(academy_id, student_id);
         if (lerr) console.error('[gateway] list_homework_groups error', lerr);
         publishHomeworksToDevice(academy_id, student_id, device_id, groups || [], 'bind');
-        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error && !lerr, action: 'bind', error: error?.message || lerr?.message, student_id }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !lerr, action: 'bind', error: lerr?.message, student_id }), { qos: 1, retain: false });
+        // refresh other unbound devices so the bound student disappears from their lists
+        await republishStudentListToUnboundDevices(academy_id, `bind:${device_id}`);
         return;
       }
       if (action === 'unbind') {
-        const student_id = msg.student_id;
-        // Record departure time before unbinding (if student_id provided)
-        if (student_id) {
-          const { error: depErr } = await supa.rpc('m5_record_departure', { p_academy_id: academy_id, p_student_id: student_id });
-          if (depErr) console.error('[gateway] record_departure error', depErr);
-        }
         const { error } = await supa.rpc('m5_unbind_device', { p_academy_id: academy_id, p_device_id: device_id });
         if (error) console.error('[gateway] unbind rpc error', error);
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind', error: error?.message }), { qos: 1, retain: false });
+        await republishStudentListToUnboundDevices(academy_id, `unbind:${device_id}`);
         return;
       }
       if (action === 'unbind_by_student') {
@@ -790,27 +924,17 @@ client.on('message', async (topic, payload) => {
         const { error } = await supa.rpc('m5_unbind_by_student', { p_academy_id: academy_id, p_student_id: student_id });
         if (error) console.error('[gateway] unbind_by_student rpc error', error);
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind_by_student', error: error?.message, student_id }), { qos: 1, retain: false });
+        await republishStudentListToUnboundDevices(academy_id, `unbind_by_student:${student_id}`);
         return;
       }
       if (action === 'list_today') {
-        const { data, error } = await supa.rpc('m5_get_students_today_basic', { p_academy_id: academy_id });
-        if (error) { console.error('[gateway] list_today error', error); return; }
-        const { data: binds } = await supa
-          .from('m5_device_bindings')
-          .select('student_id,device_id')
-          .eq('academy_id', academy_id)
-          .eq('active', true);
-        const boundToOther = new Set(
-          (binds || []).filter(b => b.device_id !== device_id).map(b => b.student_id)
-        );
-        const filtered = (data || []).filter(s => !boundToOther.has(s.student_id));
-        publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
-        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_today', count: filtered.length }), { qos: 1, retain: false });
+        const count = await publishStudentsTodayToDevice(academy_id, device_id, 'list_today');
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_today', count }), { qos: 1, retain: false });
         return;
       }
       if (action === 'list_homeworks') {
         const student_id = msg.student_id;
-        const { data: groups, error } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
+        const { data: groups, error } = await listM5GroupsWithHomework(academy_id, student_id);
         if (error) { console.error('[gateway] list_homework_groups error', error); return; }
         publishHomeworksToDevice(academy_id, student_id, device_id, groups || [], 'list_homeworks');
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (groups||[]).length }), { qos: 1, retain: false });
@@ -1076,6 +1200,7 @@ try {
               JSON.stringify({ action: 'unbound', student_id: rec.student_id }),
               { qos: 1, retain: false }
             );
+            await republishStudentListToUnboundDevices(rec.academy_id, 'realtime_unbound');
           }
         } catch (e) {
           console.error('[gateway] realtime m5_device_bindings handler error', e);
@@ -1086,6 +1211,36 @@ try {
   console.log('[gateway] realtime: m5_device_bindings subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime m5_device_bindings subscribe failed', e);
+}
+
+// Realtime: listen attendance departures → refresh student lists on unbound devices.
+// 매니저가 (바인딩 없이) 하원 처리하면 바인딩 변경이 없어 목록 재발행 트리거가 없다.
+// 그 결과 다른 기기의 학생 리스트에 하원 학생이 남아있던 문제를 해결한다.
+try {
+  try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+  const attChannel = supa
+    .channel('public:attendance_records')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'attendance_records' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? {};
+          const old = payload?.old ?? {};
+          // departure_time 이 새로 설정된 경우만(하원 처리)
+          if (rec.academy_id && rec.departure_time && !old.departure_time) {
+            console.log('[gateway] attendance departure → list resync', { student_id: rec.student_id });
+            await republishStudentListToUnboundDevices(rec.academy_id, 'realtime_departure');
+          }
+        } catch (e) {
+          console.error('[gateway] realtime attendance_records handler error', e);
+        }
+      }
+    )
+    .subscribe((status) => handleRealtimeSubscribeStatus('attendance_records', status));
+  console.log('[gateway] realtime: attendance_records subscribed init');
+} catch (e) {
+  console.warn('[gateway] realtime attendance_records subscribe failed', e);
 }
 
 scheduleFullM5HomeworkResync('startup', true);

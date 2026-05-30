@@ -29,6 +29,11 @@ function normalizeDegreeUnitLatex(input) {
     .replace(/\\circ(?=[CFKcfk]\b)/g, '\\circ ');
 }
 
+function normalizePiUnitLatex(input) {
+  return String(input || '')
+    .replace(/\\pi(?=(?:cm|mm|m|km|g|kg)\b)/g, '\\pi ');
+}
+
 const VLM_TABLE_BLOCK_RE = /(\[표시작\][\s\S]*?\[표끝\])/g;
 const LATEX_ROW_ENV_NAMES = [
   'tabular',
@@ -65,7 +70,7 @@ function protectTableBlocks(input) {
   const blocks = [];
   const text = source.replace(VLM_TABLE_BLOCK_RE, (match) => {
     const token = `\u0000VLMTABLE${blocks.length}\u0000`;
-    blocks.push(match);
+    blocks.push(normalizeLiteralJsonNewlineText(match));
     return token;
   });
   return {
@@ -263,7 +268,9 @@ function normalizeAnswerSurfaceText(input) {
     if (next === out) break;
     out = next;
   }
-  return normalizeDegreeUnitLatex(normalizeCompactFractionCommands(out))
+  return normalizePiUnitLatex(
+    normalizeDegreeUnitLatex(normalizeCompactFractionCommands(out)),
+  )
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -679,14 +686,20 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   ).trim();
   const labelMarksEssay = /서술|논술/.test(textbookLabel);
   const requestedSetType = String(vlmQ?.set_type || '').trim();
-  const setType = ALLOWED_SET_TYPES.has(requestedSetType)
+  const requestedSetTypeAllowed = ALLOWED_SET_TYPES.has(requestedSetType)
     ? requestedSetType
-    : isSet
+    : '';
+  const subs = Array.isArray(vlmQ?.sub_questions) ? vlmQ.sub_questions : [];
+  // 독립형 세트는 Stage 1 범위 헤더의 각 문항이 "공통발문 + 단일 item" 으로
+  // 분리되는 계약이다. 한 문항 안에 (1), (2), ... 소문항이 여러 개 들어온
+  // 경우는 번들형 세트로 취급해야 공통발문이 중복 노출되지 않는다.
+  const setType = isSet
+    ? (requestedSetTypeAllowed === 'independent_set' && subs.length > 1
       ? 'dependent_set'
-      : '';
+      : (requestedSetTypeAllowed || 'dependent_set'))
+    : '';
   const isIndependentSet = isSet && setType === 'independent_set';
   const commonStem = isIndependentSet ? String(vlmQ?.stem || '').trim() : '';
-  const subs = Array.isArray(vlmQ?.sub_questions) ? vlmQ.sub_questions : [];
   const independentSetItemOnly = isIndependentSet && subs.length === 1;
   const qType = labelMarksEssay
     ? '서술형'

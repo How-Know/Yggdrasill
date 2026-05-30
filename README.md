@@ -9,4 +9,5 @@
 
 노트
 - 두 프로젝트는 별도 의존성. 디자인 토큰/스키마 공유는 추후 `packages/` 추가 권장.
+- **UI/디자인 작업 시:** [`docs/design-system.md`](docs/design-system.md)를 먼저 읽는다 (Cursor Rule: `.cursor/rules/design-system.mdc`).
 

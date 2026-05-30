@@ -25,7 +25,7 @@ export function checkXeLatexInstallation() {
 
   const bin = findXeLatexBinary();
   return new Promise((resolve) => {
-    execFile(bin, ['--version'], { timeout: 5000 }, (err, stdout) => {
+    execFile(bin, ['--version'], { timeout: 5000, windowsHide: true }, (err, stdout) => {
       if (err) {
         _cached = { installed: false, version: null, binary: bin, error: err.message };
       } else {

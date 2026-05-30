@@ -1,0 +1,49 @@
+---
+description: UI/design changes must follow docs/design-system.md
+globs: apps/yggdrasill/lib/**,apps/yggdrasill_manager/lib/**
+alwaysApply: false
+---
+
+# Design System (required)
+
+When editing UI, layout, colors, typography, spacing, or visual components in
+`apps/yggdrasill` or `apps/yggdrasill_manager`, **first read**
+[`docs/design-system.md`](../../docs/design-system.md) in full and follow it.
+
+## Mandatory workflow
+
+1. Read `docs/design-system.md` (checklist §0).
+2. Build UI in **Preview only** — use the correct app folder:
+   `design_preview/yggdrasill/` (learning app), `design_preview/m5/` (M5 UI),
+   or `apps/yggdrasill_manager/.../design_preview/yggdrasill_manager/`.
+   Do not mix apps in one preview file.
+3. Do **not** edit production `*_screen.dart` until the customer confirms the
+   Preview (Hot Reload review).
+4. After approval: copy UI widget tree only; keep logic changes minimal and
+   separate.
+
+## Do not
+
+- Add new HEX colors, fonts, radius, or spacing values not listed in the doc.
+- Invent new widgets when §5 catalog components fit.
+- Mix legacy (`#1F1F1F` shell) and new teal (`kDlg*`) palettes against §2.4.
+- Change Provider/API/`onTap` business logic in the same pass as visual tweaks.
+- Redesign from screenshots alone without functional context.
+
+## Reuse first
+
+- Colors: `dialog_tokens.dart` (`kDlg*`), existing `_rs*` / Theme constants.
+- Widgets: `YggDialogSectionHeader`, `YggDialogFilterChip`, `PillTabSelector`,
+  `CustomTabBar`, `CustomNavigationRail`, `DarkPanelRoute`, `showAppSnackBar`.
+
+## After changes
+
+Add one line to §10 (changelog) in `docs/design-system.md`.
+
+## Prompt template
+
+```text
+docs/design-system.md를 먼저 읽고 준수해.
+Preview 목업만 만들고, 프로덕션 화면은 건드리지 마.
+문서의 토큰과 §5 컴포넌트만 사용해.
+```

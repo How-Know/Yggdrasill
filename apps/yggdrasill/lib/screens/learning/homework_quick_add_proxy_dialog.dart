@@ -3382,6 +3382,198 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  /// 소단원(`bigOrder|midOrder|subKey`) → 소단원 노드 조회용 맵.
+  Map<String, _SmallUnitSelectionNode> _smallNodeByUnitKey() {
+    final out = <String, _SmallUnitSelectionNode>{};
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          out['${big.orderIndex}|${mid.orderIndex}|${small.subKey}'] = small;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// 현재 선택을 소단원 단위로 분해해 자동 하위과제 목록을 만든다.
+  /// 문항 정보가 있으면 문항 기반, 없으면 페이지 기반으로 동작한다.
+  List<_DraftGroupItem> _buildAutoSubtaskDraftItems(_LinkedTextbook book) {
+    if (_rangePickerMode == 'type') {
+      return _buildProblemSubtaskDraftItems(book);
+    }
+    return _buildPageSubtaskDraftItems(book);
+  }
+
+  /// 페이지 기반(fallback): 선택 소단원을 소단원별 하위과제로 만든다.
+  List<_DraftGroupItem> _buildPageSubtaskDraftItems(_LinkedTextbook book) {
+    final selected = _sortedSelectedSmallUnits(_selectedSmallUnits());
+    if (selected.isEmpty) return const <_DraftGroupItem>[];
+    final groups = <String, List<_SelectedSmallUnit>>{};
+    final order = <String>[];
+    for (final s in selected) {
+      final key = '${s.bigOrder}|${s.midOrder}|${s.smallOrder}';
+      if (!groups.containsKey(key)) order.add(key);
+      groups.putIfAbsent(key, () => <_SelectedSmallUnit>[]).add(s);
+    }
+    final items = <_DraftGroupItem>[];
+    for (final key in order) {
+      final group = groups[key]!;
+      final first = group.first;
+      final title =
+          first.smallName.trim().isEmpty ? '교재 과제' : first.smallName.trim();
+      final pathSummary =
+          '${first.bigName} > ${first.midName} > ${first.smallName}';
+      items.add(
+        _assembleSubtaskDraftItem(
+          book: book,
+          title: title,
+          page: _mergedPageText(group),
+          count: _mergedCountText(group) ?? '',
+          pathSummary: pathSummary,
+          sourceUnitLevel: 'merged',
+          sourceUnitPath: _prefixFromSelectedSmall(first),
+          unitMappings: _unitMappingsFromSelectedSmalls(group),
+        ),
+      );
+    }
+    return items;
+  }
+
+  /// 문항 기반: 선택 문항을 소단원별 하위과제로 만든다.
+  List<_DraftGroupItem> _buildProblemSubtaskDraftItems(_LinkedTextbook book) {
+    final selected = _selectedProblemRegions();
+    if (selected.isEmpty) return const <_DraftGroupItem>[];
+    final smallNodes = _smallNodeByUnitKey();
+    final groups = <String, List<_TextbookProblemRegion>>{};
+    final order = <String>[];
+    for (final region in selected) {
+      final key = '${region.bigOrder}|${region.midOrder}|${region.subKey}';
+      if (!groups.containsKey(key)) order.add(key);
+      groups.putIfAbsent(key, () => <_TextbookProblemRegion>[]).add(region);
+    }
+    final items = <_DraftGroupItem>[];
+    for (final key in order) {
+      items.add(
+        _buildProblemSubtaskDraftItem(book, groups[key]!, smallNodes[key]),
+      );
+    }
+    return items;
+  }
+
+  _DraftGroupItem _buildProblemSubtaskDraftItem(
+    _LinkedTextbook book,
+    List<_TextbookProblemRegion> regions,
+    _SmallUnitSelectionNode? smallNode,
+  ) {
+    final pages = regions.map((region) => region.displayPage).toSet();
+    final pageText = _pagesToCompactText(pages);
+    final byPage = <int, int>{};
+    for (final region in regions) {
+      byPage[region.displayPage] = (byPage[region.displayPage] ?? 0) + 1;
+    }
+    final groupLabels = <String>[];
+    for (final region in regions) {
+      final label = region.typeGroupLabel.trim();
+      if (label.isNotEmpty && !groupLabels.contains(label)) {
+        groupLabels.add(label);
+      }
+    }
+    final first = regions.first;
+    final smallName = (smallNode?.name ?? '').trim();
+    final title = smallName.isNotEmpty
+        ? smallName
+        : (groupLabels.length == 1
+            ? groupLabels.first
+            : '유형별 문항 ${regions.length}개');
+    final pathSummary = [
+      first.bigName,
+      first.midName,
+      if (smallName.isNotEmpty) smallName,
+    ].where((e) => e.trim().isNotEmpty).join(' > ');
+    final mapping = <String, dynamic>{
+      'selectionMode': 'problem',
+      'sourceScope': 'problem_regions',
+      'bigOrder': first.bigOrder,
+      'midOrder': first.midOrder,
+      if (smallNode != null) 'smallOrder': smallNode.orderIndex,
+      'subKey': first.subKey,
+      'bigName': first.bigName,
+      'midName': first.midName,
+      'smallName': smallName,
+      'pageCounts': Map<String, int>.fromEntries(
+        byPage.entries.map((entry) => MapEntry('${entry.key}', entry.value)),
+      ),
+      'startPage': pages.isEmpty ? null : pages.reduce(math.min),
+      'endPage': pages.isEmpty ? null : pages.reduce(math.max),
+      'pageCoordinate': 'display',
+      'pageCount': regions.length,
+      'problemCount': regions.length,
+      'problemNumbers': regions.map((e) => e.problemNumber).toList(),
+      'problemCrops': regions.map((e) => e.toMappingJson()).toList(),
+      'typeGroups': groupLabels,
+      'weight': 1.0,
+    };
+    return _assembleSubtaskDraftItem(
+      book: book,
+      title: title,
+      page: pageText,
+      count: '${regions.length}',
+      pathSummary: pathSummary,
+      sourceUnitLevel: 'problem',
+      sourceUnitPath:
+          smallName.isNotEmpty ? smallName : (groupLabels.join(', ')),
+      unitMappings: <Map<String, dynamic>>[mapping],
+    );
+  }
+
+  /// 자동 하위과제 항목을 입력 폼의 양식/색/시험 설정과 함께 조립한다.
+  _DraftGroupItem _assembleSubtaskDraftItem({
+    required _LinkedTextbook book,
+    required String title,
+    required String page,
+    required String count,
+    required String pathSummary,
+    required String sourceUnitLevel,
+    required String sourceUnitPath,
+    required List<Map<String, dynamic>> unitMappings,
+  }) {
+    final testMode = _isCurrentHomeworkTypeTest();
+    final timeLimitMinutes =
+        testMode ? _parsePositiveIntText(_timeLimitMinutes.text) : null;
+    final type = _linkedHomeworkType;
+    final color = _colorForType(type);
+    final content = '${_bookMetaText(book)}\n$pathSummary';
+    final normalizedPage = _normalizePageTextCompact(page);
+    return _DraftGroupItem(
+      key: 'draft_${_draftGroupItemSeq++}',
+      type: type,
+      title: title,
+      page: normalizedPage,
+      count: count,
+      memo: _memo.text.trim(),
+      content: content,
+      body: _composeBodyValues(
+        page: normalizedPage,
+        count: count,
+        content: content,
+        timeLimitMinutes: timeLimitMinutes,
+      ),
+      color: color,
+      // 자동 하위과제는 물리 분할이므로 시간 분할(splitParts)은 1로 둔다.
+      // (하위과제 개수가 1개면 호출부에서 사용자가 고른 splitParts를 복원한다.)
+      splitParts: 1,
+      linkedBookKey: _bookIdentity(book),
+      bookId: book.bookId,
+      gradeLabel: book.gradeLabel,
+      sourceUnitLevel: sourceUnitLevel,
+      sourceUnitPath: sourceUnitPath,
+      unitMappings: unitMappings,
+      timeLimitMinutes: timeLimitMinutes,
+      testMode: testMode,
+      testOriginFlowId: testMode ? _currentTestOriginFlowId() : null,
+    );
+  }
+
   void _refreshRangeAutoDraft() {
     final requestId = ++_rangeAiRequestId;
     final selectedBook = _selectedLinkedBook;
@@ -3765,6 +3957,55 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  void _addAutoSubtaskDraftItems(_LinkedTextbook book) {
+    final built = _buildAutoSubtaskDraftItems(book);
+    if (built.isEmpty) {
+      _showDialogSnackBar(
+        _rangePickerMode == 'type'
+            ? '문항을 1개 이상 선택하세요.'
+            : '대/중/소단원을 1개 이상 선택하세요.',
+      );
+      return;
+    }
+    // 하위과제가 1개뿐이면 사용자가 고른 시간 분할(splitParts)을 그대로 둔다.
+    final items = built.length == 1
+        ? <_DraftGroupItem>[
+            built.first.copyWith(splitParts: _selectedSplitParts.clamp(1, 4)),
+          ]
+        : built;
+
+    final usedPages = _draftUsedPages();
+    final usedProblemIds = _draftUsedProblemIds();
+    final incomingProblemIds = <String>{};
+    final incomingPages = <int>{};
+    for (final item in items) {
+      incomingProblemIds.addAll(_problemIdsFromMappings(item.unitMappings));
+      incomingPages.addAll(_pagesFromRawPageText(item.page));
+    }
+    if (incomingProblemIds.isNotEmpty &&
+        incomingProblemIds.intersection(usedProblemIds).isNotEmpty) {
+      _showDialogSnackBar('이미 추가된 문항이 포함되어 있습니다. 문항을 다시 선택하세요.');
+      return;
+    }
+    if (incomingProblemIds.isEmpty &&
+        _hasPageOverlap(incomingPages, usedPages)) {
+      _showDialogSnackBar('이미 추가된 페이지가 포함되어 있습니다. 범위를 다시 선택하세요.');
+      return;
+    }
+
+    setState(() {
+      _draftGroupItems.addAll(items);
+      _applyDraftBlockedStateToUnits(
+        _units,
+        usedPages: _draftUsedPages(),
+      );
+    });
+    _resetRangeSelectionAfterAdd();
+    _timeLimitMinutes.clear();
+    _memo.clear();
+    unawaited(_generateGroupTitleByAi());
+  }
+
   void _addDraftGroupItemFromInput() {
     final selectedBook = _selectedLinkedBook;
     final useRangeDraft = selectedBook != null && !_manualPageMode;
@@ -3772,6 +4013,10 @@ class HomeworkQuickAddProxyDialogState
     final nextBookKey = _bookIdentity(selectedBook);
     if (_draftGroupItems.isNotEmpty && draftBookKey != nextBookKey) {
       _showDialogSnackBar('그룹 과제는 한 교재 범위에서만 추가할 수 있습니다.');
+      return;
+    }
+    if (useRangeDraft) {
+      _addAutoSubtaskDraftItems(selectedBook);
       return;
     }
     _DraftGroupItem? item = _buildDraftGroupItemFromInput();
@@ -5849,6 +6094,40 @@ class HomeworkQuickAddProxyDialogState
         'sourceUnitPath': null,
         'unitMappings': const <Map<String, dynamic>>[],
         'splitParts': _selectedSplitParts,
+      });
+      return;
+    }
+
+    // 범위 선택은 소단원 단위로 자동 분해한다.
+    // 하위과제가 2개 이상이면 그룹 과제로, 1개면 기존 단일 과제로 제출한다.
+    final autoSubtasks = _buildAutoSubtaskDraftItems(selectedBook);
+    if (autoSubtasks.isEmpty) {
+      _showDialogSnackBar(
+        _rangePickerMode == 'type'
+            ? '문항을 1개 이상 선택하세요.'
+            : '대/중/소단원을 1개 이상 선택하세요.',
+      );
+      return;
+    }
+    if (autoSubtasks.length > 1) {
+      final fallbackGroupTitle = () {
+        final staged = _groupTitle.text.trim();
+        if (staged.isNotEmpty) return staged;
+        final merged = _buildMergedRangeTask(selectedBook);
+        final mergedTitle = (merged?.title ?? '').trim();
+        return mergedTitle.isEmpty ? '그룹 과제' : mergedTitle;
+      }();
+      final groupItems = autoSubtasks
+          .map((e) => e.copyWith(splitParts: 1))
+          .toList(growable: false);
+      Navigator.pop(context, {
+        'studentId': widget.studentId,
+        'groupMode': true,
+        if (_isChildAddMode) 'childAddMode': true,
+        'groupTitle': fallbackGroupTitle,
+        'flowId': _flowId,
+        'action': resolvedAction,
+        'items': groupItems.map((e) => e.toJson()).toList(growable: false),
       });
       return;
     }

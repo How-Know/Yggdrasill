@@ -4,6 +4,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/student/student_screen.dart';
+import 'screens/design_preview/design_preview_hub_screen.dart';
+import 'screens/design_preview/yggdrasill/settings/settings_preview_screen.dart';
 import 'dart:io';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:window_manager/window_manager.dart';
@@ -1150,6 +1152,11 @@ class _MyAppState extends State<MyApp>
             routes: {
               '/settings': (context) => const SettingsScreen(),
               '/students': (context) => const StudentScreen(),
+              if (kDebugMode) ...{
+                '/design-preview': (context) => const DesignPreviewHubScreen(),
+                '/design-preview/yggdrasill/settings': (context) =>
+                    const SettingsPreviewScreen(),
+              },
             },
           );
         },

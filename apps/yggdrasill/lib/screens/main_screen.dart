@@ -164,23 +164,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  void _applySideSheetAnchorDate(DateTime date) {
+    final normalized = _dateOnly(date);
+    if (_isSameDate(_sideSheetAnchorDate, normalized)) return;
+    setState(() {
+      _sideSheetAnchorDate = normalized;
+      _sideSheetDataDirty = true;
+    });
+    setAttendanceAnchorDate(normalized);
+  }
+
   void _moveSideSheetToYesterday() {
     final today = _dateOnly(DateTime.now());
     final yesterday = today.subtract(const Duration(days: 1));
-    if (_isSameDate(_sideSheetAnchorDate, yesterday)) return;
-    setState(() {
-      _sideSheetAnchorDate = yesterday;
-      _sideSheetDataDirty = true;
-    });
+    _applySideSheetAnchorDate(yesterday);
   }
 
   void _moveSideSheetToToday() {
-    final today = _dateOnly(DateTime.now());
-    if (_isSameDate(_sideSheetAnchorDate, today)) return;
-    setState(() {
-      _sideSheetAnchorDate = today;
-      _sideSheetDataDirty = true;
-    });
+    _applySideSheetAnchorDate(_dateOnly(DateTime.now()));
   }
 
   // 기준 날짜의 등원 대상 학생(setId별) 리스트 추출
@@ -1116,6 +1117,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    setAttendanceAnchorDate(_sideSheetAnchorDate);
     // 과제 데이터 DB에서 1회 로드
     HomeworkStore.instance.loadAll();
     rightSheetGradingSearchRunAction = _gradingSearchRunAction;
@@ -1315,8 +1317,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _removeTooltip();
       _rotationAnimation.reverse();
     } else {
-      _sideSheetAnchorDate = _dateOnly(DateTime.now());
-      _sideSheetDataDirty = true;
+      _applySideSheetAnchorDate(_dateOnly(DateTime.now()));
       // ✅ 사이드 시트가 planned 누락으로 비어 보이지 않도록
       // 오늘 기준 2주(15일) 커버리지를 보장한다.
       if (_sideSheetDebug) {
