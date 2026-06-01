@@ -65,7 +65,7 @@ const String kLearningRenderConfigVersion =
 //   EXPORT_RENDER_CONFIG_VERSION_V2 / RENDER_CONFIG_VERSION_V2 와 일치해야 한다.
 //   클라이언트가 mathEngine='xelatex-v2' 로 요청하면 서버 normalize 단계에서
 //   renderConfigVersion 이 이 값으로 덮어써져 V1 캐시와 자동 격리된다.
-const String kLearningRenderConfigVersionV2 = 'pb_render_v2_choice_3row_layout_01';
+const String kLearningRenderConfigVersionV2 = 'pb_render_v2_cases_control_space_rows_01';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({

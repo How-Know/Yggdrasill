@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../settings/settings_screen.dart';
 import '../../widgets/dialog_tokens.dart';
 import 'yggdrasill/settings/settings_preview_screen.dart';
 
-/// kDebugMode 전용 Preview 목록.
+/// 완전 분리 Preview 앱에서 표시하는 학습앱 Preview 목록.
 class DesignPreviewHubScreen extends StatelessWidget {
   const DesignPreviewHubScreen({super.key});
 
@@ -24,8 +25,20 @@ class DesignPreviewHubScreen extends StatelessWidget {
             title: 'yggdrasill',
           ),
           _PreviewTile(
-            title: '설정',
-            subtitle: '학원 / 선생님 / 일반 탭 목업',
+            title: '설정 - 실제 기준선',
+            subtitle: '프로덕션 SettingsScreen 그대로 표시 (미세 조정 기준)',
+            badge: 'BASELINE',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const SettingsScreen(),
+                ),
+              );
+            },
+          ),
+          _PreviewTile(
+            title: '설정 - 컨셉 목업',
+            subtitle: 'mock 데이터 기반 단순화 시안 (실제 반영 전 비교용)',
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -55,11 +68,13 @@ class DesignPreviewHubScreen extends StatelessWidget {
 class _PreviewTile extends StatelessWidget {
   final String title;
   final String subtitle;
+  final String? badge;
   final VoidCallback onTap;
 
   const _PreviewTile({
     required this.title,
     required this.subtitle,
+    this.badge,
     required this.onTap,
   });
 
@@ -69,7 +84,29 @@ class _PreviewTile extends StatelessWidget {
       color: kDlgPanelBg,
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        title: Text(title, style: const TextStyle(color: kDlgText)),
+        title: Row(
+          children: [
+            Text(title, style: const TextStyle(color: kDlgText)),
+            if (badge != null) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: kDlgAccent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  badge!,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
         subtitle: Text(subtitle, style: const TextStyle(color: kDlgTextSub)),
         trailing: const Icon(Icons.chevron_right, color: kDlgTextSub),
         onTap: onTap,

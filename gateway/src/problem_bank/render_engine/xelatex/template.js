@@ -1448,6 +1448,23 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   const allowTallMathTopPad = options?.allowTallMathTopPad === true;
   const enableVisualLineTallMathPad = options?.visualLineTallMathPad !== false;
   const stemTexOptions = { visualLineTallMathPad: enableVisualLineTallMathPad };
+  // inline-text(글 중간) 그림: 본문 텍스트는 smartTexLine 으로, 그림 sentinel 자리는
+  // resolver 가 돌려준 LaTeX 으로 (텍스트 모드 그대로) 끼워넣어 줄 흐름 안에 둔다.
+  const inlineFigResolver = typeof options?.inlineFigureResolver === 'function'
+    ? options.inlineFigureResolver
+    : null;
+  const renderBodyTex = (text) => {
+    if (!inlineFigResolver || !String(text).includes('\u0000YGGINLFIG')) {
+      return smartTexLine(text, equations, stemTexOptions);
+    }
+    const segs = String(text).split(/\u0000YGGINLFIG(\d+)\u0000/g);
+    let acc = '';
+    for (let s = 0; s < segs.length; s += 1) {
+      if (s % 2 === 1) { acc += inlineFigResolver(Number(segs[s])); continue; }
+      if (segs[s]) acc += smartTexLine(segs[s], equations, stemTexOptions);
+    }
+    return acc;
+  };
   const wrapStem = (inner, { tallMath = false } = {}) => {
     const tallMathTopPad = allowTallMathTopPad && tallMath
       ? '\\par\\vspace{0.10\\baselineskip}'
@@ -1512,7 +1529,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
       );
     }
   }
-  const bodyTex = smartTexLine(sub, equations, stemTexOptions);
+  const bodyTex = renderBodyTex(sub);
   return wrapStem(`${firstPrefix}${bodyTex}`, {
     tallMath: texHasTallInlineMath(bodyTex),
   });
@@ -1522,7 +1539,8 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
 /*  Box parsing: [박스시작]/[박스끝] segment detection                  */
 /* ------------------------------------------------------------------ */
 
-function parseStemSegments(stem, stemLineAligns = []) {
+function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
+  const onFigureMarker = typeof opts.onFigureMarker === 'function' ? opts.onFigureMarker : null;
   // VLM 이 보내는 [보기시작]/[보기끝] 을 기존 [박스시작]+<보기> 표기로 정규화.
   //   [보기시작]          →  [박스시작]\n<보기>
   //   [보기끝]            →  [박스끝]
@@ -1796,7 +1814,17 @@ function parseStemSegments(stem, stemLineAligns = []) {
   const FIGURE_SINGLE_RE = /^\[\[PB_FIG_[^\]]+\]\]$|^\[(?:그림|도형|도표)\]$/;
   const out = [];
   for (const seg of segments) {
-    if (seg.type !== 'text') { out.push(seg); continue; }
+    if (seg.type !== 'text') {
+      // 마커 카운터 정렬을 위해 non-text 세그먼트(박스/보기 등)의 그림 마커도 소비한다.
+      if (onFigureMarker) {
+        for (const l of (seg.lines || [])) {
+          const ms = String(l || '').match(FIGURE_SPLIT_RE);
+          if (ms) for (const tk of ms) { if (FIGURE_SINGLE_RE.test(tk)) onFigureMarker(tk); }
+        }
+      }
+      out.push(seg);
+      continue;
+    }
     let bufLines = [];
     let bufAligns = [];
     const flushTextBuf = () => {
@@ -1825,17 +1853,35 @@ function parseStemSegments(stem, stemLineAligns = []) {
         continue;
       }
       const pieces = line.split(FIGURE_SPLIT_RE);
+      // inline-text 마커와 그 주변 텍스트는 같은 라인(lineAcc)으로 유지해야 줄 흐름 안에
+      // 그림이 들어간다. 블록 그림 마커를 만나면 그 전까지의 라인 텍스트를 flush 한 뒤
+      // 별도 figure 세그먼트로 승격한다.
+      let lineAcc = '';
+      const flushLineAcc = () => {
+        if (lineAcc) {
+          bufLines.push(lineAcc);
+          bufAligns.push(rawAlign);
+          lineAcc = '';
+        }
+      };
       for (let i = 0; i < pieces.length; i += 1) {
         const piece = pieces[i];
         if (!piece) continue;
         if (FIGURE_SINGLE_RE.test(piece)) {
-          flushTextBuf();
-          out.push({ type: 'figure', lines: [piece], lineAligns: [rawAlign] });
+          const decision = onFigureMarker ? onFigureMarker(piece) : 'block';
+          if (decision === 'inline') {
+            // inline-text(글 중간) 그림: 같은 라인에 그대로 누적.
+            lineAcc += piece;
+          } else {
+            flushLineAcc();
+            flushTextBuf();
+            out.push({ type: 'figure', lines: [piece], lineAligns: [rawAlign] });
+          }
         } else {
-          bufLines.push(piece);
-          bufAligns.push(rawAlign);
+          lineAcc += piece;
         }
       }
+      flushLineAcc();
     }
     flushTextBuf();
   }
@@ -4276,6 +4322,81 @@ function renderOneQuestion(question, {
     return `${pre}\n${body}${post}\n`;
   }
 
+  // ── inline-text(글 중간) 그림: 본문 줄 흐름 안에 그대로 삽입 ──
+  //   텍스트 렌더 경로(replaceFigureMarkersTextPath)에서 sentinel 로 치환해 두었다가,
+  //   piece 를 renderStemTextLine 으로 처리할 때 sentinel 자리에
+  //   \raisebox{}{\includegraphics[height=..]} 를 끼워넣어 한 줄 흐름으로 합친다.
+  const INLINE_FIG_SENTINEL_PREFIX = '\u0000YGGINLFIG';
+  function inlineFigureSentinel(i) {
+    return `${INLINE_FIG_SENTINEL_PREFIX}${i}\u0000`;
+  }
+  function inlineFigureSplitRegex() {
+    return /\u0000YGGINLFIG(\d+)\u0000/g;
+  }
+  function renderInlineTextFigureLatex(i) {
+    const p = figurePaths[i];
+    if (!p) return '';
+    const normalized = String(p).replace(/\\/g, '/');
+    const layout = layoutForIndex(i) || {};
+    const heightRaw = Number.isFinite(layout.heightEm) ? Number(layout.heightEm) : 1.6;
+    const heightEm = Math.max(0.35, Math.min(8, heightRaw));
+    const include = `\\includegraphics[height=${heightEm.toFixed(2)}em]{${normalized}}`;
+    // 본문 글자 중앙(x-height 부근)에 그림 중앙을 맞춰 줄 흐름에 자연스럽게 앉힌다.
+    // 좌우 thin space 로 글자와의 최소 간격을 확보(분할 시 공백이 trim 되는 것 보완).
+    return `\\,\\raisebox{\\dimexpr-0.5\\height+0.5ex\\relax}{${include}}\\,`;
+  }
+  function isInlineTextFigureIndex(i) {
+    const layout = layoutForIndex(i) || {};
+    return String(layout.position || '').toLowerCase() === 'inline-text';
+  }
+
+  // 본문 텍스트 경로 전용 마커 치환기. inline-text 그림은 sentinel 로,
+  // 그 외에는 기존 replaceFigureMarkers 와 동일하게 블록 LaTeX 으로 치환한다.
+  function replaceFigureMarkersTextPath(text) {
+    return text.replace(FIGURE_MARKER_RE, (_match, capturedItemId) => {
+      const trimmedId = capturedItemId ? String(capturedItemId).trim() : '';
+      const resolvedIdx = trimmedId ? itemIdToLocalIdx.get(trimmedId) : undefined;
+      let i;
+      if (Number.isInteger(resolvedIdx)) {
+        i = resolvedIdx;
+        figIdx += 1;
+      } else {
+        while (emittedFigIdxs.has(figIdx)) figIdx += 1;
+        i = figIdx;
+        figIdx += 1;
+      }
+      const alreadyEmitted = emittedFigIdxs.has(i);
+      emittedFigIdxs.add(i);
+      if (figIdxConsumedByGroup.has(i)) return '';
+      if (isInlineTextFigureIndex(i)) return inlineFigureSentinel(i);
+      const group = groupByStartFigIdx.get(i);
+      if (group && !alreadyEmitted) return renderFigureGroupLatex(group);
+      return renderFigureLatex(i);
+    });
+  }
+
+  // parseStemSegments 의 promotion 단계에서 inline-text 그림을 블록으로 승격하지 않도록
+  // 판단하는 probe. replaceFigureMarkersTextPath 와 동일한 순서로 figure index 를 해석한다.
+  let probeInlineFigIdx = 0;
+  const probeInlineEmitted = new Set();
+  function probeFigureMarkerDecision(token) {
+    const m = String(token || '').match(/\[\[PB_FIG_([^\]]+)\]\]/);
+    let i;
+    if (m) {
+      const id = String(m[1]).trim();
+      const resolved = itemIdToLocalIdx.get(id);
+      probeInlineFigIdx += 1;
+      if (!Number.isInteger(resolved)) return 'block';
+      i = resolved;
+    } else {
+      while (probeInlineEmitted.has(probeInlineFigIdx)) probeInlineFigIdx += 1;
+      i = probeInlineFigIdx;
+      probeInlineFigIdx += 1;
+    }
+    probeInlineEmitted.add(i);
+    return isInlineTextFigureIndex(i) ? 'inline' : 'block';
+  }
+
   function resolveFigureIndexForSegment(sIdx, segText) {
     const tokenMatch = String(segText || '').match(/\[\[PB_FIG_([^\]]+)\]\]/);
     if (tokenMatch) {
@@ -4689,7 +4810,9 @@ function renderOneQuestion(question, {
   const partsMeta = new Map();
   let currentSubQ = 0;
 
-  const segments = parseStemSegments(stem, stemLineAlignsResolved);
+  const segments = parseStemSegments(stem, stemLineAlignsResolved, {
+    onFigureMarker: probeFigureMarkerDecision,
+  });
 
   // 문항 내 표 등장 순서 카운터 (meta.table_scales 키: struct:N / raw:N 와 대응).
   let structTableIdx = 0;
@@ -4929,7 +5052,7 @@ function renderOneQuestion(question, {
           outerPendingEmpty += paragraphMatches ? paragraphMatches.length : 1;
           continue;
         }
-        const withFigs = replaceFigureMarkers(rawLine);
+        const withFigs = replaceFigureMarkersTextPath(rawLine);
         const trimmed = withFigs.trim();
         if (!trimmed) {
           outerPendingEmpty += 1;
@@ -4976,7 +5099,30 @@ function renderOneQuestion(question, {
               && currentSubQ > 0
               && explicitSubQLabel
               && Number(explicitSubQLabel[1]) === currentSubQ;
-            if (/\\includegraphics/.test(piece)) {
+            if (piece.includes(INLINE_FIG_SENTINEL_PREFIX)) {
+              // inline-text(글 중간) 그림: 라인 전체를 한 paragraph 로 렌더하되,
+              // 그림 sentinel 은 resolver 가 텍스트 모드 그대로 끼워넣는다.
+              let rendered = renderStemTextLine(piece, equations, '', {
+                allowTallMathTopPad: emittedStemTextLineAny,
+                inlineFigureResolver: (figI) => renderInlineTextFigureLatex(figI),
+              });
+              // 안전망: subQ/대화형 등 다른 경로를 탄 라인에 sentinel 이 남았으면 복원.
+              rendered = rendered.replace(
+                inlineFigureSplitRegex(),
+                (_m, n) => renderInlineTextFigureLatex(Number(n)),
+              );
+              if (rendered.trim()) {
+                const effectiveLineAlign = isExplicitSubQBodyLine ? 'left' : rawLineAlign;
+                if (effectiveLineAlign === 'center') {
+                  rendered = `\\begin{center}\n${rendered}\n\\end{center}`;
+                } else if (effectiveLineAlign === 'right') {
+                  rendered = `\\begin{flushright}\n${rendered}\n\\end{flushright}`;
+                }
+                parts.push(rendered);
+                emittedStemTextLineAny = true;
+                partsMeta.set(parts.length - 1, { subQ: currentSubQ });
+              }
+            } else if (/\\includegraphics/.test(piece)) {
               parts.push(piece);
             } else {
               // JS 의 "첫 텍스트 조각" 은 TeX 조판 후의 시각적 첫 줄이 아니다.

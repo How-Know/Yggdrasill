@@ -1494,6 +1494,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     int previousProgress = 0;
     int currentProgress = 0;
     bool groupHasRegularDue = false;
+    bool groupHasPreDone = false;
     DateTime? earliestAssigned;
     String? firstBookAndCourse;
     for (final hw in children) {
@@ -1504,22 +1505,43 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
               (a) => a.dueDate != null && _isSameDay(a.dueDate!, classDateTime))
           .toList()
         ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
-      if (dueAssignments.isEmpty) continue;
-      dueCount += dueAssignments.length;
-      if (dueAssignments.any((a) => !a.isSelfExtra)) {
-        groupHasRegularDue = true;
-      }
+      final preDone = hw.preDoneProgress ?? 0;
+      // 정규 검사예정도, 미리 해온(추가검사) 기록도 없으면 건너뛴다.
+      if (dueAssignments.isEmpty && preDone <= 0) continue;
       final checks = checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
       final hasTodayCheck =
           checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
       final window = _progressWindowForChecks(checks, classDateTime);
-      final latestDue = dueAssignments.last;
-      final itemPrevious = hasTodayCheck
-          ? window.previous
-          : math.max(window.previous, latestDue.progress);
-      final itemCurrent = hasTodayCheck
-          ? math.max(window.current, latestDue.progress)
-          : itemPrevious;
+      int itemPrevious;
+      int itemCurrent;
+      if (dueAssignments.isNotEmpty) {
+        dueCount += dueAssignments.length;
+        if (dueAssignments.any((a) => !a.isSelfExtra)) {
+          groupHasRegularDue = true;
+        }
+        final latestDue = dueAssignments.last;
+        itemPrevious = hasTodayCheck
+            ? window.previous
+            : math.max(window.previous, latestDue.progress);
+        itemCurrent = hasTodayCheck
+            ? math.max(window.current, latestDue.progress)
+            : itemPrevious;
+        final assignedAt = dueAssignments.first.assignedAt;
+        if (earliestAssigned == null || assignedAt.isBefore(earliestAssigned)) {
+          earliestAssigned = assignedAt;
+        }
+      } else {
+        // 미리 해온 숙제(아직 정식으로 내주지 않은 추가검사분):
+        // 오늘 검사 요약에 "추가분"으로 반영한다(분자에만 포함).
+        groupHasPreDone = true;
+        itemPrevious = window.previous;
+        itemCurrent = math.max(window.current, preDone);
+        final pAt = hw.preDoneAt;
+        if (pAt != null &&
+            (earliestAssigned == null || pAt.isBefore(earliestAssigned))) {
+          earliestAssigned = pAt;
+        }
+      }
       if (itemPrevious > previousProgress) {
         previousProgress = itemPrevious;
       }
@@ -1531,12 +1553,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       final count = hw.count;
       if (count != null && count > 0) groupCount += count;
       firstBookAndCourse ??= _formatBookAndCourseFromHomework(hw);
-      final assignedAt = dueAssignments.first.assignedAt;
-      if (earliestAssigned == null || assignedAt.isBefore(earliestAssigned)) {
-        earliestAssigned = assignedAt;
-      }
     }
-    if (dueCount <= 0) continue;
+    if (dueCount <= 0 && !groupHasPreDone) continue;
     final title = group.title.trim().isNotEmpty
         ? group.title.trim()
         : children.first.title.trim();

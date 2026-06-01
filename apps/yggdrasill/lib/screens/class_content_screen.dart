@@ -6627,6 +6627,11 @@ Widget _buildExtraCheckGroupCard(
   final dueText = candidate.dueDate == null
       ? '검사일 미정'
       : _formatDateWithWeekdayShort(candidate.dueDate!);
+  int preDoneMax = 0;
+  for (final c in candidate.children) {
+    final p = c.preDoneProgress ?? 0;
+    if (p > preDoneMax) preDoneMax = p;
+  }
   return GestureDetector(
     onTap: onTap,
     behavior: HitTestBehavior.opaque,
@@ -6702,6 +6707,26 @@ Widget _buildExtraCheckGroupCard(
                   height: 1.1,
                 ),
               ),
+              if (preDoneMax > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0x3352796F),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '미리 $preDoneMax%',
+                    style: const TextStyle(
+                      color: Color(0xFF9CC5B8),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(width: 6),
               const Icon(Icons.add_task_rounded, size: 18, color: kDlgAccent),
             ],
@@ -6811,82 +6836,32 @@ Future<bool> _runExtraHomeworkCheckRecordOnlyForGroup({
   );
   if (confirmed != true || !context.mounted) return false;
 
-  // 활성 assignment가 없는 하위 과제는 오늘 날짜 + 마커로 새로 생성한다.
-  final today = _dateOnly(DateTime.now());
-  final needCreate = <HomeworkItem>[];
-  for (final child in targetChildren) {
-    final t = await _resolveHomeworkCheckTarget(
-      studentId,
-      child.id,
-      includeHistory: false,
-    );
-    if (!context.mounted) return false;
-    if (t == null) needCreate.add(child);
-  }
-  if (needCreate.isNotEmpty) {
-    final groupMeta = <String, HomeworkAssignmentGroupMeta>{
-      for (final c in needCreate)
-        c.id: HomeworkAssignmentGroupMeta(
-          groupId: group.id,
-          groupTitleSnapshot: groupTitle,
-        ),
-    };
-    await HomeworkAssignmentStore.instance.recordAssignments(
-      studentId,
-      needCreate,
-      dueDate: today,
-      note: HomeworkAssignmentStore.selfExtraNote,
-      groupMetaByItemId: groupMeta,
-    );
-    if (!context.mounted) return false;
-  }
-
-  final targets =
-      <({HomeworkItem item, _HomeworkCheckTarget target, int min})>[];
-  DateTime? earliestAssignedAt;
-  DateTime? earliestDueDate;
+  // assignment를 만들지 않고, 학생별 기존 검사/미리해온 기록을 바탕으로
+  // 진행률 입력 최소값(이미 검사된 만큼)만 계산한다.
+  int globalMinProgress = 0;
   String? issueType;
   String? issueNote;
   for (final child in targetChildren) {
-    final target = await _resolveHomeworkCheckTarget(
-      studentId,
-      child.id,
-      includeHistory: false,
-    );
-    if (!context.mounted) return false;
-    if (target == null) continue;
     final checks = await HomeworkAssignmentStore.instance
         .loadChecksForItem(studentId, child.id);
+    if (!context.mounted) return false;
     checks.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
-    final previousProgress = checks.isEmpty ? 0 : checks.last.progress;
+    final lastCheckProgress = checks.isEmpty ? 0 : checks.last.progress;
+    final preDone = child.preDoneProgress ?? 0;
     final minProgress =
-        math.max(previousProgress, target.progress).clamp(0, 150);
-    earliestAssignedAt = earliestAssignedAt == null ||
-            target.assignedAt.isBefore(earliestAssignedAt)
-        ? target.assignedAt
-        : earliestAssignedAt;
-    earliestDueDate = _mergeHomeworkDueDate(
-      earliestDueDate,
-      target.dueDate == null ? null : _dateOnly(target.dueDate!),
-    );
-    issueType ??= target.issueType;
-    issueNote ??= target.issueNote;
-    targets.add((item: child, target: target, min: minProgress));
-  }
-  if (targets.isEmpty) {
-    if (context.mounted) {
-      _showHomeworkChipSnackBar(context, '검사할 할당 정보를 만들지 못했습니다.');
+        math.max(lastCheckProgress, preDone).clamp(0, 150).toInt();
+    if (minProgress > globalMinProgress) globalMinProgress = minProgress;
+    if (issueType == null && (child.preDoneIssueType?.isNotEmpty ?? false)) {
+      issueType = child.preDoneIssueType;
+      issueNote = child.preDoneIssueNote;
     }
-    return false;
   }
   if (!context.mounted) return false;
 
-  final globalMinProgress =
-      targets.fold<int>(0, (maxSoFar, e) => math.max(maxSoFar, e.min));
   final dialogTarget = _HomeworkCheckTarget(
-    assignmentId: targets.first.target.assignmentId,
-    assignedAt: earliestAssignedAt ?? DateTime.now(),
-    dueDate: earliestDueDate,
+    assignmentId: '',
+    assignedAt: DateTime.now(),
+    dueDate: null,
     progress: globalMinProgress,
     issueType: issueType,
     issueNote: issueNote,
@@ -6899,7 +6874,7 @@ Future<bool> _runExtraHomeworkCheckRecordOnlyForGroup({
     studentId,
   );
   if (!context.mounted) return false;
-  final targetIds = targets.map((e) => e.item.id).toSet();
+  final targetIds = targetChildren.map((e) => e.id).toSet();
   final groupAssignmentCounts = <String, int>{
     for (final id in targetIds) id: assignmentCountsByItem[id] ?? 0,
   };
@@ -6913,31 +6888,23 @@ Future<bool> _runExtraHomeworkCheckRecordOnlyForGroup({
     hw: summary,
     target: dialogTarget,
     minProgress: globalMinProgress,
-    groupChildren: targets.map((e) => e.item).toList(growable: false),
+    groupChildren: targetChildren,
     assignmentCountsByItem: groupAssignmentCounts,
     cycleMetaByItem: groupCycleMetaByItem,
   );
   if (!context.mounted || draft == null) return false;
 
-  final savedItemIds = <String>[];
-  for (final entry in targets) {
-    final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-      assignmentId: entry.target.assignmentId,
-      studentId: studentId,
-      homeworkItemId: entry.item.id,
-      progress: draft.progress,
-      issueType: draft.issueType,
-      issueNote: draft.issueNote,
-      markCompleted: false,
-    );
-    if (saved) savedItemIds.add(entry.item.id);
-  }
-  if (!context.mounted) return savedItemIds.isNotEmpty;
-  if (savedItemIds.isEmpty) {
-    _showHomeworkChipSnackBar(context, '그룹 숙제 검사 저장에 실패했습니다.');
-    return false;
-  }
-  _showHomeworkChipSnackBar(context, '미리 해온 그룹 숙제 검사를 기록했어요.');
+  // assignment 생성 없이 미리 해온 진행률만 임시 기록한다.
+  // 이후 하원/수동으로 숙제를 내줄 때 정식 검사로 소비된다.
+  await HomeworkStore.instance.recordPreDoneProgress(
+    studentId: studentId,
+    itemIds: targetChildren.map((e) => e.id).toList(growable: false),
+    progress: draft.progress,
+    issueType: draft.issueType,
+    issueNote: draft.issueNote,
+  );
+  if (!context.mounted) return true;
+  _showHomeworkChipSnackBar(context, '미리 해온 진행률을 기록했어요.');
   return true;
 }
 

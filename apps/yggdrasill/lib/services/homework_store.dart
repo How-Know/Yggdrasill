@@ -55,6 +55,11 @@ class HomeworkItem {
   DateTime? submittedAt;
   DateTime? confirmedAt;
   DateTime? waitingAt;
+  // 자의로 미리 해온 숙제(추가검사)의 임시 진행률. assignment 생성 시 소비된다.
+  int? preDoneProgress;
+  DateTime? preDoneAt;
+  String? preDoneIssueType;
+  String? preDoneIssueNote;
   int version; // OCC 버전
   HomeworkItem({
     required this.id,
@@ -92,6 +97,10 @@ class HomeworkItem {
     this.submittedAt,
     this.confirmedAt,
     this.waitingAt,
+    this.preDoneProgress,
+    this.preDoneAt,
+    this.preDoneIssueType,
+    this.preDoneIssueNote,
     this.version = 1,
   })  : learningTrackCode =
             HomeworkLearningTrack.normalizeCode(learningTrackCode),
@@ -339,6 +348,7 @@ class HomeworkStore {
   bool _supportsLearningTrackColumn = true;
   bool _supportsPbPresetIdColumn = true;
   bool _supportsTestOriginFlowIdColumn = true;
+  bool _supportsPreDoneColumns = true;
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
@@ -391,6 +401,12 @@ class HomeworkStore {
   bool _isMissingAssignmentCodeColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('assignment_code') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingPreDoneColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('pre_done_') &&
         (message.contains('does not exist') || message.contains('42703'));
   }
 
@@ -706,6 +722,58 @@ class HomeworkStore {
       return baseRows;
     }
 
+    Future<List<Map<String, dynamic>>> attachPreDoneColumns(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      if (!_supportsPreDoneColumns) return baseRows;
+      try {
+        final ids = <String>[];
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, Map<String, dynamic>>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
+          );
+          final raw = await supa
+              .from('homework_items')
+              .select(
+                'id,pre_done_progress,pre_done_at,pre_done_issue_type,pre_done_issue_note',
+              )
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            byId[id] = row;
+          }
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          final src = byId[id];
+          if (src == null) continue;
+          row['pre_done_progress'] = src['pre_done_progress'];
+          row['pre_done_at'] = src['pre_done_at'];
+          row['pre_done_issue_type'] = src['pre_done_issue_type'];
+          row['pre_done_issue_note'] = src['pre_done_issue_note'];
+        }
+      } catch (e) {
+        if (_isMissingPreDoneColumnError(e)) {
+          _supportsPreDoneColumns = false;
+          return baseRows;
+        }
+        rethrow;
+      }
+      return baseRows;
+    }
+
     Future<List<Map<String, dynamic>>> attachOptionalColumns(
       List<Map<String, dynamic>> baseRows,
     ) async {
@@ -734,6 +802,11 @@ class HomeworkStore {
         rows = await attachTestOriginFlowIds(rows);
       } catch (e) {
         debugPrint('[HW] attachTestOriginFlowIds skipped: $e');
+      }
+      try {
+        rows = await attachPreDoneColumns(rows);
+      } catch (e) {
+        debugPrint('[HW] attachPreDoneColumns skipped: $e');
       }
       return rows;
     }
@@ -1044,6 +1117,10 @@ class HomeworkStore {
       submittedAt: _parseTsOpt(r['submitted_at']),
       confirmedAt: _parseTsOpt(r['confirmed_at']),
       waitingAt: _parseTsOpt(r['waiting_at']),
+      preDoneProgress: _parseIntOpt(r['pre_done_progress']),
+      preDoneAt: _parseTsOpt(r['pre_done_at']),
+      preDoneIssueType: _parseTrimmedTextOpt(r['pre_done_issue_type']),
+      preDoneIssueNote: _parseTrimmedTextOpt(r['pre_done_issue_note']),
       version: _parseInt(r['version'], fallback: 1),
     );
   }
@@ -3814,6 +3891,110 @@ class HomeworkStore {
     }
   }
 
+  /// 자의로 미리 해온 숙제(추가검사)의 임시 진행률을 homework_items에 기록한다.
+  /// assignment를 만들지 않고, 이후 해당 과제를 정식으로 내줄 때 검사로 소비한다.
+  Future<void> recordPreDoneProgress({
+    required String studentId,
+    required List<String> itemIds,
+    required int progress,
+    String? issueType,
+    String? issueNote,
+  }) async {
+    final ids = itemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+    final clamped = progress.clamp(0, 150);
+    final nowUtcIso = DateTime.now().toUtc().toIso8601String();
+    final nowLocal = DateTime.now();
+    // 로컬 모델 선반영.
+    final list = _byStudentId[studentId];
+    if (list != null) {
+      for (final it in list) {
+        if (ids.contains(it.id)) {
+          it.preDoneProgress = clamped;
+          it.preDoneAt = nowLocal;
+          it.preDoneIssueType = issueType;
+          it.preDoneIssueNote = issueNote;
+        }
+      }
+    }
+    _bump();
+    if (!_supportsPreDoneColumns) return;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client
+          .from('homework_items')
+          .update(<String, dynamic>{
+            'pre_done_progress': clamped,
+            'pre_done_at': nowUtcIso,
+            'pre_done_issue_type': issueType,
+            'pre_done_issue_note': issueNote,
+          })
+          .eq('academy_id', academyId)
+          .inFilter('id', ids);
+    } catch (e) {
+      if (_isMissingPreDoneColumnError(e)) {
+        _supportsPreDoneColumns = false;
+        return;
+      }
+      // ignore: avoid_print
+      print('[HW][recordPreDoneProgress][WARN] $e');
+    }
+  }
+
+  /// 미리 해온 임시 진행률을 비운다(정식 검사로 소비된 뒤 호출).
+  Future<void> clearPreDoneProgress(
+    String studentId,
+    List<String> itemIds,
+  ) async {
+    final ids = itemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+    final list = _byStudentId[studentId];
+    if (list != null) {
+      for (final it in list) {
+        if (ids.contains(it.id)) {
+          it.preDoneProgress = null;
+          it.preDoneAt = null;
+          it.preDoneIssueType = null;
+          it.preDoneIssueNote = null;
+        }
+      }
+    }
+    _bump();
+    if (!_supportsPreDoneColumns) return;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client
+          .from('homework_items')
+          .update(<String, dynamic>{
+            'pre_done_progress': null,
+            'pre_done_at': null,
+            'pre_done_issue_type': null,
+            'pre_done_issue_note': null,
+          })
+          .eq('academy_id', academyId)
+          .inFilter('id', ids);
+    } catch (e) {
+      if (_isMissingPreDoneColumnError(e)) {
+        _supportsPreDoneColumns = false;
+        return;
+      }
+      // ignore: avoid_print
+      print('[HW][clearPreDoneProgress][WARN] $e');
+    }
+  }
+
   Future<void> _reconcileGroupRuntimeForItems(
     String academyId,
     Iterable<String> itemIds,
@@ -4073,6 +4254,8 @@ class HomeworkStore {
     int splitParts = 1,
     Map<String, int>? splitPartsByItem,
     Map<String, HomeworkAssignmentGroupMeta>? groupMetaByItemId,
+    Map<String, int>? initialProgressByItemId,
+    Map<String, ({String? type, String? note})>? initialIssueByItemId,
   }) async {
     if (items.isEmpty) return;
     Map<String, String> liveReleaseIdByItem = const <String, String>{};
@@ -4094,6 +4277,8 @@ class HomeworkStore {
       splitPartsByItem: splitPartsByItem,
       groupMetaByItemId: groupMetaByItemId,
       liveReleaseIdByItem: liveReleaseIdByItem,
+      initialProgressByItemId: initialProgressByItemId,
+      initialIssueByItemId: initialIssueByItemId,
     );
   }
 
@@ -4422,14 +4607,36 @@ class HomeworkStore {
     }());
     final groupMetaByItem =
         _buildAssignmentGroupMetaByItem(studentId, toAssign);
-    unawaited(_recordAssignmentsWithLiveRelease(
-      studentId: studentId,
-      items: toAssign,
-      dueDate: dueDate,
-      splitParts: splitParts,
-      splitPartsByItem: splitPartsByItem,
-      groupMetaByItemId: groupMetaByItem,
-    ));
+    // 미리 해온 진행률(추가검사)을 정식 검사로 소비하기 위한 시드 구성.
+    final initialProgressByItem = <String, int>{};
+    final initialIssueByItem = <String, ({String? type, String? note})>{};
+    final preDoneConsumedIds = <String>[];
+    for (final e in toAssign) {
+      final preDone = e.preDoneProgress;
+      if (preDone != null && preDone > 0) {
+        initialProgressByItem[e.id] = preDone;
+        initialIssueByItem[e.id] =
+            (type: e.preDoneIssueType, note: e.preDoneIssueNote);
+        preDoneConsumedIds.add(e.id);
+      }
+    }
+    unawaited(() async {
+      await _recordAssignmentsWithLiveRelease(
+        studentId: studentId,
+        items: toAssign,
+        dueDate: dueDate,
+        splitParts: splitParts,
+        splitPartsByItem: splitPartsByItem,
+        groupMetaByItemId: groupMetaByItem,
+        initialProgressByItemId:
+            initialProgressByItem.isEmpty ? null : initialProgressByItem,
+        initialIssueByItemId:
+            initialIssueByItem.isEmpty ? null : initialIssueByItem,
+      );
+      if (preDoneConsumedIds.isNotEmpty) {
+        await clearPreDoneProgress(studentId, preDoneConsumedIds);
+      }
+    }());
   }
 
   // 하원 시 선택하지 않은 과제를 즉시 "대기(진행중)"로 복귀시키고

@@ -239,6 +239,75 @@ function splitLatexRows(body) {
   return rows;
 }
 
+/**
+ * 추출 아티팩트 보정: 일부 보기/수식에서 cases 의 행 구분자 `\\` 가 단일
+ * 제어 공백 `\ ` 로 유실되어 들어오는 경우가 있다. 이때 cases 는 행 구분자를
+ * 찾지 못해 한 줄로 렌더된다. 최상위에 `\\`(실제 행 구분)도 없고 `&`(열 구분)도
+ * 없는데 제어 공백으로만 분절된 경우에 한해, 그 제어 공백을 행 구분자로 복구한다.
+ * (정상적인 다행/열 분리 cases 는 건드리지 않아 회귀 위험이 없다.)
+ */
+function recoverCasesControlSpaceRowBreaks(body) {
+  const src = String(body || '');
+  if (!src) return src;
+  let braceDepth = 0;
+  const envStack = [];
+  const controlSpacePositions = [];
+  for (let i = 0; i < src.length; i += 1) {
+    if (src.startsWith('\\begin{', i) || src.startsWith('\\end{', i)) {
+      const isBegin = src.startsWith('\\begin{', i);
+      const nameStart = i + (isBegin ? '\\begin{'.length : '\\end{'.length);
+      const nameEnd = src.indexOf('}', nameStart);
+      if (nameEnd > nameStart) {
+        const envName = src.slice(nameStart, nameEnd);
+        if (isBegin) {
+          envStack.push(envName);
+        } else {
+          const idx = envStack.lastIndexOf(envName);
+          if (idx >= 0) envStack.splice(idx, 1);
+        }
+        i = nameEnd;
+        continue;
+      }
+    }
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '\\') {
+      const topLevel = braceDepth === 0 && envStack.length === 0;
+      if (next === '\\') {
+        // 실제 행 구분자가 이미 존재하면 복구하지 않는다.
+        if (topLevel) return src;
+        i += 1;
+        continue;
+      }
+      if (topLevel && (next === ' ' || next === '\t' || next === '\n' || next === '\r')) {
+        controlSpacePositions.push(i);
+      }
+      if (next && !/[a-zA-Z]/.test(next)) i += 1;
+      continue;
+    }
+    if (ch === '&' && braceDepth === 0 && envStack.length === 0) {
+      // 열 구분이 있는 단일행 cases (값 & 조건) 형태는 복구 대상이 아니다.
+      return src;
+    }
+    if (ch === '{') {
+      braceDepth += 1;
+    } else if (ch === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+    }
+  }
+  if (controlSpacePositions.length === 0) return src;
+  let out = '';
+  let cursor = 0;
+  for (const idx of controlSpacePositions) {
+    out += src.slice(cursor, idx);
+    out += '\\\\';
+    cursor = idx + 1;
+    while (cursor < src.length && /\s/.test(src[cursor])) cursor += 1;
+  }
+  out += src.slice(cursor);
+  return out;
+}
+
 function splitLatexTopLevelAmpersands(row) {
   const src = String(row || '');
   const cells = [];
@@ -402,7 +471,9 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
 
     const rawBody = src.slice(bodyStart, match.endStart);
     // 안쪽 cases 를 먼저 균형 있게 변환해야 바깥 행 분리 시 내부 `\\` 를 건드리지 않는다.
-    const body = expandCasesEnvironmentToDisplayArray(rawBody, options);
+    const body = recoverCasesControlSpaceRowBreaks(
+      expandCasesEnvironmentToDisplayArray(rawBody, options),
+    );
     const rows = splitLatexRows(body);
     if (rows.length === 0) {
       out += src.slice(begin, match.endAfter);

@@ -162,6 +162,13 @@ function buildSingleFigureHtml(url, layoutItem) {
   const posClass = `figure-pos-${position}`;
   const anchorClass = `figure-anchor-${anchor}`;
   const offsetX = safeFigureOffsetX(layoutItem);
+  if (position === 'inline-text') {
+    // 글 중간(인라인): 본문 줄 흐름 안에 글자 높이 기준으로 그대로 삽입.
+    const hRaw = Number.isFinite(layoutItem?.heightEm) ? Number(layoutItem.heightEm) : 1.6;
+    const hEm = Math.max(0.6, Math.min(8, hRaw));
+    return `<img class="figure-img figure-pos-inline-text" src="${url}" `
+      + `style="height:${hEm.toFixed(2)}em;width:auto;max-width:100%;vertical-align:middle;display:inline;" />`;
+  }
   const isInline = position === 'inline-left' || position === 'inline-right';
   if (isInline && Number.isFinite(w)) {
     const occupiedW = inlineFigureOccupiedWidthEm(Number(w), offsetX) || Number(w);

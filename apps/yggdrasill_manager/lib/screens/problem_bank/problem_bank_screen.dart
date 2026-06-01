@@ -979,6 +979,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     'center',
     'wrap-left',
     'wrap-right',
+    'inline',
   ];
   static const Map<String, String> _figurePositionLabels = <String, String>{
     'align-left': '왼쪽 정렬',
@@ -986,7 +987,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     'center': '가운데',
     'wrap-left': '왼쪽 어울림',
     'wrap-right': '오른쪽 어울림',
+    'inline': '글 중간',
   };
+
+  // inline(글 중간) 배치의 기본 그림 높이(em). 본문 줄 높이에 맞춰 작게 들어간다.
+  static const double _figureInlineHeightEmDefault = 1.6;
+  static const double _figureInlineHeightEmMin = 0.35;
+  static const double _figureInlineHeightEmMax = 8.0;
 
   static String _figureArrangementFromPositionAnchor(
     String position,
@@ -994,6 +1001,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   ) {
     final pos = position.trim().toLowerCase();
     final anc = anchor.trim().toLowerCase();
+    if (pos == 'inline-text') return 'inline';
     if (_figurePositionOptions.contains(pos)) return pos;
     if (pos == 'inline-left') return 'wrap-left';
     if (pos == 'inline-right') return 'wrap-right';
@@ -1004,6 +1012,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   static String _figureLayoutPositionForArrangement(String arrangement) {
     switch (arrangement.trim().toLowerCase()) {
+      case 'inline':
+      case 'inline-text':
+        return 'inline-text';
       case 'wrap-left':
       case 'inline-left':
         return 'inline-left';
@@ -1028,6 +1039,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       default:
         return 'center';
     }
+  }
+
+  // inline(글 중간) 배치일 때, 그림 크기 슬라이더(widthEm)를 본문 줄 높이 기준
+  // heightEm 으로 매핑한다. 슬라이더 전체 구간을 height [min,max] 로 선형 대응.
+  static double _figureInlineHeightEmFromWidthEm(double widthEm) {
+    final w = widthEm.clamp(_figureWidthEmMin, _figureWidthEmMax);
+    final t = (w - _figureWidthEmMin) / (_figureWidthEmMax - _figureWidthEmMin);
+    final h = _figureInlineHeightEmMin +
+        t * (_figureInlineHeightEmMax - _figureInlineHeightEmMin);
+    return (h * 100).roundToDouble() / 100.0;
   }
 
   double _scaleToWidthEm(double scale) {
@@ -1170,14 +1191,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final pos = _figureLayoutPositionForArrangement(arrangement);
       final anchor = _figureLayoutAnchorForArrangement(arrangement);
       final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
-      items.add(<String, dynamic>{
+      final item = <String, dynamic>{
         'assetKey': key,
         'widthEm': (wEm * 10).roundToDouble() / 10.0,
         'position': pos,
         'anchor': anchor,
         'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
         'offsetYEm': 0,
-      });
+      };
+      if (pos == 'inline-text') {
+        item['heightEm'] = _figureInlineHeightEmFromWidthEm(wEm);
+      }
+      items.add(item);
     }
 
     // horizontalGroups(신규 N멤버 API) 가 제공되면 우선 사용. 없으면 레거시 pair 경로.
@@ -9343,14 +9368,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final pos = _figureLayoutPositionForArrangement(arrangement);
       final anchor = _figureLayoutAnchorForArrangement(arrangement);
       final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
-      items.add(<String, dynamic>{
+      final item = <String, dynamic>{
         'assetKey': key,
         'widthEm': (wEm * 10).roundToDouble() / 10.0,
         'position': pos,
         'anchor': anchor,
         'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
         'offsetYEm': 0,
-      });
+      };
+      if (pos == 'inline-text') {
+        item['heightEm'] = _figureInlineHeightEmFromWidthEm(wEm);
+      }
+      items.add(item);
     }
     // horizontalGroups 우선. 없으면 selectedPairKeys 를 2멤버 그룹으로 변환.
     final List<List<String>> resolvedGroups;

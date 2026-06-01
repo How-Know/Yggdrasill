@@ -1615,6 +1615,8 @@ class HomeworkAssignmentStore {
     Map<String, HomeworkAssignmentGroupMeta>? groupMetaByItemId,
     String? liveReleaseId,
     Map<String, String>? liveReleaseIdByItem,
+    Map<String, int>? initialProgressByItemId,
+    Map<String, ({String? type, String? note})>? initialIssueByItemId,
   }) async {
     if (items.isEmpty) return;
     try {
@@ -1704,6 +1706,8 @@ class HomeworkAssignmentStore {
 
       final List<String> carriedOverIds = [];
       final List<Map<String, dynamic>> rows = [];
+      final List<({String assignmentId, String itemId, int progress})>
+          seededChecks = [];
       final now = assignedAt ?? DateTime.now();
       dynamic orderBaseQuery = supa
           .from('homework_assignments')
@@ -1774,11 +1778,22 @@ class HomeworkAssignmentStore {
             item.title.trim().isEmpty ? '그룹 과제' : item.title.trim();
         final itemLiveReleaseId =
             resolvedLiveReleaseIdByItem[item.id] ?? safeLiveReleaseId;
+        final String newAssignmentId = const Uuid().v4();
+        final int? seedProgressRaw = initialProgressByItemId?[item.id];
+        final int? seedProgress = (seedProgressRaw != null && seedProgressRaw > 0)
+            ? seedProgressRaw.clamp(0, 150).toInt()
+            : null;
+        final seedIssue = initialIssueByItemId?[item.id];
         rows.add({
-          'id': const Uuid().v4(),
+          'id': newAssignmentId,
           'academy_id': academyId,
           'student_id': studentId,
           'homework_item_id': item.id,
+          if (seedProgress != null) 'progress': seedProgress,
+          if (seedProgress != null && (seedIssue?.type?.isNotEmpty ?? false))
+            'issue_type': seedIssue!.type,
+          if (seedProgress != null && (seedIssue?.note?.isNotEmpty ?? false))
+            'issue_note': seedIssue!.note,
           'group_id': groupMeta?.groupId,
           'group_title_snapshot':
               titleSnapshot.isEmpty ? fallbackTitle : titleSnapshot,
@@ -1800,6 +1815,13 @@ class HomeworkAssignmentStore {
           'carry_over_from_id':
               (lastId != null && lastStatus != 'completed') ? lastId : null,
         });
+        if (seedProgress != null) {
+          seededChecks.add((
+            assignmentId: newAssignmentId,
+            itemId: item.id,
+            progress: seedProgress,
+          ));
+        }
       }
 
       if (carriedOverIds.isNotEmpty) {
@@ -1835,6 +1857,35 @@ class HomeworkAssignmentStore {
           return copy;
         }).toList(growable: false);
         await supa.from('homework_assignments').insert(fallbackRows);
+      }
+      // 미리 해온 진행률을 정식 검사 기록으로 소비한다.
+      for (final seed in seededChecks) {
+        try {
+          await supa.from('homework_assignment_checks').insert({
+            'id': const Uuid().v4(),
+            'academy_id': academyId,
+            'student_id': studentId,
+            'homework_item_id': seed.itemId,
+            'assignment_id': seed.assignmentId,
+            'checked_at': now.toUtc().toIso8601String(),
+            'progress': seed.progress.clamp(0, 150),
+          });
+          final row = await supa
+              .from('homework_items')
+              .select('check_count')
+              .eq('academy_id', academyId)
+              .eq('id', seed.itemId)
+              .maybeSingle();
+          final current = (row?['check_count'] as num?)?.toInt() ?? 0;
+          await supa
+              .from('homework_items')
+              .update({'check_count': current + 1})
+              .eq('academy_id', academyId)
+              .eq('id', seed.itemId);
+        } catch (e) {
+          // ignore: avoid_print
+          print('[HW_ASSIGN][seedCheck][WARN] $e');
+        }
       }
       for (final due in affectedDueDates) {
         await _normalizeAssignedOrderForDueDateIso(

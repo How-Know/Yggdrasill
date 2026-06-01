@@ -14,6 +14,7 @@ const List<String> figurePositionOptions = <String>[
   'center',
   'wrap-left',
   'wrap-right',
+  'inline',
 ];
 
 const Map<String, String> figurePositionLabels = <String, String>{
@@ -22,6 +23,7 @@ const Map<String, String> figurePositionLabels = <String, String>{
   'center': '가운데',
   'wrap-left': '왼쪽 어울림',
   'wrap-right': '오른쪽 어울림',
+  'inline': '글 중간',
 };
 
 List<Map<String, dynamic>> figureAssetsOf(ProblemBankQuestion q) {

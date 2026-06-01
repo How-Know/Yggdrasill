@@ -16,6 +16,9 @@ function parseFigureLayout(question) {
     items.push({
       assetKey,
       widthEm: clampFinite(item.widthEm, 2, 50, 20),
+      // inline-text(글 중간) 배치에서 본문 줄 높이에 맞춰 크기를 지정하는 값(em).
+      // 다른 배치에서는 무시된다.
+      heightEm: clampFinite(item.heightEm, 0.35, 8, 1.6),
       position: normalizePosition(item.position),
       anchor: normalizeAnchor(item.anchor),
       offsetXEm: clampFinite(item.offsetXEm, -20, 20, 0),
@@ -176,7 +179,7 @@ function clampFinite(value, min, max, fallback) {
 
 function normalizePosition(pos) {
   const s = String(pos || '').trim().toLowerCase();
-  const valid = ['below-stem', 'inline-right', 'inline-left', 'between-stem-choices', 'above-choices'];
+  const valid = ['below-stem', 'inline-right', 'inline-left', 'inline-text', 'between-stem-choices', 'above-choices'];
   return valid.includes(s) ? s : 'below-stem';
 }
 
