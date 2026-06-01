@@ -666,6 +666,11 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     existingRow?.meta && typeof existingRow.meta === 'object'
       ? existingRow.meta
       : {};
+  const vlmMeta = vlmQ?.meta && typeof vlmQ.meta === 'object' ? vlmQ.meta : {};
+  const vlmSetModel =
+    vlmMeta.set_model && typeof vlmMeta.set_model === 'object'
+      ? vlmMeta.set_model
+      : {};
   const figureAssets = Array.isArray(existingMeta.figure_assets)
     ? existingMeta.figure_assets
     : [];
@@ -888,7 +893,13 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
           set_model: {
             version: 1,
             set_type: setType || 'dependent_set',
-            set_key: String(vlmQ?.set_key || vlmQ?.question_number || '').trim(),
+            set_key: String(
+              vlmSetModel.set_key ||
+                vlmSetModel.setKey ||
+                vlmQ?.set_key ||
+                vlmQ?.question_number ||
+                '',
+            ).trim(),
             ...(commonStem ? { common_stem: commonStem } : {}),
             ...(independentSetItemOnly
               ? {

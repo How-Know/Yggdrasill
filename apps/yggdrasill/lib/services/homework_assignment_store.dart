@@ -85,6 +85,7 @@ class HomeworkAssignmentBrief {
   final int repeatIndex;
   final int splitParts;
   final int splitRound;
+  final String? note;
 
   const HomeworkAssignmentBrief({
     required this.id,
@@ -97,7 +98,12 @@ class HomeworkAssignmentBrief {
     required this.repeatIndex,
     required this.splitParts,
     required this.splitRound,
+    this.note,
   });
+
+  /// 학생이 자의로 미리 해온 과제를 검사하기 위해 생성된 assignment 여부.
+  bool get isSelfExtra =>
+      (note ?? '').trim() == HomeworkAssignmentStore.selfExtraNote;
 }
 
 class HomeworkAssignmentCycleMeta {
@@ -139,6 +145,10 @@ class HomeworkAssignmentStore {
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
   static const String reservationNote = '__reserved_homework__';
+
+  /// 학생이 자의로 미리 해온 과제를 즉석 검사하기 위해 생성한 assignment 마커.
+  /// 정규로 "내준" 과제와 구분하기 위해 note에 기록한다.
+  static const String selfExtraNote = '__self_extra_check__';
 
   /// Synthetic assignment ids merged into [loadActiveAssignments] until the server row exists.
   static const String optimisticReservedAssignmentIdPrefix = '__opt_resv__:';
@@ -1478,7 +1488,7 @@ class HomeworkAssignmentStore {
       final rows = await supa
           .from('homework_assignments')
           .select(
-            'id,homework_item_id,assigned_at,due_date,order_index,status,progress,repeat_index,split_parts,split_round',
+            'id,homework_item_id,assigned_at,due_date,order_index,status,progress,repeat_index,split_parts,split_round,note',
           )
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
@@ -1521,6 +1531,7 @@ class HomeworkAssignmentStore {
                 repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
                 splitParts: splitParts,
                 splitRound: _normalizeSplitRound(r['split_round'], splitParts),
+                note: r['note'] as String?,
               ),
             );
       }

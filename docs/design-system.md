@@ -251,13 +251,17 @@ flowchart LR
 4. 컨펌 후: **UI 위젯 트리만** 이식하고, diff는 최소화한다.
 5. 기능 연결(상태, API)은 **별도 작업**으로 분리한다.
 
-### Preview 진입 (구현 시 선택 — 고객 확정 전 기본안)
+### Preview 실행 (완전 분리)
 
-| 방식 | 설명 |
-|------|------|
-| `kDebugMode` 전용 라우트 | **권장 기본안** — 릴리스 빌드에 포함되지 않음 |
-| 설정 숨김 메뉴 | 내부 테스터용 |
-| `--dart-define=DESIGN_PREVIEW=true` | CI/수동 실행용 |
+Preview는 본앱과 같은 `build/windows/.../Debug` 산출물을 공유하지 않도록
+**별도 Flutter 앱**에서 실행한다.
+
+```powershell
+cd apps\yggdrasill_design_preview
+flutter run -d windows
+```
+
+본앱 실행과 Preview 실행은 서로 다른 Flutter 프로젝트이므로 Windows DLL 잠금 충돌을 피한다.
 
 시안 개수: 한 Preview 화면에 **최대 2~3안(A/B/C)**. 그 이상은 통일성 저하.
 
@@ -296,19 +300,12 @@ design_preview/
 
 **별도 창 (권장 — 실사용 디버그 앱과 동시 실행):**
 
-| 앱 | 명령 (두 번째 터미널) |
-|----|----------------------|
-| yggdrasill | `flutter run -d windows -t lib/main_design_preview.dart` |
-| yggdrasill_manager | `flutter run -d windows -t lib/main_design_preview.dart` |
+| 터미널 | 명령 |
+|--------|------|
+| 본앱 | `cd apps\yggdrasill; flutter run -d windows` |
+| 디자인 Preview | `cd apps\yggdrasill_design_preview; flutter run -d windows` |
 
-진입점: `lib/main_design_preview.dart` (DB·Supabase 초기화 없음, Preview Hub만 표시)
-
-**kDebugMode 라우트 (본앱 내):** `/design-preview` (각 앱 `main.dart`)
-
-| 앱 | 직접 진입 |
-|----|-----------|
-| yggdrasill | `/design-preview/yggdrasill/settings` |
-| yggdrasill_manager | Hub → 설정 Preview |
+Preview 루트에서 **학습앱 Preview** 또는 **매니저앱 Preview**를 선택한다.
 
 ---
 
@@ -344,7 +341,8 @@ design_preview/
 |------|------|--------|
 | 2026-05-29 | 초안 생성 (코드 스냅샷, Preview 워크플로, Cursor Rule 연동) | — |
 | 2026-05-29 | Preview 폴더 분리 (yggdrasill / manager / m5), 설정 목업·kDebugMode 라우트 | — |
-| 2026-05-30 | `main_design_preview.dart` — 실사용 앱과 별도 창 동시 실행 | — |
+| 2026-05-30 | 앱 내부 Preview 진입점 실험 (이후 완전 분리 방식으로 대체) | — |
+| 2026-05-31 | `apps/yggdrasill_design_preview` 완전 분리 Preview 앱 생성 | — |
 
 ---
 

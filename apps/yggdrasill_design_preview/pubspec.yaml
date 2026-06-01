@@ -1,5 +1,5 @@
-name: mneme_flutter
-description: "A new Flutter project."
+name: yggdrasill_design_preview
+description: "Standalone design preview app for Yggdrasill."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.2+2
+version: 1.0.0+1
 
 environment:
   sdk: '>=3.2.6 <4.0.0'
@@ -30,70 +30,23 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  file_selector: ^1.0.1
-  flutter_localizations:
-    sdk: flutter
-  morphable_shape: ^2.0.0 # morphable_shape 2.x (AnimatedMorphContainer, shapes)
-  dimension: 0.2.0 # used with morphable_shape: length unit utilities
-  shared_preferences: ^2.0.15
-  intl: ^0.20.2
-  uuid: ^4.3.3
-  flutter_colorpicker: ^1.0.3
-  provider: ^6.1.1
-  path_provider: ^2.1.1
-  path: ^1.8.3
-  material_symbols_icons: ^4.2719.1
-  freezed_annotation: ^2.4.1
-  json_annotation: ^4.8.1
-  dartz: ^0.10.1
-  equatable: ^2.0.5
-  sqflite: ^2.3.0
-  file_picker: ^6.1.1
-  sqflite_common_ffi: ^2.3.0
-  animations: ^2.0.11
-  window_manager: ^0.3.7
-  flutter_speed_dial: ^7.0.0
-  http: ^1.2.2
-  geolocator: ^14.0.2
-  desktop_drop: ^0.6.1
-  open_filex: ^4.5.0
-  url_launcher: ^6.3.0
-  syncfusion_flutter_pdf: ^24.1.41
-  pdfrx: ^1.0.77
-  image: ^4.2.0
-  webview_windows: ^0.4.0
-  flutter_math_fork: ^0.7.2
-  package_info_plus: ^9.0.0
-  flutter_secure_storage: ^9.2.2
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.2
-  flutter_svg: ^2.0.9
-  dotted_border: ^3.0.1
-  supabase_flutter: ^2.6.0
-  window_size:
-    git:
-      url: https://github.com/google/flutter-desktop-embedding.git
-      path: plugins/window_size
-      ref: 6c66ad23ee79749f30a8eece542cf54eaf157ed8
-  excel: ^4.0.6
-  crypto: ^3.0.7
+  cupertino_icons: ^1.0.8
+  mneme_flutter:
+    path: ../yggdrasill
+  yggdrasill_manager:
+    path: ../yggdrasill_manager
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  build_runner: ^2.4.6
-  freezed: ^2.4.2
-  json_serializable: ^6.7.1
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^2.0.0
-  msix: ^3.16.12
+  flutter_lints: ^6.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -107,11 +60,9 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  assets:
-    - assets/icons/network_cell.svg
-    - assets/icons/package.svg
-    - assets/icons/app_icon_stack.svg
-    - assets/emoji/
+  # assets:
+  #   - images/a_dot_burr.jpeg
+  #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -138,86 +89,3 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
-  fonts:
-    - family: HCRBatang
-      fonts:
-        - asset: assets/fonts/hancom/HCRBatang.ttf
-        - asset: assets/fonts/hancom/HCRBatang-Bold.ttf
-          weight: 700
-    - family: KakaoSmallSans
-      fonts:
-        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Light.ttf
-          weight: 300
-        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Bold.ttf
-          weight: 700
-    - family: KoPubWorldBatangPro
-      fonts:
-        - asset: assets/fonts/kopub/KoPubWorldBatangProLight.otf
-          weight: 300
-    - family: ChosunNm
-      fonts:
-        - asset: assets/fonts/chosun/ChosunNm.ttf
-    - family: KakaoBigSans
-      fonts:
-        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Bold.ttf
-          weight: 700
-        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
-          weight: 800
-msix_config:
-  display_name: Yggdrasill
-  publisher_display_name: How-Know
-  identity_name: com.yggdrasill.mneme
-  publisher: CN=How-Know
-  msix_version: 1.1.2.2
-  logo_path: windows/runner/resources/app_icon.ico
-  certificate_subject: CN=How-Know
-  certificate_path: C:\\Users\\harry\\Yggdrasill\\apps\\yggdrasill\\dist\\howknow_codesign_new.pfx
-  certificate_password: "HowKnow2025!"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

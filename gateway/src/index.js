@@ -67,6 +67,10 @@ const HOMEWORK_PUSH_COALESCE_MS = validInt(
   Number.parseInt(process.env.HOMEWORK_PUSH_COALESCE_MS ?? '140', 10),
   140
 );
+const M5_BIND_CONFIRM_REFRESH_DELAY_MS = validInt(
+  Number.parseInt(process.env.M5_BIND_CONFIRM_REFRESH_DELAY_MS ?? '1500', 10),
+  1500
+);
 const M5_GROUP_CHILDREN_LIMIT = validInt(
   Number.parseInt(process.env.M5_GROUP_CHILDREN_LIMIT ?? '8', 10),
   8
@@ -447,6 +451,38 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
     });
   homeworkPublishChains.set(key, job);
   return job;
+}
+
+function scheduleBindConfirmHomeworksRefresh(academy_id, student_id, device_id) {
+  if (!academy_id || !student_id || !device_id || M5_BIND_CONFIRM_REFRESH_DELAY_MS <= 0) return;
+  setTimeout(async () => {
+    try {
+      const { data: groups, error } = await listM5GroupsWithHomework(academy_id, student_id);
+      if (error) {
+        console.error('[gateway] bind confirm list_homework_groups error', {
+          academy_id,
+          device_id,
+          student_id,
+          error: error.message
+        });
+        return;
+      }
+      publishHomeworksToDevice(
+        academy_id,
+        student_id,
+        device_id,
+        groups || [],
+        'bind_confirm_refresh'
+      );
+    } catch (e) {
+      console.error('[gateway] bind confirm refresh error', {
+        academy_id,
+        device_id,
+        student_id,
+        error: e?.message || e
+      });
+    }
+  }, M5_BIND_CONFIRM_REFRESH_DELAY_MS);
 }
 
 async function queueHomeworksToBoundDevices(academy_id, student_id, source = 'unknown') {
@@ -907,6 +943,7 @@ client.on('message', async (topic, payload) => {
         const { data: groups, error: lerr } = await listM5GroupsWithHomework(academy_id, student_id);
         if (lerr) console.error('[gateway] list_homework_groups error', lerr);
         publishHomeworksToDevice(academy_id, student_id, device_id, groups || [], 'bind');
+        scheduleBindConfirmHomeworksRefresh(academy_id, student_id, device_id);
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !lerr, action: 'bind', error: lerr?.message, student_id }), { qos: 1, retain: false });
         // refresh other unbound devices so the bound student disappears from their lists
         await republishStudentListToUnboundDevices(academy_id, `bind:${device_id}`);

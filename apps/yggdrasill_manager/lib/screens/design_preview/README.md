@@ -19,7 +19,7 @@ design_preview/
 **학습앱·M5** Preview는 별도 패키지:  
 `apps/yggdrasill/lib/screens/design_preview/` (`yggdrasill/`, `m5/`)
 
-## 별도 창으로 띄우기 (실사용 앱과 동시 실행)
+## 별도 창으로 띄우기 (완전 분리)
 
 터미널 **1** — 본앱:
 
@@ -28,9 +28,12 @@ cd apps\yggdrasill_manager
 flutter run -d windows
 ```
 
-터미널 **2** — Preview 전용:
+터미널 **2** — Preview 전용 앱:
 
 ```powershell
-cd apps\yggdrasill_manager
-flutter run -d windows -t lib/main_design_preview.dart
+cd apps\yggdrasill_design_preview
+flutter run -d windows
 ```
+
+이 폴더는 Preview **소스**를 보관하고, 실행은
+`apps/yggdrasill_design_preview`가 담당합니다.

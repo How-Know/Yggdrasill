@@ -1098,6 +1098,43 @@ extension ProblemBankQuestionSetExtension on ProblemBankQuestion {
   String get setCommonStem =>
       '${setModel['common_stem'] ?? setModel['commonStem'] ?? ''}'.trim();
 
+  List<Map<String, dynamic>> get setCommonFigureAssets {
+    final raw =
+        setModel['common_figure_assets'] ?? setModel['commonFigureAssets'];
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(
+              item.map((key, value) => MapEntry('$key', value)),
+            ))
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic> get setCommonFigureLayout {
+    final raw =
+        setModel['common_figure_layout'] ?? setModel['commonFigureLayout'];
+    if (raw is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(
+      raw.map((key, value) => MapEntry('$key', value)),
+    );
+  }
+
+  Map<String, dynamic> get setCommonTableScales {
+    final raw = setModel['common_table_scales'] ?? setModel['commonTableScales'];
+    if (raw is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(
+      raw.map((key, value) => MapEntry('$key', value)),
+    );
+  }
+
+  Map<String, dynamic> get setCommonTableLayout {
+    final raw = setModel['common_table_layout'] ?? setModel['commonTableLayout'];
+    if (raw is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(
+      raw.map((key, value) => MapEntry('$key', value)),
+    );
+  }
+
   String get setItemLabel =>
       '${setModel['item_label'] ?? setModel['itemLabel'] ?? questionNumber}'
           .trim();

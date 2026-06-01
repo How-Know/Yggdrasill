@@ -1,11 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
-
-import 'screens/design_preview/design_preview_hub_screen.dart';
 
 import 'services/auth_service.dart';
 import 'services/error_reporter.dart';
@@ -96,10 +93,6 @@ class YggdrasillManagerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: _buildManagerTheme(),
       home: const AuthWrapper(),
-      routes: {
-        if (kDebugMode)
-          '/design-preview': (context) => const DesignPreviewHubScreen(),
-      },
     );
   }
 }

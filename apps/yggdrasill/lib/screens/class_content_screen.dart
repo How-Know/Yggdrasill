@@ -2533,9 +2533,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final visibleAssignments = activeAssignments
           .where((assignment) => !_isReservationAssignment(assignment))
           .toList(growable: false);
-      final checksByItem = await HomeworkAssignmentStore.instance
+      var checksByItem = await HomeworkAssignmentStore.instance
           .loadChecksForStudent(studentId);
-      final assignmentsByItem = await HomeworkAssignmentStore.instance
+      var assignmentsByItem = await HomeworkAssignmentStore.instance
           .loadAssignmentsForStudent(studentId);
       await StudentFlowStore.instance.loadForStudent(studentId);
       if (!context.mounted) return;
@@ -2555,6 +2555,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final today = _dateOnly(DateTime.now());
       bool isToday(DateTime dt) => _dateOnly(dt) == today;
 
+      List<_HomeworkOverviewEntry> buildOverviewEntries() {
       final entries = <_HomeworkOverviewEntry>[];
       final seenItemIds = <String>{};
 
@@ -2653,6 +2654,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final rightTs = b.checkedAt ?? b.assignedAt;
         return rightTs.compareTo(leftTs);
       });
+      return entries;
+      }
+
+      var entries = buildOverviewEntries();
       final allClassRecords = DataManager.instance
           .getAttendanceRecordsForStudent(studentId)
           .where((record) => record.isPresent)
@@ -2724,6 +2729,98 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 windowEnd: selectedFilter.to,
                 limit: 16,
               );
+              Future<void> refreshOverview() async {
+                checksByItem = await HomeworkAssignmentStore.instance
+                    .loadChecksForStudent(studentId);
+                assignmentsByItem = await HomeworkAssignmentStore.instance
+                    .loadAssignmentsForStudent(studentId);
+                final rebuilt = buildOverviewEntries();
+                if (!dialogContext.mounted) return;
+                setDialogState(() {
+                  entries = rebuilt;
+                });
+              }
+
+              Future<void> onAddExtraCheck() async {
+                // 후보는 홈 메뉴 과제 리스트와 동일하게 HomeworkStore의 그룹/미완료
+                // item을 기준으로 만든다(assignment 행이 아직 없는 과제도 포함).
+                final hiddenItemIds = <String>{...reservedItemIds};
+                hiddenItemIds.addAll(
+                  HomeworkAssignmentStore.instance
+                      .peekPendingReservedHomeworkItemIds(studentId),
+                );
+                final dueByItem = <String, DateTime>{};
+                final assignedTodayItems = <String>{};
+                for (final a in activeAssignments) {
+                  if (_isReservationAssignment(a)) continue;
+                  final iid = a.homeworkItemId.trim();
+                  if (iid.isEmpty) continue;
+                  if (a.dueDate != null) {
+                    final d = _dateOnly(a.dueDate!);
+                    final prev = dueByItem[iid];
+                    if (prev == null || d.isBefore(prev)) {
+                      dueByItem[iid] = d;
+                    }
+                  }
+                  if (_dateOnly(a.assignedAt) == today) {
+                    assignedTodayItems.add(iid);
+                  }
+                }
+                final candidateGroups = <_ExtraCheckGroupCandidate>[];
+                for (final group in HomeworkStore.instance.groups(studentId)) {
+                  final children = HomeworkStore.instance
+                      .itemsInGroup(studentId, group.id)
+                      .where((e) => e.status != HomeworkStatus.completed)
+                      .where((e) => !hiddenItemIds.contains(e.id))
+                      .toList(growable: false);
+                  if (children.isEmpty) continue;
+                  DateTime? groupDue;
+                  bool anyAssignedToday = false;
+                  int progress = 0;
+                  for (final c in children) {
+                    final d = dueByItem[c.id];
+                    if (d != null &&
+                        (groupDue == null || d.isBefore(groupDue))) {
+                      groupDue = d;
+                    }
+                    if (assignedTodayItems.contains(c.id)) {
+                      anyAssignedToday = true;
+                    }
+                    final checks = checksByItem[c.id] ??
+                        const <HomeworkAssignmentCheck>[];
+                    for (final ck in checks) {
+                      if (ck.progress > progress) progress = ck.progress;
+                    }
+                  }
+                  final dueToday = groupDue != null && groupDue == today;
+                  // 이전에 내줘서 오늘이 정규 검사예정인 그룹만 제외하고,
+                  // 오늘 추가된 그룹은 미리 검사 대상으로 포함한다.
+                  if (dueToday && !anyAssignedToday) continue;
+                  final title = group.title.trim().isNotEmpty
+                      ? group.title.trim()
+                      : children.first.title.trim();
+                  candidateGroups.add(
+                    _ExtraCheckGroupCandidate(
+                      group: group,
+                      summary: children.first,
+                      children: children,
+                      title: title.isEmpty ? '그룹 과제' : title,
+                      flowLabel: homeworkOverviewFlowLabel(children.first.id),
+                      bookAndCourse:
+                          _homeworkBookCourseLabel(children.first),
+                      dueDate: groupDue,
+                      progress: progress,
+                    ),
+                  );
+                }
+                final recorded = await _showExtraHomeworkCheckPicker(
+                  context: dialogContext,
+                  studentId: studentId,
+                  candidateGroups: candidateGroups,
+                );
+                if (recorded) await refreshOverview();
+              }
+
               return AlertDialog(
                 backgroundColor: kDlgBg,
                 shape: RoundedRectangleBorder(
@@ -2866,9 +2963,29 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const YggDialogSectionHeader(
-                                  icon: Icons.assignment_rounded,
-                                  title: '활성/오늘 검사 현황',
+                                Row(
+                                  children: [
+                                    const Expanded(
+                                      child: YggDialogSectionHeader(
+                                        icon: Icons.assignment_rounded,
+                                        title: '활성/오늘 검사 현황',
+                                      ),
+                                    ),
+                                    IconButton(
+                                      onPressed: onAddExtraCheck,
+                                      icon: const Icon(Icons.add_rounded),
+                                      iconSize: 20,
+                                      color: kDlgAccent,
+                                      tooltip: '추가로 해온 숙제 검사',
+                                      visualDensity: VisualDensity.compact,
+                                      splashRadius: 20,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 32,
+                                        minHeight: 32,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 10),
                                 SizedBox(
@@ -6396,6 +6513,432 @@ Future<void> _runHomeworkCheckAndConfirm({
     hw.id,
     recordAssignmentCheck: false,
   );
+}
+
+/// 오늘 정규 검사예정이 아닌 그룹 과제 중에서, 학생이 미리(자의로) 더 해온 숙제를
+/// 골라 검사 기록만 남기기 위한 선택 다이얼로그(그룹 단위).
+/// 기존 검사 흐름과 달리 활성/검사일정 상태는 변경하지 않는다.
+Future<bool> _showExtraHomeworkCheckPicker({
+  required BuildContext context,
+  required String studentId,
+  required List<_ExtraCheckGroupCandidate> candidateGroups,
+}) async {
+  bool recordedAny = false;
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      final media = MediaQuery.of(ctx).size;
+      final dialogWidth = math.min(media.width * 0.7, 520.0);
+      final listHeight = math.min(media.height * 0.55, 480.0);
+      return StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return AlertDialog(
+            backgroundColor: kDlgBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Text(
+              '추가로 해온 숙제 검사',
+              style: TextStyle(
+                color: kDlgText,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            content: SizedBox(
+              width: dialogWidth,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '오늘 정규 검사예정이 아닌 그룹 과제 중, 학생이 미리 해온 숙제를 선택해 검사 기록을 남깁니다.',
+                    style: TextStyle(
+                      color: kDlgTextSub,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: listHeight,
+                    child: candidateGroups.isEmpty
+                        ? const Center(
+                            child: Text(
+                              '추가로 검사할 과제가 없습니다.',
+                              style: TextStyle(
+                                color: kDlgTextSub,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: candidateGroups.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final g = candidateGroups[index];
+                              return _buildExtraCheckGroupCard(
+                                g,
+                                onTap: () async {
+                                  final ok =
+                                      await _runExtraHomeworkCheckRecordOnlyForGroup(
+                                    context: dialogContext,
+                                    studentId: studentId,
+                                    group: g.group,
+                                    summary: g.summary,
+                                    children: g.children,
+                                  );
+                                  if (ok) {
+                                    recordedAny = true;
+                                    if (dialogContext.mounted) {
+                                      Navigator.of(dialogContext).pop();
+                                    }
+                                  }
+                                },
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                child: const Text('닫기'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+  return recordedAny;
+}
+
+/// 추가검사 후보 그룹 카드(활성/오늘 검사 현황 카드와 유사한 스타일).
+Widget _buildExtraCheckGroupCard(
+  _ExtraCheckGroupCandidate candidate, {
+  required VoidCallback onTap,
+}) {
+  final indicatorValue = (candidate.progress.clamp(0, 100)) / 100.0;
+  final dueText = candidate.dueDate == null
+      ? '검사일 미정'
+      : _formatDateWithWeekdayShort(candidate.dueDate!);
+  return GestureDetector(
+    onTap: onTap,
+    behavior: HitTestBehavior.opaque,
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0x221D2B2C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF31464C)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  candidate.bookAndCourse,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFCAD2C5),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 120,
+                child: Text(
+                  candidate.flowLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: Color(0xFF8FA1A1),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  candidate.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: kDlgText,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${candidate.children.length}개 과제',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFCAD2C5),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.add_task_rounded, size: 18, color: kDlgAccent),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  dueText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: kDlgTextSub,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: indicatorValue,
+                    minHeight: 7,
+                    backgroundColor: const Color(0xFF23363B),
+                    valueColor:
+                        const AlwaysStoppedAnimation<Color>(kDlgAccent),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${candidate.progress}%',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF8EA3A8),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// 미리 해온 그룹 숙제에 대한 검사 기록만 저장한다(제출/대기/활성 해제 없음).
+/// 활성 assignment가 없는 하위 과제는 오늘 날짜 + "자의 추가분" 마커로 생성한다.
+Future<bool> _runExtraHomeworkCheckRecordOnlyForGroup({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkGroup group,
+  required HomeworkItem summary,
+  required List<HomeworkItem> children,
+}) async {
+  final targetChildren = children
+      .where((e) => e.status != HomeworkStatus.completed)
+      .toList(growable: false);
+  if (targetChildren.isEmpty) return false;
+
+  final groupTitle = group.title.trim().isNotEmpty
+      ? group.title.trim()
+      : (summary.title.trim().isEmpty ? '이 그룹 과제' : summary.title.trim());
+
+  // 학생이 자의로 미리 해온 과제를 검사한다는 사실을 한 번 더 확인한다.
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      title: const Text(
+        '추가 숙제 검사',
+        style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+      ),
+      content: Text(
+        '“$groupTitle” 그룹 과제를 학생이 미리 해온 것으로 보고 추가 검사를 진행할까요?',
+        style: const TextStyle(
+          color: kDlgTextSub,
+          fontSize: 13.5,
+          fontWeight: FontWeight.w600,
+          height: 1.4,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('취소'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          style: TextButton.styleFrom(foregroundColor: kDlgAccent),
+          child: const Text('진행'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return false;
+
+  // 활성 assignment가 없는 하위 과제는 오늘 날짜 + 마커로 새로 생성한다.
+  final today = _dateOnly(DateTime.now());
+  final needCreate = <HomeworkItem>[];
+  for (final child in targetChildren) {
+    final t = await _resolveHomeworkCheckTarget(
+      studentId,
+      child.id,
+      includeHistory: false,
+    );
+    if (!context.mounted) return false;
+    if (t == null) needCreate.add(child);
+  }
+  if (needCreate.isNotEmpty) {
+    final groupMeta = <String, HomeworkAssignmentGroupMeta>{
+      for (final c in needCreate)
+        c.id: HomeworkAssignmentGroupMeta(
+          groupId: group.id,
+          groupTitleSnapshot: groupTitle,
+        ),
+    };
+    await HomeworkAssignmentStore.instance.recordAssignments(
+      studentId,
+      needCreate,
+      dueDate: today,
+      note: HomeworkAssignmentStore.selfExtraNote,
+      groupMetaByItemId: groupMeta,
+    );
+    if (!context.mounted) return false;
+  }
+
+  final targets =
+      <({HomeworkItem item, _HomeworkCheckTarget target, int min})>[];
+  DateTime? earliestAssignedAt;
+  DateTime? earliestDueDate;
+  String? issueType;
+  String? issueNote;
+  for (final child in targetChildren) {
+    final target = await _resolveHomeworkCheckTarget(
+      studentId,
+      child.id,
+      includeHistory: false,
+    );
+    if (!context.mounted) return false;
+    if (target == null) continue;
+    final checks = await HomeworkAssignmentStore.instance
+        .loadChecksForItem(studentId, child.id);
+    checks.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+    final previousProgress = checks.isEmpty ? 0 : checks.last.progress;
+    final minProgress =
+        math.max(previousProgress, target.progress).clamp(0, 150);
+    earliestAssignedAt = earliestAssignedAt == null ||
+            target.assignedAt.isBefore(earliestAssignedAt)
+        ? target.assignedAt
+        : earliestAssignedAt;
+    earliestDueDate = _mergeHomeworkDueDate(
+      earliestDueDate,
+      target.dueDate == null ? null : _dateOnly(target.dueDate!),
+    );
+    issueType ??= target.issueType;
+    issueNote ??= target.issueNote;
+    targets.add((item: child, target: target, min: minProgress));
+  }
+  if (targets.isEmpty) {
+    if (context.mounted) {
+      _showHomeworkChipSnackBar(context, '검사할 할당 정보를 만들지 못했습니다.');
+    }
+    return false;
+  }
+  if (!context.mounted) return false;
+
+  final globalMinProgress =
+      targets.fold<int>(0, (maxSoFar, e) => math.max(maxSoFar, e.min));
+  final dialogTarget = _HomeworkCheckTarget(
+    assignmentId: targets.first.target.assignmentId,
+    assignedAt: earliestAssignedAt ?? DateTime.now(),
+    dueDate: earliestDueDate,
+    progress: globalMinProgress,
+    issueType: issueType,
+    issueNote: issueNote,
+  );
+  final assignmentCountsByItem =
+      await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
+  if (!context.mounted) return false;
+  final cycleMetaByItem =
+      await HomeworkAssignmentStore.instance.loadLatestCycleMetaByItem(
+    studentId,
+  );
+  if (!context.mounted) return false;
+  final targetIds = targets.map((e) => e.item.id).toSet();
+  final groupAssignmentCounts = <String, int>{
+    for (final id in targetIds) id: assignmentCountsByItem[id] ?? 0,
+  };
+  final groupCycleMetaByItem = <String, HomeworkAssignmentCycleMeta>{
+    for (final id in targetIds)
+      if (cycleMetaByItem[id] != null) id: cycleMetaByItem[id]!,
+  };
+
+  final draft = await _showHomeworkItemCheckDialog(
+    context: context,
+    hw: summary,
+    target: dialogTarget,
+    minProgress: globalMinProgress,
+    groupChildren: targets.map((e) => e.item).toList(growable: false),
+    assignmentCountsByItem: groupAssignmentCounts,
+    cycleMetaByItem: groupCycleMetaByItem,
+  );
+  if (!context.mounted || draft == null) return false;
+
+  final savedItemIds = <String>[];
+  for (final entry in targets) {
+    final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+      assignmentId: entry.target.assignmentId,
+      studentId: studentId,
+      homeworkItemId: entry.item.id,
+      progress: draft.progress,
+      issueType: draft.issueType,
+      issueNote: draft.issueNote,
+      markCompleted: false,
+    );
+    if (saved) savedItemIds.add(entry.item.id);
+  }
+  if (!context.mounted) return savedItemIds.isNotEmpty;
+  if (savedItemIds.isEmpty) {
+    _showHomeworkChipSnackBar(context, '그룹 숙제 검사 저장에 실패했습니다.');
+    return false;
+  }
+  _showHomeworkChipSnackBar(context, '미리 해온 그룹 숙제 검사를 기록했어요.');
+  return true;
 }
 
 Future<bool> _runHomeworkCheckDialogOnly({
@@ -14220,6 +14763,29 @@ class _ReservedHomeworkGroupSection {
     required this.groupId,
     required this.title,
     required this.entries,
+  });
+}
+
+/// 추가검사(자의로 미리 해온 숙제) 후보 그룹.
+class _ExtraCheckGroupCandidate {
+  final HomeworkGroup group;
+  final HomeworkItem summary;
+  final List<HomeworkItem> children;
+  final String title;
+  final String flowLabel;
+  final String bookAndCourse;
+  final DateTime? dueDate;
+  final int progress;
+
+  const _ExtraCheckGroupCandidate({
+    required this.group,
+    required this.summary,
+    required this.children,
+    required this.title,
+    required this.flowLabel,
+    required this.bookAndCourse,
+    required this.dueDate,
+    required this.progress,
   });
 }
 

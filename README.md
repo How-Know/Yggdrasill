@@ -1,10 +1,12 @@
 # Yggdrasill Monorepo (apps/)
 
 - apps/yggdrasill: Flutter 앱
+- apps/yggdrasill_design_preview: UI 목업/컨펌 전용 Flutter 앱
 - apps/survey-web: 설문 웹(React + Vite + TS)
 
 개발 가이드(요약)
 - Flutter: `cd apps/yggdrasill` → `flutter pub get` → `flutter run`
+- Design Preview: `cd apps/yggdrasill_design_preview` → `flutter pub get` → `flutter run -d windows`
 - Web(설문): `cd apps/survey-web` → Node 설치 후 `npm i` → `npm run dev`
 
 노트

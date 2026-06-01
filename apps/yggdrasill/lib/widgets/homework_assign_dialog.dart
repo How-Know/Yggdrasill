@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -63,19 +64,26 @@ class _TodoListEntry {
 class _CheckRateEntry {
   final String title;
   final int? progress;
+  final int? previousProgress;
   final int? todayProgress;
   final String bookAndCourse;
   final String page;
   final String count;
   final DateTime? assignedAt;
+
+  /// 학생이 자의로 미리 해온 과제(추가검사 마커)인지 여부.
+  /// 검사율 합계에서 분자(오늘 추가분)에는 포함하되 분모(남은%)에서는 제외한다.
+  final bool isExtra;
   const _CheckRateEntry({
     required this.title,
     required this.progress,
+    this.previousProgress,
     this.todayProgress,
     required this.bookAndCourse,
     required this.page,
     required this.count,
     required this.assignedAt,
+    this.isExtra = false,
   });
 }
 
@@ -1464,21 +1472,17 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   final assignmentsByItem = await HomeworkAssignmentStore.instance
       .loadAssignmentsForStudent(studentId);
   final latestAssignmentByItem = <String, HomeworkAssignmentBrief>{};
-  final assignmentById = <String, HomeworkAssignmentBrief>{};
   for (final entry in assignmentsByItem.entries) {
     final sorted = List<HomeworkAssignmentBrief>.from(entry.value)
       ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
     if (sorted.isNotEmpty) {
       latestAssignmentByItem[entry.key] = sorted.last;
     }
-    for (final brief in sorted) {
-      assignmentById[brief.id] = brief;
-    }
   }
 
   final allHomeworkItems = HomeworkStore.instance.items(studentId);
   final checkRates = <_CheckRateEntry>[];
-  final coveredCheckItemIds = <String>{};
+  final coveredDueItemIds = <String>{};
   final groupsForCheckRates = HomeworkStore.instance.groups(studentId);
   for (final group in groupsForCheckRates) {
     final children = HomeworkStore.instance
@@ -1486,37 +1490,53 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     if (children.isEmpty) continue;
     final groupPages = <String>[];
     int groupCount = 0;
-    int checkCount = 0;
+    int dueCount = 0;
     int previousProgress = 0;
     int currentProgress = 0;
+    bool groupHasRegularDue = false;
     DateTime? earliestAssigned;
     String? firstBookAndCourse;
     for (final hw in children) {
-      coveredCheckItemIds.add(hw.id);
+      coveredDueItemIds.add(hw.id);
+      final dueAssignments = (assignmentsByItem[hw.id] ??
+              const <HomeworkAssignmentBrief>[])
+          .where(
+              (a) => a.dueDate != null && _isSameDay(a.dueDate!, classDateTime))
+          .toList()
+        ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+      if (dueAssignments.isEmpty) continue;
+      dueCount += dueAssignments.length;
+      if (dueAssignments.any((a) => !a.isSelfExtra)) {
+        groupHasRegularDue = true;
+      }
       final checks = checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
       final hasTodayCheck =
           checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
-      if (!hasTodayCheck) continue;
-      checkCount++;
       final window = _progressWindowForChecks(checks, classDateTime);
-      if (window.previous > previousProgress) {
-        previousProgress = window.previous;
+      final latestDue = dueAssignments.last;
+      final itemPrevious = hasTodayCheck
+          ? window.previous
+          : math.max(window.previous, latestDue.progress);
+      final itemCurrent = hasTodayCheck
+          ? math.max(window.current, latestDue.progress)
+          : itemPrevious;
+      if (itemPrevious > previousProgress) {
+        previousProgress = itemPrevious;
       }
-      if (window.current > currentProgress) {
-        currentProgress = window.current;
+      if (itemCurrent > currentProgress) {
+        currentProgress = itemCurrent;
       }
       final page = (hw.page ?? '').trim();
       if (page.isNotEmpty) groupPages.add(page);
       final count = hw.count;
       if (count != null && count > 0) groupCount += count;
       firstBookAndCourse ??= _formatBookAndCourseFromHomework(hw);
-      final assignedAt = latestAssignmentByItem[hw.id]?.assignedAt;
-      if (assignedAt != null &&
-          (earliestAssigned == null || assignedAt.isBefore(earliestAssigned))) {
+      final assignedAt = dueAssignments.first.assignedAt;
+      if (earliestAssigned == null || assignedAt.isBefore(earliestAssigned)) {
         earliestAssigned = assignedAt;
       }
     }
-    if (checkCount <= 0) continue;
+    if (dueCount <= 0) continue;
     final title = group.title.trim().isNotEmpty
         ? group.title.trim()
         : children.first.title.trim();
@@ -1524,28 +1544,26 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       _CheckRateEntry(
         title: title.isEmpty ? '그룹 과제' : title,
         progress: currentProgress,
+        previousProgress: previousProgress,
         todayProgress: math.max(0, currentProgress - previousProgress),
         bookAndCourse: firstBookAndCourse ?? '교재 미기재',
         page: groupPages.isEmpty ? '-' : groupPages.join(', '),
         count: groupCount > 0 ? groupCount.toString() : '-',
         assignedAt: earliestAssigned,
+        isExtra: !groupHasRegularDue,
       ),
     );
   }
-  for (final entry in checksByItem.entries) {
-    if (coveredCheckItemIds.contains(entry.key)) continue;
-    final todays = entry.value
-        .where((c) => _isSameDay(c.checkedAt, classDateTime))
+  for (final entry in assignmentsByItem.entries) {
+    if (coveredDueItemIds.contains(entry.key)) continue;
+    final dueAssignments = entry.value
+        .where(
+            (a) => a.dueDate != null && _isSameDay(a.dueDate!, classDateTime))
         .toList()
-      ..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
-    if (todays.isEmpty) continue;
-    final latest = todays.last;
+      ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+    if (dueAssignments.isEmpty) continue;
+    final latest = dueAssignments.last;
     final hw = HomeworkStore.instance.getById(studentId, entry.key);
-    final latestAssignmentId = (latest.assignmentId ?? '').trim();
-    final assignedBrief = latestAssignmentId.isNotEmpty
-        ? assignmentById[latestAssignmentId] ??
-            latestAssignmentByItem[entry.key]
-        : latestAssignmentByItem[entry.key];
     final title =
         (hw?.title.trim().isNotEmpty ?? false) ? hw!.title.trim() : '과제';
     final bookAndCourse =
@@ -1553,16 +1571,27 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final page = (hw?.page ?? '').trim();
     final hwCount = hw?.count;
     final count = (hwCount != null && hwCount > 0) ? hwCount.toString() : '-';
-    final window = _progressWindowForChecks(entry.value, classDateTime);
+    final checks = checksByItem[entry.key] ?? const <HomeworkAssignmentCheck>[];
+    final window = _progressWindowForChecks(checks, classDateTime);
+    final hasTodayCheck =
+        checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
+    final previousProgress = hasTodayCheck
+        ? window.previous
+        : math.max(window.previous, latest.progress);
+    final currentProgress = hasTodayCheck
+        ? math.max(window.current, latest.progress)
+        : previousProgress;
     checkRates.add(
       _CheckRateEntry(
         title: title,
-        progress: window.current,
-        todayProgress: window.today,
+        progress: currentProgress,
+        previousProgress: previousProgress,
+        todayProgress: math.max(0, currentProgress - previousProgress),
         bookAndCourse: bookAndCourse,
         page: page.isEmpty ? '-' : page,
         count: count,
-        assignedAt: assignedBrief?.assignedAt,
+        assignedAt: dueAssignments.first.assignedAt,
+        isExtra: dueAssignments.every((a) => a.isSelfExtra),
       ),
     );
   }
@@ -1571,6 +1600,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       const _CheckRateEntry(
         title: '숙제 없음',
         progress: null,
+        previousProgress: null,
         todayProgress: null,
         bookAndCourse: '',
         page: '-',
@@ -2041,6 +2071,54 @@ Future<sf.PdfFont> _loadTodoPdfFont(
   );
 }
 
+final Map<String, Uint8List?> _todoEmojiBytesCache = <String, Uint8List?>{};
+
+Future<sf.PdfBitmap?> _loadTodoEmojiBitmap(String assetPath) async {
+  if (!_todoEmojiBytesCache.containsKey(assetPath)) {
+    try {
+      final data = await rootBundle.load(assetPath);
+      _todoEmojiBytesCache[assetPath] = data.buffer.asUint8List();
+    } catch (_) {
+      _todoEmojiBytesCache[assetPath] = null;
+    }
+  }
+  final bytes = _todoEmojiBytesCache[assetPath];
+  if (bytes == null || bytes.isEmpty) return null;
+  try {
+    return sf.PdfBitmap(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 오늘 검사예정 숙제의 (오늘 추가 퍼센트 합)/(남았던 퍼센트 합) 비율(%)에 따라
+/// 표시할 이모지 에셋 경로와 문구를 반환한다.
+({String asset, String label, bool fire}) _todoCheckMoodFor(int ratioPct) {
+  if (ratioPct <= 0) {
+    return (asset: 'assets/emoji/emoji_angry.png', label: '안함', fire: false);
+  }
+  if (ratioPct <= 15) {
+    return (
+      asset: 'assets/emoji/emoji_distressed.png',
+      label: '거의 안함',
+      fire: false
+    );
+  }
+  if (ratioPct <= 40) {
+    return (asset: 'assets/emoji/emoji_crying.png', label: '많이 덜함', fire: false);
+  }
+  if (ratioPct <= 60) {
+    return (asset: 'assets/emoji/emoji_neutral.png', label: '덜함', fire: false);
+  }
+  if (ratioPct <= 85) {
+    return (asset: 'assets/emoji/emoji_smile.png', label: '조금 덜함', fire: false);
+  }
+  if (ratioPct <= 100) {
+    return (asset: 'assets/emoji/emoji_grin.png', label: '다함', fire: false);
+  }
+  return (asset: 'assets/emoji/emoji_cool.png', label: '추가 학습까지', fire: true);
+}
+
 Future<String> _buildHomeworkTodoPdf({
   required _TodoSheetPayload payload,
 }) async {
@@ -2094,7 +2172,7 @@ Future<String> _buildHomeworkTodoPdf({
     );
   }
 
-  const double headerH = 116;
+  const double headerH = 100;
   final headerBottom = top + headerH;
   graphics.drawLine(
       linePen, Offset(left, headerBottom), Offset(right, headerBottom));
@@ -2141,9 +2219,9 @@ Future<String> _buildHomeworkTodoPdf({
     format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
   );
 
-  // 타이틀-학생/수업 간격은 늘리고, 학생/수업-등하원 간격은 줄인 배치
-  final infoY1 = top + 52;
-  final infoY3 = top + 74;
+  // 헤더 하단 디바이더는 유지하고 타이틀-정보 간격만 넓힌 배치
+  final infoY1 = top + 58;
+  final infoY3 = top + 78;
   final metricGap = contentWidth * 0.01;
   final metricW = (contentWidth - metricGap * 2) / 3;
   final leftInfoW = metricW;
@@ -2212,16 +2290,6 @@ Future<String> _buildHomeworkTodoPdf({
   final contentBottom = bottom;
   final foldY = size.height / 2;
 
-  // ── Page 1: 수업 요약 (Class Summary) with donut chart ──
-  graphics.drawString(
-    '수업 요약',
-    sectionFont,
-    brush: subBrush,
-    bounds: Rect.fromLTWH(left, contentTop, contentWidth, 18),
-  );
-  graphics.drawLine(weakLinePen, Offset(left, contentTop + 20),
-      Offset(right, contentTop + 20));
-
   final donutEntries = payload.classWorkEntries;
   final totalLearningMs = payload.learningMs;
   final arrMs = payload.arrivalTime?.millisecondsSinceEpoch ?? 0;
@@ -2241,6 +2309,53 @@ Future<String> _buildHomeworkTodoPdf({
   final summaryDividerX = legendX + legendW + 8;
   final summaryX = summaryDividerX + 10;
   final summaryW = math.max(0.0, right - summaryX - 2);
+  final visibleCheckRateCount =
+      payload.checkRates.where((e) => e.progress != null).length;
+
+  // ── Page 1: 수업 요약 (Class Summary) + 숙제 검사 내역 ──
+  graphics.drawString(
+    '수업 요약',
+    sectionFont,
+    brush: subBrush,
+    bounds: Rect.fromLTWH(left, contentTop, summaryDividerX - left - 8, 18),
+  );
+  if (summaryW > 48) {
+    final checkTitleFont = await _loadTodoPdfFont(11.4, bold: true);
+    graphics.drawString('숙제 검사 내역 $visibleCheckRateCount개', checkTitleFont,
+        brush: textBrush,
+        bounds: Rect.fromLTWH(summaryX, contentTop, summaryW, 18));
+  }
+
+  void drawPage1ProgressBar({
+    required double x,
+    required double y,
+    required double w,
+    required int previousPct,
+    required int todayPct,
+  }) {
+    const h = 4.6;
+    final prev = previousPct.clamp(0, 100).toDouble();
+    final today = todayPct.clamp(0, math.max(0, 100 - previousPct)).toDouble();
+    graphics.drawRectangle(
+      pen: weakLinePen,
+      brush: sf.PdfSolidBrush(sf.PdfColor(238, 238, 238)),
+      bounds: Rect.fromLTWH(x, y, w, h),
+    );
+    if (prev > 0) {
+      graphics.drawRectangle(
+        brush: sf.PdfSolidBrush(sf.PdfColor(185, 185, 185)),
+        bounds: Rect.fromLTWH(x, y, w * prev / 100, h),
+      );
+    }
+    if (today > 0) {
+      final prevW = w * prev / 100;
+      graphics.drawRectangle(
+        brush: sf.PdfSolidBrush(sf.PdfColor(76, 175, 80)),
+        bounds: Rect.fromLTWH(x + prevW, y, w * today / 100, h),
+      );
+    }
+  }
+
   if (donutEntries.isEmpty && totalLearningMs <= 0) {
     graphics.drawString(
       '• 오늘 수행 기록 없음',
@@ -2333,34 +2448,76 @@ Future<String> _buildHomeworkTodoPdf({
         graphics.drawString('${slice.checks}회 검사', legendFont,
             brush: subBrush,
             bounds: Rect.fromLTWH(legendX + 14, ly + 12, legendW - 14, 13));
-        ly += 22;
+        ly += 24;
       } else {
-        ly += 18;
+        ly += 20;
       }
     }
   }
 
   if (summaryW > 48) {
-    graphics.drawLine(weakLinePen, Offset(summaryDividerX, legendTopY - 4),
+    graphics.drawLine(weakLinePen, Offset(summaryDividerX, contentTop),
         Offset(summaryDividerX, foldY - 8));
-    final csTitleFont = await _loadTodoPdfFont(11.4, bold: true);
     final csLine1Font = await _loadTodoPdfFont(9.2, bold: true);
     final csLine2Font = await _loadTodoPdfFont(9.0);
-    double csY = legendTopY - 1;
-    graphics.drawString('숙제 검사 내역 ${payload.checkRates.length}개', csTitleFont,
-        brush: textBrush, bounds: Rect.fromLTWH(summaryX, csY, summaryW, 16));
-    graphics.drawLine(weakLinePen, Offset(summaryX, csY + 16),
-        Offset(summaryX + summaryW, csY + 16));
-    csY += 20;
-    if (payload.checkRates.isEmpty ||
-        (payload.checkRates.length == 1 &&
-            payload.checkRates.first.progress == null)) {
+    double csY = contentTop + 27;
+
+    final hasCheckData =
+        payload.checkRates.any((e) => e.progress != null);
+    if (hasCheckData) {
+      // 분자: 오늘 추가된 % 합(정규 오늘검사예정 + 자의 추가분 모두 포함)
+      // 분모: 정규 오늘검사예정 과제의 "내준 시점 기준 남은 %"만 합산
+      //       (자의 추가분은 분모에서 제외 -> 100% 초과 가능)
+      int sumTodayPct = 0;
+      int sumRemainingPct = 0;
+      for (final cr in payload.checkRates) {
+        if (cr.progress == null) continue;
+        sumTodayPct += (cr.todayProgress ?? 0);
+        if (!cr.isExtra) {
+          sumRemainingPct += math.max(0, 100 - (cr.previousProgress ?? 0));
+        }
+      }
+      final int ratioPct = sumRemainingPct > 0
+          ? ((sumTodayPct * 100) / sumRemainingPct).round()
+          : (sumTodayPct > 0 ? 101 : 0);
+      final mood = _todoCheckMoodFor(ratioPct);
+      const double emSize = 24.0;
+      const double moodGap = 8.0;
+      // 타이틀 하단(contentTop+18)과 이모지 사이 여백을, 이모지와 리스트
+      // 사이 간격(13)과 동일하게 맞춘다.
+      const double moodVGap = 13.0;
+      final double emY = contentTop + 18 + moodVGap;
+      final moodFont = await _loadTodoPdfFont(10.8, bold: true);
+      final moodText = '${mood.label}  $ratioPct%';
+      final moodTextW = moodFont.measureString(moodText).width;
+      final blockW = emSize + moodGap + moodTextW;
+      final blockX = summaryX + math.max(0.0, (summaryW - blockW) / 2);
+      final emojiBmp = await _loadTodoEmojiBitmap(mood.asset);
+      if (emojiBmp != null) {
+        graphics.drawImage(
+            emojiBmp, Rect.fromLTWH(blockX, emY, emSize, emSize));
+        if (mood.fire) {
+          final flameBmp = await _loadTodoEmojiBitmap('assets/emoji/flame.png');
+          if (flameBmp != null) {
+            graphics.drawImage(flameBmp,
+                Rect.fromLTWH(blockX + emSize - 11, emY - 7, 15, 15));
+          }
+        }
+      }
+      final textX = blockX + emSize + moodGap;
+      graphics.drawString(moodText, moodFont,
+          brush: textBrush,
+          bounds: Rect.fromLTWH(textX, emY + 5, moodTextW + 4, 18));
+      csY = emY + emSize + moodVGap;
+    }
+
+    if (!hasCheckData) {
       graphics.drawString('검사 내역 없음', csLine2Font,
           brush: subBrush,
           bounds: Rect.fromLTWH(summaryX, csY + 2, summaryW, 13));
     } else {
       for (final cr in payload.checkRates) {
-        if (csY + 30 > foldY - 10) break;
+        if (csY + 40 > foldY - 10) break;
         final bookText = cr.bookAndCourse.trim();
         final groupText = cr.title.trim();
         final titleText = (() {
@@ -2370,23 +2527,29 @@ Future<String> _buildHomeworkTodoPdf({
           return '$bookText · $groupText';
         })();
         final todayPct = cr.todayProgress ?? 0;
-        final totalPct = cr.progress ?? 0;
+        final previousPct = cr.previousProgress ?? 0;
         final infoText = [
           _formatPageText(cr.page),
           _formatCountText(cr.count),
           if (cr.assignedAt != null) _formatMonthDay(cr.assignedAt!),
-          '오늘 +$todayPct%',
-          '전체 $totalPct%',
+          '+$todayPct%',
         ].join(' · ');
         graphics.drawString(titleText, csLine1Font,
             brush: textBrush,
             bounds: Rect.fromLTWH(summaryX, csY, summaryW, 13));
         graphics.drawString(infoText, csLine2Font,
             brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 12, summaryW, 13));
-        graphics.drawLine(weakLinePen, Offset(summaryX, csY + 27),
-            Offset(summaryX + summaryW, csY + 27));
-        csY += 31;
+            bounds: Rect.fromLTWH(summaryX, csY + 14, summaryW, 13));
+        drawPage1ProgressBar(
+          x: summaryX,
+          y: csY + 30,
+          w: summaryW,
+          previousPct: previousPct,
+          todayPct: todayPct,
+        );
+        graphics.drawLine(weakLinePen, Offset(summaryX, csY + 38),
+            Offset(summaryX + summaryW, csY + 38));
+        csY += 43;
       }
     }
   }

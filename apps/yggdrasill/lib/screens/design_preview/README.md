@@ -21,7 +21,7 @@ design_preview/
 **매니저앱** Preview는 별도 패키지:  
 `apps/yggdrasill_manager/lib/screens/design_preview/`
 
-## 별도 창으로 띄우기 (실사용 앱과 동시 실행)
+## 별도 창으로 띄우기 (완전 분리)
 
 터미널 **1** — 평소처럼 본앱:
 
@@ -30,19 +30,17 @@ cd apps\yggdrasill
 flutter run -d windows
 ```
 
-터미널 **2** — 디자인 Preview 전용 창 (Supabase/DB 없이 가벼움):
+터미널 **2** — 디자인 Preview 전용 앱:
 
 ```powershell
-cd apps\yggdrasill
-flutter run -d windows -t lib/main_design_preview.dart
+cd apps\yggdrasill_design_preview
+flutter run -d windows
 ```
 
-두 창은 **서로 다른 프로세스**라 Hot Reload도 각각 독립입니다. Preview 쪽만 수정·저장하면 Preview 창만 갱신됩니다.
+두 창은 **서로 다른 Flutter 프로젝트**라 Windows `build/windows/.../Debug`
+산출물이 충돌하지 않습니다. Preview 쪽만 수정·저장하면 Preview 앱만 갱신됩니다.
 
-## 본앱 안에서 라우트로 열기 (선택)
+## 구조
 
-```dart
-Navigator.of(context).pushNamed('/design-preview');
-```
-
-`kDebugMode`에서만 등록됨. 라우트: `/design-preview/yggdrasill/settings`
+이 폴더는 Preview **소스**를 보관하고, 실행은
+`apps/yggdrasill_design_preview`가 담당합니다.

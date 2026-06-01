@@ -216,15 +216,36 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
   for (const q of questions) {
     q.figure_local_paths = [];
     q.figure_local_infos = [];
+    q.common_figure_local_paths = [];
+    q.common_figure_local_infos = [];
     q.answer_figure_local_paths = [];
     q.answer_figure_local_infos = [];
     const meta = q.meta && typeof q.meta === 'object' ? q.meta : {};
+    const model = meta.set_model && typeof meta.set_model === 'object'
+      ? meta.set_model
+      : {};
+    const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object'
+      ? meta.delivery_unit
+      : {};
+    const deliverySource = delivery.source_meta && typeof delivery.source_meta === 'object'
+      ? delivery.source_meta
+      : {};
     const assetSets = [
       {
         assets: Array.isArray(meta.figure_assets) ? meta.figure_assets : [],
         paths: q.figure_local_paths,
         infos: q.figure_local_infos,
         prefix: 'fig',
+      },
+      {
+        assets: Array.isArray(model.common_figure_assets)
+          ? model.common_figure_assets
+          : (Array.isArray(deliverySource.common_figure_assets)
+              ? deliverySource.common_figure_assets
+              : []),
+        paths: q.common_figure_local_paths,
+        infos: q.common_figure_local_infos,
+        prefix: 'common-fig',
       },
       {
         assets: Array.isArray(meta.answer_figure_assets)

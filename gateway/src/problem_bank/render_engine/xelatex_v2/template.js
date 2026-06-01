@@ -3029,14 +3029,20 @@ function renderChoicesLatex(choices, equations, layoutColumns = 1, options = {})
     const cells = choices.map((c, i) => renderItem(c, i));
     const row1W = '\\dimexpr0.2\\linewidth-0.2em\\relax';
     const row2W = '\\dimexpr0.3333\\linewidth-0.3333em\\relax';
+    const row3W = '\\dimexpr0.5\\linewidth-0.5em\\relax';
     const measureCells = cells.flatMap((cell) => [
       `\\sbox{\\YggChoiceMeasureBox}{${cell}}%`,
       `\\ifdim\\wd\\YggChoiceMeasureBox>${row1W} \\ifnum\\YggChoiceLayout<2 \\YggChoiceLayout=2 \\fi\\fi%`,
-      `\\ifdim\\wd\\YggChoiceMeasureBox>${row2W} \\YggChoiceLayout=3 \\fi%`,
+      `\\ifdim\\wd\\YggChoiceMeasureBox>${row2W} \\ifnum\\YggChoiceLayout<3 \\YggChoiceLayout=3 \\fi\\fi%`,
+      `\\ifdim\\wd\\YggChoiceMeasureBox>${row3W} \\YggChoiceLayout=4 \\fi%`,
     ]);
     const row1 = cells.map((cell) => `\\makebox[${row1W}][l]{${cell}}`).join('%\n');
     const row2Top = cells.slice(0, 3).map((cell) => `\\makebox[${row2W}][l]{${cell}}`).join('%\n');
     const row2Bot = cells.slice(3, 5).map((cell) => `\\makebox[${row2W}][l]{${cell}}`).join('%\n');
+    // 3줄 레이아웃: 2 + 2 + 1 배치 (각 칸 0.5\linewidth).
+    const row3a = cells.slice(0, 2).map((cell) => `\\makebox[${row3W}][l]{${cell}}`).join('%\n');
+    const row3b = cells.slice(2, 4).map((cell) => `\\makebox[${row3W}][l]{${cell}}`).join('%\n');
+    const row3c = `\\makebox[${row3W}][l]{${cells[4]}}`;
     const stack = choices.map((c, i) => {
       const text = typeof c === 'string' ? c : c?.text || c?.label || '';
       const label = CIRCLED_DIGITS[i] || String(i + 1);
@@ -3058,10 +3064,18 @@ function renderChoicesLatex(choices, equations, layoutColumns = 1, options = {})
       '  \\par\\noindent%',
       `  ${row2Bot}%`,
       '  \\par',
+      '\\else\\ifnum\\YggChoiceLayout=3',
+      '  \\noindent%',
+      `  ${row3a}%`,
+      '  \\par\\noindent%',
+      `  ${row3b}%`,
+      '  \\par\\noindent%',
+      `  ${row3c}%`,
+      '  \\par',
       '\\else',
       stack,
       '  \\par',
-      '\\fi\\fi',
+      '\\fi\\fi\\fi',
       '}',
     ].join('\n');
   }
@@ -3999,6 +4013,50 @@ function formatIndependentSetHeaderLabelLatex(group) {
   return `[${labels.join(', ')}]`;
 }
 
+function commonStemRenderMetaFromItem(item) {
+  const meta = item?.meta && typeof item.meta === 'object' ? item.meta : {};
+  const model = meta.set_model && typeof meta.set_model === 'object'
+    ? meta.set_model
+    : {};
+  const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object'
+    ? meta.delivery_unit
+    : {};
+  const deliverySource = delivery.source_meta && typeof delivery.source_meta === 'object'
+    ? delivery.source_meta
+    : {};
+  const commonFigureAssets = Array.isArray(model.common_figure_assets)
+    ? model.common_figure_assets
+    : (Array.isArray(deliverySource.common_figure_assets)
+        ? deliverySource.common_figure_assets
+        : []);
+  const commonFigureLayout =
+    model.common_figure_layout && typeof model.common_figure_layout === 'object'
+      ? model.common_figure_layout
+      : (deliverySource.common_figure_layout && typeof deliverySource.common_figure_layout === 'object'
+          ? deliverySource.common_figure_layout
+          : null);
+  const commonTableScales =
+    model.common_table_scales && typeof model.common_table_scales === 'object'
+      ? model.common_table_scales
+      : (deliverySource.common_table_scales && typeof deliverySource.common_table_scales === 'object'
+          ? deliverySource.common_table_scales
+          : null);
+  const commonTableLayout =
+    model.common_table_layout && typeof model.common_table_layout === 'object'
+      ? model.common_table_layout
+      : (deliverySource.common_table_layout && typeof deliverySource.common_table_layout === 'object'
+          ? deliverySource.common_table_layout
+          : null);
+  const out = { ...meta };
+  if (commonFigureAssets.length > 0) out.figure_assets = commonFigureAssets;
+  else delete out.figure_assets;
+  if (commonFigureLayout) out.figure_layout = commonFigureLayout;
+  else delete out.figure_layout;
+  if (commonTableScales) out.table_scales = commonTableScales;
+  if (commonTableLayout) out.table_layout = commonTableLayout;
+  return out;
+}
+
 function renderIndependentSetGroupLatex(group, {
   showQuestionNumber = true,
   questionNumberPlacement = 'inline',
@@ -4017,26 +4075,40 @@ function renderIndependentSetGroupLatex(group, {
       aboveNumberFontPtOverride,
     })).join('\n');
   }
-  const equations = items.flatMap((item) => Array.isArray(item?.equations) ? item.equations : []);
   const headerLabel = formatIndependentSetHeaderLabelLatex(group);
   const lines = [];
   const commonFontSizePt = Math.max(7, Number(stemSizePt) || 11);
   const commonLeadPt = Math.max(commonFontSizePt * 1.18, commonFontSizePt + 1).toFixed(2);
   lines.push('\\begingroup');
   lines.push(`\\fontsize{${commonFontSizePt.toFixed(2)}pt}{${commonLeadPt}pt}\\selectfont`);
-  const header = showQuestionNumber && headerLabel
-    ? `\\questionnumber{${escapeLatexText(headerLabel)}}~`
-    : '';
-  const commonStemLines = commonStem.replace(/\r/g, '').split('\n');
-  let renderedAnyCommonLine = false;
-  for (const rawLine of commonStemLines) {
-    const line = String(rawLine || '').trim();
-    if (!line) continue;
-    lines.push(renderStemTextLine(line, equations, renderedAnyCommonLine ? '' : header, {
-      fontSizePt: commonFontSizePt,
-    }));
-    renderedAnyCommonLine = true;
+  if (showQuestionNumber && headerLabel) {
+    lines.push(`\\noindent\\questionnumber{${escapeLatexText(headerLabel)}}\\par\\nobreak\\vspace{0.15em}`);
   }
+  const firstItem = items[0] || {};
+  const commonQuestion = {
+    ...firstItem,
+    id: `${firstItem?.id || firstItem?.question_uid || 'common'}:common`,
+    question_uid: `${firstItem?.question_uid || firstItem?.id || 'common'}:common`,
+    question_number: '',
+    stem: commonStem,
+    choices: [],
+    objective_choices: [],
+    meta: commonStemRenderMetaFromItem(firstItem),
+    figure_local_paths: Array.isArray(firstItem?.common_figure_local_paths)
+      ? firstItem.common_figure_local_paths
+      : [],
+    figure_local_infos: Array.isArray(firstItem?.common_figure_local_infos)
+      ? firstItem.common_figure_local_infos
+      : [],
+  };
+  lines.push(renderOneQuestion(commonQuestion, {
+    showQuestionNumber: false,
+    questionNumberPlacement: 'inline',
+    questionNumberFormat,
+    stemSizePt,
+    aboveNumberFontPtOverride,
+    inlineNumberFontPtOverride: stemSizePt,
+  }));
   lines.push('\\vspace{\\baselineskip}');
   for (let itemIdx = 0; itemIdx < items.length; itemIdx += 1) {
     const item = items[itemIdx];

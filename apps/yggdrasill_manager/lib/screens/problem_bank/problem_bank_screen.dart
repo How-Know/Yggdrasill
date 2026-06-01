@@ -9801,6 +9801,359 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  String _commonStemGroupKeyOf(ProblemBankQuestion q) {
+    final setKey = '${q.setModel['set_key'] ?? q.setModel['setKey'] ?? ''}'
+        .trim();
+    if (setKey.isNotEmpty) return 'key:$setKey';
+    return 'stem:${q.setCommonStem.replaceAll(RegExp(r'\s+'), ' ').trim()}';
+  }
+
+  List<ProblemBankQuestion> _commonStemGroupQuestions(ProblemBankQuestion q) {
+    final commonStem = q.setCommonStem;
+    if (!q.isIndependentSetItem || commonStem.isEmpty) {
+      return const <ProblemBankQuestion>[];
+    }
+    final key = _commonStemGroupKeyOf(q);
+    final rows = _questions
+        .where((item) =>
+            item.isIndependentSetItem &&
+            item.setCommonStem.isNotEmpty &&
+            _commonStemGroupKeyOf(item) == key)
+        .toList(growable: false)
+      ..sort((a, b) {
+        final ao = a.sourceOrder.compareTo(b.sourceOrder);
+        if (ao != 0) return ao;
+        return a.questionNumber.compareTo(b.questionNumber);
+      });
+    return rows.isEmpty ? <ProblemBankQuestion>[q] : rows;
+  }
+
+  String _commonStemGroupTooltip(ProblemBankQuestion q) {
+    final nums = _commonStemGroupQuestions(q)
+        .map((item) => item.questionNumber.trim())
+        .where((questionNumber) => questionNumber.isNotEmpty)
+        .toList(growable: false);
+    return nums.isEmpty ? '공통발문' : '공통발문 · 묶인 문항: ${nums.join(', ')}';
+  }
+
+  ProblemBankQuestion _commonStemPreviewQuestion(ProblemBankQuestion q) {
+    final meta = Map<String, dynamic>.from(q.meta);
+    final assets = q.setCommonFigureAssets;
+    final figureLayout = q.setCommonFigureLayout;
+    final tableScales = q.setCommonTableScales;
+    final tableLayout = q.setCommonTableLayout;
+    meta
+      ..remove('set_model')
+      ..remove('delivery_unit');
+    if (assets.isNotEmpty) {
+      meta['figure_assets'] = assets;
+      meta['figure_count'] = assets.length;
+    } else {
+      meta.remove('figure_assets');
+      meta['figure_count'] = 0;
+    }
+    if (figureLayout.isNotEmpty) {
+      meta['figure_layout'] = figureLayout;
+    } else {
+      meta.remove('figure_layout');
+    }
+    if (tableScales.isNotEmpty) {
+      meta['table_scales'] = tableScales;
+    } else {
+      meta.remove('table_scales');
+    }
+    if (tableLayout.isNotEmpty) {
+      meta['table_layout'] = tableLayout;
+    } else {
+      meta.remove('table_layout');
+    }
+    return q.copyWith(
+      questionType: '주관식',
+      stem: q.setCommonStem,
+      choices: const <ProblemBankChoice>[],
+      objectiveChoices: const <ProblemBankChoice>[],
+      allowObjective: false,
+      figureRefs: List<String>.filled(assets.length, '[그림]'),
+      meta: meta,
+    );
+  }
+
+  List<ProblemBankQuestion> _applyCommonStemDraftToGroup(
+    ProblemBankQuestion source,
+    Map<String, dynamic> draftMeta,
+  ) {
+    final group = _commonStemGroupQuestions(source);
+    if (group.isEmpty) return const <ProblemBankQuestion>[];
+    final groupIds = group.map((item) => item.id).toSet();
+    final commonFigureAssets = draftMeta['figure_assets'];
+    final commonFigureLayout = draftMeta['figure_layout'];
+    final commonTableScales = draftMeta['table_scales'];
+    final commonTableLayout = draftMeta['table_layout'];
+    final updated = <ProblemBankQuestion>[];
+
+    setState(() {
+      _questions = _questions.map((item) {
+        if (!groupIds.contains(item.id)) return item;
+        final meta = Map<String, dynamic>.from(item.meta);
+        final setModel = Map<String, dynamic>.from(item.setModel);
+        if (commonFigureAssets is List && commonFigureAssets.isNotEmpty) {
+          setModel['common_figure_assets'] = commonFigureAssets;
+        } else {
+          setModel.remove('common_figure_assets');
+        }
+        if (commonFigureLayout is Map && commonFigureLayout.isNotEmpty) {
+          setModel['common_figure_layout'] =
+              Map<String, dynamic>.from(commonFigureLayout);
+        } else {
+          setModel.remove('common_figure_layout');
+        }
+        if (commonTableScales is Map && commonTableScales.isNotEmpty) {
+          setModel['common_table_scales'] =
+              Map<String, dynamic>.from(commonTableScales);
+        } else {
+          setModel.remove('common_table_scales');
+        }
+        if (commonTableLayout is Map && commonTableLayout.isNotEmpty) {
+          setModel['common_table_layout'] =
+              Map<String, dynamic>.from(commonTableLayout);
+        } else {
+          setModel.remove('common_table_layout');
+        }
+        meta['set_model'] = setModel;
+        final next = item.copyWith(meta: meta);
+        updated.add(next);
+        _dirtyQuestionIds.add(next.id);
+        return next;
+      }).toList(growable: false);
+    });
+    return updated;
+  }
+
+  Future<void> _openCommonStemPreviewDialog(ProblemBankQuestion q) async {
+    if (!mounted || q.setCommonStem.isEmpty) return;
+    final screen = MediaQuery.sizeOf(context);
+    final commonQ = _commonStemPreviewQuestion(q);
+    final groupLabel = _commonStemGroupQuestions(q)
+        .map((item) => item.questionNumber.trim())
+        .where((questionNumber) => questionNumber.isNotEmpty)
+        .join(', ');
+    final figureAssets = _orderedFigureAssetsOf(commonQ);
+    final hasFigures = figureAssets.isNotEmpty;
+    final tableEntries = _parseTableEntries(commonQ);
+    final hasTables = tableEntries.isNotEmpty;
+    final hasSidebar = hasFigures || hasTables;
+    const double sidebarWidth = 360;
+    final dialogWidth = hasSidebar
+        ? math.min(screen.width - 40, 880.0 + sidebarWidth)
+        : math.min(screen.width - 40, 880.0);
+    final dialogMaxHeight = (screen.height - 40).clamp(480.0, 1600.0);
+
+    final figureData = hasFigures ? _prepareFigureScaleData(commonQ) : null;
+    final draftMap = figureData?.draftMap;
+    final positionMap = figureData?.positionMap;
+    final offsetXMap = figureData?.offsetXMap;
+    final selectedPairKeys = figureData?.selectedPairKeys;
+    final selectedGroups = <List<String>>[
+      for (final group in figureData?.initialGroups ?? const <List<String>>[])
+        List<String>.from(group),
+    ];
+    final initialTableScales = _readTableScaleMap(commonQ);
+    final tableScaleDrafts = <String, TableScaleValue>{
+      for (final t in tableEntries)
+        t.key: initialTableScales[t.key] ?? const TableScaleValue(),
+    };
+    final tableLayoutItems = _tableLayoutItemsByKey(commonQ.meta);
+    final tablePositionMap = <String, String>{
+      for (final t in tableEntries)
+        t.key: _figureArrangementFromPositionAnchor(
+          '${tableLayoutItems[t.key]?['position'] ?? 'below-stem'}',
+          '${tableLayoutItems[t.key]?['anchor'] ?? 'center'}',
+        ),
+    };
+    final tableOffsetXMap = <String, double>{
+      for (final t in tableEntries)
+        t.key: (double.tryParse(
+                    '${tableLayoutItems[t.key]?['offsetXEm'] ?? ''}') ??
+                0.0)
+            .clamp(-8.0, 8.0)
+            .toDouble(),
+    };
+    var refreshing = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogContext, setLocalState) {
+            final draftMeta = Map<String, dynamic>.from(
+              (hasFigures || hasTables)
+                  ? _buildDraftMeta(
+                      commonQ,
+                      draftMap ?? const <String, double>{},
+                      selectedPairKeys ?? const <String>{},
+                      positionMap: positionMap,
+                      offsetXMap: offsetXMap,
+                      horizontalGroups: selectedGroups,
+                      tableScales: hasTables ? tableScaleDrafts : null,
+                      tableScaleDefault:
+                          hasTables ? const TableScaleValue() : null,
+                      tablePositionMap: hasTables ? tablePositionMap : null,
+                      tableOffsetXMap: hasTables ? tableOffsetXMap : null,
+                    )
+                  : commonQ.meta,
+            );
+            final previewQ = commonQ.copyWith(meta: draftMeta);
+
+            void applyAndSave() {
+              final updatedGroup = _applyCommonStemDraftToGroup(q, draftMeta);
+              setLocalState(() {
+                refreshing = true;
+              });
+              () async {
+                for (final item in updatedGroup) {
+                  await _saveAndRefreshPreview(item);
+                }
+                if (ctx.mounted) {
+                  setLocalState(() {
+                    refreshing = false;
+                  });
+                }
+              }();
+            }
+
+            final leftScroll = SingleChildScrollView(
+              padding: const EdgeInsets.only(right: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildPdfPreviewPaperContent(
+                    previewQ,
+                    expanded: true,
+                    scrollable: false,
+                    showQuestionNumberPrefix: false,
+                  ),
+                  if (hasFigures) ...[
+                    const SizedBox(height: 10),
+                    _buildFigurePreviewThumbnail(previewQ, expanded: true),
+                  ],
+                ],
+              ),
+            );
+
+            final sidebarScroll = hasSidebar
+                ? Container(
+                    width: sidebarWidth,
+                    padding: const EdgeInsets.only(left: 10),
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        left: BorderSide(color: _border, width: 1),
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(left: 2, right: 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (hasFigures)
+                            _buildFigureEditSection(
+                              draftMap: draftMap!,
+                              positionMap: positionMap!,
+                              offsetXMap: offsetXMap!,
+                              selectedPairKeys: selectedPairKeys!,
+                              selectedGroups: selectedGroups,
+                              figureData: figureData!,
+                              setLocalState: setLocalState,
+                              onSettingChanged: applyAndSave,
+                            ),
+                          if (hasFigures && hasTables)
+                            const SizedBox(height: 12),
+                          if (hasTables)
+                            _buildTableEditSection(
+                              entries: tableEntries,
+                              drafts: tableScaleDrafts,
+                              positionMap: tablePositionMap,
+                              offsetXMap: tableOffsetXMap,
+                              setLocalState: setLocalState,
+                              onSettingChanged: applyAndSave,
+                            ),
+                        ],
+                      ),
+                    ),
+                  )
+                : null;
+
+            return Dialog(
+              backgroundColor: _panel,
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: dialogMaxHeight,
+                  minWidth: 560,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            groupLabel.isEmpty
+                                ? '공통발문 미리보기'
+                                : '공통발문 미리보기 · $groupLabel',
+                            style: const TextStyle(
+                              color: _text,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (refreshing)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _accent,
+                                ),
+                              ),
+                            ),
+                          IconButton(
+                            tooltip: '닫기',
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            icon: const Icon(Icons.close, color: _textSub),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Flexible(
+                        child: sidebarScroll == null
+                            ? leftScroll
+                            : Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(child: leftScroll),
+                                  sidebarScroll,
+                                ],
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   /// 확대 미리보기 다이얼로그용 "그림선지형 배치" 인라인 편집 섹션.
   Widget _buildImageChoiceEditSection({
     required String rows,
@@ -12147,6 +12500,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         color: _textSub,
                       ),
               ),
+              if (q.isIndependentSetItem && q.setCommonStem.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Tooltip(
+                  message: _commonStemGroupTooltip(q),
+                  child: TextButton.icon(
+                    onPressed: () => unawaited(_openCommonStemPreviewDialog(q)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFFE0B56D),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 5,
+                      ),
+                      minimumSize: const Size(0, 30),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: const Icon(Icons.auto_stories_outlined, size: 15),
+                    label: const Text(
+                      '공통',
+                      style: TextStyle(
+                        fontSize: 11.4,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const Spacer(),
               IconButton(
                 tooltip: '검수 편집',
