@@ -20,8 +20,8 @@ design_preview/
 
 ## 설정 화면 Preview 원칙
 
-- **설정 - 실제 기준선**: `screens/settings/settings_screen.dart`를 그대로 띄운다.
-  미세 조정은 이 화면을 기준으로 한다.
+- **설정 - 실제 기준선**: `SettingsBaselinePreviewScreen` — 좌측 `CustomNavigationRail` +
+  프로덕션 `SettingsScreen`. 본앱 메인 셸과 동일한 레이아웃으로 미세 조정한다.
 - **설정 - 컨셉 목업**: mock 데이터 기반 단순화 시안이다. 실제 화면과 다를 수 있으므로
   바로 반영 기준으로 쓰지 않는다.
 

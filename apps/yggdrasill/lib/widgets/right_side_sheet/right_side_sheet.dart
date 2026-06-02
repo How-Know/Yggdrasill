@@ -2758,7 +2758,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
   static const double _actionPaneWidth = 62;
   static const Duration _snapDuration = Duration(milliseconds: 170);
   static const double _cardRadius = 12.0;
-  static const double _cardBorderWidth = 1.7;
+  static const double _cardBorderWidth = 2.2;
 
   late final AnimationController _ctrl =
       AnimationController(vsync: this, duration: _snapDuration);
@@ -2934,7 +2934,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                 onHorizontalDragEnd: _handleHorizontalDragEnd,
                 onHorizontalDragCancel: _close,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(_cardRadius),
                   child: Stack(
                     children: [
                       Positioned(
@@ -5309,11 +5309,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }) async {
     final session = widget.session;
     if (session == null) return;
-    if (session.solutionPathRaw.trim().isEmpty) {
+    final hasSolutionSource = cell.solutionPathRaw.trim().isNotEmpty ||
+        session.solutionPathRaw.trim().isNotEmpty;
+    final hasSolutionTarget = cell.solutionPathRaw.trim().isNotEmpty ||
+        cell.solutionPageNumber != null ||
+        cell.solutionRect1k.length >= 4;
+    if (!hasSolutionSource || !hasSolutionTarget) {
       if (!mounted) return;
-      ScaffoldMessenger.of(_navigatorContext).showSnackBar(
-        const SnackBar(content: Text('해설 PDF가 연결되어 있지 않습니다.')),
-      );
+      await _showNoLinkedSolutionDialog(cell);
       return;
     }
     await _openSessionAnswerSheet(
@@ -5327,6 +5330,44 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       solutionPathRawOverride: cell.solutionPathRaw,
       preferSolutionRawAsBase:
           cell.answerPathRaw.trim().isEmpty && cell.solutionPathRaw.isNotEmpty,
+    );
+  }
+
+  Future<void> _showNoLinkedSolutionDialog(
+    _RightSheetGradingCellVm cell,
+  ) async {
+    await _showTopOverlayDialog<void>(
+      builder: (dialogContext, closeDialog) {
+        return AlertDialog(
+          backgroundColor: _rsBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _rsBorder),
+          ),
+          title: Text(
+            '${cell.displayQuestionLabel}번 해설',
+            style: const TextStyle(
+              color: _rsText,
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: const Text(
+            '이 문항에 연결된 해설이 없습니다.',
+            style: TextStyle(color: _rsTextSub, fontSize: 14, height: 1.4),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => closeDialog(),
+              style: FilledButton.styleFrom(
+                backgroundColor: _rsAccent,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('확인'),
+            ),
+          ],
+        );
+      },
     );
   }
 

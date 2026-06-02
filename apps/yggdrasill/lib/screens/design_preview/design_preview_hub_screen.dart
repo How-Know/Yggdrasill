@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../settings/settings_screen.dart';
 import '../../widgets/dialog_tokens.dart';
+import 'yggdrasill/settings/settings_baseline_preview_screen.dart';
 import 'yggdrasill/settings/settings_preview_screen.dart';
 
 /// 완전 분리 Preview 앱에서 표시하는 학습앱 Preview 목록.
@@ -26,12 +26,12 @@ class DesignPreviewHubScreen extends StatelessWidget {
           ),
           _PreviewTile(
             title: '설정 - 실제 기준선',
-            subtitle: '프로덕션 SettingsScreen 그대로 표시 (미세 조정 기준)',
+            subtitle: 'NavRail + SettingsScreen (본앱과 동일 셸)',
             badge: 'BASELINE',
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const SettingsScreen(),
+                  builder: (_) => const SettingsBaselinePreviewScreen(),
                 ),
               );
             },

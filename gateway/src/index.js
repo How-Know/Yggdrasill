@@ -738,6 +738,18 @@ client.on('message', async (topic, payload) => {
         error: runtimeSyncError?.message ?? error?.message
       });
       if (ok) {
+        // 수행 단일성 보강(방법 A): state_v3가 phase guard로 다른 그룹 pause를
+        // 건너뛸 수 있어, 학생의 모든 그룹 runtime을 children 기준 재동기화.
+        const { error: recErr } = await supa.rpc('m5_reconcile_student_group_runtimes', {
+          p_academy_id: academy_id,
+          p_student_id: student_id
+        });
+        if (recErr) {
+          const msg = `${recErr.code || ''} ${recErr.message || ''}`;
+          if (!/42883|PGRST202|does not exist|could not find the function|schema cache/i.test(msg)) {
+            console.error('[gateway] reconcile runtimes error', recErr);
+          }
+        }
         await publishHomeworksToBoundDevices(academy_id, student_id, 'group_transition');
       }
       return;
@@ -889,6 +901,22 @@ client.on('message', async (topic, payload) => {
         );
 
         if (ok) {
+          // 수행 단일성 보강(방법 A): 전환으로 pause된 다른 그룹들의 runtime이
+          // phase=2로 잔존해 M5가 stale 초록불을 보이는 문제를 막는다. 실제
+          // 적용된 경우(dedup 아님)에만, 해당 학생의 모든 그룹 runtime을
+          // children 기준으로 재동기화한다.
+          if (!row.dedup) {
+            const { error: recErr } = await supa.rpc('m5_reconcile_student_group_runtimes', {
+              p_academy_id: academy_id,
+              p_student_id: student_id
+            });
+            if (recErr) {
+              const msg = `${recErr.code || ''} ${recErr.message || ''}`;
+              if (!/42883|PGRST202|does not exist|could not find the function|schema cache/i.test(msg)) {
+                console.error(`[${GROUP_CMD_V2_LOG_TAG}] reconcile runtimes error`, recErr);
+              }
+            }
+          }
           await queueHomeworksToBoundDevices(academy_id, student_id, `${GROUP_CMD_V2_LOG_TAG}:device_command`);
         }
         return;
