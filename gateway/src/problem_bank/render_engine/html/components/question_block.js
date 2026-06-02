@@ -1066,6 +1066,11 @@ export function renderQuestionBlock(
   const equations = Array.isArray(question?.equations) ? question.equations : [];
   const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
   const isImageChoice = isImageChoiceQuestion(question);
+  // 본문 그림 + 이미지 선지(그림 선지) 공존: stem 그림 마커 수만큼 앞쪽 dataUrls 는 본문
+  //   그림으로 소비되고, 그 이후 5개를 선지 ①~⑤ 로 매핑한다(N=0 이면 기존과 동일).
+  const imageChoiceStemFigureCount = isImageChoice
+    ? ((String(question?.stem || '').match(FIGURE_MARKER_RE) || []).length)
+    : 0;
   // hydrateFiguresForHtml 이 dataUrls 와 같은 인덱스에 HWPX binaryItemIDRef 를 채워둔다.
   //   본문 [[PB_FIG_<id>]] 토큰 해석에 사용 — 비어있으면 plain 마커처럼 positional 로 동작.
   const figureItemIds = Array.isArray(question?.figure_item_ids) ? question.figure_item_ids : [];
@@ -1081,7 +1086,9 @@ export function renderQuestionBlock(
   // plain `[문단]` 으로 정규화한 뒤 속성값을 stemLineAligns 에 이식해
   // XeLaTeX / HTML 두 경로가 같은 "라인별 정렬" 인프라를 공유하도록 한다.
   const normalizedAlign = applyInlineAlignmentMarkers(
-    isImageChoice ? stripImageChoiceFigureMarkers(question?.stem || '') : (question?.stem || ''),
+    (isImageChoice && imageChoiceStemFigureCount === 0)
+      ? stripImageChoiceFigureMarkers(question?.stem || '')
+      : (question?.stem || ''),
     rawStemLineAligns,
   );
   const normalizedStem = normalizedAlign.stem;
@@ -1106,7 +1113,7 @@ export function renderQuestionBlock(
     if (isBlankChoiceQuestion(question) && choices.length === 5) {
       choiceHtml = renderBlankChoiceContainer(question, choices, mathRenderer, equations, choiceOpts);
     } else if (isImageChoice && choices.length === 5) {
-      choiceHtml = renderImageChoiceContainer(question, choices, dataUrls);
+      choiceHtml = renderImageChoiceContainer(question, choices, dataUrls, imageChoiceStemFigureCount);
     } else {
       const items = choices.map((ch) => renderChoiceItem(ch, mathRenderer, equations, choiceOpts));
       const layout = chooseLayout(items);

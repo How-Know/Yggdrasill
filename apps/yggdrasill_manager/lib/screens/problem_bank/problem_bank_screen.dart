@@ -7409,6 +7409,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   static final RegExp _figureMarkerRegex =
       RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표|표)\]', caseSensitive: false);
 
+  // 이미지 선지(그림 선지) 문항에서 "본문 그림" 개수. 렌더러(xelatex/html)의
+  //   imageChoiceStemFigureCount 오프셋과 동일하게 stem 의 그림 마커 수를 센다.
+  //   본문 그림 N개 다음의 figure_assets 5개를 선지 ①~⑤ 로 매핑한다.
+  static final RegExp _figureMarkerCountRegex =
+      RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]', caseSensitive: false);
+  int _imageChoiceStemFigureCount(ProblemBankQuestion q) {
+    if (!_isImageChoiceQuestion(q)) return 0;
+    return _figureMarkerCountRegex.allMatches(q.stem).length;
+  }
+
   Widget _buildStemTextPreviewLine(
     String text, {
     double fontSize = 13.4,
@@ -9455,8 +9465,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final screen = MediaQuery.sizeOf(context);
     final isImageChoice = _isImageChoiceQuestion(q);
     final figureAssets = _orderedFigureAssetsOf(q);
-    final hasFigures = !isImageChoice &&
-        (q.figureRefs.isNotEmpty || figureAssets.isNotEmpty);
+    // 이미지 선지 문항도 figure_assets(본문 그림 + 선지 그림)를 가질 수 있으므로
+    //   그림 크기 편집 섹션을 열어준다. 선지 그림은 위치/그룹 없이 "크기만" 조절.
+    final hasFigures = q.figureRefs.isNotEmpty || figureAssets.isNotEmpty;
+    final imageChoiceStemFigCount = _imageChoiceStemFigureCount(q);
+    final figureSizeOnlyKeys = <String>{};
+    if (isImageChoice) {
+      for (var i = 0; i < figureAssets.length; i += 1) {
+        if (i < imageChoiceStemFigCount) continue;
+        figureSizeOnlyKeys.add(_figureScaleKeyForAsset(figureAssets[i], i + 1));
+      }
+    }
     final tableEntries = _parseTableEntries(q);
     final hasTables = tableEntries.isNotEmpty;
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);
@@ -9700,6 +9719,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         figureData: figureData!,
                         setLocalState: setLocalState,
                         onSettingChanged: applyAndRefresh,
+                        sizeOnlyKeys: figureSizeOnlyKeys,
+                        allowGrouping: !isImageChoice,
                       ),
                     if (hasFigures &&
                         (hasTables || hasAnswerFigures || isImageChoice))
@@ -10298,6 +10319,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }) figureData,
     required void Function(void Function()) setLocalState,
     required VoidCallback onSettingChanged,
+    Set<String> sizeOnlyKeys = const <String>{},
+    bool allowGrouping = true,
   }) {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
@@ -10356,14 +10379,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             setLocalState: setLocalState,
             showPreviewImages: false,
             onSettingChanged: onSettingChanged,
+            sizeOnlyKeys: sizeOnlyKeys,
           ),
-          _buildHorizontalGroupsEditor(
-            availableKeys: figureData.availableFigureKeys,
-            labels: figureData.labels,
-            selectedGroups: selectedGroups,
-            setLocalState: setLocalState,
-            onSettingChanged: onSettingChanged,
-          ),
+          if (allowGrouping)
+            _buildHorizontalGroupsEditor(
+              availableKeys: figureData.availableFigureKeys,
+              labels: figureData.labels,
+              selectedGroups: selectedGroups,
+              setLocalState: setLocalState,
+              onSettingChanged: onSettingChanged,
+            ),
         ],
       ),
     );
@@ -10989,6 +11014,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final assets = _orderedFigureAssetsOf(q);
     final fallbackCount =
         assets.isNotEmpty ? assets.length : math.max(1, q.figureRefs.length);
+    final isImageChoiceQ = _isImageChoiceQuestion(q);
+    final stemFigCount = isImageChoiceQ ? _imageChoiceStemFigureCount(q) : 0;
+    const circledChoiceLabels = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'];
 
     final existingLayout = _parseFigureLayout(q);
     final existingItemsByKey = _figureLayoutItemsByKey(q.meta);
@@ -11004,7 +11032,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ? assets[i]
           : <String, dynamic>{'figure_index': i + 1};
       final key = _figureScaleKeyForAsset(asset, i + 1);
-      final label = _figureScaleKeyLabel(key, i + 1);
+      var label = _figureScaleKeyLabel(key, i + 1);
+      if (isImageChoiceQ) {
+        if (i < stemFigCount) {
+          label = stemFigCount > 1 ? '본문 그림 ${i + 1}' : '본문 그림';
+        } else {
+          final ci = i - stemFigCount;
+          label = '선지 ${ci < circledChoiceLabels.length ? circledChoiceLabels[ci] : '${ci + 1}'}';
+        }
+      }
       final path = '${asset['path'] ?? ''}'.trim();
       final previewUrl = _figurePreviewUrlForPath(q.id, path);
 
@@ -11122,11 +11158,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required void Function(void Function()) setLocalState,
     bool showPreviewImages = true,
     VoidCallback? onSettingChanged,
+    Set<String> sizeOnlyKeys = const <String>{},
   }) {
     return [
       for (var i = 0; i < draftMap.length; i += 1)
         () {
           final key = draftMap.keys.elementAt(i);
+          final sizeOnly = sizeOnlyKeys.contains(key);
           final widthEm = draftMap[key] ?? _figureWidthEmDefault;
           final label = labels[key] ?? '그림 ${i + 1}';
           final position = positionMap[key] ?? 'center';
@@ -11189,6 +11227,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   },
                   onChangeEnd: (_) => onSettingChanged?.call(),
                 ),
+                if (!sizeOnly) ...[
                 const SizedBox(height: 4),
                 Row(
                   children: [
@@ -11275,6 +11314,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ),
                   ],
                 ),
+                ],
               ],
             ),
           );

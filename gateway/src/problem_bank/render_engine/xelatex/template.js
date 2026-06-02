@@ -81,9 +81,13 @@ function measuredWrapMacroLines() {
 }
 
 function tableColumnLengthLines() {
-  return Array.from({ length: 26 }, (_, i) => (
-    `\\newlength{\\tblcelwd${String.fromCharCode(0x41 + i)}}`
-  ));
+  return [
+    ...Array.from({ length: 26 }, (_, i) => (
+      `\\newlength{\\tblcelwd${String.fromCharCode(0x41 + i)}}`
+    )),
+    // 수식 셀 자연 폭 측정용 임시 레지스터.
+    '\\newlength{\\YggCellNat}',
+  ];
 }
 
 function useLegacyInlineWrapMode() {
@@ -2435,7 +2439,9 @@ function renderTableLatex(
     : null;
   const colWeights = [];
   for (let i = 0; i < maxCols; i += 1) {
-    const w = rawColScales && rawColScales.length === maxCols
+    // columnScales 길이가 실제 열 수와 정확히 같지 않아도 인덱스별로 최대한 반영하고,
+    // 값이 없는 컬럼만 1.0(균등)으로 둔다. (예전엔 길이 불일치 시 전부 무시했음)
+    const w = rawColScales && rawColScales.length > 0 && rawColScales[i] != null
       ? clampTableScale(rawColScales[i])
       : 1.0;
     colWeights.push(w);
@@ -2449,6 +2455,12 @@ function renderTableLatex(
 
   // 컬럼별 개별 폭 레지스터 이름 \tblcelwdA..\tblcelwdZ.
   const colWidthVar = (i) => `\\tblcelwd${String.fromCharCode(0x41 + i)}`;
+
+  // 각 셀 내용을 "한 줄로 폈을 때"의 자연 폭을 측정하기 위한 수집 버킷.
+  // 매니저앱에서 한 줄로 맞춰둔 표가 과제형의 좁은 폭에서 줄바꿈되며 깨지는 것을
+  // 막기 위함: 컬럼을 자연 폭까지 넓힌 뒤(아래 measureLines) 표 전체를 \linewidth 로
+  // 균일 축소(adjustbox)한다. → 줄바꿈 없이, 모든 셀 폰트 크기는 동일하게 유지된다.
+  const cellMeasureByCol = Array.from({ length: maxCols }, () => []);
 
   const latexRows = rows.map((row) => {
     const cells = [];
@@ -2470,6 +2482,9 @@ function renderTableLatex(
       //       (* 는 페이지 끝에서도 공간 흡수되지 않게 강제)
       //   - \centering : paragraph-level 가로 중앙 (content 가 길어 줄바꿈 돼도 중앙)
       //   - vphantom 사용 X : baseline 에 붙은 phantom 이 시각적 하향 쏠림 유발.
+      if (content && content.trim()) {
+        cellMeasureByCol[i].push(content);
+      }
       cells.push(
         `\\parbox[c][\\tblcellht][c]{${colWidthVar(i)}}{\\vspace*{\\fill}\\centering ${content}\\par\\vspace*{\\fill}}`,
       );
@@ -2487,13 +2502,38 @@ function renderTableLatex(
     );
   }
 
+  // 셀 자연 폭 측정 → 컬럼이 내용보다 좁으면(=한 줄로 안 들어가 줄바꿈이 생길 폭이면)
+  // 컬럼을 자연 폭까지 넓힌다. 측정은 표 폰트 크기에서 수행하고 \global 로 그룹 밖
+  // 폭 레지스터에 반영한다. (폰트 크기는 건드리지 않으므로 모든 셀 글자 크기가 동일)
+  // 넓힌 결과 표 전체가 \linewidth 를 넘으면 아래 adjustbox 가 균일 축소한다.
+  const measureLines = [];
+  if (cellMeasureByCol.some((arr) => arr.length > 0)) {
+    measureLines.push(
+      `{\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont%`,
+    );
+    for (let i = 0; i < maxCols; i += 1) {
+      for (const cellTex of cellMeasureByCol[i]) {
+        measureLines.push(
+          `\\global\\settowidth{\\YggCellNat}{${cellTex}}\\ifdim\\YggCellNat>${colWidthVar(i)}\\relax\\global\\setlength{${colWidthVar(i)}}{\\dimexpr\\YggCellNat+0.5em\\relax}\\fi%`,
+        );
+      }
+    }
+    measureLines.push('}');
+  }
+
+  // 표 전체를 \linewidth 안으로 균일 비율 축소(폭 초과 시에만)하는 안전망.
+  // adjustbox 의 max width 는 자연폭이 \linewidth 보다 클 때만 비례 축소하므로
+  // 폭이 충분하면 그대로, 넘칠 때만 표 전체가 같은 비율로 작아진다.
+  // → 어떤 경우에도 모든 셀의 글자 크기는 서로 동일하게 유지되고 오버플로우는 사라진다.
   const tableInner = [
+    '\\adjustbox{max width=\\linewidth}{%',
     `{\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
     latexRows.join('\n\\hline\n'),
     '\\hline',
-    '\\end{tabular}}',
+    '\\end{tabular}}%',
+    '}',
   ].join('\n');
   const position = normalizeTableLayoutPosition(tableLayout?.position);
   const anchor = normalizeTableLayoutAnchor(tableLayout?.anchor);
@@ -2513,6 +2553,7 @@ function renderTableLatex(
       : `\\hfill ${shiftedTable}\\hfill\\null`;
   return [
     ...lengthDefs,
+    ...measureLines,
     `\\setlength{\\tblcellht}{${cellHeightEm}em}`,
     renderOptions.omitOuterPar
       ? `\\noindent ${alignedTable}`
@@ -4097,7 +4138,13 @@ function renderOneQuestion(question, {
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
   const isImageChoice = isImageChoiceQuestion(question);
-  const rawStem = isImageChoice
+  // 본문 그림 + 이미지 선지(그림 선지)가 공존하는 경우: stem 의 그림 마커 개수를 세어
+  //   앞쪽 N개 그림은 본문 그림으로 그대로 렌더링하고, 그 이후 5개를 선지 ①~⑤ 로 매핑한다.
+  //   본문 그림이 없는 일반 이미지 선지(N=0)는 기존처럼 마커를 제거하고 figurePaths[0..4] 사용.
+  const imageChoiceStemFigureCount = isImageChoice
+    ? ((String(question?.stem || '').match(FIGURE_MARKER_RE) || []).length)
+    : 0;
+  const rawStem = (isImageChoice && imageChoiceStemFigureCount === 0)
     ? stripImageChoiceFigureMarkers(question?.stem || '')
     : (question?.stem || '');
   const metaAligns = (() => {
@@ -4607,8 +4654,9 @@ function renderOneQuestion(question, {
     return `\\par\\noindent\\hbox to \\linewidth{\\hfill${pieces.join('%\n')}\\hfill\\null}\\par\n`;
   }
 
-  function renderImageChoicesLatex() {
-    if (!Array.isArray(choices) || choices.length !== 5 || figurePaths.length === 0) return '';
+  function renderImageChoicesLatex(figureOffset = 0) {
+    const offset = Number.isInteger(figureOffset) && figureOffset > 0 ? figureOffset : 0;
+    if (!Array.isArray(choices) || choices.length !== 5 || figurePaths.length - offset <= 0) return '';
     const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
     const rowsPref = String(meta.image_choice_layout?.rows || '').trim();
     const rowCount = rowsPref === '3' ? 3 : 2;
@@ -4616,21 +4664,34 @@ function renderOneQuestion(question, {
     const groups = rowCount === 3
       ? [[0, 1], [2, 3], [4]]
       : [[0, 1, 2], [3, 4]];
+    // 선지별 크기: figure_layout 의 widthEm(매니저앱 "선지 크기" 슬라이더)을 읽어
+    //   기본폭(0.84/0.78\linewidth)에 비례 스케일로 반영한다. 기본 widthEm(15.5)을
+    //   scale 1.0 으로 보고, 0.35~1.0 범위로 제한한다.
+    const choiceWidthScale = (choicePos) => {
+      const key = `idx:${choicePos + offset + 1}`;
+      const item = Array.isArray(layoutItems)
+        ? layoutItems.find((it) => it && it.assetKey === key)
+        : null;
+      const w = item && Number.isFinite(Number(item.widthEm)) ? Number(item.widthEm) : null;
+      if (!w) return 1.0;
+      return Math.max(0.35, Math.min(1.0, w / 15.5));
+    };
     const lines = ['{\\setstretch{1.25}\\parskip=0pt'];
     for (const row of groups) {
       const cellWidth = rowCount === 3 ? 0.47 : 0.31;
-      const imgWidth = rowCount === 3 ? '0.84\\linewidth' : '0.78\\linewidth';
+      const baseImgFrac = rowCount === 3 ? 0.84 : 0.78;
       const cells = Array.from({ length: columnCount }, (_, pos) => {
         const idx = row[pos];
         if (!Number.isInteger(idx)) {
           return `\\begin{minipage}[t]{${cellWidth.toFixed(2)}\\linewidth}\\strut\\end{minipage}`;
         }
-        const p = figurePaths[idx];
+        const p = figurePaths[idx + offset];
         if (!p) return '';
         const normalized = String(p).replace(/\\/g, '/');
         const label = typeof choices[idx] === 'string'
           ? (CIRCLED_DIGITS[idx] || String(idx + 1))
           : (String(choices[idx]?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
+        const imgWidth = `${(baseImgFrac * choiceWidthScale(idx)).toFixed(3)}\\linewidth`;
         const include = `\\includegraphics[width=${imgWidth},keepaspectratio]{${normalized}}`;
         return [
           `\\begin{minipage}[t]{${cellWidth.toFixed(2)}\\linewidth}`,
@@ -5382,7 +5443,7 @@ function renderOneQuestion(question, {
     parts.push(isBlankChoiceQuestion(question)
       ? renderBlankChoicesLatex(question, choices, equations)
       : (isImageChoice
-        ? renderImageChoicesLatex()
+        ? renderImageChoicesLatex(imageChoiceStemFigureCount)
         : renderChoicesLatex(choices, equations, layoutColumns)));
   }
 

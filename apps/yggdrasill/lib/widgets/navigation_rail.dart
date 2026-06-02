@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'app_bar_title.dart'; // for AccountButton
+import '../theme/ygg_semantic_colors.dart';
 
 const double _navIconSize = 26.0;
 const Color _navBackgroundColor = Color(0xFF0B1112);
@@ -24,6 +25,8 @@ class CustomNavigationRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final navBackground =
+        context.yggSurfaceBase;
     // Row 안에서는 가로 제약이 무한대(Infinity)로 들어올 수 있어서,
     // 하단 영역에서 width: double.infinity 를 쓰면 레이아웃이 깨질 수 있다.
     // (navigationRailTheme.minWidth와 동일한 폭으로 고정)
@@ -32,7 +35,7 @@ class CustomNavigationRail extends StatelessWidget {
       children: [
         Expanded(
           child: NavigationRail(
-            backgroundColor: _navBackgroundColor,
+            backgroundColor: navBackground,
             unselectedIconTheme:
                 const IconThemeData(color: _navIconColor, size: _navIconSize),
             selectedIconTheme:
@@ -175,7 +178,7 @@ class CustomNavigationRail extends StatelessWidget {
         SizedBox(
           width: railWidth,
           child: ColoredBox(
-            color: _navBackgroundColor,
+            color: navBackground,
             child: Align(
               alignment: Alignment.center,
               child: AccountButton(

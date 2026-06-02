@@ -809,8 +809,12 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   // meta.figure_count 를 최우선으로 참조해 "이 문항이 HWPX BinData 몇 장을 소비할지"
   // 를 결정한다. stem 의 [그림] 마커 개수를 그대로 저장해 두면, HWPX+PDF 경로에서
   // VLM 이 시각적으로 판별한 그림 개수를 원본 HWPX 이미지에 정확히 나눠줄 수 있다.
+  // 이미지 선지(그림 선지) 문항이 본문 그림까지 함께 가진 경우(예: "그래프가 다음 그림과
+  //   같을 때 … 옳은 것은?" + 그림 선지 5개), 본문 그림(stemFigureMarkerCount)과 선지
+  //   그림(imageChoiceNormalization.count)을 합산해야 HWPX 원본 이미지가 정확히 분배된다.
+  //   stem 그림을 빼고 선지 수만 세면 본문 그림 1장이 누락된다.
   const figureCountForMapping = imageChoiceNormalization.isImageChoice
-    ? Math.max(imageChoiceNormalization.count, figureAssets.length)
+    ? Math.max(imageChoiceNormalization.count + stemFigureMarkerCount, figureAssets.length)
     : stemFigureMarkerCount;
 
   // VLM prompt [S10] 은 각 문항의 배점을 questions[i].score 에 실수 또는 null

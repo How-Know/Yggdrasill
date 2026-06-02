@@ -25,6 +25,7 @@ import '../../services/tenant_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'student_archives_screen.dart';
+import '../../theme/ygg_semantic_colors.dart';
 
 enum SettingType {
   academy,
@@ -83,7 +84,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   static const Color _kSignatureGreen = Color(0xFF33A373);
-  static const Color _kPageBackground = Color(0xFF0B1112);
   static const String _kSystemDefaultPrinterValue = '__system_default__';
 
   SettingType _selectedType = SettingType.academy;
@@ -3252,7 +3252,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Column(
         children: [
           const SizedBox(height: 0),
@@ -3802,7 +3802,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 각 내용 위젯을 배경색 컨테이너로 감싸는 래퍼 추가
   Widget _buildAcademySettingsContainer() {
     return Container(
-      color: _kPageBackground,
+      color: context.yggSurfaceBase,
       child: ScrollConfiguration(
         behavior: const ScrollBehavior(),
         child: Scrollbar(
@@ -3830,7 +3830,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildTeacherSettingsContainer() {
     return Container(
-      color: _kPageBackground,
+      color: context.yggSurfaceBase,
       child: ScrollConfiguration(
         behavior: const ScrollBehavior(),
         child: Scrollbar(
@@ -3858,7 +3858,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildGeneralSettingsContainer() {
     return Container(
-      color: _kPageBackground,
+      color: context.yggSurfaceBase,
       child: ScrollConfiguration(
         behavior: const ScrollBehavior(),
         child: Scrollbar(

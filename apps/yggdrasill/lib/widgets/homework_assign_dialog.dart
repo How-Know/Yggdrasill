@@ -70,6 +70,8 @@ class _CheckRateEntry {
   final String page;
   final String count;
   final DateTime? assignedAt;
+  final DateTime? dueDate;
+  final DateTime? checkedAt;
 
   /// 학생이 자의로 미리 해온 과제(추가검사 마커)인지 여부.
   /// 검사율 합계에서 분자(오늘 추가분)에는 포함하되 분모(남은%)에서는 제외한다.
@@ -83,6 +85,8 @@ class _CheckRateEntry {
     required this.page,
     required this.count,
     required this.assignedAt,
+    this.dueDate,
+    this.checkedAt,
     this.isExtra = false,
   });
 }
@@ -1495,7 +1499,10 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     int currentProgress = 0;
     bool groupHasRegularDue = false;
     bool groupHasPreDone = false;
+    bool groupHasTodayCheckItem = false;
     DateTime? earliestAssigned;
+    DateTime? groupDueDate;
+    DateTime? groupCheckedAt;
     String? firstBookAndCourse;
     for (final hw in children) {
       coveredDueItemIds.add(hw.id);
@@ -1506,40 +1513,58 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           .toList()
         ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
       final preDone = hw.preDoneProgress ?? 0;
-      // 정규 검사예정도, 미리 해온(추가검사) 기록도 없으면 건너뛴다.
-      if (dueAssignments.isEmpty && preDone <= 0) continue;
       final checks = checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
       final hasTodayCheck =
           checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
+      // 포함 조건: ①오늘 정규 검사예정 ②오늘 검사한 기록 존재
+      // (지난 시간 결석분 / 오늘 완료되어 마감정보가 사라진 과제) ③미리 해온(추가검사) 기록.
+      if (dueAssignments.isEmpty && !hasTodayCheck && preDone <= 0) continue;
       final window = _progressWindowForChecks(checks, classDateTime);
+      HomeworkAssignmentBrief? repAssign;
       int itemPrevious;
       int itemCurrent;
+      bool itemIsRegular;
       if (dueAssignments.isNotEmpty) {
         dueCount += dueAssignments.length;
-        if (dueAssignments.any((a) => !a.isSelfExtra)) {
-          groupHasRegularDue = true;
-        }
+        itemIsRegular = dueAssignments.any((a) => !a.isSelfExtra);
         final latestDue = dueAssignments.last;
+        repAssign = latestDue;
         itemPrevious = hasTodayCheck
             ? window.previous
             : math.max(window.previous, latestDue.progress);
         itemCurrent = hasTodayCheck
             ? math.max(window.current, latestDue.progress)
             : itemPrevious;
-        final assignedAt = dueAssignments.first.assignedAt;
-        if (earliestAssigned == null || assignedAt.isBefore(earliestAssigned)) {
-          earliestAssigned = assignedAt;
-        }
+      } else if (hasTodayCheck) {
+        // 오늘 검사는 했지만 오늘 마감이 아닌 과제: 정규 숙제로 본다(분모 포함).
+        groupHasTodayCheckItem = true;
+        itemIsRegular = true;
+        repAssign = latestAssignmentByItem[hw.id];
+        itemPrevious = window.previous;
+        itemCurrent = window.current;
       } else {
-        // 미리 해온 숙제(아직 정식으로 내주지 않은 추가검사분):
-        // 오늘 검사 요약에 "추가분"으로 반영한다(분자에만 포함).
+        // 미리 해온 숙제(아직 정식으로 내주지 않은 추가검사분): 분자에만 포함.
         groupHasPreDone = true;
+        itemIsRegular = false;
+        repAssign = latestAssignmentByItem[hw.id];
         itemPrevious = window.previous;
         itemCurrent = math.max(window.current, preDone);
-        final pAt = hw.preDoneAt;
-        if (pAt != null &&
-            (earliestAssigned == null || pAt.isBefore(earliestAssigned))) {
-          earliestAssigned = pAt;
+      }
+      if (itemIsRegular) groupHasRegularDue = true;
+      // 내준 날짜/마감 날짜: 가장 이른 내준 시점의 대표 assignment 기준.
+      final repAssignedAt = repAssign?.assignedAt ?? hw.preDoneAt;
+      if (repAssignedAt != null &&
+          (earliestAssigned == null ||
+              repAssignedAt.isBefore(earliestAssigned))) {
+        earliestAssigned = repAssignedAt;
+        groupDueDate = repAssign?.dueDate;
+      }
+      // 검사일: 오늘 검사 중 가장 늦은 시각.
+      for (final c in checks) {
+        if (_isSameDay(c.checkedAt, classDateTime)) {
+          if (groupCheckedAt == null || c.checkedAt.isAfter(groupCheckedAt!)) {
+            groupCheckedAt = c.checkedAt;
+          }
         }
       }
       if (itemPrevious > previousProgress) {
@@ -1554,7 +1579,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       if (count != null && count > 0) groupCount += count;
       firstBookAndCourse ??= _formatBookAndCourseFromHomework(hw);
     }
-    if (dueCount <= 0 && !groupHasPreDone) continue;
+    if (dueCount <= 0 && !groupHasPreDone && !groupHasTodayCheckItem) continue;
     final title = group.title.trim().isNotEmpty
         ? group.title.trim()
         : children.first.title.trim();
@@ -1568,6 +1593,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         page: groupPages.isEmpty ? '-' : groupPages.join(', '),
         count: groupCount > 0 ? groupCount.toString() : '-',
         assignedAt: earliestAssigned,
+        dueDate: groupDueDate,
+        checkedAt: groupCheckedAt,
         isExtra: !groupHasRegularDue,
       ),
     );
@@ -1579,8 +1606,14 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
             (a) => a.dueDate != null && _isSameDay(a.dueDate!, classDateTime))
         .toList()
       ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
-    if (dueAssignments.isEmpty) continue;
-    final latest = dueAssignments.last;
+    final checks = checksByItem[entry.key] ?? const <HomeworkAssignmentCheck>[];
+    final hasTodayCheck =
+        checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
+    // 오늘 마감이거나, 오늘 검사한 기록이 있으면 포함.
+    if (dueAssignments.isEmpty && !hasTodayCheck) continue;
+    final HomeworkAssignmentBrief? repAssign = dueAssignments.isNotEmpty
+        ? dueAssignments.last
+        : latestAssignmentByItem[entry.key];
     final hw = HomeworkStore.instance.getById(studentId, entry.key);
     final title =
         (hw?.title.trim().isNotEmpty ?? false) ? hw!.title.trim() : '과제';
@@ -1589,16 +1622,27 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final page = (hw?.page ?? '').trim();
     final hwCount = hw?.count;
     final count = (hwCount != null && hwCount > 0) ? hwCount.toString() : '-';
-    final checks = checksByItem[entry.key] ?? const <HomeworkAssignmentCheck>[];
     final window = _progressWindowForChecks(checks, classDateTime);
-    final hasTodayCheck =
-        checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
+    final int latestDueProgress = dueAssignments.isEmpty
+        ? 0
+        : dueAssignments.last.progress;
     final previousProgress = hasTodayCheck
         ? window.previous
-        : math.max(window.previous, latest.progress);
+        : math.max(window.previous, latestDueProgress);
     final currentProgress = hasTodayCheck
-        ? math.max(window.current, latest.progress)
+        ? math.max(window.current, latestDueProgress)
         : previousProgress;
+    DateTime? checkedAt;
+    for (final c in checks) {
+      if (_isSameDay(c.checkedAt, classDateTime)) {
+        if (checkedAt == null || c.checkedAt.isAfter(checkedAt)) {
+          checkedAt = c.checkedAt;
+        }
+      }
+    }
+    final bool isExtraEntry = dueAssignments.isNotEmpty
+        ? dueAssignments.every((a) => a.isSelfExtra)
+        : false;
     checkRates.add(
       _CheckRateEntry(
         title: title,
@@ -1608,8 +1652,10 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         bookAndCourse: bookAndCourse,
         page: page.isEmpty ? '-' : page,
         count: count,
-        assignedAt: dueAssignments.first.assignedAt,
-        isExtra: dueAssignments.every((a) => a.isSelfExtra),
+        assignedAt: repAssign?.assignedAt,
+        dueDate: repAssign?.dueDate,
+        checkedAt: checkedAt,
+        isExtra: isExtraEntry,
       ),
     );
   }
@@ -2534,8 +2580,10 @@ Future<String> _buildHomeworkTodoPdf({
           brush: subBrush,
           bounds: Rect.fromLTWH(summaryX, csY + 2, summaryW, 13));
     } else {
+      final rightAlign =
+          sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right);
       for (final cr in payload.checkRates) {
-        if (csY + 40 > foldY - 10) break;
+        if (csY + 52 > foldY - 10) break;
         final bookText = cr.bookAndCourse.trim();
         final groupText = cr.title.trim();
         final titleText = (() {
@@ -2546,28 +2594,46 @@ Future<String> _buildHomeworkTodoPdf({
         })();
         final todayPct = cr.todayProgress ?? 0;
         final previousPct = cr.previousProgress ?? 0;
-        final infoText = [
-          _formatPageText(cr.page),
-          _formatCountText(cr.count),
-          if (cr.assignedAt != null) _formatMonthDay(cr.assignedAt!),
+        // 2번째 줄: 페이지(좌) | 문항수 · +퍼센트(우)
+        final line2Left = _formatPageText(cr.page);
+        final line2Right = [
+          if (_formatCountText(cr.count) != '-') _formatCountText(cr.count),
           '+$todayPct%',
         ].join(' · ');
+        // 3번째 줄: 내준 날짜 · 마감 날짜(좌) | 검사일(우)
+        final line3Left = [
+          '내준 ${cr.assignedAt != null ? _formatMonthDay(cr.assignedAt!) : '-'}',
+          '마감 ${cr.dueDate != null ? _formatMonthDay(cr.dueDate!) : '-'}',
+        ].join(' · ');
+        final line3Right =
+            '검사 ${cr.checkedAt != null ? _formatMonthDay(cr.checkedAt!) : '-'}';
         graphics.drawString(titleText, csLine1Font,
             brush: textBrush,
             bounds: Rect.fromLTWH(summaryX, csY, summaryW, 13));
-        graphics.drawString(infoText, csLine2Font,
+        graphics.drawString(line2Left, csLine2Font,
             brush: subBrush,
             bounds: Rect.fromLTWH(summaryX, csY + 14, summaryW, 13));
+        graphics.drawString(line2Right, csLine2Font,
+            brush: subBrush,
+            bounds: Rect.fromLTWH(summaryX, csY + 14, summaryW, 13),
+            format: rightAlign);
+        graphics.drawString(line3Left, csLine2Font,
+            brush: subBrush,
+            bounds: Rect.fromLTWH(summaryX, csY + 27, summaryW, 13));
+        graphics.drawString(line3Right, csLine2Font,
+            brush: subBrush,
+            bounds: Rect.fromLTWH(summaryX, csY + 27, summaryW, 13),
+            format: rightAlign);
         drawPage1ProgressBar(
           x: summaryX,
-          y: csY + 30,
+          y: csY + 42,
           w: summaryW,
           previousPct: previousPct,
           todayPct: todayPct,
         );
-        graphics.drawLine(weakLinePen, Offset(summaryX, csY + 38),
-            Offset(summaryX + summaryW, csY + 38));
-        csY += 43;
+        graphics.drawLine(weakLinePen, Offset(summaryX, csY + 50),
+            Offset(summaryX + summaryW, csY + 50));
+        csY += 55;
       }
     }
   }

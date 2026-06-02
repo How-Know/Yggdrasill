@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../theme/ygg_semantic_colors.dart';
 import '../../../../widgets/navigation_rail.dart';
 import '../../../settings/settings_screen.dart';
 
@@ -58,7 +59,7 @@ class _SettingsBaselinePreviewScreenState
         ),
       ),
       child: Scaffold(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: context.yggSurfaceBase,
         body: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

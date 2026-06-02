@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_screen.dart';
 import 'screens/settings/settings_screen.dart';
+import 'theme/ygg_semantic_colors.dart';
 import 'screens/student/student_screen.dart';
 import 'dart:io';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -1075,6 +1076,9 @@ class _MyAppState extends State<MyApp>
             locale: const Locale('ko', 'KR'), // 기본 로케일을 한국어로 설정
             theme: ThemeData(
               useMaterial3: true,
+              extensions: const <ThemeExtension<dynamic>>[
+                YggSemanticColors(surfaceBase: YggSemanticColors.surfaceBaseDarkDefault),
+              ],
               scaffoldBackgroundColor: const Color(0xFF1F1F1F),
               appBarTheme: const AppBarTheme(
                 toolbarHeight: 80, // 기본 56에서 24px 추가

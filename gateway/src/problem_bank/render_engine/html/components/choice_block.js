@@ -193,9 +193,11 @@ export function renderBlankChoiceContainer(question, choices, mathRenderer, equa
   return `<div class="blank-choice-table" style="--blank-choice-cols:${labels.length + 1};--blank-choice-width-scale:${widthScale};grid-template-columns:${gridColumns};">${header}${rows}</div>`;
 }
 
-export function renderImageChoiceContainer(question, choices, dataUrls) {
+export function renderImageChoiceContainer(question, choices, dataUrls, figureOffset = 0) {
   if (!Array.isArray(choices) || choices.length !== 5) return '';
-  const urls = Array.isArray(dataUrls) ? dataUrls.slice(0, 5) : [];
+  const offset = Number.isInteger(figureOffset) && figureOffset > 0 ? figureOffset : 0;
+  // 본문 그림이 앞쪽 offset 개를 소비했으므로, 선지 이미지는 그 다음부터 5개를 사용한다.
+  const urls = Array.isArray(dataUrls) ? dataUrls.slice(offset, offset + 5) : [];
   if (urls.length === 0) return '';
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const rowsPref = String(meta.image_choice_layout?.rows || '').trim();
@@ -204,14 +206,25 @@ export function renderImageChoiceContainer(question, choices, dataUrls) {
   const groups = rowCount === 3
     ? [choices.slice(0, 2), choices.slice(2, 4), choices.slice(4, 5)]
     : [choices.slice(0, 3), choices.slice(3, 5)];
+  // 선지별 크기(widthEm) → 0.35~1.0 스케일. 기본 widthEm(15.5)을 1.0 으로 본다.
+  const layoutItems = Array.isArray(meta.figure_layout?.items) ? meta.figure_layout.items : [];
+  const choiceWidthScale = (choicePos) => {
+    const key = `idx:${choicePos + offset + 1}`;
+    const item = layoutItems.find((it) => it && it.assetKey === key);
+    const w = item && Number.isFinite(Number(item.widthEm)) ? Number(item.widthEm) : null;
+    if (!w) return 1;
+    return Math.max(0.35, Math.min(1.0, w / 15.5));
+  };
   let cursor = 0;
   const rows = groups.map((rowChoices) => {
     const cells = rowChoices.map((choice) => {
       const url = urls[cursor];
+      const scale = choiceWidthScale(cursor);
       cursor += 1;
       const label = escapeHtml(String(choice?.label || '').trim() || String(cursor));
+      const imgStyle = scale < 0.999 ? ` style="width:${(scale * 100).toFixed(1)}%"` : '';
       const img = url
-        ? `<img class="image-choice-img" src="${url}" />`
+        ? `<img class="image-choice-img" src="${url}"${imgStyle} />`
         : '<span class="image-choice-missing">[그림]</span>';
       return `<div class="image-choice-cell"><span class="choice-label">${label}</span>${img}</div>`;
     }).join('');

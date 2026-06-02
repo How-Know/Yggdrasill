@@ -92,7 +92,12 @@ function mimeTypeFromPath(path) {
 }
 
 function parseBinDataOrder(path) {
-  const m = String(path || '').match(/bin(\d+)\./i);
+  // HWPX BinData 파일명은 `bin0001.png` 뿐 아니라 `image1.PNG`, `image12.BMP` 등
+  //   다양하다. "bin" 접두사만 보던 기존 정규식은 `imageN` 에서 매칭 실패 →
+  //   localeCompare 사전식 정렬(image1, image10, image11, …, image2)로 순서가
+  //   뒤섞여 문서 읽기 순서와 어긋났다. 파일명 끝(확장자 직전)의 숫자를 정렬 키로 쓴다.
+  const name = String(path || '');
+  const m = name.match(/(\d+)\s*\.[a-z0-9]+$/i);
   if (!m) return Number.MAX_SAFE_INTEGER;
   const n = Number.parseInt(m[1] || '', 10);
   return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
@@ -130,6 +135,15 @@ function inferQuestionFigureCount(row) {
   const markerCountFromStem = countFigureMarkersInText(row?.stem || '');
   let markerCount =
     markerCountFromRefs > 0 ? markerCountFromRefs : markerCountFromStem;
+  // 그림 선지(이미지 선지)는 choices[].text 안에 `[그림]` 마커로 들어있고
+  //   stem/figure_refs 에는 잡히지 않는다. 그 결과 stem 카운트만 보면 본문 그림
+  //   1개로 오인해 선지 그림(보통 5개)을 통째로 누락한다. 선지 마커도 합산한다.
+  let markerCountFromChoices = 0;
+  const choices = Array.isArray(row?.choices) ? row.choices : [];
+  for (const choice of choices) {
+    markerCountFromChoices += countFigureMarkersInText(choice?.text);
+  }
+  markerCount += markerCountFromChoices;
   const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
   const metaCount = Number.parseInt(
     String(meta.figure_count ?? meta.figure_marker_count ?? ''),
@@ -666,7 +680,7 @@ async function loadDocumentReferencePack(job) {
 
     const { data: questionRows, error: qErr } = await supa
       .from('pb_questions')
-      .select('id,source_order,figure_refs,stem,meta')
+      .select('id,source_order,figure_refs,stem,choices,meta')
       .eq('academy_id', job.academy_id)
       .eq('document_id', job.document_id)
       .order('source_order', { ascending: true });

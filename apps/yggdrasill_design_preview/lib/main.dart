@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mneme_flutter/screens/design_preview/design_preview_hub_screen.dart'
     as learning_preview;
+import 'package:mneme_flutter/theme/ygg_semantic_colors.dart';
 import 'package:yggdrasill_manager/screens/design_preview/design_preview_hub_screen.dart'
     as manager_preview;
 
@@ -21,6 +22,7 @@ class _YggdrasillDesignPreviewAppState
     extends State<YggdrasillDesignPreviewApp> {
   final FocusNode _focusNode = FocusNode(debugLabel: 'design-preview-root');
   bool _isDarkMode = true;
+  int _darkSurfaceBaseIndex = 2; // surfaceBase Dark 확정: #000000
 
   @override
   void dispose() {
@@ -30,6 +32,26 @@ class _YggdrasillDesignPreviewAppState
 
   void _toggleThemeMode() {
     setState(() => _isDarkMode = !_isDarkMode);
+  }
+
+  void _cycleDarkSurfaceBase() {
+    if (!_isDarkMode) return;
+    setState(() {
+      _darkSurfaceBaseIndex =
+          (_darkSurfaceBaseIndex + 1) %
+          YggSemanticColors.surfaceBaseDarkCandidates.length;
+    });
+  }
+
+  String get _surfaceBaseBannerLabel {
+    if (!_isDarkMode) {
+      return 'surfaceBase ${YggSemanticColors.hex(YggSemanticColors.surfaceBaseLight)} · Space';
+    }
+    final label =
+        YggSemanticColors.surfaceBaseDarkCandidateLabels[_darkSurfaceBaseIndex];
+    final n = _darkSurfaceBaseIndex + 1;
+    final total = YggSemanticColors.surfaceBaseDarkCandidates.length;
+    return 'surfaceBase $label ($n/$total) · Enter · Space';
   }
 
   @override
@@ -45,13 +67,15 @@ class _YggdrasillDesignPreviewAppState
           focusNode: _focusNode,
           autofocus: true,
           onKeyEvent: (event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.space) {
+            if (event is! KeyDownEvent) return;
+            if (event.logicalKey == LogicalKeyboardKey.space) {
               _toggleThemeMode();
+            } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+              _cycleDarkSurfaceBase();
             }
           },
           child: _ThemeModeBanner(
-            isDarkMode: _isDarkMode,
+            label: _surfaceBaseBannerLabel,
             child: child ?? const SizedBox.shrink(),
           ),
         );
@@ -62,21 +86,29 @@ class _YggdrasillDesignPreviewAppState
 
   ThemeData _buildTheme(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
+    final surfaceBase = isDark
+        ? YggSemanticColors.surfaceBaseDarkCandidates[_darkSurfaceBaseIndex]
+        : YggSemanticColors.surfaceBaseLight;
+    final semantic = isDark
+        ? YggSemanticColors.dark(surfaceBase: surfaceBase)
+        : YggSemanticColors.light();
+
     return ThemeData(
-        useMaterial3: true,
+      useMaterial3: true,
+      brightness: brightness,
+      scaffoldBackgroundColor: surfaceBase,
+      extensions: <ThemeExtension<dynamic>>[semantic],
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF33A373),
         brightness: brightness,
-        scaffoldBackgroundColor:
-            isDark ? const Color(0xFF0B1112) : const Color(0xFFF6F8F7),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF33A373),
-          brightness: brightness,
-        ),
-        fontFamily: 'KakaoSmallSans',
-        textTheme: const TextTheme(
-          titleLarge: TextStyle(fontFamily: 'KakaoBigSans'),
-          titleMedium: TextStyle(fontFamily: 'KakaoBigSans'),
-          titleSmall: TextStyle(fontFamily: 'KakaoBigSans'),
-        ),
+        surface: surfaceBase,
+      ),
+      fontFamily: 'KakaoSmallSans',
+      textTheme: const TextTheme(
+        titleLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+        titleMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+        titleSmall: TextStyle(fontFamily: 'KakaoBigSans'),
+      ),
     );
   }
 }
@@ -88,7 +120,7 @@ class _PreviewRootScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: scheme.surface,
+      backgroundColor: context.yggSurfaceBase,
       appBar: AppBar(
         backgroundColor: scheme.surfaceContainerHighest,
         foregroundColor: scheme.onSurface,
@@ -113,7 +145,7 @@ class _PreviewRootScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '스페이스바: 기본모드 / 다크모드 전환',
+              'Space: 라이트/다크 전환 · Enter(다크만): surfaceBase 후보 순환',
               style: TextStyle(color: scheme.primary, fontSize: 13),
             ),
             const SizedBox(height: 24),
@@ -173,7 +205,8 @@ class _PreviewCard extends StatelessWidget {
         side: BorderSide(color: isDark ? _border : scheme.outlineVariant),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         title: Text(
           title,
           style: TextStyle(
@@ -200,11 +233,11 @@ class _PreviewCard extends StatelessWidget {
 }
 
 class _ThemeModeBanner extends StatelessWidget {
-  final bool isDarkMode;
+  final String label;
   final Widget child;
 
   const _ThemeModeBanner({
-    required this.isDarkMode,
+    required this.label,
     required this.child,
   });
 
@@ -227,7 +260,7 @@ class _ThemeModeBanner extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 child: Text(
-                  isDarkMode ? 'Dark Mode · Space' : 'Light Mode · Space',
+                  label,
                   style: TextStyle(
                     color: scheme.onInverseSurface,
                     fontSize: 12,
