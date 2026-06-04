@@ -10,6 +10,7 @@ extern "C" {
 // 외부에서 토글을 사용할 수 있도록 공개 (settings 등에서 참조)
 extern bool g_bottom_sheet_open;
 extern bool g_should_vibrate_phase4;
+extern bool g_should_vibrate_test_end;
 void toggle_bottom_sheet(void);
 
 #ifdef __cplusplus

@@ -31,7 +31,9 @@ import '../../../app_overlays.dart';
 import 'student_promotion_dialog.dart';
 import 'student_notification_consent_dialog.dart';
 import 'package:uuid/uuid.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../services/student_flow_store.dart';
+import '../../../services/tenant_service.dart';
 
 const Color _studentListPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentListMutedTextColor = Color(0xFFCBD8D8);
@@ -2603,6 +2605,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: 12),
+                _StudentPinSection(
+                  studentId: student.id,
+                  studentName: student.name,
+                  outlineColor: outlineColor,
+                  labelStyle: labelStyle,
+                  valueStyle: valueStyle,
+                ),
               ],
             ),
           ),
@@ -3049,4 +3059,413 @@ class _MonthlyPaymentStatus {
     required this.detail,
     required this.color,
   });
+}
+
+/// M5 로그인 PIN을 학생 정보 패널에서 조회·수정할 수 있는 섹션.
+/// 디자인은 상위 정보 섹션(section/infoRow)과 동일한 토큰을 재사용한다.
+class _StudentPinSection extends StatefulWidget {
+  final String studentId;
+  final String studentName;
+  final Color outlineColor;
+  final TextStyle labelStyle;
+  final TextStyle valueStyle;
+
+  const _StudentPinSection({
+    required this.studentId,
+    required this.studentName,
+    required this.outlineColor,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  @override
+  State<_StudentPinSection> createState() => _StudentPinSectionState();
+}
+
+class _StudentPinSectionState extends State<_StudentPinSection> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _academyId;
+
+  bool _pinRequired = false;
+  bool _pinSet = false;
+  String? _pin;
+  bool _locked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final res = await Supabase.instance.client.rpc(
+        'm5_admin_get_student_pin',
+        params: {
+          'p_academy_id': academyId,
+          'p_student_id': widget.studentId,
+        },
+      );
+      final map = (res is Map) ? res : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() {
+        _academyId = academyId;
+        _pinRequired = map['pin_required'] == true;
+        _pinSet = map['pin_set'] == true;
+        _pin = (map['pin'] as String?)?.trim();
+        _locked = map['locked'] == true;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _editPin() async {
+    final academyId = _academyId;
+    if (academyId == null || _busy) return;
+    final newPin = await showDialog<String>(
+      context: context,
+      builder: (_) => _StudentPinEditDialog(
+        studentName: widget.studentName,
+        initialPin: _pin,
+      ),
+    );
+    if (newPin == null || newPin.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'm5_admin_set_student_pin',
+        params: {
+          'p_academy_id': academyId,
+          'p_student_id': widget.studentId,
+          'p_pin': newPin,
+        },
+      );
+      final ok = (res is Map) && res['ok'] == true;
+      if (!mounted) return;
+      if (ok) {
+        showAppSnackBar(context, 'PIN이 저장되었습니다.', useRoot: true);
+        await _load();
+      } else {
+        showAppSnackBar(context, 'PIN 저장에 실패했습니다.', useRoot: true);
+      }
+    } catch (_) {
+      if (mounted) showAppSnackBar(context, 'PIN 저장 중 오류가 발생했습니다.', useRoot: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _clearPin() async {
+    final academyId = _academyId;
+    if (academyId == null || _busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: kDlgBorder),
+        ),
+        title: const Text('PIN 해제', style: TextStyle(color: kDlgText)),
+        content: Text(
+          '${widget.studentName} 학생의 PIN을 해제하면, M5 기기에서 PIN 없이 바로 로그인할 수 있게 됩니다.',
+          style: const TextStyle(color: kDlgTextSub, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소', style: TextStyle(color: kDlgTextSub)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('해제', style: TextStyle(color: Color(0xFFE57373))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'm5_admin_clear_student_pin',
+        params: {
+          'p_academy_id': academyId,
+          'p_student_id': widget.studentId,
+        },
+      );
+      final ok = (res is Map) && res['ok'] == true;
+      if (!mounted) return;
+      if (ok) {
+        showAppSnackBar(context, 'PIN이 해제되었습니다.', useRoot: true);
+        await _load();
+      } else {
+        showAppSnackBar(context, 'PIN 해제에 실패했습니다.', useRoot: true);
+      }
+    } catch (_) {
+      if (mounted) showAppSnackBar(context, 'PIN 해제 중 오류가 발생했습니다.', useRoot: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String valueText;
+    Color valueColor = widget.valueStyle.color ?? const Color(0xFFEAF2F2);
+    if (_loading) {
+      valueText = '불러오는 중…';
+      valueColor = const Color(0xFF9FB3B3);
+    } else if (!_pinRequired) {
+      valueText = '미설정 (PIN 없이 바로 로그인)';
+      valueColor = const Color(0xFF9FB3B3);
+    } else if (_pin != null && _pin!.isNotEmpty) {
+      valueText = _pin!;
+      valueColor = const Color(0xFF33A373);
+    } else if (_pinSet) {
+      valueText = '설정됨 (학생이 지정)';
+      valueColor = const Color(0xFFEAF2F2);
+    } else {
+      valueText = '대기 (첫 로그인 시 설정)';
+      valueColor = const Color(0xFFF2B45B);
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1112),
+        borderRadius: BorderRadius.circular(14),
+        border:
+            Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.password_outlined,
+                  size: 18, color: Color(0xFFB9C8C8)),
+              const SizedBox(width: 8),
+              const Text(
+                'M5 로그인 PIN',
+                style: TextStyle(
+                  color: _studentListPrimaryTextColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (_locked)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                        color: const Color(0xFFE57373).withOpacity(0.6)),
+                  ),
+                  child: const Text(
+                    '잠김',
+                    style: TextStyle(
+                        color: Color(0xFFE57373),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text('현재 PIN', style: widget.labelStyle),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    valueText,
+                    textAlign: TextAlign.right,
+                    style: widget.valueStyle.copyWith(
+                      color: valueColor,
+                      fontSize:
+                          (_pinRequired && _pin != null && _pin!.isNotEmpty)
+                              ? 18
+                              : 15,
+                      letterSpacing:
+                          (_pinRequired && _pin != null && _pin!.isNotEmpty)
+                              ? 3
+                              : 0,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed:
+                      (_loading || _busy || _academyId == null) ? null : _editPin,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF33A373),
+                    side: const BorderSide(color: Color(0xFF33A373)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    textStyle: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: Text(_pinRequired ? 'PIN 수정' : 'PIN 설정'),
+                ),
+              ),
+              if (_pinRequired) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: (_loading || _busy || _academyId == null)
+                        ? null
+                        : _clearPin,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF9FB3B3),
+                      side: const BorderSide(color: Color(0xFF4D5A5A)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      textStyle: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700),
+                    ),
+                    icon: const Icon(Icons.lock_open_outlined, size: 18),
+                    label: const Text('해제'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 선생님이 학생 PIN(4~8자리 숫자)을 직접 입력하는 다이얼로그.
+class _StudentPinEditDialog extends StatefulWidget {
+  final String studentName;
+  final String? initialPin;
+
+  const _StudentPinEditDialog({
+    required this.studentName,
+    this.initialPin,
+  });
+
+  @override
+  State<_StudentPinEditDialog> createState() => _StudentPinEditDialogState();
+}
+
+class _StudentPinEditDialogState extends State<_StudentPinEditDialog> {
+  late final TextEditingController _controller;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialPin ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final pin = _controller.text.trim();
+    if (!RegExp(r'^[0-9]{4,8}$').hasMatch(pin)) {
+      setState(() => _error = '4~8자리 숫자로 입력하세요.');
+      return;
+    }
+    Navigator.of(context).pop(pin);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: const BorderSide(color: kDlgBorder),
+      ),
+      title: Text(
+        '${widget.studentName} PIN ${widget.initialPin == null ? '설정' : '수정'}',
+        style: const TextStyle(
+            color: kDlgText, fontSize: 17, fontWeight: FontWeight.w700),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '4~8자리 숫자를 입력하세요.',
+            style: TextStyle(color: kDlgTextSub, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            obscureText: false,
+            maxLength: 8,
+            style: const TextStyle(
+                color: kDlgText,
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 6),
+            textAlign: TextAlign.center,
+            cursorColor: kDlgAccent,
+            onSubmitted: (_) => _submit(),
+            decoration: InputDecoration(
+              counterText: '',
+              filled: true,
+              fillColor: kDlgFieldBg,
+              errorText: _error,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kDlgBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kDlgAccent, width: 2),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소', style: TextStyle(color: kDlgTextSub)),
+        ),
+        TextButton(
+          onPressed: _submit,
+          child: const Text('저장',
+              style: TextStyle(color: kDlgAccent, fontWeight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
 }

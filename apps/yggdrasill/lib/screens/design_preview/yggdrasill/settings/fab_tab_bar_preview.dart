@@ -97,7 +97,7 @@ class FabTabBarTokens {
   /// Preview — 학원정보 탭 Pretendard (`Pretendard-Bold.otf` 등록)
   static const String previewHeadlineFontFamily = 'Pretendard';
   static const FontWeight previewHeadlineFontWeight = FontWeight.w700;
-  static const FontWeight previewAcademyRowLabelFontWeight = FontWeight.w300;
+  static const FontWeight previewAcademyRowLabelFontWeight = FontWeight.w400;
 
   static TextStyle previewPageTitleStyle(PreviewAcademyPanelStyle style) {
     return TextStyle(
@@ -386,47 +386,74 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: FabTabBarTokens.previewRowValueStyle(style),
                     );
-                final tappableValue = row.onTap != null
-                    ? Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: row.onTap,
-                          child: valueArea,
-                        ),
-                      )
-                    : valueArea;
 
-                return Material(
-                  color: Colors.transparent,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: FabTabBarTokens
-                          .previewAcademyGroupedRowPaddingHorizontal,
-                      vertical: FabTabBarTokens
-                          .previewAcademyGroupedRowPaddingVertical,
-                    ),
-                    child: Row(
-                      children: [
-                        Text(
-                          row.label,
-                          style: FabTabBarTokens.previewRowLabelStyle(style),
+                final rowBody = Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: FabTabBarTokens
+                        .previewAcademyGroupedRowPaddingHorizontal,
+                    vertical: FabTabBarTokens
+                        .previewAcademyGroupedRowPaddingVertical,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            row.label,
+                            style: FabTabBarTokens.previewRowLabelStyle(style),
+                          ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(child: tappableValue),
-                        if (row.trailing != null) ...[
-                          const SizedBox(width: 8),
-                          row.trailing!,
-                        ] else if (row.showChevron) ...[
-                          const SizedBox(width: 4),
-                          Icon(
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: row.onTap != null && row.trailing != null
+                            ? Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: row.onTap,
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: valueArea,
+                                  ),
+                                ),
+                              )
+                            : Align(
+                                alignment: Alignment.centerRight,
+                                child: valueArea,
+                              ),
+                      ),
+                      if (row.trailing != null) ...[
+                        const SizedBox(width: 8),
+                        Center(child: row.trailing!),
+                      ] else if (row.showChevron) ...[
+                        const SizedBox(width: 4),
+                        Center(
+                          child: Icon(
                             Icons.chevron_right,
                             size: FabTabBarTokens.previewAcademyChevronSize,
                             color: style.chevron,
                           ),
-                        ],
+                        ),
                       ],
-                    ),
+                    ],
                   ),
+                );
+
+                if (row.onTap != null && row.trailing == null) {
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: row.onTap,
+                      child: rowBody,
+                    ),
+                  );
+                }
+
+                return Material(
+                  color: Colors.transparent,
+                  child: rowBody,
                 );
               },
             ),

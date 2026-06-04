@@ -1627,7 +1627,7 @@ String _gradingNormalizeLocalPath(String path) {
   return uri.toFilePath(windows: Platform.isWindows);
 }
 
-class _SubmittedHomeworkCard extends StatelessWidget {
+class _SubmittedHomeworkCard extends StatefulWidget {
   final _GradingGroupEntry entry;
   final double cardHeight;
   final double metaHeight;
@@ -1645,6 +1645,34 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     this.isPendingConfirm = false,
     this.isCompleteCheckbox = false,
   });
+
+  @override
+  State<_SubmittedHomeworkCard> createState() => _SubmittedHomeworkCardState();
+}
+
+class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
+  bool _opening = false;
+
+  _GradingGroupEntry get entry => widget.entry;
+  double get cardHeight => widget.cardHeight;
+  double get metaHeight => widget.metaHeight;
+  Future<String?> get coverPathFuture => widget.coverPathFuture;
+  Future<void> Function()? get onTap => widget.onTap;
+  bool get isPendingConfirm => widget.isPendingConfirm;
+  bool get isCompleteCheckbox => widget.isCompleteCheckbox;
+
+  Future<void> _handleTap() async {
+    final action = onTap;
+    if (action == null || _opening) return;
+    setState(() => _opening = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) {
+        setState(() => _opening = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1810,6 +1838,24 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                if (_opening)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        color: const Color(0x990B1112),
+                        child: Center(
+                          child: SizedBox(
+                            width: (34.0 * scale).clamp(24.0, 38.0),
+                            height: (34.0 * scale).clamp(24.0, 38.0),
+                            child: const CircularProgressIndicator(
+                              strokeWidth: 2.6,
+                              color: kDlgAccent,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             );
           },
@@ -1819,12 +1865,10 @@ class _SubmittedHomeworkCard extends StatelessWidget {
 
     if (onTap == null) return card;
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: _opening ? SystemMouseCursors.basic : SystemMouseCursors.click,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () {
-          unawaited(onTap!());
-        },
+        onTap: _opening ? null : () => unawaited(_handleTap()),
         child: card,
       ),
     );

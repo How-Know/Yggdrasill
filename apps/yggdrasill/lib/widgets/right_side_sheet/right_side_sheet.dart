@@ -2724,11 +2724,13 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final Color borderColor;
   final double answerSlotHeight;
   final bool hasSourceInfo;
-  final VoidCallback onOpenSolution;
+  final Future<void> Function() onOpenSolution;
   final VoidCallback onReportIssue;
   final VoidCallback onToggleState;
   final VoidCallback onShowSourceInfo;
   final Widget answerChild;
+  final bool solutionOpening;
+  final bool solutionOpenBlocked;
 
   const _RightSheetAnswerListRow({
     required this.questionLabel,
@@ -2746,6 +2748,8 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     required this.onToggleState,
     required this.onShowSourceInfo,
     required this.answerChild,
+    this.solutionOpening = false,
+    this.solutionOpenBlocked = false,
   });
 
   @override
@@ -2803,6 +2807,12 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
     widget.onShowSourceInfo();
   }
 
+  Future<void> _openSolution() async {
+    if (widget.solutionOpenBlocked) return;
+    _close();
+    await widget.onOpenSolution();
+  }
+
   @override
   void dispose() {
     _ctrl.dispose();
@@ -2819,27 +2829,40 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
         : '수정';
 
     Widget questionButton() {
+      final busy = widget.solutionOpening;
       return Tooltip(
-        message: '$questionLabel번 해설 PDF로 이동',
+        message:
+            busy ? '$questionLabel번 해설 PDF 여는 중' : '$questionLabel번 해설 PDF로 이동',
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
-          onTap: widget.onOpenSolution,
-          onLongPress: widget.onReportIssue,
+          onTap: widget.solutionOpenBlocked
+              ? null
+              : () => unawaited(_openSolution()),
+          onLongPress: widget.solutionOpenBlocked ? null : widget.onReportIssue,
           child: SizedBox(
             width: 56,
             height: 44,
             child: Center(
-              child: Text(
-                questionLabel,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF9FB3B3),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
-                  height: 1.0,
-                  letterSpacing: -0.2,
-                ),
-              ),
+              child: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: _rsAccent,
+                      ),
+                    )
+                  : Text(
+                      questionLabel,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFF9FB3B3),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        height: 1.0,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
             ),
           ),
         ),
@@ -3043,6 +3066,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   bool _editResetBusy = false;
   bool _actionBusy = false;
   bool _answerPdfOpening = false;
+  String _openingSolutionCellKey = '';
   int _pdfFocusRequestSeq = 0;
   String _autoOpenedAnswerSessionId = '';
   Map<String, LearningProblemAnswerRender> _answerRenders =
@@ -5307,6 +5331,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _RightSheetGradingCellVm cell, {
     required int pageNumber,
   }) async {
+    if (_answerPdfOpening || _openingSolutionCellKey.isNotEmpty) return;
     final session = widget.session;
     if (session == null) return;
     final hasSolutionSource = cell.solutionPathRaw.trim().isNotEmpty ||
@@ -5319,18 +5344,27 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       await _showNoLinkedSolutionDialog(cell);
       return;
     }
-    await _openSessionAnswerSheet(
-      session,
-      initialShowSolution: true,
-      focusPageNumber: cell.solutionPageNumber ?? pageNumber,
-      focusRect1k: cell.solutionRect1k.length >= 4
-          ? cell.solutionRect1k
-          : cell.focusRect1k,
-      answerPathRawOverride: cell.answerPathRaw,
-      solutionPathRawOverride: cell.solutionPathRaw,
-      preferSolutionRawAsBase:
-          cell.answerPathRaw.trim().isEmpty && cell.solutionPathRaw.isNotEmpty,
-    );
+    if (mounted) {
+      setState(() => _openingSolutionCellKey = cell.key);
+    }
+    try {
+      await _openSessionAnswerSheet(
+        session,
+        initialShowSolution: true,
+        focusPageNumber: cell.solutionPageNumber ?? pageNumber,
+        focusRect1k: cell.solutionRect1k.length >= 4
+            ? cell.solutionRect1k
+            : cell.focusRect1k,
+        answerPathRawOverride: cell.answerPathRaw,
+        solutionPathRawOverride: cell.solutionPathRaw,
+        preferSolutionRawAsBase: cell.answerPathRaw.trim().isEmpty &&
+            cell.solutionPathRaw.isNotEmpty,
+      );
+    } finally {
+      if (mounted && _openingSolutionCellKey == cell.key) {
+        setState(() => _openingSolutionCellKey = '');
+      }
+    }
   }
 
   Future<void> _showNoLinkedSolutionDialog(
@@ -6188,9 +6222,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       borderColor: colors.border,
       answerSlotHeight: answerSlotHeight,
       hasSourceInfo: cell.sourceInfo.isNotEmpty,
-      onOpenSolution: () => unawaited(
-        _openCellSolution(cell, pageNumber: pageNumber),
-      ),
+      solutionOpening: _openingSolutionCellKey == cell.key,
+      solutionOpenBlocked:
+          _answerPdfOpening || _openingSolutionCellKey.isNotEmpty,
+      onOpenSolution: () => _openCellSolution(cell, pageNumber: pageNumber),
       onReportIssue: () => unawaited(_openQuestionIssueReportDialog(cell)),
       onToggleState: () => unawaited(_toggleCellState(cell.key)),
       onShowSourceInfo: () => unawaited(_openQuestionSourceInfoDialog(cell)),

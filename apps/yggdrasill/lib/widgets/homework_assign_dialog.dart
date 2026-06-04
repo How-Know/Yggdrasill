@@ -1682,6 +1682,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   );
 
   final classWorkEntries = <_ClassWorkEntry>[];
+  final coveredDonutItemIds = <String>{};
   final donutGroups = HomeworkStore.instance.groups(studentId);
   for (final group in donutGroups) {
     final children = HomeworkStore.instance
@@ -1695,6 +1696,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final groupPages = <String>[];
     String? firstBookAndCourse;
     for (final hw in children) {
+      coveredDonutItemIds.add(hw.id);
       final studyMs = todayLearningMsByItem[hw.id] ?? 0;
       if (studyMs > groupStudyMs) groupStudyMs = studyMs;
       if (_hasTodayHomeworkActivity(hw, classDateTime) || studyMs > 0)
@@ -1739,6 +1741,85 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       ),
     );
   }
+
+  // 완료되어 그룹 링크가 사라진 과제라도, 오늘 수행시간이 있으면 수업 요약에 반영한다.
+  // (총 학습시간 합계는 이미 이런 과제를 포함하므로, 도넛 세그먼트/요약 줄과 일치시킨다.)
+  final donutLeftoverCompleted = HomeworkStore.instance
+      .items(studentId)
+      .where((e) =>
+          e.completedAt != null &&
+          _isSameDay(e.completedAt!, classDateTime) &&
+          !coveredDonutItemIds.contains(e.id) &&
+          (todayLearningMsByItem[e.id] ?? 0) > 0)
+      .toList(growable: false);
+  if (donutLeftoverCompleted.isNotEmpty) {
+    final allGroupsForLeftover = HomeworkStore.instance.groups(studentId);
+    final leftoverByGroupKey = <String, List<HomeworkItem>>{};
+    for (final hw in donutLeftoverCompleted) {
+      String? matchedGroupId;
+      for (final g in allGroupsForLeftover) {
+        final ch = HomeworkStore.instance
+            .itemsInGroup(studentId, g.id, includeCompleted: true);
+        if (ch.any((c) => c.id == hw.id)) {
+          matchedGroupId = g.id;
+          break;
+        }
+      }
+      final key = matchedGroupId ?? hw.id;
+      leftoverByGroupKey.putIfAbsent(key, () => <HomeworkItem>[]).add(hw);
+    }
+    for (final entry in leftoverByGroupKey.entries) {
+      final items = entry.value;
+      int groupStudyMs = 0;
+      int groupCheckCount = 0;
+      int groupTotalCount = 0;
+      DateTime? earliestAssigned;
+      final groupPages = <String>[];
+      String? firstBookAndCourse;
+      final subs = <_SubWorkEntry>[];
+      for (final hw in items) {
+        final studyMs = todayLearningMsByItem[hw.id] ?? 0;
+        if (studyMs > groupStudyMs) groupStudyMs = studyMs;
+        groupCheckCount += (checksByItem[hw.id] ?? const [])
+            .where((c) => _isSameDay(c.checkedAt, classDateTime))
+            .length;
+        final hwCount = hw.count;
+        if (hwCount != null && hwCount > 0) groupTotalCount += hwCount;
+        final p = (hw.page ?? '').trim();
+        if (p.isNotEmpty) groupPages.add(p);
+        firstBookAndCourse ??= _formatBookAndCourseFromHomework(hw);
+        final assignedAt = latestAssignmentByItem[hw.id]?.assignedAt;
+        if (assignedAt != null &&
+            (earliestAssigned == null ||
+                assignedAt.isBefore(earliestAssigned))) {
+          earliestAssigned = assignedAt;
+        }
+        final t = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
+        final ct =
+            (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
+        subs.add(
+            _SubWorkEntry(title: t, page: p.isEmpty ? '-' : p, count: ct));
+      }
+      if (groupStudyMs <= 0) continue;
+      final groupObj = HomeworkStore.instance.groupById(studentId, entry.key);
+      final groupTitle = groupObj != null && groupObj.title.trim().isNotEmpty
+          ? groupObj.title.trim()
+          : items.first.title.trim();
+      classWorkEntries.add(
+        _ClassWorkEntry(
+          title: groupTitle,
+          bookAndCourse: firstBookAndCourse ?? '',
+          page: groupPages.isEmpty ? '-' : groupPages.join(', '),
+          count: groupTotalCount > 0 ? groupTotalCount.toString() : '-',
+          assignedAt: earliestAssigned,
+          studyMs: groupStudyMs,
+          todayCheckCount: groupCheckCount,
+          subEntries: subs,
+        ),
+      );
+    }
+  }
+
   classWorkEntries.sort((a, b) {
     final left = a.assignedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
     final right = b.assignedAt ?? DateTime.fromMillisecondsSinceEpoch(0);

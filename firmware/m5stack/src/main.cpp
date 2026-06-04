@@ -75,6 +75,20 @@ static portMUX_TYPE g_hw_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool g_hw_pending = false;
 static String g_hw_pending_json;
 
+// Deferred UI work from MQTT (async-tcp) task -> executed in loop() (LVGL thread).
+// LVGL is not thread-safe; building UI directly in the MQTT callback races with
+// lv_timer_handler() and can overflow the async-tcp stack, causing freeze/reset.
+static volatile bool g_bind_ack_pending = false;
+static bool g_bind_ack_ok = false;
+static char g_bind_ack_reason[32] = {0};
+static int g_bind_ack_attempts_left = -1;
+static int g_bind_ack_locked_seconds = -1;
+static volatile bool g_students_pending = false;
+static String g_students_pending_json;
+static volatile bool g_student_info_pending = false;
+static String g_student_info_pending_json;
+static volatile bool g_force_unbind_pending = false;
+
 // GROUP_CMD_V2 (server-authoritative group transition) states
 static const char* GROUP_CMD_V2_TARGET_DEVICE = "m5-device-001";
 static const uint32_t GROUP_CMD_V2_ACK_TIMEOUT_MS = 2500;
@@ -437,7 +451,15 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
           const char* reason = ackDoc["reason"] | "";
           int attempts_left = ackDoc["attempts_left"] | -1;
           int locked_seconds = ackDoc["locked_seconds"] | -1;
-          ui_port_on_bind_ack(ok, reason, attempts_left, locked_seconds);
+          // Defer UI work to loop() (LVGL thread) — see g_bind_ack_pending notes.
+          portENTER_CRITICAL(&g_hw_mux);
+          g_bind_ack_ok = ok;
+          strncpy(g_bind_ack_reason, reason ? reason : "", sizeof(g_bind_ack_reason) - 1);
+          g_bind_ack_reason[sizeof(g_bind_ack_reason) - 1] = '\0';
+          g_bind_ack_attempts_left = attempts_left;
+          g_bind_ack_locked_seconds = locked_seconds;
+          g_bind_ack_pending = true;
+          portEXIT_CRITICAL(&g_hw_mux);
         }
       }
     }
@@ -450,22 +472,12 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     received += len;
     Serial.printf("students_today chunk: idx=%u len=%u total=%u recv=%u\n", (unsigned)index, (unsigned)len, (unsigned)total, (unsigned)received);
     if (total && received < total) { return; }
-    // parse when complete
-    DynamicJsonDocument doc(expected + 2048);
-    DeserializationError err = deserializeJson(doc, acc.c_str(), acc.length());
-    if (err) { Serial.print("students_today parse error: "); Serial.println(err.c_str()); return; }
-    JsonArray arr;
-    if (doc.containsKey("students") && doc["students"].is<JsonArray>()) {
-      arr = doc["students"].as<JsonArray>();
-    } else if (doc.is<JsonArray>()) {
-      arr = doc.as<JsonArray>();
-    } else if (doc.containsKey("items") && doc["items"].is<JsonArray>()) {
-      arr = doc["items"].as<JsonArray>();
-    } else if (doc.containsKey("data") && doc["data"].is<JsonArray>()) {
-      arr = doc["data"].as<JsonArray>();
-    }
-    Serial.print("students_today count="); Serial.println((int)arr.size());
-    ui_port_update_students(arr);
+    // Defer parse + UI render to loop() (LVGL thread).
+    portENTER_CRITICAL(&g_hw_mux);
+    g_students_pending_json = acc;
+    g_students_pending = true;
+    portEXIT_CRITICAL(&g_hw_mux);
+    acc.remove(0);
   }
   if (t == homeworksTopic) {
     static String hw_acc; static size_t hw_expected = 0; static size_t hw_received = 0;
@@ -492,17 +504,20 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   }
   if (t == studentInfoTopic) {
     g_last_mqtt_rx_student_info_ms = nowMs;
-    DynamicJsonDocument doc(1024);
-    DeserializationError err = deserializeJson(doc, payload, len);
-    if (!err && doc.containsKey("info")) {
-      JsonObject info = doc["info"].as<JsonObject>();
-      ui_port_update_student_info(info);
-    }
+    // Defer parse + UI render to loop() (LVGL thread).
+    String body; body.reserve(len + 1);
+    for (size_t i = 0; i < len; ++i) body += (char)payload[i];
+    portENTER_CRITICAL(&g_hw_mux);
+    g_student_info_pending_json = body;
+    g_student_info_pending = true;
+    portEXIT_CRITICAL(&g_hw_mux);
   }
   if (t == unboundTopic) {
     Serial.println("[MQTT] unbound received – returning to student list");
-    fw_clear_local_binding_state();
-    ui_port_force_unbind();
+    // Defer local-state clear + UI unbind to loop() (LVGL thread).
+    portENTER_CRITICAL(&g_hw_mux);
+    g_force_unbind_pending = true;
+    portEXIT_CRITICAL(&g_hw_mux);
   }
 }
 
@@ -927,6 +942,74 @@ void loop() {
     }
   }
 
+  // Deferred UI work from MQTT (async-tcp) task, run here on the LVGL thread.
+  if (g_bind_ack_pending) {
+    bool ok; char reason[sizeof(g_bind_ack_reason)]; int attemptsLeft; int lockedSeconds;
+    portENTER_CRITICAL(&g_hw_mux);
+    ok = g_bind_ack_ok;
+    strncpy(reason, g_bind_ack_reason, sizeof(reason));
+    reason[sizeof(reason) - 1] = '\0';
+    attemptsLeft = g_bind_ack_attempts_left;
+    lockedSeconds = g_bind_ack_locked_seconds;
+    g_bind_ack_pending = false;
+    portEXIT_CRITICAL(&g_hw_mux);
+    ui_port_on_bind_ack(ok, reason, attemptsLeft, lockedSeconds);
+  }
+
+  if (g_students_pending) {
+    String json_copy;
+    portENTER_CRITICAL(&g_hw_mux);
+    json_copy = g_students_pending_json;
+    g_students_pending_json.remove(0);
+    g_students_pending = false;
+    portEXIT_CRITICAL(&g_hw_mux);
+    if (json_copy.length() > 0) {
+      DynamicJsonDocument doc(json_copy.length() + 2048);
+      DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
+      if (err) {
+        Serial.print("students_today parse error: "); Serial.println(err.c_str());
+      } else {
+        JsonArray arr;
+        if (doc.containsKey("students") && doc["students"].is<JsonArray>()) {
+          arr = doc["students"].as<JsonArray>();
+        } else if (doc.is<JsonArray>()) {
+          arr = doc.as<JsonArray>();
+        } else if (doc.containsKey("items") && doc["items"].is<JsonArray>()) {
+          arr = doc["items"].as<JsonArray>();
+        } else if (doc.containsKey("data") && doc["data"].is<JsonArray>()) {
+          arr = doc["data"].as<JsonArray>();
+        }
+        Serial.print("students_today count="); Serial.println((int)arr.size());
+        ui_port_update_students(arr);
+      }
+    }
+  }
+
+  if (g_student_info_pending) {
+    String json_copy;
+    portENTER_CRITICAL(&g_hw_mux);
+    json_copy = g_student_info_pending_json;
+    g_student_info_pending_json.remove(0);
+    g_student_info_pending = false;
+    portEXIT_CRITICAL(&g_hw_mux);
+    if (json_copy.length() > 0) {
+      DynamicJsonDocument doc(json_copy.length() + 1024);
+      DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
+      if (!err && doc.containsKey("info")) {
+        JsonObject info = doc["info"].as<JsonObject>();
+        ui_port_update_student_info(info);
+      }
+    }
+  }
+
+  if (g_force_unbind_pending) {
+    portENTER_CRITICAL(&g_hw_mux);
+    g_force_unbind_pending = false;
+    portEXIT_CRITICAL(&g_hw_mux);
+    fw_clear_local_binding_state();
+    ui_port_force_unbind();
+  }
+
   lv_timer_handler();
   screensaver_poll();
   screensaver_check_shake();
@@ -934,7 +1017,7 @@ void loop() {
   // Safe vibration handling (3 second interval) using PMIC vibration (LDO3/DLDO1)
   static uint32_t lastVibMs = 0;
   // 주기 20% 감소: 3000ms -> 2400ms
-  if (g_should_vibrate_phase4 && nowTick - lastVibMs >= 2400) {
+  if ((g_should_vibrate_phase4 || g_should_vibrate_test_end) && nowTick - lastVibMs >= 2400) {
     Serial.println("[VIB] setVibration: pulse start");
     screensaver_dismiss();
     M5.Power.setVibration(140);

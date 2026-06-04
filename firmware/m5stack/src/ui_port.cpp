@@ -137,6 +137,9 @@ static uint32_t s_test_perform_epoch = 0;
 static int s_test_perform_group_idx = -1;
 static char s_test_perform_group_id[40] = {0};
 static int s_test_perform_tlim_sec = 0;
+// 시험 종료(제한시간 소진) 알람 다이얼로그 상태
+static lv_obj_t* s_test_end_popup = nullptr;
+static bool s_test_end_triggered = false;
 static int s_tp_cycle_baseline_sec = 0;
 static uint32_t s_tp_run_start_tick = 0;
 static bool s_tp_running = false;
@@ -238,6 +241,12 @@ static inline bool hw_is_test_group(const HwGroupData& g) {
   // 신규 테스트는 type='프린트'+테스트 플로우로 저장되므로 서버 플래그(is_test) 우선.
   // 레거시 데이터 호환을 위해 type=='테스트'도 함께 인정.
   return g.is_test || strcmp(g.item_type, u8"테스트") == 0;
+}
+
+// 테스트 속성은 첫 수행에만 적용된다. 한 번 사이클을 돈(확인 완료, check_count>0)
+// 그룹은 학습앱과 동일하게 일반 과제로 강등되어 테스트 전용 수행화면/카운트다운을 쓰지 않는다.
+static inline bool hw_should_treat_as_test(const HwGroupData& g) {
+  return hw_is_test_group(g) && g.check_count <= 0;
 }
 
 // 그룹 내 자식 항목 변화(페이즈·문항·누적 등)까지 need_full 에 반영
@@ -387,6 +396,7 @@ static void hw_global_timer_cb(lv_timer_t* timer) {
 
 bool g_bottom_sheet_open = false;
 bool g_should_vibrate_phase4 = false;
+bool g_should_vibrate_test_end = false;
 
 static lv_obj_t* s_snackbar = nullptr;
 static lv_obj_t* s_snackbar_lbl = nullptr;
@@ -584,6 +594,8 @@ static void close_homework_detail_page(void);
 static void show_homework_detail_page(int group_idx);
 static void show_test_perform_screen(int group_idx);
 static void close_test_perform_screen(void);
+static void show_test_end_popup(void);
+static void close_test_end_popup(void);
 static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_idx);
 static void show_entry_hub_overlay(void);
 static void close_student_info_screen(bool show_entry_hub);
@@ -3769,7 +3781,7 @@ static void hw_perform_card_action(int group_idx) {
   HwGroupData& g = s_groups[group_idx];
   const int phase = g.phase;
   if (phase == 1) {
-    if (hw_is_test_group(g)) {
+    if (hw_should_treat_as_test(g)) {
       show_test_start_confirm_popup(group_idx);
     } else {
       if (!fw_publish_group_transition(g.group_id, 1)) return;
@@ -3780,7 +3792,7 @@ static void hw_perform_card_action(int group_idx) {
       update_detail_play_button_visual();
     }
   } else if (phase == 2) {
-    if (hw_is_test_group(g)) {
+    if (hw_should_treat_as_test(g)) {
       show_test_perform_screen(group_idx);
     } else {
       show_homework_detail_page(group_idx);
@@ -3938,7 +3950,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
   lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(card, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-  const bool is_test_card = hw_is_test_group(g);
+  const bool is_test_card = hw_should_treat_as_test(g);
 
   // 1열 좌: 내신기출/교재명; 테스트(비내신)는 「테스트」(24pt). 연결 교재 없으면 비어있을 수 있음.
   lv_obj_t* title_lbl = lv_label_create(card);
@@ -4561,7 +4573,7 @@ static void hw_detail_paint_time(lv_obj_t* const* slots, int secs,
 }
 
 static bool detail_test_effective_running(const HwGroupData& g) {
-  if (!hw_is_test_group(g)) return false;
+  if (!hw_should_treat_as_test(g)) return false;
   bool server_running = hw_server_running_group(g);
   bool effective_running = server_running || s_detail_playing;
   if (millis() < s_detail_manual_override_until_ms) {
@@ -4632,7 +4644,7 @@ static void detail_timer_cb(lv_timer_t* timer) {
   s_detail_total_frozen_sec = total_sec;
 
   int tlim_sec = (g.time_limit_minutes > 0) ? ((int)g.time_limit_minutes * 60) : 0;
-  bool test_countdown = hw_is_test_group(g) && tlim_sec > 0 && effective_running;
+  bool test_countdown = hw_should_treat_as_test(g) && tlim_sec > 0 && effective_running;
 
   if (s_hw_detail_session_slots[0] && lv_obj_is_valid(s_hw_detail_session_slots[0])) {
     int show_sec = cycle_sec;
@@ -4869,6 +4881,75 @@ static void close_test_perform_screen(void) {
   s_tp_cycle_baseline_sec = 0;
   s_tp_run_start_tick = 0;
   s_tp_running = false;
+  // 화면을 벗어나면 시험 종료 알람도 함께 정리
+  close_test_end_popup();
+  s_test_end_triggered = false;
+  g_should_vibrate_test_end = false;
+}
+
+static void close_test_end_popup(void) {
+  if (s_test_end_popup && lv_obj_is_valid(s_test_end_popup)) lv_obj_del(s_test_end_popup);
+  s_test_end_popup = nullptr;
+}
+
+// 제한시간이 모두 소진되면 표시: 진동 알람과 함께 "시험 종료" 안내.
+// 확인 시 진동을 끄고 자동 제출(transition 99) 후 수행화면을 빠져나간다.
+static void show_test_end_popup(void) {
+  extern const lv_font_t kakao_kr_16;
+  extern const lv_font_t kakao_kr_24;
+  if (s_test_end_popup && lv_obj_is_valid(s_test_end_popup)) return;
+
+  s_test_end_popup = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(s_test_end_popup, 276, 156);
+  lv_obj_center(s_test_end_popup);
+  lv_obj_set_style_bg_color(s_test_end_popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(s_test_end_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_test_end_popup, 1, 0);
+  lv_obj_set_style_border_color(s_test_end_popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_radius(s_test_end_popup, 14, 0);
+  lv_obj_set_style_pad_all(s_test_end_popup, 12, 0);
+  lv_obj_set_style_pad_row(s_test_end_popup, 10, 0);
+  lv_obj_clear_flag(s_test_end_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(s_test_end_popup, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_test_end_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* title = lv_label_create(s_test_end_popup);
+  lv_obj_set_style_text_font(title, &kakao_kr_24, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE0524D), 0);
+  lv_label_set_text(title, u8"시험 종료");
+
+  lv_obj_t* msg = lv_label_create(s_test_end_popup);
+  lv_obj_set_width(msg, 248);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(msg, u8"제한 시간이 종료되어\n자동 제출됩니다.");
+
+  lv_obj_t* confirm_btn = lv_btn_create(s_test_end_popup);
+  lv_obj_set_size(confirm_btn, 200, 40);
+  lv_obj_set_style_radius(confirm_btn, 10, 0);
+  lv_obj_set_style_bg_color(confirm_btn, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_border_width(confirm_btn, 0, 0);
+  lv_obj_t* confirm_lbl = lv_label_create(confirm_btn);
+  lv_obj_set_style_text_font(confirm_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(confirm_lbl, u8"확인");
+  lv_obj_center(confirm_lbl);
+  lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
+    (void)e;
+    // 알람(진동) 중지
+    g_should_vibrate_test_end = false;
+    M5.Power.setVibration(0);
+    char gid[40];
+    strncpy(gid, s_test_perform_group_id, sizeof(gid) - 1);
+    gid[sizeof(gid) - 1] = '\0';
+    close_test_end_popup();
+    // 자동 제출(중단 팝업과 동일하게 제출 단계로 이동) 후 화면 종료
+    if (gid[0]) (void)fw_publish_group_transition(gid, 99);
+    close_test_perform_screen();
+  }, LV_EVENT_CLICKED, NULL);
+
+  screensaver_attach_activity(s_test_end_popup);
 }
 
 static void test_perform_format_remaining(int secs, char* buf, size_t sz) {
@@ -4925,6 +5006,13 @@ static void test_perform_timer_cb(lv_timer_t* timer) {
     // 임박 시 빨간색으로 경고
     lv_obj_set_style_text_color(s_test_perform_time_lbl,
       lv_color_hex(remaining <= 30 && remaining > 0 ? 0xE0524D : 0xF0F0F0), 0);
+  }
+
+  // 제한시간 종료 → 시험 종료 알람(진동) + 자동 제출 안내 (1회만)
+  if (tlim > 0 && remaining <= 0 && !s_test_end_triggered) {
+    s_test_end_triggered = true;
+    g_should_vibrate_test_end = true;
+    show_test_end_popup();
   }
 }
 
@@ -5116,7 +5204,7 @@ static void show_homework_detail_page(int group_idx) {
   lv_obj_set_style_text_align(row1, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_width(row1, 300);
   lv_label_set_long_mode(row1, LV_LABEL_LONG_DOT);
-  lv_label_set_text(row1, hw_is_test_group(g) ? u8"테스트" : g.book_name);
+  lv_label_set_text(row1, hw_should_treat_as_test(g) ? u8"테스트" : g.book_name);
   lv_obj_set_style_pad_top(row1, 6, 0);
   lv_obj_set_style_translate_y(row1, -10, 0);
 
