@@ -137,9 +137,27 @@ static uint32_t s_test_perform_epoch = 0;
 static int s_test_perform_group_idx = -1;
 static char s_test_perform_group_id[40] = {0};
 static int s_test_perform_tlim_sec = 0;
-// 시험 종료(제한시간 소진) 알람 다이얼로그 상태
+// 시험 종료(제한시간 소진) 알람 다이얼로그 상태 — 특정 화면에 종속되지 않는
+// 전역 알람. 어떤 화면에 있든 hw_global_timer_cb에서 제한시간 소진을 감지해
+// 띄우고, 확인 전까지 진동/팝업이 유지된다.
 static lv_obj_t* s_test_end_popup = nullptr;
-static bool s_test_end_triggered = false;
+// 현재 알람이 걸린 그룹 id(팝업 표시 중). 비어있으면 알람 없음.
+static char s_test_end_gid[40] = {0};
+// 알람 발화 시점에 이미 서버에서 제출(phase>=3)됐는지. 확인 동작을 가른다.
+//  - true  : 외부(학습앱)가 정각에 자동 제출함 → 확인은 알람만 끔(중복 제출 안 함)
+//  - false : 아직 진행 중 → 확인 시 M5가 제출(transition 99)
+static bool s_test_end_already_submitted = false;
+
+// 테스트 그룹별 진행 추적: 로컬 카운트다운이 제한시간에 도달했는지(peak)와
+// 알람 발화 여부를 그룹 단위로 기억해, 외부에서 phase를 먼저 3으로 바꿔도
+// "시간초과로 제출됨"을 판별할 수 있게 한다.
+struct TestEndTrack {
+  bool used;
+  char gid[40];
+  int peak_cycle;   // phase 2(진행) 동안 관측한 최대 사이클(초)
+  bool alarmed;     // 이 진행 세션에서 이미 알람을 띄웠는지
+};
+static TestEndTrack s_test_end_track[8];
 static int s_tp_cycle_baseline_sec = 0;
 static uint32_t s_tp_run_start_tick = 0;
 static bool s_tp_running = false;
@@ -363,10 +381,15 @@ static const lv_opa_t BREATH_LUT[] = {
 
 static void fmt_time_static(int secs, char* buf, size_t sz);
 static void fmt_time_hms(int secs, char* buf, size_t sz);
+// 화면 비종속 시험 종료(제한시간 소진) 감지/알람. 정의는 하단(팝업 정의 이후).
+static void test_end_global_check(void);
 
 static void hw_global_timer_cb(lv_timer_t* timer) {
   uint32_t epoch = (uint32_t)(uintptr_t)timer->user_data;
   if (epoch != s_hw_timer_epoch) { lv_timer_del(timer); return; }
+
+  // 매 호출(≈100ms)마다 제한시간 소진을 감지해 알람을 띄운다(화면 무관).
+  test_end_global_check();
 
   static uint8_t sec_tick = 0;
   sec_tick++;
@@ -4881,10 +4904,8 @@ static void close_test_perform_screen(void) {
   s_tp_cycle_baseline_sec = 0;
   s_tp_run_start_tick = 0;
   s_tp_running = false;
-  // 화면을 벗어나면 시험 종료 알람도 함께 정리
-  close_test_end_popup();
-  s_test_end_triggered = false;
-  g_should_vibrate_test_end = false;
+  // 시험 종료 알람은 전역(hw_global_timer_cb)에서 관리하므로 여기서 끄지 않는다.
+  // (수행화면을 벗어나도 확인 전까지 알람/진동 유지)
 }
 
 static void close_test_end_popup(void) {
@@ -4893,7 +4914,8 @@ static void close_test_end_popup(void) {
 }
 
 // 제한시간이 모두 소진되면 표시: 진동 알람과 함께 "시험 종료" 안내.
-// 확인 시 진동을 끄고 자동 제출(transition 99) 후 수행화면을 빠져나간다.
+// 화면 비종속(전역). 확인 시 진동을 끄고 자동 제출(transition 99)한 뒤,
+// 수행화면이 열려 있으면 함께 닫는다.
 static void show_test_end_popup(void) {
   extern const lv_font_t kakao_kr_16;
   extern const lv_font_t kakao_kr_24;
@@ -4941,15 +4963,117 @@ static void show_test_end_popup(void) {
     g_should_vibrate_test_end = false;
     M5.Power.setVibration(0);
     char gid[40];
-    strncpy(gid, s_test_perform_group_id, sizeof(gid) - 1);
+    strncpy(gid, s_test_end_gid, sizeof(gid) - 1);
     gid[sizeof(gid) - 1] = '\0';
+    bool alreadySubmitted = s_test_end_already_submitted;
+    s_test_end_gid[0] = '\0';
     close_test_end_popup();
-    // 자동 제출(중단 팝업과 동일하게 제출 단계로 이동) 후 화면 종료
-    if (gid[0]) (void)fw_publish_group_transition(gid, 99);
-    close_test_perform_screen();
+    // 외부(학습앱)가 이미 제출했으면 알람만 끈다. 아직이면 M5가 제출.
+    if (gid[0] && !alreadySubmitted) (void)fw_publish_group_transition(gid, 99);
+    // 수행화면이 이 그룹으로 열려 있으면 함께 닫는다
+    if (s_test_perform_screen && lv_obj_is_valid(s_test_perform_screen)) {
+      close_test_perform_screen();
+    }
   }, LV_EVENT_CLICKED, NULL);
 
   screensaver_attach_activity(s_test_end_popup);
+}
+
+// 그룹 id로 추적 슬롯을 찾거나 새로 만든다(없으면 빈 슬롯 사용).
+static TestEndTrack* test_end_track_get(const char* gid) {
+  int free_idx = -1;
+  for (int i = 0; i < (int)(sizeof(s_test_end_track) / sizeof(s_test_end_track[0])); i++) {
+    if (s_test_end_track[i].used) {
+      if (strcmp(s_test_end_track[i].gid, gid) == 0) return &s_test_end_track[i];
+    } else if (free_idx < 0) {
+      free_idx = i;
+    }
+  }
+  if (free_idx < 0) return nullptr;
+  TestEndTrack* t = &s_test_end_track[free_idx];
+  t->used = true;
+  strncpy(t->gid, gid, sizeof(t->gid) - 1);
+  t->gid[sizeof(t->gid) - 1] = '\0';
+  t->peak_cycle = 0;
+  t->alarmed = false;
+  return t;
+}
+
+// 화면과 무관하게 "테스트 그룹의 제한시간 소진"을 감지해 시험 종료 알람을 띄운다.
+//
+// 핵심: 실사용에서는 학습앱이 제한시간 정각에 서버측에서 먼저 제출(phase→3)하고
+// M5는 이를 따라간다. 따라서 phase==2 만 보면 외부 제출에 매번 밀린다.
+// 대신 진행 중(phase 2) 동안 로컬 카운트다운의 최대치(peak)를 그룹별로 기억해 두고,
+//  (a) 진행 중 peak가 제한시간에 도달했거나,
+//  (b) 외부에서 막 제출(phase>=3)됐는데 peak가 제한시간 근처였으면 → "시간초과"로 보고 발화.
+// (b)에서는 이미 제출됐으므로 확인은 알람만 끈다(중복 제출 방지).
+static void test_end_global_check(void) {
+  if (!s_groups || s_group_cnt == 0) return;
+  uint32_t tick = lv_tick_get();
+  const int GRACE = 3;  // 외부 제출과 로컬 시계의 미세한 차이를 흡수
+
+  // 알람이 이미 떠 있는 경우: 팝업이 사라졌는데 진동 플래그가 남아있으면 복구
+  if (s_test_end_gid[0]) {
+    if (!s_test_end_popup || !lv_obj_is_valid(s_test_end_popup)) {
+      if (g_should_vibrate_test_end) {
+        show_test_end_popup();
+      } else {
+        s_test_end_gid[0] = '\0';
+      }
+    }
+    return;  // 알람 진행 중에는 새 발화 검사 생략
+  }
+
+  // 0) 사라진 그룹의 추적 슬롯 회수
+  for (int k = 0; k < (int)(sizeof(s_test_end_track) / sizeof(s_test_end_track[0])); k++) {
+    if (!s_test_end_track[k].used) continue;
+    bool found = false;
+    for (uint8_t i = 0; i < s_group_cnt; i++) {
+      if (strcmp(s_groups[i].group_id, s_test_end_track[k].gid) == 0) { found = true; break; }
+    }
+    if (!found) s_test_end_track[k].used = false;
+  }
+
+  // 1) 추적 갱신: 진행 중 테스트의 peak 기록, 새 세션이면 무장 재설정
+  for (uint8_t i = 0; i < s_group_cnt; i++) {
+    HwGroupData& g = s_groups[i];
+    int tlim = (g.time_limit_minutes > 0) ? ((int)g.time_limit_minutes * 60) : 0;
+    if (!hw_is_test_group(g) || tlim <= 0) continue;
+    TestEndTrack* t = test_end_track_get(g.group_id);
+    if (!t) continue;
+    if (g.phase <= 1) {
+      // 대기 단계로 (재)진입 = 새 수행 세션 → 무장 재설정
+      t->peak_cycle = 0;
+      t->alarmed = false;
+    } else if (hw_server_running_group(g)) {
+      int live_cycle = (int)g.cycle_elapsed + hw_live_segment_sec(g, tick);
+      if (live_cycle > t->peak_cycle) t->peak_cycle = live_cycle;
+    }
+  }
+
+  // 2) 발화 판정
+  for (uint8_t i = 0; i < s_group_cnt; i++) {
+    HwGroupData& g = s_groups[i];
+    int tlim = (g.time_limit_minutes > 0) ? ((int)g.time_limit_minutes * 60) : 0;
+    if (!hw_is_test_group(g) || tlim <= 0) continue;
+    TestEndTrack* t = test_end_track_get(g.group_id);
+    if (!t || t->alarmed) continue;
+
+    bool running = hw_server_running_group(g);
+    int live_cycle = running ? ((int)g.cycle_elapsed + hw_live_segment_sec(g, tick)) : t->peak_cycle;
+
+    bool reached_running = running && (live_cycle >= tlim);
+    bool submitted_timeout = (g.phase >= 3) && (t->peak_cycle >= tlim - GRACE) && (t->peak_cycle > 0);
+    if (!reached_running && !submitted_timeout) continue;
+
+    t->alarmed = true;
+    s_test_end_already_submitted = (g.phase >= 3);
+    strncpy(s_test_end_gid, g.group_id, sizeof(s_test_end_gid) - 1);
+    s_test_end_gid[sizeof(s_test_end_gid) - 1] = '\0';
+    g_should_vibrate_test_end = true;
+    show_test_end_popup();
+    break;
+  }
 }
 
 static void test_perform_format_remaining(int secs, char* buf, size_t sz) {
@@ -5008,12 +5132,8 @@ static void test_perform_timer_cb(lv_timer_t* timer) {
       lv_color_hex(remaining <= 30 && remaining > 0 ? 0xE0524D : 0xF0F0F0), 0);
   }
 
-  // 제한시간 종료 → 시험 종료 알람(진동) + 자동 제출 안내 (1회만)
-  if (tlim > 0 && remaining <= 0 && !s_test_end_triggered) {
-    s_test_end_triggered = true;
-    g_should_vibrate_test_end = true;
-    show_test_end_popup();
-  }
+  // 제한시간 종료 감지/알람은 전역 타이머(hw_global_timer_cb)에서 처리한다.
+  // 수행화면 타이머는 도넛/남은시간 표시만 담당.
 }
 
 static void show_test_perform_screen(int group_idx) {

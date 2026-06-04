@@ -14128,17 +14128,11 @@ Widget _buildHomeworkChipVisual(
     if (visualPhase == 2 && remainingMs > 0) {
       _testTimedOutHomeworkKeys.remove(timeoutBadgeKey);
     }
-    if (shouldAutoSubmitForTimeout &&
-        !_testAutoSubmitTriggeredKeys.contains(autoSubmitKey)) {
-      _testAutoSubmitTriggeredKeys.add(autoSubmitKey);
+    // 제한시간 만료 시 '자동 제출'은 M5 기기가 담당한다(시험 종료 알람 → 확인 시 제출).
+    // 학습앱(플러터)은 서버/M5 상태를 따라가기만 하고 여기서 제출하지 않는다.
+    // 시간 초과 표시(배지)는 그대로 유지한다.
+    if (shouldAutoSubmitForTimeout) {
       _testTimedOutHomeworkKeys.add(timeoutBadgeKey);
-      unawaited(() async {
-        await HomeworkStore.instance.submit(studentId, hw.id);
-        final latest = HomeworkStore.instance.getById(studentId, hw.id);
-        if (latest != null && latest.phase == 2) {
-          _testAutoSubmitTriggeredKeys.remove(autoSubmitKey);
-        }
-      }());
     }
   }
   final bool showTimedOutBadge = isTestCard &&

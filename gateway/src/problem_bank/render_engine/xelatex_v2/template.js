@@ -2393,6 +2393,19 @@ function renderDecoContinuationLine(
   );
 }
 
+function renderRawBoxLatexEnvironment(lines) {
+  const raw = (lines || [])
+    .filter((line) => line !== BOX_PARAGRAPH_BREAK)
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  if (!raw) return '';
+  const envMatch = raw.match(/^\\begin\{(array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}[\s\S]*\\end\{\1\}$/);
+  if (!envMatch) return '';
+  return `\\begin{center}$\\displaystyle ${raw}$\\end{center}`;
+}
+
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
   // 1) 박스 내부의 "본문 라인" 목록을 평탄화하되, [문단] 마커는 간격 sentinel 로 보존한다.
   const rawFlatLines = flattenBoxParagraphLines(lines);
@@ -2412,7 +2425,10 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
   const centerMode = forcedAlign === 'left' ? false : boxContentIsCenteredOnly(flatLines);
 
   const contentParts = [];
-  if (hasSectionLabels) {
+  const rawLatexEnvironment = hasSectionLabels ? '' : renderRawBoxLatexEnvironment(flatLines);
+  if (rawLatexEnvironment) {
+    contentParts.push(rawLatexEnvironment);
+  } else if (hasSectionLabels) {
     let activeLabelTex = '';
     for (const line of flatLines) {
       if (line === BOX_PARAGRAPH_BREAK) {
@@ -2759,6 +2775,11 @@ function unwrapLatexTextCommandsForTextMode(input) {
       content += ch;
       i += 1;
     }
+    // Preserve a command boundary when math commands are followed by \text{...}.
+    // Example: \text{A 지점}\sim\text{B 지점} -> A 지점\sim B 지점.
+    // Without the inserted space, smartTexLine sees "\simB" as one undefined
+    // control sequence during raw tabular rendering.
+    if (/\\[A-Za-z]+$/.test(out) && content) out += ' ';
     out += content;
     cursor = i;
   }

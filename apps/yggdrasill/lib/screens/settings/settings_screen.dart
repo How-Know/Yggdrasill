@@ -110,9 +110,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _sloganController =
       ImeAwareTextEditingController();
   final TextEditingController _capacityController =
-      ImeAwareTextEditingController(text: '30');
+      ImeAwareTextEditingController();
   final TextEditingController _lessonDurationController =
-      ImeAwareTextEditingController(text: '50');
+      ImeAwareTextEditingController();
   // [추가] 수강 횟수 컨트롤러
   final TextEditingController _courseCountController =
       ImeAwareTextEditingController();
@@ -148,6 +148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final Set<int> _hoveredOperatingHourCards = {};
 
   final GlobalKey _academyInfoKey = GlobalKey();
+  final GlobalKey _previewPaymentMenuAnchorKey = GlobalKey();
   double _academyInfoHeight = 0;
 
   final Set<int> _hoveredTabs = {};
@@ -640,10 +641,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _academyAddressController.text =
             DataManager.instance.academySettings.address;
         _sloganController.text = DataManager.instance.academySettings.slogan;
-        _capacityController.text =
-            DataManager.instance.academySettings.defaultCapacity.toString();
-        _lessonDurationController.text =
-            DataManager.instance.academySettings.lessonDuration.toString();
+        if (widget.previewUseFabStyleTabBar) {
+          _capacityController.text = '';
+          _lessonDurationController.text = '';
+        } else {
+          _capacityController.text =
+              DataManager.instance.academySettings.defaultCapacity.toString();
+          _lessonDurationController.text =
+              DataManager.instance.academySettings.lessonDuration.toString();
+        }
         _courseCountController.text = DataManager
             .instance.academySettings.sessionCycle
             .toString(); // [추가] 수강 횟수 불러오기
@@ -1864,6 +1870,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return PreviewAcademyInfoRow(
         label: day.koreanName,
         value: '',
+        suppressInkHighlight: true,
         valueWidget: isActive
             ? Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -1897,6 +1904,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : null,
         showChevron: false,
         trailing: PreviewAcademyIosSwitch(
+          key: ValueKey('preview-hours-switch-${day.name}'),
           value: isActive,
           inactiveColor: switchInactive,
           onChanged: (enabled) {
@@ -1969,7 +1977,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _previewPaymentTypeLabel(PaymentType type) {
     switch (type) {
       case PaymentType.monthly:
-        return '월 결제';
+        return '월결제';
       case PaymentType.perClass:
         return '횟수제';
     }
@@ -3060,13 +3068,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _openPreviewAcademyBasicInfoDialog(
+    PreviewAcademyPanelStyle style, {
+    PreviewAcademyBasicInfoField initialFocusField =
+        PreviewAcademyBasicInfoField.academyName,
+  }) async {
+    final result = await PreviewAcademyFieldInputSheet.show(
+      context: context,
+      style: style,
+      initialValues: PreviewAcademyBasicInfoValues(
+        academyName: _academyNameController.text,
+        academyAddress: _academyAddressController.text,
+        slogan: _sloganController.text,
+      ),
+      initialFocusField: initialFocusField,
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _academyNameController.text = result.academyName;
+        _academyAddressController.text = result.academyAddress;
+        _sloganController.text = result.slogan;
+      });
+    }
+  }
+
+  Future<void> _openPreviewPaymentMenu(PreviewAcademyPanelStyle style) async {
+    final box =
+        _previewPaymentMenuAnchorKey.currentContext?.findRenderObject()
+            as RenderBox?;
+    if (box == null) return;
+
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: box,
+      style: style,
+      selectedId: _paymentType.name,
+      options: const [
+        PreviewAcademyMenuOption(id: 'monthly', label: '월결제'),
+        PreviewAcademyMenuOption(id: 'perClass', label: '횟수제'),
+      ],
+    );
+
+    if (pickedId != null && mounted) {
+      setState(() {
+        _paymentType = pickedId == 'monthly'
+            ? PaymentType.monthly
+            : PaymentType.perClass;
+      });
+    }
+  }
+
+  String _previewAcademyRowValue(TextEditingController controller) {
+    final text = controller.text.trim();
+    return text.isEmpty ? '' : text;
+  }
+
+  String _previewLessonDurationValue() {
+    final text = _lessonDurationController.text.trim();
+    if (text.isEmpty) return '';
+    return '$text분';
+  }
+
   Widget _buildAcademySettingsPreview() {
     final academyStyle = _previewAcademyPanelStyle(context)!;
-
-    String displayValue(TextEditingController controller) {
-      final text = controller.text.trim();
-      return text.isEmpty ? '' : text;
-    }
 
     return _buildPreviewAcademySectionScope(
       child: Column(
@@ -3076,9 +3140,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Text(
             '학원정보',
             textAlign: TextAlign.center,
-            style: FabTabBarTokens.previewPageTitleStyle(academyStyle),
+            style: FabTabBarTokens.previewAcademyMainTitleStyle(academyStyle),
           ),
-          const SizedBox(height: 28),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
+          ),
           Center(
             child: GestureDetector(
               onTap: _pickLogoImage,
@@ -3090,7 +3156,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   : CircleAvatar(
                       radius: FabTabBarTokens.previewAcademyLogoRadius,
                       backgroundColor:
-                          academyStyle.avatarPlaceholderBackground,
+                          FabTabBarTokens.paletteFor(
+                            Theme.of(context).brightness,
+                          ).highlight,
                       child: Icon(
                         Icons.school_outlined,
                         size: FabTabBarTokens.previewAcademyLogoIconSize,
@@ -3137,18 +3205,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             rows: [
               PreviewAcademyInfoRow(
                 label: '학원명',
-                value: displayValue(_academyNameController),
-                onTap: () => _previewAcademyFieldTap('학원명'),
+                value: _previewAcademyRowValue(_academyNameController),
+                onTap: () => _openPreviewAcademyBasicInfoDialog(
+                  academyStyle,
+                  initialFocusField: PreviewAcademyBasicInfoField.academyName,
+                ),
               ),
               PreviewAcademyInfoRow(
                 label: '학원주소',
-                value: displayValue(_academyAddressController),
-                onTap: () => _previewAcademyFieldTap('학원주소'),
+                value: _previewAcademyRowValue(_academyAddressController),
+                onTap: () => _openPreviewAcademyBasicInfoDialog(
+                  academyStyle,
+                  initialFocusField:
+                      PreviewAcademyBasicInfoField.academyAddress,
+                ),
               ),
               PreviewAcademyInfoRow(
                 label: '슬로건',
-                value: displayValue(_sloganController),
-                onTap: () => _previewAcademyFieldTap('슬로건'),
+                value: _previewAcademyRowValue(_sloganController),
+                onTap: () => _openPreviewAcademyBasicInfoDialog(
+                  academyStyle,
+                  initialFocusField: PreviewAcademyBasicInfoField.slogan,
+                ),
               ),
             ],
           ),
@@ -3191,69 +3269,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
       rows: [
         PreviewAcademyInfoRow(
           label: '기본 정원',
-          showChevron: false,
-          valueWidget: TextFormField(
-            controller: _capacityController,
-            textAlign: TextAlign.right,
-            keyboardType: TextInputType.number,
-            style: TextStyle(
-              color: academyStyle.inputText,
-              fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
-            ),
-            decoration: _previewAcademyInlineFieldDecoration(academyStyle),
-          ),
+          value: _previewAcademyRowValue(_capacityController),
+          onTap: () => _previewAcademyFieldTap('기본 정원'),
         ),
         PreviewAcademyInfoRow(
           label: '수업 시간',
-          showChevron: false,
-          valueWidget: TextFormField(
-            controller: _lessonDurationController,
-            textAlign: TextAlign.right,
-            keyboardType: TextInputType.number,
-            style: TextStyle(
-              color: academyStyle.inputText,
-              fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
-            ),
-            decoration: _previewAcademyInlineFieldDecoration(
-              academyStyle,
-              hintText: '분',
-            ),
-          ),
+          value: _previewLessonDurationValue(),
+          onTap: () => _previewAcademyFieldTap('수업 시간'),
         ),
         PreviewAcademyInfoRow(
           label: '지불 방식',
+          value: _previewPaymentTypeLabel(_paymentType),
           showChevron: false,
-          valueWidget: PreviewAcademyPaymentTypeSelector(
+          valueUsesHintStyle: true,
+          trailingAlignsWithChevron: true,
+          trailing: PreviewAcademyPaymentMenuAnchor(
+            key: _previewPaymentMenuAnchorKey,
             style: academyStyle,
-            selectedId: _paymentType.name,
-            valueLabel: _previewPaymentTypeLabel(_paymentType),
-            options: const [
-              PreviewAcademyMenuOption(id: 'monthly', label: '월 결제'),
-              PreviewAcademyMenuOption(id: 'perClass', label: '횟수제'),
-            ],
-            onSelected: (id) {
-              setState(() {
-                _paymentType = id == 'monthly'
-                    ? PaymentType.monthly
-                    : PaymentType.perClass;
-              });
-            },
           ),
+          onTap: () => _openPreviewPaymentMenu(academyStyle),
         ),
         if (_paymentType == PaymentType.perClass)
           PreviewAcademyInfoRow(
             label: '기준 수강 횟수',
-            showChevron: false,
-            valueWidget: TextFormField(
-              controller: _courseCountController,
-              textAlign: TextAlign.right,
-              keyboardType: TextInputType.number,
-              style: TextStyle(
-                color: academyStyle.inputText,
-                fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
-              ),
-              decoration: _previewAcademyInlineFieldDecoration(academyStyle),
-            ),
+            value: _previewAcademyRowValue(_courseCountController),
+            onTap: () => _previewAcademyFieldTap('기준 수강 횟수'),
           ),
       ],
     );

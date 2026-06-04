@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -39,6 +40,15 @@ class FabTabBarTokens {
   /// Preview — 학원 탭 상단 여백
   static const double previewAcademyTopInset = 24;
 
+  /// Preview — 학원 탭 최상단 「학원정보」 제목 글자 크기
+  static const double previewAcademyMainTitleFontSize = 32;
+
+  /// Preview — 「학원정보」 제목 **밑변** ↔ 로고 **상단** 사이 고정 간격.
+  ///
+  /// 제목 줄 높이는 [previewAcademyMainTitleStyle] `height: 1.15` → 약 37px
+  /// (32 × 1.15). 로고까지의 시각적 여백 = 이 값만큼.
+  static const double previewAcademyMainTitleToLogoSpacing = 36;
+
   /// Preview — 학원 섹션 카드 라운드
   static const double previewAcademyGroupedCardRadius = 28;
 
@@ -72,9 +82,29 @@ class FabTabBarTokens {
   /// Preview — 스위치 thumb 너비 배율 (기준 대비 +10%)
   static const double previewAcademySwitchThumbWidthScale = 1.1;
 
+  /// Preview — 요일 활성 스위치 애니메이션
+  static const Duration previewAcademySwitchDuration =
+      Duration(milliseconds: 280);
+  static const Curve previewAcademySwitchCurve = Curves.easeOutBack;
+
   /// Preview — 글래스 드롭다운 열림 애니메이션
   static const Duration previewAcademyMenuOpenDuration =
-      Duration(milliseconds: 340);
+      Duration(milliseconds: 220);
+
+  /// Preview — 글래스 드롭다운 닫힘 애니메이션 (열림보다 빠르게)
+  static const Duration previewAcademyMenuCloseDuration =
+      Duration(milliseconds: 90);
+
+  /// Preview — 글래스 메뉴 틴트 (불투명도 90%)
+  static const Color previewAcademyMenuGlassTintLight = Color(0xE6FFFFFF);
+  static const Color previewAcademyMenuGlassTintDark = Color(0xE61C1C1E);
+
+  /// Preview — 글래스 드롭다운 뒤 화면 흐림 (BackdropFilter)
+  static const double previewAcademyMenuGlassBlurSigma = 18;
+  static const Color previewAcademyMenuGlassHoverOverlayLight =
+      Color(0x12FFFFFF);
+  static const Color previewAcademyMenuGlassHoverOverlayDark =
+      Color(0x12FFFFFF);
 
   /// Preview — 섹션 타이틀 줄 ↔ 아래 카드 간격 (타이틀 줄만 좁게)
   static const double previewAcademySectionHeaderToCardSpacing = 8;
@@ -83,6 +113,41 @@ class FabTabBarTokens {
 
   /// Preview — 확인·저장·변경 등 주요 액션 문구 색 (본앱 `_kSignatureGreen`과 동일)
   static const Color previewConfirmActionColor = Color(0xFF33A373);
+
+  /// Preview — iOS형 입력 시트 (학원명 등)
+  static const double previewAcademyInputSheetRadius = 34;
+  /// 600 × 1.3
+  static const double previewAcademyInputSheetMaxWidth = 780;
+  static const double previewAcademyInputSheetMinHeight = 320;
+  static const double previewAcademyInputSheetFieldLabelWidth = 72;
+
+  /// 시트 바깥(화면 ↔ 시트 테두리) 좌·우
+  static const double previewAcademyInputSheetOuterPaddingHorizontal = 24;
+
+  /// 시트 테두리 ↔ 콘텐츠(헤더·입력 카드) 사이
+  static const double previewAcademyInputSheetBorderInset = 4;
+
+  /// [previewAcademyInputSheetBorderInset] 안쪽 — 헤더·본문 inner
+  static const double previewAcademyInputSheetInnerPaddingTop = 12;
+  static const double previewAcademyInputSheetInnerPaddingHorizontal = 16;
+  static const double previewAcademyInputSheetInnerPaddingBottom = 20;
+
+  /// 헤더 행 ↔ 입력 그룹 카드 (12 + 8)
+  static const double previewAcademyInputSheetHeaderToFieldSpacing = 20;
+
+  /// 입력 그룹 카드 안 — 카드 행 [previewAcademyGroupedRowPaddingHorizontal]과 동일
+  static const double previewAcademyInputSheetFieldPaddingHorizontal = 24;
+
+  /// 라벨 ↔ 입력란 가로 간격
+  static const double previewAcademyInputSheetLabelToFieldSpacing = 32;
+
+  /// 입력 행 한 줄 상·하 패딩 (각각)
+  static const double previewAcademyInputSheetFieldRowPaddingVertical = 16;
+
+  /// 학원 탭 카드 라벨 왼쪽 = scope(16) + 카드 행(24). 시트 inner(16) + 필드(24)와 동일.
+  static const double previewAcademyInputSheetFieldInsetFromSheet =
+      previewAcademySectionScopePaddingHorizontal +
+      previewAcademyGroupedRowPaddingHorizontal;
 
   /// Preview — 학원 로고 (지름 180)
   static const double previewAcademyLogoDiameter = 180;
@@ -104,6 +169,17 @@ class FabTabBarTokens {
       fontFamily: previewHeadlineFontFamily,
       fontWeight: previewHeadlineFontWeight,
       fontSize: previewAcademyBaseFontSize,
+      color: style.title,
+    );
+  }
+
+  /// Preview — 학원 탭 최상단 「학원정보」 전용 (32px).
+  static TextStyle previewAcademyMainTitleStyle(PreviewAcademyPanelStyle style) {
+    return TextStyle(
+      fontFamily: previewHeadlineFontFamily,
+      fontWeight: previewHeadlineFontWeight,
+      fontSize: previewAcademyMainTitleFontSize,
+      height: 1.15,
       color: style.title,
     );
   }
@@ -133,6 +209,16 @@ class FabTabBarTokens {
     );
   }
 
+  /// Preview — 카드 행 값/플레이스홀더 (학원정보·정원·지불방식 통일)
+  static TextStyle previewAcademyFieldDisplayStyle(
+    PreviewAcademyPanelStyle style, {
+    required bool isEmpty,
+  }) {
+    return previewRowValueStyle(style).copyWith(
+      color: isEmpty ? style.hint : style.rowValue,
+    );
+  }
+
   static TextStyle previewBodyTextStyle(
     PreviewAcademyPanelStyle style, {
     Color? color,
@@ -143,6 +229,15 @@ class FabTabBarTokens {
       fontSize: previewAcademyBaseFontSize,
       fontWeight: fontWeight,
       color: color ?? style.inputText,
+      decoration: TextDecoration.none,
+      decorationThickness: 0,
+    );
+  }
+
+  static TextStyle previewMenuItemTextStyle(PreviewAcademyPanelStyle style) {
+    return previewBodyTextStyle(
+      style,
+      color: style.title,
     );
   }
 
@@ -155,7 +250,7 @@ class FabTabBarTokens {
   // Dark — 글래스: 배경색 인지와 뒤 콘텐츠 비침의 균형
   static const Color fabBarDarkBase = Color(0xFF212121);
   static const Color fabBarDarkSurface = Color(0x80212121);
-  static const Color fabBarDarkHighlight = Color(0x992A2A2A);
+  static const Color fabBarDarkHighlight = Color(0x9A383838);
   static const Color fabBarDarkLabelSelected = Color(0xFFF4F5F5);
   static const Color fabBarDarkLabelUnselected = Color(0xFF9AA0A0);
 
@@ -321,17 +416,27 @@ class FabTabBarPalette {
 class PreviewAcademyInfoRow {
   final String label;
   final String value;
+  final String? emptyPlaceholder;
   final Widget? valueWidget;
   final Widget? trailing;
   final bool showChevron;
+  final bool suppressInkHighlight;
+  /// `trailing`이 chevron(20px)과 같은 열에 올 때 값 텍스트 오른쪽을 맞춤.
+  final bool trailingAlignsWithChevron;
+  /// 값이 있어도 [style.hint] 색으로 표시 (미입력·월결제 등).
+  final bool valueUsesHintStyle;
   final VoidCallback? onTap;
 
   const PreviewAcademyInfoRow({
     required this.label,
     this.value = '',
+    this.emptyPlaceholder,
     this.valueWidget,
     this.trailing,
     this.showChevron = true,
+    this.suppressInkHighlight = false,
+    this.trailingAlignsWithChevron = false,
+    this.valueUsesHintStyle = false,
     this.onTap,
   });
 }
@@ -378,16 +483,92 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
             Builder(
               builder: (context) {
                 final row = rows[i];
-                final valueArea = row.valueWidget ??
-                    Text(
-                      row.value.isEmpty ? '미입력' : row.value,
-                      textAlign: TextAlign.right,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: FabTabBarTokens.previewRowValueStyle(style),
-                    );
+                final valueIsEmpty = row.value.isEmpty;
+                final valueTextStyle = FabTabBarTokens.previewAcademyFieldDisplayStyle(
+                  style,
+                  isEmpty: row.valueUsesHintStyle || valueIsEmpty,
+                );
+                final Widget valueArea;
+                if (row.valueWidget != null && row.value.isEmpty) {
+                  valueArea = row.valueWidget!;
+                } else {
+                  valueArea = Text(
+                    valueIsEmpty
+                        ? (row.emptyPlaceholder ?? '미입력')
+                        : row.value,
+                    textAlign: TextAlign.right,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: valueTextStyle,
+                  );
+                }
 
-                final rowBody = Padding(
+                final inlineTrailing =
+                    row.trailing != null && row.trailingAlignsWithChevron;
+
+                final rowContent = Row(
+                  children: [
+                    Text(
+                      row.label,
+                      style: FabTabBarTokens.previewRowLabelStyle(style),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: valueArea,
+                      ),
+                    ),
+                    if (inlineTrailing) ...[
+                      const SizedBox(width: 4),
+                      row.trailing!,
+                    ] else if (row.trailing == null && row.showChevron) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.chevron_right,
+                        size: FabTabBarTokens.previewAcademyChevronSize,
+                        color: style.chevron,
+                      ),
+                    ],
+                  ],
+                );
+
+                Widget wrapTapTarget(Widget child) {
+                  if (row.onTap == null) return child;
+                  if (row.suppressInkHighlight) {
+                    return MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: row.onTap,
+                        behavior: HitTestBehavior.opaque,
+                        child: child,
+                      ),
+                    );
+                  }
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: row.onTap,
+                      child: child,
+                    ),
+                  );
+                }
+
+                if (row.trailing == null || inlineTrailing) {
+                  return wrapTapTarget(
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: FabTabBarTokens
+                            .previewAcademyGroupedRowPaddingHorizontal,
+                        vertical: FabTabBarTokens
+                            .previewAcademyGroupedRowPaddingVertical,
+                      ),
+                      child: rowContent,
+                    ),
+                  );
+                }
+
+                return Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: FabTabBarTokens
                         .previewAcademyGroupedRowPaddingHorizontal,
@@ -395,65 +576,14 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
                         .previewAcademyGroupedRowPaddingVertical,
                   ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Center(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            row.label,
-                            style: FabTabBarTokens.previewRowLabelStyle(style),
-                          ),
-                        ),
+                      Expanded(child: wrapTapTarget(rowContent)),
+                      SizedBox(
+                        width: row.trailingAlignsWithChevron ? 4 : 8,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: row.onTap != null && row.trailing != null
-                            ? Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: row.onTap,
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: valueArea,
-                                  ),
-                                ),
-                              )
-                            : Align(
-                                alignment: Alignment.centerRight,
-                                child: valueArea,
-                              ),
-                      ),
-                      if (row.trailing != null) ...[
-                        const SizedBox(width: 8),
-                        Center(child: row.trailing!),
-                      ] else if (row.showChevron) ...[
-                        const SizedBox(width: 4),
-                        Center(
-                          child: Icon(
-                            Icons.chevron_right,
-                            size: FabTabBarTokens.previewAcademyChevronSize,
-                            color: style.chevron,
-                          ),
-                        ),
-                      ],
+                      row.trailing!,
                     ],
                   ),
-                );
-
-                if (row.onTap != null && row.trailing == null) {
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: row.onTap,
-                      child: rowBody,
-                    ),
-                  );
-                }
-
-                return Material(
-                  color: Colors.transparent,
-                  child: rowBody,
                 );
               },
             ),
@@ -465,7 +595,7 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
 }
 
 /// Preview — 스크린샷 기준 가로 pill 커스텀 스위치 (요일 활성 on/off).
-class PreviewAcademyIosSwitch extends StatelessWidget {
+class PreviewAcademyIosSwitch extends StatefulWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
   final Color activeColor;
@@ -480,50 +610,112 @@ class PreviewAcademyIosSwitch extends StatelessWidget {
   });
 
   @override
+  State<PreviewAcademyIosSwitch> createState() => _PreviewAcademyIosSwitchState();
+}
+
+class _PreviewAcademyIosSwitchState extends State<PreviewAcademyIosSwitch>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _position;
+
+  static const _trackWidth = FabTabBarTokens.previewAcademySwitchWidth;
+  static const _trackHeight = FabTabBarTokens.previewAcademySwitchHeight;
+  static const _inset = FabTabBarTokens.previewAcademySwitchInset;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: FabTabBarTokens.previewAcademySwitchDuration,
+    );
+    _position = CurvedAnimation(
+      parent: _controller,
+      curve: FabTabBarTokens.previewAcademySwitchCurve,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _controller.value = widget.value ? 1.0 : 0.0;
+  }
+
+  void _animateTo(bool on) {
+    if (on) {
+      _controller.forward();
+    } else {
+      _controller.reverse();
+    }
+  }
+
+  @override
+  void didUpdateWidget(PreviewAcademyIosSwitch oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value == widget.value) return;
+    final target = widget.value ? 1.0 : 0.0;
+    if ((_controller.value - target).abs() > 0.01) {
+      _animateTo(widget.value);
+    }
+  }
+
+  void _handleTap() {
+    if (widget.onChanged == null) return;
+    final next = !widget.value;
+    _animateTo(next);
+    widget.onChanged!(next);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    const trackWidth = FabTabBarTokens.previewAcademySwitchWidth;
-    const trackHeight = FabTabBarTokens.previewAcademySwitchHeight;
-    const inset = FabTabBarTokens.previewAcademySwitchInset;
-    final baseThumbWidth = (trackWidth - inset * 2) / 2 - 1;
+    final baseThumbWidth = (_trackWidth - _inset * 2) / 2 - 1;
     final thumbWidth =
         baseThumbWidth * FabTabBarTokens.previewAcademySwitchThumbWidthScale;
-    final thumbHeight = trackHeight - inset * 2;
+    final thumbHeight = _trackHeight - _inset * 2;
     final thumbRadius = thumbHeight / 2;
+    final thumbTravel = _trackWidth - thumbWidth - _inset * 2;
 
     return GestureDetector(
-      onTap: onChanged == null ? null : () => onChanged!(!value),
+      onTap: widget.onChanged == null ? null : _handleTap,
       behavior: HitTestBehavior.opaque,
       child: SizedBox(
-        width: trackWidth,
-        height: trackHeight,
-        child: Stack(
-          clipBehavior: Clip.hardEdge,
-          children: [
-            Positioned.fill(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(trackHeight / 2),
-                  color: value ? activeColor : inactiveColor,
+        width: _trackWidth,
+        height: _trackHeight,
+        child: AnimatedBuilder(
+          animation: _position,
+          builder: (context, child) {
+            final t = _position.value;
+            final trackColor =
+                Color.lerp(widget.inactiveColor, widget.activeColor, t)!;
+
+            return Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(_trackHeight / 2),
+                      color: trackColor,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              left: value ? trackWidth - thumbWidth - inset : inset,
-              top: inset,
-              width: thumbWidth,
-              height: thumbHeight,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(thumbRadius),
+                Positioned(
+                  left: _inset + thumbTravel * t,
+                  top: _inset,
+                  width: thumbWidth,
+                  height: thumbHeight,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(thumbRadius),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
@@ -541,7 +733,7 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
   });
 
   static const _openCurve = Cubic(0.16, 1.0, 0.3, 1.0);
-  static const _closeCurve = Cubic(0.4, 0.0, 0.65, 1.0);
+  static const _closeCurve = Cubic(0.55, 0.0, 1.0, 1.0);
 
   double _easedProgress(Animation<double> anim) {
     if (anim.status == AnimationStatus.reverse) {
@@ -560,7 +752,11 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
         final scaleX = 0.96 + 0.04 * t;
         final slideY = (1 - t) * -6;
 
-        return ClipRect(
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(
+            FabTabBarTokens.previewAcademyMenuRadius,
+          ),
+          clipBehavior: Clip.antiAlias,
           child: Align(
             alignment: Alignment.topRight,
             heightFactor: heightFactor,
@@ -582,6 +778,712 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
   }
 }
 
+/// Preview — 글래스 메뉴 패널 (고정 틴트 + 콘텐츠, 호버는 은은한 오버레이만).
+class _PreviewAcademyGlassMenuPanel extends StatefulWidget {
+  final PreviewAcademyPanelStyle style;
+  final String selectedId;
+  final List<PreviewAcademyMenuOption> options;
+  final ValueChanged<String> onOptionSelected;
+
+  const _PreviewAcademyGlassMenuPanel({
+    required this.style,
+    required this.selectedId,
+    required this.options,
+    required this.onOptionSelected,
+  });
+
+  @override
+  State<_PreviewAcademyGlassMenuPanel> createState() =>
+      _PreviewAcademyGlassMenuPanelState();
+}
+
+class _PreviewAcademyGlassMenuPanelState
+    extends State<_PreviewAcademyGlassMenuPanel> {
+  int? _hoveredIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final radius = FabTabBarTokens.previewAcademyMenuRadius;
+    final glassTint = isDark
+        ? FabTabBarTokens.previewAcademyMenuGlassTintDark
+        : FabTabBarTokens.previewAcademyMenuGlassTintLight;
+    final hoverOverlay = isDark
+        ? FabTabBarTokens.previewAcademyMenuGlassHoverOverlayDark
+        : FabTabBarTokens.previewAcademyMenuGlassHoverOverlayLight;
+
+    return Material(
+      type: MaterialType.transparency,
+      color: Colors.transparent,
+      child: DefaultTextStyle(
+        style: const TextStyle(
+          decoration: TextDecoration.none,
+          decorationColor: Colors.transparent,
+        ),
+        child: RepaintBoundary(
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(radius),
+              border: Border.all(
+                color: isDark
+                    ? const Color(0x33FFFFFF)
+                    : const Color(0x40FFFFFF),
+                width: 0.5,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x1A000000),
+                  blurRadius: 20,
+                  offset: Offset(0, 6),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(radius),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                fit: StackFit.passthrough,
+                children: [
+                  Positioned.fill(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
+                        sigmaY: FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
+                      ),
+                      child: const ColoredBox(color: Colors.transparent),
+                    ),
+                  ),
+                  ColoredBox(
+                    color: glassTint,
+                    child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (int i = 0; i < widget.options.length; i++)
+                        MouseRegion(
+                          onEnter: (_) => setState(() => _hoveredIndex = i),
+                          onExit: (_) => setState(() => _hoveredIndex = null),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => widget
+                                .onOptionSelected(widget.options[i].id),
+                            child: ColoredBox(
+                              color: _hoveredIndex == i
+                                  ? hoverOverlay
+                                  : Colors.transparent,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 14,
+                                ),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 28,
+                                      child: widget.options[i].id ==
+                                              widget.selectedId
+                                          ? Icon(
+                                              Icons.check,
+                                              size: FabTabBarTokens
+                                                  .previewAcademyBaseFontSize,
+                                              color: widget.style.title,
+                                            )
+                                          : null,
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        widget.options[i].label,
+                                        style: FabTabBarTokens
+                                            .previewMenuItemTextStyle(
+                                          widget.style,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Preview — 기본 정보 입력 시트에서 포커스할 필드.
+enum PreviewAcademyBasicInfoField {
+  academyName,
+  academyAddress,
+  slogan,
+}
+
+/// Preview — 학원명·주소·슬로건 입력 시트 결과.
+class PreviewAcademyBasicInfoValues {
+  final String academyName;
+  final String academyAddress;
+  final String slogan;
+
+  const PreviewAcademyBasicInfoValues({
+    required this.academyName,
+    required this.academyAddress,
+    required this.slogan,
+  });
+}
+
+/// Preview — iOS형 기본 정보 입력 시트 (학원명·주소·슬로건).
+class PreviewAcademyFieldInputSheet extends StatefulWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+  final PreviewAcademyBasicInfoValues initialValues;
+  final PreviewAcademyBasicInfoField initialFocusField;
+
+  const PreviewAcademyFieldInputSheet({
+    super.key,
+    required this.style,
+    required this.title,
+    required this.initialValues,
+    this.initialFocusField = PreviewAcademyBasicInfoField.academyName,
+  });
+
+  static Future<PreviewAcademyBasicInfoValues?> show({
+    required BuildContext context,
+    required PreviewAcademyPanelStyle style,
+    String title = '학원정보',
+    required PreviewAcademyBasicInfoValues initialValues,
+    PreviewAcademyBasicInfoField initialFocusField =
+        PreviewAcademyBasicInfoField.academyName,
+  }) {
+    return showGeneralDialog<PreviewAcademyBasicInfoValues>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: title,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return PreviewAcademyFieldInputSheet(
+          style: style,
+          title: title,
+          initialValues: initialValues,
+          initialFocusField: initialFocusField,
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curve,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.96, end: 1).animate(curve),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  State<PreviewAcademyFieldInputSheet> createState() =>
+      _PreviewAcademyFieldInputSheetState();
+}
+
+class _PreviewAcademyFieldInputSheetState
+    extends State<PreviewAcademyFieldInputSheet> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _addressController;
+  late final TextEditingController _sloganController;
+  late final FocusNode _nameFocusNode;
+  late final FocusNode _addressFocusNode;
+  late final FocusNode _sloganFocusNode;
+
+  static const _fieldLabels = ['학원명', '학원주소', '슬로건'];
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController =
+        TextEditingController(text: widget.initialValues.academyName);
+    _addressController =
+        TextEditingController(text: widget.initialValues.academyAddress);
+    _sloganController =
+        TextEditingController(text: widget.initialValues.slogan);
+    _nameFocusNode = FocusNode();
+    _addressFocusNode = FocusNode();
+    _sloganFocusNode = FocusNode();
+    for (final c in [_nameController, _addressController, _sloganController]) {
+      c.addListener(_onFieldChanged);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final focusNode = switch (widget.initialFocusField) {
+        PreviewAcademyBasicInfoField.academyName => _nameFocusNode,
+        PreviewAcademyBasicInfoField.academyAddress => _addressFocusNode,
+        PreviewAcademyBasicInfoField.slogan => _sloganFocusNode,
+      };
+      focusNode.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final fieldContext = focusNode.context;
+        if (fieldContext != null) {
+          Scrollable.ensureVisible(
+            fieldContext,
+            alignment: 0.25,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      });
+    });
+  }
+
+  void _onFieldChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_nameController, _addressController, _sloganController]) {
+      c.removeListener(_onFieldChanged);
+      c.dispose();
+    }
+    _nameFocusNode.dispose();
+    _addressFocusNode.dispose();
+    _sloganFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _close([PreviewAcademyBasicInfoValues? values]) {
+    Navigator.of(context).pop(values);
+  }
+
+  void _confirm() {
+    _close(
+      PreviewAcademyBasicInfoValues(
+        academyName: _nameController.text.trim(),
+        academyAddress: _addressController.text.trim(),
+        slogan: _sloganController.text.trim(),
+      ),
+    );
+  }
+
+  Widget _buildFieldRow({
+    required String label,
+    required TextEditingController controller,
+    FocusNode? focusNode,
+    required TextInputAction textInputAction,
+    required VoidCallback? onSubmitted,
+  }) {
+    final hintStyle = FabTabBarTokens.previewAcademyFieldDisplayStyle(
+      widget.style,
+      isEmpty: true,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal:
+            FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+        vertical:
+            FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
+            child: Text(
+              label,
+              style: FabTabBarTokens.previewRowLabelStyle(widget.style),
+            ),
+          ),
+          const SizedBox(
+            width: FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
+          ),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              style: FabTabBarTokens.previewBodyTextStyle(
+                widget.style,
+                color: widget.style.inputText,
+              ),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                hintText:
+                    controller.text.trim().isEmpty ? '필수입력' : null,
+                hintStyle: hintStyle,
+              ),
+              textInputAction: textInputAction,
+              onSubmitted: (_) => onSubmitted?.call(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sheetSurface =
+        isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final groupedFill =
+        isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final headerIconBg =
+        isDark ? const Color(0xFF3A3A3C) : const Color(0xFFE5E5EA);
+    final subtleBorder = isDark
+        ? const Color(0x33FFFFFF)
+        : const Color(0x33000000);
+
+    final controllers = [_nameController, _addressController, _sloganController];
+    final focusNodes = [_nameFocusNode, _addressFocusNode, _sloganFocusNode];
+    final submitActions = <VoidCallback?>[
+      _addressFocusNode.requestFocus,
+      _sloganFocusNode.requestFocus,
+      _confirm,
+    ];
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxWidth: FabTabBarTokens.previewAcademyInputSheetMaxWidth,
+            minHeight: FabTabBarTokens.previewAcademyInputSheetMinHeight,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal:
+                  FabTabBarTokens.previewAcademyInputSheetOuterPaddingHorizontal,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: sheetSurface,
+                borderRadius: BorderRadius.circular(
+                  FabTabBarTokens.previewAcademyInputSheetRadius,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 32,
+                    offset: Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(
+                  FabTabBarTokens.previewAcademyInputSheetBorderInset,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingHorizontal,
+                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingTop,
+                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingHorizontal,
+                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingBottom,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        height: 44,
+                        child: Row(
+                          children: [
+                            _PreviewAcademyInputSheetIconButton(
+                              backgroundColor: headerIconBg,
+                              borderColor: subtleBorder,
+                              icon: Icons.close,
+                              iconColor: widget.style.title,
+                              onPressed: () => _close(),
+                            ),
+                            Expanded(
+                              child: Text(
+                                widget.title,
+                                textAlign: TextAlign.center,
+                                style: FabTabBarTokens.previewPageTitleStyle(
+                                  widget.style,
+                                ).copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            _PreviewAcademyInputSheetConfirmPill(
+                              borderColor: subtleBorder,
+                              onPressed: _confirm,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(
+                        height: FabTabBarTokens
+                            .previewAcademyInputSheetHeaderToFieldSpacing,
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: groupedFill,
+                          borderRadius: BorderRadius.circular(
+                            FabTabBarTokens.previewAcademyGroupedCardRadius,
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (int i = 0; i < _fieldLabels.length; i++) ...[
+                              if (i > 0)
+                                Divider(
+                                  height: 1,
+                                  thickness: 1,
+                                  indent: FabTabBarTokens
+                                      .previewAcademyInputSheetFieldPaddingHorizontal,
+                                  endIndent: FabTabBarTokens
+                                      .previewAcademyInputSheetFieldPaddingHorizontal,
+                                  color: widget.style.divider,
+                                ),
+                              _buildFieldRow(
+                                label: _fieldLabels[i],
+                                controller: controllers[i],
+                                focusNode: focusNodes[i],
+                                textInputAction: i < _fieldLabels.length - 1
+                                    ? TextInputAction.next
+                                    : TextInputAction.done,
+                                onSubmitted: submitActions[i],
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewAcademyInputSheetIconButton extends StatelessWidget {
+  final Color backgroundColor;
+  final Color borderColor;
+  final IconData icon;
+  final Color iconColor;
+  final VoidCallback onPressed;
+
+  const _PreviewAcademyInputSheetIconButton({
+    required this.backgroundColor,
+    required this.borderColor,
+    required this.icon,
+    required this.iconColor,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: backgroundColor,
+        border: Border.all(color: borderColor, width: 0.5),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 36,
+            height: 36,
+            child: Icon(icon, size: 20, color: iconColor),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewAcademyInputSheetConfirmPill extends StatelessWidget {
+  final Color borderColor;
+  final VoidCallback onPressed;
+
+  const _PreviewAcademyInputSheetConfirmPill({
+    required this.borderColor,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: FabTabBarTokens.previewConfirmActionColor,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: borderColor, width: 0.5),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(999),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(999),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+            child: Icon(
+              Icons.check,
+              size: 22,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Preview — 지불 방식 메뉴 앵커(위·아래 화살표). 행 전체 탭은 [PreviewAcademyInfoRow.onTap].
+class PreviewAcademyPaymentMenuAnchor extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+
+  const PreviewAcademyPaymentMenuAnchor({
+    super.key,
+    required this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: FabTabBarTokens.previewAcademyChevronSize,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.keyboard_arrow_up,
+            size: 14,
+            color: style.chevron,
+          ),
+          Icon(
+            Icons.keyboard_arrow_down,
+            size: 14,
+            color: style.chevron,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Preview — 루트 오버레이 + 분리된 배리어/메뉴 레이어.
+class _PreviewAcademyGlassMenuOverlay extends StatefulWidget {
+  final double left;
+  final double top;
+  final double menuWidth;
+  final PreviewAcademyPanelStyle style;
+  final String selectedId;
+  final List<PreviewAcademyMenuOption> options;
+  final ValueChanged<String?> onClosed;
+
+  const _PreviewAcademyGlassMenuOverlay({
+    required this.left,
+    required this.top,
+    required this.menuWidth,
+    required this.style,
+    required this.selectedId,
+    required this.options,
+    required this.onClosed,
+  });
+
+  @override
+  State<_PreviewAcademyGlassMenuOverlay> createState() =>
+      _PreviewAcademyGlassMenuOverlayState();
+}
+
+class _PreviewAcademyGlassMenuOverlayState
+    extends State<_PreviewAcademyGlassMenuOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  bool _isClosing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: FabTabBarTokens.previewAcademyMenuOpenDuration,
+      reverseDuration: FabTabBarTokens.previewAcademyMenuCloseDuration,
+    );
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _close([String? result]) async {
+    if (_isClosing) return;
+    _isClosing = true;
+    await _controller.reverse();
+    if (mounted) {
+      widget.onClosed(result);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final barrierOpacity =
+        Curves.easeOut.transform(_controller.value.clamp(0.0, 1.0));
+
+    return Material(
+      type: MaterialType.transparency,
+      color: Colors.transparent,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _close(),
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 0.22 * barrierOpacity),
+              ),
+            ),
+          ),
+          Positioned(
+            left: widget.left,
+            top: widget.top,
+            width: widget.menuWidth,
+            child: _PreviewAcademyGlassMenuTransition(
+              animation: _controller,
+              child: _PreviewAcademyGlassMenuPanel(
+                style: widget.style,
+                selectedId: widget.selectedId,
+                options: widget.options,
+                onOptionSelected: (id) => _close(id),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Preview — iOS 글래스 드롭다운 메뉴.
 class PreviewAcademyGlassMenu {
   PreviewAcademyGlassMenu._();
@@ -597,191 +1499,38 @@ class PreviewAcademyGlassMenu {
         anchor.localToGlobal(anchor.size.bottomRight(Offset.zero));
     final screenSize = MediaQuery.sizeOf(context);
     const menuWidth = 240.0;
+    final top = anchorBottomRight.dy + 6;
+    final left = (anchorBottomRight.dx - menuWidth)
+        .clamp(8.0, screenSize.width - menuWidth - 8);
 
-    return showGeneralDialog<String>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: '닫기',
-      barrierColor: Colors.transparent,
-      transitionDuration: FabTabBarTokens.previewAcademyMenuOpenDuration,
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return child;
-      },
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        final top = anchorBottomRight.dy + 6;
-        final left = (anchorBottomRight.dx - menuWidth)
-            .clamp(8.0, screenSize.width - menuWidth - 8);
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final completer = Completer<String?>();
+    late final OverlayEntry entry;
 
-        return Stack(
-          children: [
-            Positioned(
-              left: left,
-              top: top,
-              width: menuWidth,
-              child: _PreviewAcademyGlassMenuTransition(
-                animation: animation,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(
-                    FabTabBarTokens.previewAcademyMenuRadius,
-                  ),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(
-                      sigmaX: FabTabBarTokens.fabBarBlurSigma,
-                      sigmaY: FabTabBarTokens.fabBarBlurSigma,
-                    ),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xB31C1C1E)
-                            : const Color(0xB3FFFFFF),
-                        borderRadius: BorderRadius.circular(
-                          FabTabBarTokens.previewAcademyMenuRadius,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x26000000),
-                            blurRadius: 24,
-                            offset: Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (int i = 0; i < options.length; i++)
-                              Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () => Navigator.of(dialogContext)
-                                      .pop(options[i].id),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 14,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 28,
-                                          child: options[i].id == selectedId
-                                              ? Icon(
-                                                  Icons.check,
-                                                  size: FabTabBarTokens
-                                                      .previewAcademyBaseFontSize,
-                                                  color: style.title,
-                                                )
-                                              : null,
-                                        ),
-                                        Expanded(
-                                          child: Text(
-                                            options[i].label,
-                                            style: FabTabBarTokens
-                                                .previewBodyTextStyle(
-                                              style,
-                                              color: style.title,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-/// Preview — 지불 방식 iOS형 값 + 위·아래 화살표 + 체크 메뉴.
-class PreviewAcademyPaymentTypeSelector extends StatefulWidget {
-  final PreviewAcademyPanelStyle style;
-  final String selectedId;
-  final String valueLabel;
-  final List<PreviewAcademyMenuOption> options;
-  final ValueChanged<String> onSelected;
-
-  const PreviewAcademyPaymentTypeSelector({
-    super.key,
-    required this.style,
-    required this.selectedId,
-    required this.valueLabel,
-    required this.options,
-    required this.onSelected,
-  });
-
-  @override
-  State<PreviewAcademyPaymentTypeSelector> createState() =>
-      _PreviewAcademyPaymentTypeSelectorState();
-}
-
-class _PreviewAcademyPaymentTypeSelectorState
-    extends State<PreviewAcademyPaymentTypeSelector> {
-  final GlobalKey _anchorKey = GlobalKey();
-
-  Future<void> _openMenu() async {
-    final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return;
-
-    final pickedId = await PreviewAcademyGlassMenu.show(
-      context: context,
-      anchor: box,
-      style: widget.style,
-      selectedId: widget.selectedId,
-      options: widget.options,
-    );
-
-    if (pickedId != null) {
-      widget.onSelected(pickedId);
+    void removeEntry() {
+      entry.remove();
+      entry.dispose();
     }
-  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _openMenu,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              widget.valueLabel,
-              style: FabTabBarTokens.previewRowValueStyle(widget.style),
-            ),
-            const SizedBox(width: 4),
-            Column(
-              key: _anchorKey,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.keyboard_arrow_up,
-                  size: 14,
-                  color: widget.style.chevron,
-                ),
-                Icon(
-                  Icons.keyboard_arrow_down,
-                  size: 14,
-                  color: widget.style.chevron,
-                ),
-              ],
-            ),
-          ],
-        ),
+    entry = OverlayEntry(
+      builder: (overlayContext) => _PreviewAcademyGlassMenuOverlay(
+        left: left,
+        top: top,
+        menuWidth: menuWidth,
+        style: style,
+        selectedId: selectedId,
+        options: options,
+        onClosed: (result) {
+          removeEntry();
+          if (!completer.isCompleted) {
+            completer.complete(result);
+          }
+        },
       ),
     );
+
+    overlay.insert(entry);
+    return completer.future;
   }
 }
 
