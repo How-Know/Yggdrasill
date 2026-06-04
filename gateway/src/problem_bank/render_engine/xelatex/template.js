@@ -2170,17 +2170,21 @@ function boxContentIsCenteredOnly(lines) {
   if (joined.includes('[수식줄바꿈')) return false;
   if (/[가-힣ㄱ-ㅎ]/.test(joined)) return false;
   if (/\\(?:bullet|circ)\b/.test(joined)) return false;
+  if (/[•●∙◦○]/.test(joined)) return false;
   if (/[❶❷❸❹❺❻❼❽❾❿]/.test(joined)) return false;
   if (BOGI_ITEM_RE.test(joined)) return false;
   return true;
 }
 
-// "\bullet" / "\circ" 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
-const SYMBOL_LABEL_LINE_RE = /^\s*(?:\\(bullet|circ)\b|([❶❷❸❹❺❻❼❽❾❿]))\s*/;
+// "\bullet" / "\circ" / 리터럴 글머리표(•●∙◦○) 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
+// HWPX 추출본은 \bullet 명령 대신 리터럴 가운데점 문자(U+2022 등)를 그대로 내려보내므로
+// 이들도 (가)/(나) 라벨과 동일하게 "구역 시작" 신호로 인식해 줄바꿈+들여쓰기를 적용한다.
+const SYMBOL_LABEL_LINE_RE = /^\s*(?:\\(bullet|circ)\b|([❶❷❸❹❺❻❼❽❾❿])|([•●∙◦○]))\s*/;
 const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
 
 function symbolLabelTex(symbol) {
-  if (symbol === 'circ') return `$\\circ$\\ `;
+  // 빈 동그라미(○/◦) 와 \circ 는 빈 원으로, 채워진 점(•/●/∙) 과 \bullet 은 채워진 점으로.
+  if (symbol === 'circ' || symbol === '○' || symbol === '◦') return `$\\circ$\\ `;
   if (/^[❶❷❸❹❺❻❼❽❾❿]$/.test(symbol)) return `${escapeLatexText(symbol)}\\hspace{0.45em}`;
   return `$\\bullet$\\ `;
 }
@@ -2191,7 +2195,7 @@ function symbolLabelTex(symbol) {
 //   - \ (backslash-space) 를 뒤에 붙여 기호 뒤 1공백을 LaTeX 에서 절대 소멸하지 않도록 보장
 function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) {
   const match = String(rawLine || '').match(SYMBOL_LABEL_LINE_RE);
-  const symbol = match ? (match[1] || match[2]) : 'bullet';
+  const symbol = match ? (match[1] || match[2] || match[3]) : 'bullet';
   const stripped = String(rawLine || '').replace(SYMBOL_LABEL_LINE_RE, '');
   const withFigs = replaceFigureMarkers
     ? replaceFigureMarkers(stripped)
@@ -2207,7 +2211,7 @@ function renderSymbolLabelLine(rawLine, equations, replaceFigureMarkers = null) 
 function decoSectionLabelTex(rawLine) {
   const line = String(rawLine || '').trim();
   const symbol = line.match(SYMBOL_LABEL_LINE_RE);
-  if (symbol) return symbolLabelTex(symbol[1] || symbol[2]);
+  if (symbol) return symbolLabelTex(symbol[1] || symbol[2] || symbol[3]);
   const labelMatch = line.match(BOGI_ITEM_RE);
   if (!labelMatch) return '';
   const labelText = bogiLabelTextFromMatch(labelMatch);
@@ -5623,7 +5627,9 @@ export function buildAnswerTexSource(answer, options = {}) {
     .join('\n');
 
   const lines = [
-    `\\documentclass[12pt,varwidth=${safeWidth}cm]{standalone}`,
+    // border 상단을 넉넉히 줘서 분수 분자처럼 콘텐츠 박스를 살짝 넘치는 잉크가
+    // standalone crop 에 잘리지 않도록 한다. (최종 프레이밍은 픽셀 단위 트림이 함)
+    `\\documentclass[12pt,border={6pt 8pt 6pt 16pt},varwidth=${safeWidth}cm]{standalone}`,
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
     '\\usepackage{array}',
@@ -5631,10 +5637,12 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\XeTeXlinebreaklocale ""',
     '\\XeTeXlinebreakskip=0pt plus 0pt minus 0pt',
     '\\tolerance=9999',
-    '\\emergencystretch=0pt',
-    // 인라인 수식 내부 binary op / relation 위치에서 자동 줄바꿈 차단.
-    '\\binoppenalty=10000',
-    '\\relpenalty=10000',
+    '\\emergencystretch=1em',
+    // 정답 렌더는 (질문 렌더와 달리) 긴 수식이 답칸 너비를 넘으면 +/= 에서 줄바꿈
+    // 되어 wrap 되어야 한다. 그래서 binoppenalty/relpenalty 를 TeX 기본값으로 두어
+    // 자동 줄바꿈을 허용한다. (10000 은 줄바꿈 완전 차단이라 긴 수식이 잘렸음)
+    '\\binoppenalty=700',
+    '\\relpenalty=500',
     '\\usepackage{xcolor}',
     '\\usepackage{graphicx}',
     '\\usepackage{wrapfig}',
@@ -5650,6 +5658,14 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
+    // 정답 단답 렌더는 standalone(varwidth)로 콘텐츠 박스에 딱 맞춰 페이지를
+    // 자른다. 그런데 \mtsymmathbox(=\YggInlineMathBox)는 인라인 수식의 ht/dp 를
+    // (ht+dp)/2 로 줄여 줄 높이를 안정화하는데, 분수처럼 분자가 큰 수식은
+    // 글리프가 선언된 박스 높이 위로 넘쳐(top overflow) standalone 가 분자 윗부분을
+    // 잘라버린다. 단답 렌더에서는 줄 높이 안정화가 필요 없고(픽셀 단위 트림이
+    // 상단 22px 패딩으로 프레이밍함) 오히려 잘림만 유발하므로 identity 로 끈다.
+    // (멀티라인 박스 경로도 같은 이유로 \mtsymmathbox 를 identity 로 둔다.)
+    '\\renewcommand{\\mtsymmathbox}[1]{#1}',
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
     hangulFontDirective(fontRegularPath, fontFamily, fontBold),

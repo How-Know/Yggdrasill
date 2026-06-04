@@ -74,7 +74,9 @@ class _SettingsBaselinePreviewScreenState
               },
             ),
             const Expanded(
-              child: SettingsScreen(),
+              child: SettingsScreen(
+                previewUseFabStyleTabBar: true,
+              ),
             ),
           ],
         ),

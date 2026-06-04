@@ -155,11 +155,11 @@ typedef ProblemBankPreviewGeneratePdfCallback = Future<void> Function(
   ProblemBankPreviewRefreshRequest request,
 );
 
-typedef ProblemBankPreviewSaveSettingsCallback = Future<void> Function(
+typedef ProblemBankPreviewSaveSettingsCallback = Future<bool> Function(
   ProblemBankPreviewRefreshRequest request,
 );
 
-typedef ProblemBankPreviewCreateAssignmentCallback = Future<void> Function(
+typedef ProblemBankPreviewCreateAssignmentCallback = Future<bool> Function(
   ProblemBankPreviewRefreshRequest request,
 );
 
@@ -409,9 +409,7 @@ class _ProblemBankExportServerPreviewDialogState
     // V2 (xelatex-v2) 는 한글-수식 시각 정렬·줄간격 대칭을 새로 잡는 별도 파이프라인.
     //   V1 (xelatex) 캐시·매크로와 완전히 격리되어 동작하므로, V2 가 명시적으로 들어오면
     //   그대로 보존한다.
-    _mathEngine = initialEngine == 'mathjax-svg'
-        ? 'mathjax-svg'
-        : 'xelatex-v2';
+    _mathEngine = initialEngine == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex-v2';
     _previewFailureMessage = null;
     _editingPresetId = widget.initialEditingPresetId.trim();
     _editingPresetName = widget.initialEditingPresetName.trim();
@@ -2241,7 +2239,10 @@ class _ProblemBankExportServerPreviewDialogState
         presetIdToUpdate: '',
         assignmentFlowName: assignmentPrompt.flowName,
       );
-      await callback(payload);
+      final created = await callback(payload);
+      if (created && mounted) {
+        Navigator.of(context).pop();
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -2275,7 +2276,8 @@ class _ProblemBankExportServerPreviewDialogState
         presetDisplayName: presetDisplayName,
         presetIdToUpdate: presetId,
       );
-      await callback(payload);
+      final saved = await callback(payload);
+      if (!saved) return;
       if (mounted) {
         setState(() {
           _editingPresetName = presetDisplayName;
@@ -2308,7 +2310,10 @@ class _ProblemBankExportServerPreviewDialogState
         presetDisplayName: presetDisplayName,
         presetIdToUpdate: '',
       );
-      await callback(payload);
+      final saved = await callback(payload);
+      if (saved && mounted) {
+        Navigator.of(context).pop();
+      }
     } finally {
       if (mounted) {
         setState(() {

@@ -59,7 +59,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_stable_01';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_table_overflow_fit_04';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_deco_bullet_label_01';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,

@@ -550,7 +550,7 @@ class _GradingModePageState extends State<GradingModePage> {
       _resolveEntryCoverSource(
     _GradingGroupEntry entry,
   ) {
-    if (_isPrintCoverEntry(entry)) {
+    if (_isPrintCoverEntry(entry) || _gradingEntryIsProblemBankSource(entry)) {
       return (bookId: '', gradeLabel: '', disableFlowFallback: true);
     }
     final summaryBookId = (entry.summary.bookId ?? '').trim();
@@ -1046,6 +1046,16 @@ class _GradingGroupEntry {
 
   bool get hasSubmittedChild => children.any(
       (child) => child.phase == 3 && child.status != HomeworkStatus.completed);
+}
+
+/// 문제은행 출처(추출 교재) 과제인지 판별한다.
+/// 이 경우 채점 카드 배경에 추출 교재 표지를 쓰지 않고 어두운 회색으로 둔다.
+bool _gradingEntryIsProblemBankSource(_GradingGroupEntry entry) {
+  if ((entry.summary.pbPresetId ?? '').trim().isNotEmpty) return true;
+  for (final child in entry.children) {
+    if ((child.pbPresetId ?? '').trim().isNotEmpty) return true;
+  }
+  return false;
 }
 
 class _GradingCardLayout {
@@ -1832,10 +1842,14 @@ class _SubmittedHomeworkCard extends StatelessWidget {
         final hw = entry.summary;
         final provider = _coverImageProvider(snapshot.data ?? '');
         final hasImage = provider != null;
-        final fallbackCoverColor = _coverColorForType(hw);
+        final isProblemBankSource = _gradingEntryIsProblemBankSource(entry);
+        final fallbackCoverColor = isProblemBankSource
+            ? const Color(0xFF2B2B2B)
+            : _coverColorForType(hw);
         final isPrintCover = _isPrintCoverEntry(entry);
-        final useDarkOverlayText = isPrintCover ||
-            (!hasImage && fallbackCoverColor.computeLuminance() > 0.6);
+        final useDarkOverlayText = !isProblemBankSource &&
+            (isPrintCover ||
+                (!hasImage && fallbackCoverColor.computeLuminance() > 0.6));
         final overlayNameSize = (41.0 * scale).clamp(22.0, 41.0).toDouble();
         final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
         final overlayNameColor = useDarkOverlayText

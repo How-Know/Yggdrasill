@@ -1180,7 +1180,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           }
           LearningProblemBankService.generatedAssignmentChanged.add(null);
           await _refreshTemplates();
-          if (!mounted) return;
+          if (!mounted) return false;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
@@ -1190,6 +1190,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
               ),
             ),
           );
+          return true;
         },
         onCreateAssignmentRequested: (request) async {
           final renderConfig = _assignmentRenderConfigForPreset(
@@ -1215,10 +1216,11 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                 _boolFromConfig(renderConfig, 'includeExplanation', false),
             displayName: displayName,
           );
-          if (!mounted) return;
+          if (!mounted) return false;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('미리 만든 과제를 추가로 생성했습니다.')),
           );
+          return true;
         },
       );
     } catch (e) {

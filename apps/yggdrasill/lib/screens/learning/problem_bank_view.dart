@@ -1266,6 +1266,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     });
   }
 
+  void _resetQuestionSelectionForNextBuild() {
+    if (!mounted) return;
+    setState(() {
+      _selectedQuestionIds.clear();
+      _cartQuestionIds.clear();
+      _showOnlySelectedQuestions = false;
+    });
+  }
+
   void _commitQuestionReorder({
     required String id,
     required int targetIndex,
@@ -2514,7 +2523,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final academyId = _academyId;
           if (academyId == null || academyId.isEmpty) {
             _showSnack('학원 정보가 없어 세팅 저장을 진행할 수 없습니다.');
-            return;
+            return false;
           }
           setState(() {
             _exportSettings = _exportSettings.copyWith(
@@ -2534,7 +2543,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               _selectedQuestionUidsInCurrentOrder(selected);
           if (orderedQuestionUids.isEmpty) {
             _showSnack('저장할 문항이 없습니다.');
-            return;
+            return false;
           }
           final renderPatch = buildRenderPatch(request);
           final renderConfig = <String, dynamic>{
@@ -2550,7 +2559,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final sourceDocumentId = selected.first.documentId.trim();
           if (sourceDocumentId.isEmpty) {
             _showSnack('원본 문서 정보를 찾지 못했습니다.');
-            return;
+            return false;
           }
           try {
             final presetIdToUpdate = request.presetIdToUpdate.trim();
@@ -2584,26 +2593,31 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   ? '프리셋 업데이트 완료 ($effectiveCount문항)'
                   : '새 프리셋 저장 완료 ($effectiveCount문항)',
             );
+            if (presetIdToUpdate.isEmpty) {
+              _resetQuestionSelectionForNextBuild();
+            }
+            return true;
           } catch (e) {
             _showSnack('세팅 저장 실패: $e');
+            return false;
           }
         },
         onCreateAssignmentRequested: (request) async {
           final academyId = _academyId;
           if (academyId == null || academyId.isEmpty) {
             _showSnack('학원 정보가 없어 과제 생성을 진행할 수 없습니다.');
-            return;
+            return false;
           }
           final orderedQuestionUids =
               _selectedQuestionUidsInCurrentOrder(selected);
           if (orderedQuestionUids.isEmpty) {
             _showSnack('과제로 저장할 문항이 없습니다.');
-            return;
+            return false;
           }
           final sourceDocumentId = selected.first.documentId.trim();
           if (sourceDocumentId.isEmpty) {
             _showSnack('원본 문서 정보를 찾지 못했습니다.');
-            return;
+            return false;
           }
           setState(() {
             _exportSettings = _exportSettings.copyWith(
@@ -2645,8 +2659,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 ? result.selectedQuestionUids.length
                 : orderedQuestionUids.length;
             _showSnack('미리 만든 과제 생성 완료 ($count문항)');
+            _resetQuestionSelectionForNextBuild();
+            return true;
           } catch (e) {
             _showSnack('과제 생성 실패: $e');
+            return false;
           }
         },
       );

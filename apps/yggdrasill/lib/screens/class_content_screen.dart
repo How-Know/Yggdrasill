@@ -646,399 +646,422 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 return ValueListenableBuilder<DateTime>(
                   valueListenable: attendanceAnchorDateNotifier,
                   builder: (context, anchorDate, ___) {
-                // sessionOverrides 변화도 함께 트리거
-                final _ = DataManager.instance.sessionOverridesNotifier.value;
-                final list =
-                    _computeAttendingStudentsForDate(anchorDate);
-                final headerDateTime = _headerDisplayDateTime(anchorDate);
-                final attendingStudentIds =
-                    list.map((s) => s.id).toList(growable: false);
-                final studentNamesById = <String, String>{
-                  for (final s in list) s.id: s.name,
-                };
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ValueListenableBuilder<int>(
-                      valueListenable: HomeworkStore.instance.revision,
-                      builder: (context, homeworkRevision, _) {
-                        final submittedCount = _isGradingMode
-                            ? _countSubmittedHomeworkItems(list)
-                            : 0;
-                        return Padding(
-                          padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
-                              final double controlsReserve =
-                                  _isGradingMode ? 380 : 270;
-                              final double leftBudget = math.max(
-                                0.0,
-                                constraints.maxWidth -
-                                    controlsReserve -
-                                    56, // 좌우 패딩·간격 여유
-                              );
-                              final double headerScale =
-                                  (constraints.maxWidth / 1680.0)
-                                      .clamp(0.68, 1.0);
-                              final double dateTimeFontSize =
-                                  (50 * headerScale).clamp(26.0, 50.0);
-                              final double statsFontSize =
-                                  (38 * headerScale).clamp(18.0, 40.0);
-                              final double weatherIconSize =
-                                  dateTimeFontSize * 1.1;
-                              // 한 줄에 날짜+통계까지 넣기에 부족하면 통계만 2번째 줄.
-                              final bool statsOnSecondLine =
-                                  leftBudget < 920 * headerScale;
-                              final Widget dateLine = Wrap(
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 12 * headerScale,
-                                runSpacing: 4,
-                                children: [
-                                  HomeHeaderWeatherIcon(
-                                    iconSize: weatherIconSize,
-                                    color: Colors.white70,
-                                  ),
-                                  Text(
-                                    _formatDateWithWeekdayAndTime(
-                                        headerDateTime),
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: dateTimeFontSize,
-                                      fontWeight: FontWeight.bold,
-                                      height: 1.0,
-                                    ),
-                                  ),
-                                  if (!isAttendanceAnchorToday(anchorDate))
-                                    Text(
-                                      '슬라이드시트 기준일',
-                                      style: TextStyle(
-                                        color: Colors.white38,
-                                        fontSize: (14 * headerScale)
-                                            .clamp(11.0, 14.0),
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                ],
-                              );
-                              final Widget statsLine = Wrap(
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 14 * headerScale,
-                                runSpacing: 4,
-                                children: [
-                                  if (!_isGradingMode)
-                                    Text(
-                                      '등원: ${list.length}명',
-                                      style: TextStyle(
-                                        color: Colors.white60,
-                                        fontSize: statsFontSize,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    )
-                                  else
-                                    Text(
-                                      '제출: $submittedCount개',
-                                      style: TextStyle(
-                                        color: const Color(0xFF8FB3FF),
-                                        fontSize: statsFontSize,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                ],
-                              );
-                              final Widget infoBlock = statsOnSecondLine
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        dateLine,
-                                        SizedBox(height: 6 * headerScale),
-                                        statsLine,
-                                      ],
-                                    )
-                                  : Wrap(
-                                      crossAxisAlignment:
-                                          WrapCrossAlignment.center,
-                                      spacing: 18 * headerScale,
-                                      runSpacing: 6,
-                                      children: [
-                                        HomeHeaderWeatherIcon(
-                                          iconSize: weatherIconSize,
-                                          color: Colors.white70,
-                                        ),
-                                        Text(
-                                          _formatDateWithWeekdayAndTime(
-                                              headerDateTime),
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: dateTimeFontSize,
-                                            fontWeight: FontWeight.bold,
-                                            height: 1.0,
-                                          ),
-                                        ),
-                                        if (!_isGradingMode)
-                                          Text(
-                                            '등원: ${list.length}명',
-                                            style: TextStyle(
-                                              color: Colors.white60,
-                                              fontSize: statsFontSize,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          )
-                                        else
-                                          Text(
-                                            '제출: $submittedCount개',
-                                            style: TextStyle(
-                                              color: const Color(0xFF8FB3FF),
-                                              fontSize: statsFontSize,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                      ],
-                                    );
-                              final Widget controls = Wrap(
-                                alignment: WrapAlignment.end,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 12,
-                                runSpacing: 12,
-                                children: [
-                                  _buildHeaderPillIconButton(
-                                    icon: Icons.link_rounded,
-                                    tooltip: 'M5 바인딩 이력',
-                                    iconColor: const Color(0xFFD0DDDD),
-                                    onTap: () => unawaited(
-                                      _showM5BindingHistoryDialog(
-                                        context: context,
-                                      ),
-                                    ),
-                                  ),
-                                  _buildHeaderPillIconButton(
-                                    icon: Icons.print,
-                                    tooltip: '인쇄',
-                                    iconColor: _printPickMode
-                                        ? const Color(0xFFEAF2F2)
-                                        : const Color(0xFFD0DDDD),
-                                    onTap: () => unawaited(
-                                      _openHeaderHomeworkPrintFlow(
-                                        attendingStudents: list,
-                                      ),
-                                    ),
-                                  ),
-                                  if (_isGradingMode)
-                                    ValueListenableBuilder<bool>(
-                                      valueListenable: rightSideSheetOpen,
-                                      builder: (context, isOpen, _) {
-                                        return _buildHeaderPillIconButton(
-                                          icon: isOpen
-                                              ? Icons
-                                                  .keyboard_double_arrow_right_rounded
-                                              : Icons
-                                                  .keyboard_double_arrow_left_rounded,
-                                          tooltip: isOpen
-                                              ? '오른쪽 시트 닫기'
-                                              : '오른쪽 시트 열기',
-                                          iconColor: const Color(0xFFD0DDDD),
-                                          onTap: () async {
-                                            blockRightSideSheetOpen.value =
-                                                false;
-                                            final action =
-                                                toggleRightSideSheetAction;
-                                            if (action != null) {
-                                              await action();
-                                            }
-                                          },
-                                        );
-                                      },
-                                    ),
-                                  if (_isGradingMode)
-                                    _buildHeaderPillIconButton(
-                                      icon: Icons.history_rounded,
-                                      tooltip: '채점 이력',
-                                      iconColor: const Color(0xFFD0DDDD),
-                                      onTap: () {
-                                        unawaited(
-                                          _showGradingHistoryDialog(
-                                            context: context,
-                                            attendingStudentIds:
-                                                attendingStudentIds,
-                                            studentNamesById: studentNamesById,
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
+                    // sessionOverrides 변화도 함께 트리거
+                    final _ =
+                        DataManager.instance.sessionOverridesNotifier.value;
+                    final list = _computeAttendingStudentsForDate(anchorDate);
+                    final headerDateTime = _headerDisplayDateTime(anchorDate);
+                    final attendingStudentIds =
+                        list.map((s) => s.id).toList(growable: false);
+                    final studentNamesById = <String, String>{
+                      for (final s in list) s.id: s.name,
+                    };
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ValueListenableBuilder<int>(
+                          valueListenable: HomeworkStore.instance.revision,
+                          builder: (context, homeworkRevision, _) {
+                            final submittedCount = _isGradingMode
+                                ? _countSubmittedHomeworkItems(list)
+                                : 0;
+                            return Padding(
+                              padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
+                                  final double controlsReserve =
+                                      _isGradingMode ? 380 : 270;
+                                  final double leftBudget = math.max(
+                                    0.0,
+                                    constraints.maxWidth -
+                                        controlsReserve -
+                                        56, // 좌우 패딩·간격 여유
+                                  );
+                                  final double headerScale =
+                                      (constraints.maxWidth / 1680.0)
+                                          .clamp(0.68, 1.0);
+                                  final double dateTimeFontSize =
+                                      (50 * headerScale).clamp(26.0, 50.0);
+                                  final double statsFontSize =
+                                      (38 * headerScale).clamp(18.0, 40.0);
+                                  final double weatherIconSize =
+                                      dateTimeFontSize * 1.1;
+                                  // 한 줄에 날짜+통계까지 넣기에 부족하면 통계만 2번째 줄.
+                                  final bool statsOnSecondLine =
+                                      leftBudget < 920 * headerScale;
+                                  final Widget dateLine = Wrap(
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    spacing: 12 * headerScale,
+                                    runSpacing: 4,
                                     children: [
-                                      Switch(
-                                        value: _isGradingMode,
-                                        onChanged: (value) {
-                                          setState(() {
-                                            _isGradingMode = value;
-                                            if (!value) {
-                                              _batchConfirmService
-                                                  .clearPending();
-                                            }
-                                          });
-                                          gradingModeActive.value = value;
-                                          if (value) {
-                                            blockRightSideSheetOpen.value =
-                                                false;
-                                            _scheduleRightSheetAnswerPreload();
-                                          } else {
-                                            blockRightSideSheetOpen.value =
-                                                true;
-                                            _rightSheetPreloadDebounce
-                                                ?.cancel();
-                                            _lastRightSheetPreloadKey = '';
-                                            final closeAction =
-                                                closeRightSideSheetAction;
-                                            if (closeAction != null) {
-                                              unawaited(closeAction());
-                                            }
-                                          }
-                                        },
-                                        activeColor: kDlgAccent,
+                                      HomeHeaderWeatherIcon(
+                                        iconSize: weatherIconSize,
+                                        color: Colors.white70,
+                                      ),
+                                      Text(
+                                        _formatDateWithWeekdayAndTime(
+                                            headerDateTime),
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: dateTimeFontSize,
+                                          fontWeight: FontWeight.bold,
+                                          height: 1.0,
+                                        ),
+                                      ),
+                                      if (!isAttendanceAnchorToday(anchorDate))
+                                        Text(
+                                          '슬라이드시트 기준일',
+                                          style: TextStyle(
+                                            color: Colors.white38,
+                                            fontSize: (14 * headerScale)
+                                                .clamp(11.0, 14.0),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                    ],
+                                  );
+                                  final Widget statsLine = Wrap(
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    spacing: 14 * headerScale,
+                                    runSpacing: 4,
+                                    children: [
+                                      if (!_isGradingMode)
+                                        Text(
+                                          '등원: ${list.length}명',
+                                          style: TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: statsFontSize,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        )
+                                      else
+                                        Text(
+                                          '제출: $submittedCount개',
+                                          style: TextStyle(
+                                            color: const Color(0xFF8FB3FF),
+                                            fontSize: statsFontSize,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                    ],
+                                  );
+                                  final Widget infoBlock = statsOnSecondLine
+                                      ? Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            dateLine,
+                                            SizedBox(height: 6 * headerScale),
+                                            statsLine,
+                                          ],
+                                        )
+                                      : Wrap(
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
+                                          spacing: 18 * headerScale,
+                                          runSpacing: 6,
+                                          children: [
+                                            HomeHeaderWeatherIcon(
+                                              iconSize: weatherIconSize,
+                                              color: Colors.white70,
+                                            ),
+                                            Text(
+                                              _formatDateWithWeekdayAndTime(
+                                                  headerDateTime),
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: dateTimeFontSize,
+                                                fontWeight: FontWeight.bold,
+                                                height: 1.0,
+                                              ),
+                                            ),
+                                            if (!_isGradingMode)
+                                              Text(
+                                                '등원: ${list.length}명',
+                                                style: TextStyle(
+                                                  color: Colors.white60,
+                                                  fontSize: statsFontSize,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              )
+                                            else
+                                              Text(
+                                                '제출: $submittedCount개',
+                                                style: TextStyle(
+                                                  color:
+                                                      const Color(0xFF8FB3FF),
+                                                  fontSize: statsFontSize,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                          ],
+                                        );
+                                  final Widget controls = Wrap(
+                                    alignment: WrapAlignment.end,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    spacing: 12,
+                                    runSpacing: 12,
+                                    children: [
+                                      _buildHeaderPillIconButton(
+                                        icon: Icons.link_rounded,
+                                        tooltip: 'M5 바인딩 이력',
+                                        iconColor: const Color(0xFFD0DDDD),
+                                        onTap: () => unawaited(
+                                          _showM5BindingHistoryDialog(
+                                            context: context,
+                                          ),
+                                        ),
+                                      ),
+                                      _buildHeaderPillIconButton(
+                                        icon: Icons.print,
+                                        tooltip: '인쇄',
+                                        iconColor: _printPickMode
+                                            ? const Color(0xFFEAF2F2)
+                                            : const Color(0xFFD0DDDD),
+                                        onTap: () => unawaited(
+                                          _openHeaderHomeworkPrintFlow(
+                                            attendingStudents: list,
+                                          ),
+                                        ),
+                                      ),
+                                      if (_isGradingMode)
+                                        ValueListenableBuilder<bool>(
+                                          valueListenable: rightSideSheetOpen,
+                                          builder: (context, isOpen, _) {
+                                            return _buildHeaderPillIconButton(
+                                              icon: isOpen
+                                                  ? Icons
+                                                      .keyboard_double_arrow_right_rounded
+                                                  : Icons
+                                                      .keyboard_double_arrow_left_rounded,
+                                              tooltip: isOpen
+                                                  ? '오른쪽 시트 닫기'
+                                                  : '오른쪽 시트 열기',
+                                              iconColor:
+                                                  const Color(0xFFD0DDDD),
+                                              onTap: () async {
+                                                blockRightSideSheetOpen.value =
+                                                    false;
+                                                final action =
+                                                    toggleRightSideSheetAction;
+                                                if (action != null) {
+                                                  await action();
+                                                }
+                                              },
+                                            );
+                                          },
+                                        ),
+                                      if (_isGradingMode)
+                                        _buildHeaderPillIconButton(
+                                          icon: Icons.history_rounded,
+                                          tooltip: '채점 이력',
+                                          iconColor: const Color(0xFFD0DDDD),
+                                          onTap: () {
+                                            unawaited(
+                                              _showGradingHistoryDialog(
+                                                context: context,
+                                                attendingStudentIds:
+                                                    attendingStudentIds,
+                                                studentNamesById:
+                                                    studentNamesById,
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Switch(
+                                            value: _isGradingMode,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _isGradingMode = value;
+                                                if (!value) {
+                                                  _batchConfirmService
+                                                      .clearPending();
+                                                }
+                                              });
+                                              gradingModeActive.value = value;
+                                              if (value) {
+                                                blockRightSideSheetOpen.value =
+                                                    false;
+                                                _scheduleRightSheetAnswerPreload();
+                                              } else {
+                                                blockRightSideSheetOpen.value =
+                                                    true;
+                                                _rightSheetPreloadDebounce
+                                                    ?.cancel();
+                                                _lastRightSheetPreloadKey = '';
+                                                final closeAction =
+                                                    closeRightSideSheetAction;
+                                                if (closeAction != null) {
+                                                  unawaited(closeAction());
+                                                }
+                                              }
+                                            },
+                                            activeColor: kDlgAccent,
+                                          ),
+                                        ],
                                       ),
                                     ],
-                                  ),
-                                ],
-                              );
-                              return Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(child: infoBlock),
-                                  const SizedBox(width: 20),
-                                  controls,
-                                ],
-                              );
-                            },
-                          ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    const SizedBox(height: 20),
-                    Expanded(
-                      child: _isGradingMode
-                          ? GradingModePage(
-                              attendingStudentIds: attendingStudentIds,
-                              studentNamesById: studentNamesById,
-                              pendingConfirms: _pendingConfirms,
-                              onSubmittedCardTap:
-                                  (studentId, group, summary, children) async {
-                                final submittedChildren = children
-                                    .where(
-                                      (e) =>
-                                          e.status !=
-                                              HomeworkStatus.completed &&
-                                          e.phase == 3 &&
-                                          e.completedAt == null,
-                                    )
-                                    .toList(growable: false);
-                                if (submittedChildren.isEmpty) return;
-                                final pendingKeys = submittedChildren
-                                    .map(
-                                      (e) => (
-                                        studentId: studentId,
-                                        itemId: e.id,
-                                      ),
-                                    )
-                                    .toList(growable: false);
-                                if (submittedChildren.length == 1) {
-                                  return _handleSubmittedChipTapForPending(
-                                    context: context,
-                                    studentId: studentId,
-                                    hw: submittedChildren.first,
-                                    targetKeys: pendingKeys,
                                   );
-                                }
-                                HomeworkItem answerSeed =
-                                    submittedChildren.first;
-                                for (final child in submittedChildren) {
-                                  if (_hasDirectHomeworkTextbookLink(child)) {
-                                    answerSeed = child;
-                                    break;
-                                  }
-                                }
-                                return _handleSubmittedChipTapForPending(
-                                  context: context,
-                                  studentId: studentId,
-                                  hw: answerSeed,
-                                  targetKeys: pendingKeys,
-                                );
-                              },
-                              onHomeworkCardTap:
-                                  (studentId, group, summary, children) {
-                                if (_printPickMode) {
-                                  if (group != null) {
-                                    return _handleHomeworkGroupPrintPick(
+                                  return Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(child: infoBlock),
+                                      const SizedBox(width: 20),
+                                      controls,
+                                    ],
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        const SizedBox(height: 20),
+                        Expanded(
+                          child: _isGradingMode
+                              ? GradingModePage(
+                                  attendingStudentIds: attendingStudentIds,
+                                  studentNamesById: studentNamesById,
+                                  pendingConfirms: _pendingConfirms,
+                                  onSubmittedCardTap: (studentId, group,
+                                      summary, children) async {
+                                    final submittedChildren = children
+                                        .where(
+                                          (e) =>
+                                              e.status !=
+                                                  HomeworkStatus.completed &&
+                                              e.phase == 3 &&
+                                              e.completedAt == null,
+                                        )
+                                        .toList(growable: false);
+                                    if (submittedChildren.isEmpty) return;
+                                    final pendingKeys = submittedChildren
+                                        .map(
+                                          (e) => (
+                                            studentId: studentId,
+                                            itemId: e.id,
+                                          ),
+                                        )
+                                        .toList(growable: false);
+                                    if (submittedChildren.length == 1) {
+                                      return _handleSubmittedChipTapForPending(
+                                        context: context,
+                                        studentId: studentId,
+                                        hw: submittedChildren.first,
+                                        targetKeys: pendingKeys,
+                                      );
+                                    }
+                                    HomeworkItem answerSeed =
+                                        submittedChildren.first;
+                                    for (final child in submittedChildren) {
+                                      if (_hasDirectHomeworkTextbookLink(
+                                          child)) {
+                                        answerSeed = child;
+                                        break;
+                                      }
+                                    }
+                                    return _handleSubmittedChipTapForPending(
                                       context: context,
                                       studentId: studentId,
-                                      group: group,
-                                      summary: summary,
-                                      children: children,
+                                      hw: answerSeed,
+                                      targetKeys: pendingKeys,
                                     );
-                                  }
-                                  return _handleHomeworkPrintPick(
-                                    context: context,
-                                    studentId: studentId,
-                                    hw: summary,
-                                  );
-                                }
-                                if (group == null && children.length == 1) {
-                                  return _runHomeworkCheckDialogOnly(
-                                    context: context,
-                                    studentId: studentId,
-                                    hw: children.first,
-                                  );
-                                }
-                                return _runHomeworkCheckDialogForGroup(
-                                  context: context,
-                                  studentId: studentId,
-                                  group: group,
-                                  summary: summary,
-                                  children: children,
-                                );
-                              },
-                              onTogglePending: (studentId, itemId) {
-                                setState(() {
-                                  final key =
-                                      (studentId: studentId, itemId: itemId);
-                                  if (_pendingConfirms.containsKey(key)) {
-                                    _pendingConfirms.remove(key);
-                                  } else {
-                                    _pendingConfirms[key] = false;
-                                  }
-                                });
-                              },
-                            )
-                          : ListView.separated(
-                              scrollDirection: Axis.horizontal,
-                              padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
-                              itemCount: list.length,
-                              separatorBuilder: (_, __) => SizedBox(
-                                width: 14.4,
-                                child: Align(
-                                  alignment: Alignment.topCenter,
-                                  child: Container(
-                                    width: 1,
-                                    height:
-                                        ClassContentScreen._attendingCardHeight,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF223131),
-                                      borderRadius: BorderRadius.circular(999),
+                                  },
+                                  onHomeworkCardTap: (studentId, group, summary,
+                                      children) async {
+                                    if (_printPickMode) {
+                                      if (group != null) {
+                                        return _handleHomeworkGroupPrintPick(
+                                          context: context,
+                                          studentId: studentId,
+                                          group: group,
+                                          summary: summary,
+                                          children: children,
+                                        );
+                                      }
+                                      return _handleHomeworkPrintPick(
+                                        context: context,
+                                        studentId: studentId,
+                                        hw: summary,
+                                      );
+                                    }
+                                    _HomeworkCheckResult? checkResult;
+                                    if (group == null && children.length == 1) {
+                                      checkResult =
+                                          await _runHomeworkCheckDialogOnly(
+                                        context: context,
+                                        studentId: studentId,
+                                        hw: children.first,
+                                      );
+                                    } else {
+                                      checkResult =
+                                          await _runHomeworkCheckDialogForGroup(
+                                        context: context,
+                                        studentId: studentId,
+                                        group: group,
+                                        summary: summary,
+                                        children: children,
+                                      );
+                                    }
+                                    if (!context.mounted) return;
+                                    await _openGradingAfterHomeworkCheck(
+                                      context: context,
+                                      studentId: studentId,
+                                      checkResult: checkResult,
+                                    );
+                                  },
+                                  onTogglePending: (studentId, itemId) {
+                                    setState(() {
+                                      final key = (
+                                        studentId: studentId,
+                                        itemId: itemId
+                                      );
+                                      if (_pendingConfirms.containsKey(key)) {
+                                        _pendingConfirms.remove(key);
+                                      } else {
+                                        _pendingConfirms[key] = false;
+                                      }
+                                    });
+                                  },
+                                )
+                              : ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  padding:
+                                      const EdgeInsets.fromLTRB(24, 0, 24, 0),
+                                  itemCount: list.length,
+                                  separatorBuilder: (_, __) => SizedBox(
+                                    width: 14.4,
+                                    child: Align(
+                                      alignment: Alignment.topCenter,
+                                      child: Container(
+                                        width: 1,
+                                        height: ClassContentScreen
+                                            ._attendingCardHeight,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF223131),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                        ),
+                                      ),
                                     ),
                                   ),
+                                  itemBuilder: (ctx, i) {
+                                    return _buildStudentColumn(
+                                        context, list[i]);
+                                  },
                                 ),
-                              ),
-                              itemBuilder: (ctx, i) {
-                                return _buildStudentColumn(context, list[i]);
-                              },
-                            ),
-                    ),
-                  ],
-                );
+                        ),
+                      ],
+                    );
                   },
                 );
               },
@@ -1659,7 +1682,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   // 슬라이드시트와 동일 기준일: 등원·미하원 학생
-  List<_AttendingStudent> _computeAttendingStudentsForDate(DateTime anchorDate) {
+  List<_AttendingStudent> _computeAttendingStudentsForDate(
+      DateTime anchorDate) {
     final _ = DataManager.instance.attendanceRecordsNotifier.value;
     final __ = DataManager.instance.sessionOverridesNotifier.value;
     return _computeAttendingStudentsStatic(anchorDate);
@@ -2556,105 +2580,108 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       bool isToday(DateTime dt) => _dateOnly(dt) == today;
 
       List<_HomeworkOverviewEntry> buildOverviewEntries() {
-      final entries = <_HomeworkOverviewEntry>[];
-      final seenItemIds = <String>{};
+        final entries = <_HomeworkOverviewEntry>[];
+        final seenItemIds = <String>{};
 
-      for (final assignment in visibleAssignments) {
-        final itemId = assignment.homeworkItemId.trim();
-        if (itemId.isEmpty) continue;
-        final checks = List<HomeworkAssignmentCheck>.from(
-          checksByItem[itemId] ?? const <HomeworkAssignmentCheck>[],
-        )..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
-        final todayChecks = checks.where((c) => isToday(c.checkedAt)).toList();
-        final latestTodayCheck = todayChecks.isEmpty ? null : todayChecks.last;
-        final fallbackTitle =
-            HomeworkStore.instance.getById(studentId, itemId)?.title.trim() ??
-                '';
-        final titleRaw = assignment.title.trim().isNotEmpty
-            ? assignment.title.trim()
-            : fallbackTitle;
-        final xp = _homeworkOverviewExpandParts(
-          studentId: studentId,
-          itemId: itemId,
-          checks: checks,
-          assignedAt: assignment.assignedAt,
-        );
-        entries.add(
-          _HomeworkOverviewEntry(
-            homeworkItemId: itemId,
-            title: titleRaw.isEmpty ? '(제목 없음)' : titleRaw,
+        for (final assignment in visibleAssignments) {
+          final itemId = assignment.homeworkItemId.trim();
+          if (itemId.isEmpty) continue;
+          final checks = List<HomeworkAssignmentCheck>.from(
+            checksByItem[itemId] ?? const <HomeworkAssignmentCheck>[],
+          )..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+          final todayChecks =
+              checks.where((c) => isToday(c.checkedAt)).toList();
+          final latestTodayCheck =
+              todayChecks.isEmpty ? null : todayChecks.last;
+          final fallbackTitle =
+              HomeworkStore.instance.getById(studentId, itemId)?.title.trim() ??
+                  '';
+          final titleRaw = assignment.title.trim().isNotEmpty
+              ? assignment.title.trim()
+              : fallbackTitle;
+          final xp = _homeworkOverviewExpandParts(
+            studentId: studentId,
+            itemId: itemId,
+            checks: checks,
             assignedAt: assignment.assignedAt,
-            dueDate: assignment.dueDate,
-            checkedToday: latestTodayCheck != null,
-            checkedAt: latestTodayCheck?.checkedAt,
-            progress: latestTodayCheck?.progress ?? assignment.progress,
-            isActive: true,
-            flowLabel: homeworkOverviewFlowLabel(itemId),
-            overviewLine1Left: xp.overviewLine1Left,
-            expandLine4Left: xp.expandLine4Left,
-            expandLine4Right: xp.expandLine4Right,
-            expandLine5Left: xp.expandLine5Left,
-            expandLine5Right: xp.expandLine5Right,
-            expandChildren: xp.expandChildren,
-          ),
-        );
-        seenItemIds.add(itemId);
-      }
-
-      for (final entry in checksByItem.entries) {
-        final itemId = entry.key.trim();
-        if (itemId.isEmpty ||
-            seenItemIds.contains(itemId) ||
-            reservedItemIds.contains(itemId)) {
-          continue;
+          );
+          entries.add(
+            _HomeworkOverviewEntry(
+              homeworkItemId: itemId,
+              title: titleRaw.isEmpty ? '(제목 없음)' : titleRaw,
+              assignedAt: assignment.assignedAt,
+              dueDate: assignment.dueDate,
+              checkedToday: latestTodayCheck != null,
+              checkedAt: latestTodayCheck?.checkedAt,
+              progress: latestTodayCheck?.progress ?? assignment.progress,
+              isActive: true,
+              flowLabel: homeworkOverviewFlowLabel(itemId),
+              overviewLine1Left: xp.overviewLine1Left,
+              expandLine4Left: xp.expandLine4Left,
+              expandLine4Right: xp.expandLine4Right,
+              expandLine5Left: xp.expandLine5Left,
+              expandLine5Right: xp.expandLine5Right,
+              expandChildren: xp.expandChildren,
+            ),
+          );
+          seenItemIds.add(itemId);
         }
-        final checks = List<HomeworkAssignmentCheck>.from(entry.value)
-          ..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
-        final todayChecks = checks.where((c) => isToday(c.checkedAt)).toList();
-        if (todayChecks.isEmpty) continue;
-        final latestTodayCheck = todayChecks.last;
 
-        final briefs = List<HomeworkAssignmentBrief>.from(
-          assignmentsByItem[itemId] ?? const <HomeworkAssignmentBrief>[],
-        )..sort((a, b) => b.assignedAt.compareTo(a.assignedAt));
-        final latestBrief = briefs.isEmpty ? null : briefs.first;
-        final fallbackTitle =
-            HomeworkStore.instance.getById(studentId, itemId)?.title.trim() ??
-                '';
-        final xp2 = _homeworkOverviewExpandParts(
-          studentId: studentId,
-          itemId: itemId,
-          checks: checks,
-          assignedAt: latestBrief?.assignedAt ?? latestTodayCheck.checkedAt,
-        );
-        entries.add(
-          _HomeworkOverviewEntry(
-            homeworkItemId: itemId,
-            title: fallbackTitle.isEmpty ? '(제목 없음)' : fallbackTitle,
+        for (final entry in checksByItem.entries) {
+          final itemId = entry.key.trim();
+          if (itemId.isEmpty ||
+              seenItemIds.contains(itemId) ||
+              reservedItemIds.contains(itemId)) {
+            continue;
+          }
+          final checks = List<HomeworkAssignmentCheck>.from(entry.value)
+            ..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+          final todayChecks =
+              checks.where((c) => isToday(c.checkedAt)).toList();
+          if (todayChecks.isEmpty) continue;
+          final latestTodayCheck = todayChecks.last;
+
+          final briefs = List<HomeworkAssignmentBrief>.from(
+            assignmentsByItem[itemId] ?? const <HomeworkAssignmentBrief>[],
+          )..sort((a, b) => b.assignedAt.compareTo(a.assignedAt));
+          final latestBrief = briefs.isEmpty ? null : briefs.first;
+          final fallbackTitle =
+              HomeworkStore.instance.getById(studentId, itemId)?.title.trim() ??
+                  '';
+          final xp2 = _homeworkOverviewExpandParts(
+            studentId: studentId,
+            itemId: itemId,
+            checks: checks,
             assignedAt: latestBrief?.assignedAt ?? latestTodayCheck.checkedAt,
-            dueDate: latestBrief?.dueDate,
-            checkedToday: true,
-            checkedAt: latestTodayCheck.checkedAt,
-            progress: latestTodayCheck.progress,
-            isActive: false,
-            flowLabel: homeworkOverviewFlowLabel(itemId),
-            overviewLine1Left: xp2.overviewLine1Left,
-            expandLine4Left: xp2.expandLine4Left,
-            expandLine4Right: xp2.expandLine4Right,
-            expandLine5Left: xp2.expandLine5Left,
-            expandLine5Right: xp2.expandLine5Right,
-            expandChildren: xp2.expandChildren,
-          ),
-        );
-      }
+          );
+          entries.add(
+            _HomeworkOverviewEntry(
+              homeworkItemId: itemId,
+              title: fallbackTitle.isEmpty ? '(제목 없음)' : fallbackTitle,
+              assignedAt: latestBrief?.assignedAt ?? latestTodayCheck.checkedAt,
+              dueDate: latestBrief?.dueDate,
+              checkedToday: true,
+              checkedAt: latestTodayCheck.checkedAt,
+              progress: latestTodayCheck.progress,
+              isActive: false,
+              flowLabel: homeworkOverviewFlowLabel(itemId),
+              overviewLine1Left: xp2.overviewLine1Left,
+              expandLine4Left: xp2.expandLine4Left,
+              expandLine4Right: xp2.expandLine4Right,
+              expandLine5Left: xp2.expandLine5Left,
+              expandLine5Right: xp2.expandLine5Right,
+              expandChildren: xp2.expandChildren,
+            ),
+          );
+        }
 
-      entries.sort((a, b) {
-        if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
-        final leftTs = a.checkedAt ?? a.assignedAt;
-        final rightTs = b.checkedAt ?? b.assignedAt;
-        return rightTs.compareTo(leftTs);
-      });
-      return entries;
+        entries.sort((a, b) {
+          if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
+          final leftTs = a.checkedAt ?? a.assignedAt;
+          final rightTs = b.checkedAt ?? b.assignedAt;
+          return rightTs.compareTo(leftTs);
+        });
+        return entries;
       }
 
       var entries = buildOverviewEntries();
@@ -2786,8 +2813,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     if (assignedTodayItems.contains(c.id)) {
                       anyAssignedToday = true;
                     }
-                    final checks = checksByItem[c.id] ??
-                        const <HomeworkAssignmentCheck>[];
+                    final checks =
+                        checksByItem[c.id] ?? const <HomeworkAssignmentCheck>[];
                     for (final ck in checks) {
                       if (ck.progress > progress) progress = ck.progress;
                     }
@@ -2806,8 +2833,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       children: children,
                       title: title.isEmpty ? '그룹 과제' : title,
                       flowLabel: homeworkOverviewFlowLabel(children.first.id),
-                      bookAndCourse:
-                          _homeworkBookCourseLabel(children.first),
+                      bookAndCourse: _homeworkBookCourseLabel(children.first),
                       dueDate: groupDue,
                       progress: progress,
                     ),
@@ -5206,6 +5232,58 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
   }
 
+  Future<void> _openGradingAfterHomeworkCheck({
+    required BuildContext context,
+    required String studentId,
+    required _HomeworkCheckResult? checkResult,
+  }) async {
+    if (checkResult == null ||
+        !checkResult.saved ||
+        !checkResult.startGrading) {
+      return;
+    }
+    final itemIds = checkResult.itemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (itemIds.isEmpty) return;
+
+    final pendingKeys = itemIds
+        .map((itemId) => (studentId: studentId, itemId: itemId))
+        .toList(growable: false);
+    final latestById = <String, HomeworkItem>{};
+    for (final itemId in itemIds) {
+      final latest = HomeworkStore.instance.getById(studentId, itemId);
+      if (latest != null) latestById[itemId] = latest;
+    }
+    final submittedChildren = itemIds
+        .map((itemId) => latestById[itemId])
+        .whereType<HomeworkItem>()
+        .where(
+          (item) =>
+              item.status != HomeworkStatus.completed &&
+              item.phase == 3 &&
+              item.completedAt == null,
+        )
+        .toList(growable: false);
+    if (submittedChildren.isEmpty || !context.mounted) return;
+
+    var answerSeed = submittedChildren.first;
+    for (final child in submittedChildren) {
+      if (_hasDirectHomeworkTextbookLink(child)) {
+        answerSeed = child;
+        break;
+      }
+    }
+    await _handleSubmittedChipTapForPending(
+      context: context,
+      studentId: studentId,
+      hw: answerSeed,
+      targetKeys: pendingKeys,
+    );
+  }
+
   Future<void> _handleHomeworkCardTapForPending({
     required BuildContext context,
     required String studentId,
@@ -5879,12 +5957,26 @@ class _HomeworkCheckDraft {
   final int progress;
   final String? issueType;
   final String? issueNote;
+  final bool startGrading;
 
   const _HomeworkCheckDraft({
     required this.progress,
     required this.issueType,
     required this.issueNote,
+    this.startGrading = true,
   });
+}
+
+class _HomeworkCheckResult {
+  final List<String> itemIds;
+  final bool startGrading;
+
+  const _HomeworkCheckResult({
+    required this.itemIds,
+    required this.startGrading,
+  });
+
+  bool get saved => itemIds.isNotEmpty;
 }
 
 Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(
@@ -6165,6 +6257,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
   required HomeworkItem hw,
   required _HomeworkCheckTarget target,
   required int minProgress,
+  bool showStartGradingOption = false,
   List<HomeworkItem> groupChildren = const <HomeworkItem>[],
   Map<String, int> assignmentCountsByItem = const <String, int>{},
   Map<String, HomeworkAssignmentCycleMeta> cycleMetaByItem =
@@ -6178,6 +6271,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
   const validIssues = {'lost', 'forgot', 'other'};
   String? issueType =
       validIssues.contains(target.issueType) ? target.issueType : null;
+  bool startGrading = true;
   final noteController = ImeAwareTextEditingController(
     text: issueType == 'other' ? (target.issueNote ?? '') : '',
   );
@@ -6358,8 +6452,9 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             selected: issueType == 'lost',
                             onSelected: (v) => setState(() {
                               issueType = v ? 'lost' : null;
-                              if (issueType != 'other')
+                              if (issueType != 'other') {
                                 noteController.text = '';
+                              }
                             }),
                           ),
                           YggDialogFilterChip(
@@ -6367,8 +6462,9 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             selected: issueType == 'forgot',
                             onSelected: (v) => setState(() {
                               issueType = v ? 'forgot' : null;
-                              if (issueType != 'other')
+                              if (issueType != 'other') {
                                 noteController.text = '';
+                              }
                             }),
                           ),
                           YggDialogFilterChip(
@@ -6408,6 +6504,63 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                           ),
                         ),
                       ],
+                      if (showStartGradingOption) ...[
+                        const SizedBox(height: 14),
+                        const YggDialogSectionHeader(
+                          icon: Icons.fact_check_outlined,
+                          title: '검사 후 처리',
+                        ),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: () {
+                            setState(() => startGrading = !startGrading);
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(
+                              children: [
+                                IgnorePointer(
+                                  child: Checkbox(
+                                    value: startGrading,
+                                    onChanged: (_) {},
+                                    activeColor: kDlgAccent,
+                                    checkColor: const Color(0xFF10191C),
+                                    side: const BorderSide(color: kDlgBorder),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '바로채점',
+                                        style: TextStyle(
+                                          color: kDlgText,
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      SizedBox(height: 2),
+                                      Text(
+                                        '체크 시 제출 단계로 넘긴 뒤 연결된 정답/문제 DB 채점 화면을 바로 엽니다.',
+                                        style: TextStyle(
+                                          color: kDlgTextSub,
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w600,
+                                          height: 1.25,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -6431,6 +6584,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                       progress: safeProgress,
                       issueType: issueType,
                       issueNote: issueNote?.isEmpty == true ? null : issueNote,
+                      startGrading: showStartGradingOption && startGrading,
                     ),
                   );
                 },
@@ -6756,8 +6910,7 @@ Widget _buildExtraCheckGroupCard(
                     value: indicatorValue,
                     minHeight: 7,
                     backgroundColor: const Color(0xFF23363B),
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(kDlgAccent),
+                    valueColor: const AlwaysStoppedAnimation<Color>(kDlgAccent),
                   ),
                 ),
               ),
@@ -6908,23 +7061,23 @@ Future<bool> _runExtraHomeworkCheckRecordOnlyForGroup({
   return true;
 }
 
-Future<bool> _runHomeworkCheckDialogOnly({
+Future<_HomeworkCheckResult?> _runHomeworkCheckDialogOnly({
   required BuildContext context,
   required String studentId,
   required HomeworkItem hw,
 }) async {
   final latest = HomeworkStore.instance.getById(studentId, hw.id);
-  if (latest == null) return false;
+  if (latest == null) return null;
 
   final target = await _resolveHomeworkCheckTarget(
     studentId,
     hw.id,
     includeHistory: false,
   );
-  if (!context.mounted) return false;
+  if (!context.mounted) return null;
   if (target == null) {
     _showHomeworkChipSnackBar(context, '숙제 할당 정보를 찾을 수 없습니다.');
-    return false;
+    return null;
   }
 
   final checks = await HomeworkAssignmentStore.instance
@@ -6933,14 +7086,15 @@ Future<bool> _runHomeworkCheckDialogOnly({
   final previousProgress = checks.isEmpty ? 0 : checks.last.progress;
   final minProgress = math.max(previousProgress, target.progress).clamp(0, 150);
 
-  if (!context.mounted) return false;
+  if (!context.mounted) return null;
   final draft = await _showHomeworkItemCheckDialog(
     context: context,
     hw: latest,
     target: target,
     minProgress: minProgress,
+    showStartGradingOption: true,
   );
-  if (!context.mounted || draft == null) return false;
+  if (!context.mounted || draft == null) return null;
 
   final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
     assignmentId: target.assignmentId,
@@ -6951,10 +7105,10 @@ Future<bool> _runHomeworkCheckDialogOnly({
     issueNote: draft.issueNote,
     markCompleted: false,
   );
-  if (!context.mounted) return false;
+  if (!context.mounted) return null;
   if (!saved) {
     _showHomeworkChipSnackBar(context, '숙제 검사 저장에 실패했습니다.');
-    return false;
+    return null;
   }
   // 리얼타임 반영 중에도 순서 흔들림이 없도록,
   // 복귀 항목의 order_index를 먼저 "활성 꼬리"로 재배정한 뒤 노출한다.
@@ -6963,8 +7117,7 @@ Future<bool> _runHomeworkCheckDialogOnly({
     hw.id,
     activateFromHomework: true,
   );
-  final bool isCompletedProgress = draft.progress >= 100;
-  if (isCompletedProgress) {
+  if (draft.startGrading) {
     await HomeworkStore.instance.submit(studentId, hw.id);
   } else {
     await HomeworkStore.instance.waitPhase(studentId, hw.id);
@@ -6973,19 +7126,27 @@ Future<bool> _runHomeworkCheckDialogOnly({
     studentId,
     [hw.id],
   );
-  if (!context.mounted) return true;
-  if (isCompletedProgress) {
+  if (!context.mounted) {
+    return _HomeworkCheckResult(
+      itemIds: [hw.id],
+      startGrading: draft.startGrading,
+    );
+  }
+  if (draft.startGrading) {
     _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
   } else {
     _showHomeworkChipSnackBar(
       context,
-      '완료율이 100% 미만이어서 대기 상태로 두었어요.',
+      '숙제 검사 저장 — 대기 상태로 전환했어요.',
     );
   }
-  return true;
+  return _HomeworkCheckResult(
+    itemIds: [hw.id],
+    startGrading: draft.startGrading,
+  );
 }
 
-Future<bool> _runHomeworkCheckDialogForGroup({
+Future<_HomeworkCheckResult?> _runHomeworkCheckDialogForGroup({
   required BuildContext context,
   required String studentId,
   required HomeworkGroup? group,
@@ -6995,7 +7156,7 @@ Future<bool> _runHomeworkCheckDialogForGroup({
   final targetChildren = children
       .where((e) => e.status != HomeworkStatus.completed)
       .toList(growable: false);
-  if (targetChildren.isEmpty) return false;
+  if (targetChildren.isEmpty) return null;
 
   final targets =
       <({HomeworkItem item, _HomeworkCheckTarget target, int min})>[];
@@ -7010,10 +7171,10 @@ Future<bool> _runHomeworkCheckDialogForGroup({
       child.id,
       includeHistory: false,
     );
-    if (!context.mounted) return false;
+    if (!context.mounted) return null;
     if (target == null) {
       _showHomeworkChipSnackBar(context, '일부 하위 과제의 숙제 할당 정보를 찾지 못했습니다.');
-      return false;
+      return null;
     }
 
     final checks = await HomeworkAssignmentStore.instance
@@ -7036,7 +7197,7 @@ Future<bool> _runHomeworkCheckDialogForGroup({
     targets.add((item: child, target: target, min: minProgress));
   }
 
-  if (targets.isEmpty || !context.mounted) return false;
+  if (targets.isEmpty || !context.mounted) return null;
   final globalMinProgress =
       targets.fold<int>(0, (maxSoFar, e) => math.max(maxSoFar, e.min));
   final dialogTarget = _HomeworkCheckTarget(
@@ -7049,12 +7210,12 @@ Future<bool> _runHomeworkCheckDialogForGroup({
   );
   final assignmentCountsByItem =
       await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
-  if (!context.mounted) return false;
+  if (!context.mounted) return null;
   final cycleMetaByItem =
       await HomeworkAssignmentStore.instance.loadLatestCycleMetaByItem(
     studentId,
   );
-  if (!context.mounted) return false;
+  if (!context.mounted) return null;
   final targetChildIds = targetChildren.map((e) => e.id).toSet();
   final groupAssignmentCounts = <String, int>{
     for (final id in targetChildIds) id: assignmentCountsByItem[id] ?? 0,
@@ -7069,11 +7230,12 @@ Future<bool> _runHomeworkCheckDialogForGroup({
     hw: summary,
     target: dialogTarget,
     minProgress: globalMinProgress,
+    showStartGradingOption: true,
     groupChildren: targetChildren,
     assignmentCountsByItem: groupAssignmentCounts,
     cycleMetaByItem: groupCycleMetaByItem,
   );
-  if (!context.mounted || draft == null) return false;
+  if (!context.mounted || draft == null) return null;
 
   final savedItemIds = <String>[];
   for (final entry in targets) {
@@ -7091,9 +7253,9 @@ Future<bool> _runHomeworkCheckDialogForGroup({
   }
 
   if (savedItemIds.isEmpty) {
-    if (!context.mounted) return false;
+    if (!context.mounted) return null;
     _showHomeworkChipSnackBar(context, '그룹 숙제 검사 저장에 실패했습니다.');
-    return false;
+    return null;
   }
 
   for (final itemId in savedItemIds) {
@@ -7102,7 +7264,7 @@ Future<bool> _runHomeworkCheckDialogForGroup({
       itemId,
       activateFromHomework: true,
     );
-    if (draft.progress >= 100) {
+    if (draft.startGrading) {
       await HomeworkStore.instance.submit(studentId, itemId);
     } else {
       await HomeworkStore.instance.waitPhase(studentId, itemId);
@@ -7110,13 +7272,18 @@ Future<bool> _runHomeworkCheckDialogForGroup({
   }
   await HomeworkAssignmentStore.instance
       .clearActiveAssignmentsForItems(studentId, savedItemIds);
-  if (!context.mounted) return true;
+  if (!context.mounted) {
+    return _HomeworkCheckResult(
+      itemIds: savedItemIds,
+      startGrading: draft.startGrading,
+    );
+  }
   final groupTitle = (group?.title ?? '').trim();
   final summaryTitle = summary.title.trim();
   final prefix = groupTitle.isNotEmpty
       ? groupTitle
       : (summaryTitle.isNotEmpty ? summaryTitle : '그룹 숙제');
-  if (draft.progress >= 100) {
+  if (draft.startGrading) {
     _showHomeworkChipSnackBar(
       context,
       '$prefix 검사 완료 — 하위 ${savedItemIds.length}개 과제를 제출 상태로 이동했어요.',
@@ -7124,10 +7291,13 @@ Future<bool> _runHomeworkCheckDialogForGroup({
   } else {
     _showHomeworkChipSnackBar(
       context,
-      '$prefix 검사 저장 — 완료율이 100% 미만이어서 하위 ${savedItemIds.length}개를 대기 상태로 두었어요.',
+      '$prefix 검사 저장 — 하위 ${savedItemIds.length}개를 대기 상태로 전환했어요.',
     );
   }
-  return true;
+  return _HomeworkCheckResult(
+    itemIds: savedItemIds,
+    startGrading: draft.startGrading,
+  );
 }
 
 String _formatDateTime(DateTime dt) {

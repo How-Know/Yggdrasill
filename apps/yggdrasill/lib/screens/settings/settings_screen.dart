@@ -26,6 +26,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'student_archives_screen.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 enum SettingType {
   academy,
@@ -76,7 +77,14 @@ class TimeRange {
 }
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  /// Preview 전용: 기존 상단 PillTabSelector 대신 하단 중앙 FAB 스타일 탭바를 표시한다.
+  /// 기본값은 false라 본앱 라우트에는 적용되지 않는다.
+  final bool previewUseFabStyleTabBar;
+
+  const SettingsScreen({
+    super.key,
+    this.previewUseFabStyleTabBar = false,
+  });
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -129,6 +137,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     DayOfWeek.saturday: [],
     DayOfWeek.sunday: [],
   };
+
+  /// Preview — 요일별 수업 여부(스위치). 시간 등록과 분리.
+  final Set<DayOfWeek> _previewOperatingDaysActive = {};
 
   int _customTabIndex = 0;
   int _prevTabIndex = 0;
@@ -676,6 +687,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         print('[DEBUG][MAPPING] 최종 _operatingHours:');
         _operatingHours.forEach((k, v) => print('  ${k.name}: $v'));
+        _syncPreviewOperatingDaysActiveFromHours();
       });
     } catch (e) {
       print('Error loading settings: $e');
@@ -1796,42 +1808,234 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildOperatingHoursSection() {
-    const double blockWidth = 100.0; // 더 좁게
-    return Center(
-      child: SizedBox(
-        width: 780, // 위쪽 "학원 정보" 컨테이너와 폭 통일
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF18181A), // 학원 정보 컨테이너와 동일하게
-            borderRadius: BorderRadius.circular(16), // 학원 정보 라운드 값과 동일하게
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
+  String _previewOperatingHoursTimeLabel(DayOfWeek day) {
+    final range = _operatingHours[day];
+    if (range == null || _isLastThirtyMarkerDay(day)) {
+      return '';
+    }
+    final start = _formatTimeOfDay(
+      TimeOfDay(hour: range.startHour, minute: range.startMinute),
+    );
+    final end = _formatTimeOfDay(
+      TimeOfDay(hour: range.endHour, minute: range.endMinute),
+    );
+    final breaks = _breakTimes[day] ?? [];
+    if (breaks.isEmpty) {
+      return '$start - $end';
+    }
+    final breakSummary = breaks
+        .map(
+          (b) =>
+              '${_formatTimeOfDay(TimeOfDay(hour: b.startHour, minute: b.startMinute))}-${_formatTimeOfDay(TimeOfDay(hour: b.endHour, minute: b.endMinute))}',
+        )
+        .join(', ');
+    return '$start - $end · 휴식 $breakSummary';
+  }
+
+  String _previewOperatingHoursText(DayOfWeek day) {
+    final timeLabel = _previewOperatingHoursTimeLabel(day);
+    return timeLabel.isEmpty ? '휴무' : timeLabel;
+  }
+
+  void _syncPreviewOperatingDaysActiveFromHours() {
+    _previewOperatingDaysActive.clear();
+    for (final day in DayOfWeek.values) {
+      final range = _operatingHours[day];
+      if (range != null && !_isLastThirtyMarkerDay(day)) {
+        _previewOperatingDaysActive.add(day);
+      }
+    }
+  }
+
+  bool _previewOperatingDayIsActive(DayOfWeek day) {
+    return _previewOperatingDaysActive.contains(day);
+  }
+
+  Widget _buildPreviewOperatingHoursSection(
+    PreviewAcademyPanelStyle previewStyle,
+  ) {
+    final switchInactive = Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF3A3A3C)
+        : const Color(0xFFE5E5EA);
+
+    final rows = DayOfWeek.values.map((day) {
+      final isActive = _previewOperatingDayIsActive(day);
+      final timeLabel = _previewOperatingHoursTimeLabel(day);
+      return PreviewAcademyInfoRow(
+        label: day.koreanName,
+        value: '',
+        valueWidget: isActive
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    '운영 시간',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
+                  Flexible(
+                    child: Text(
+                      timeLabel.isEmpty ? '시간' : timeLabel,
+                      textAlign: TextAlign.right,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: FabTabBarTokens.previewRowValueStyle(previewStyle)
+                          .copyWith(
+                        color: timeLabel.isEmpty
+                            ? previewStyle.hint
+                            : previewStyle.rowValue,
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.chevron_right,
+                    size: FabTabBarTokens.previewAcademyChevronSize,
+                    color: previewStyle.chevron,
+                  ),
+                ],
+              )
+            : const SizedBox.shrink(),
+        onTap: isActive
+            ? () => _selectOperatingHours(context, day)
+            : null,
+        showChevron: false,
+        trailing: PreviewAcademyIosSwitch(
+          value: isActive,
+          inactiveColor: switchInactive,
+          onChanged: (enabled) {
+            setState(() {
+              if (enabled) {
+                _previewOperatingDaysActive.add(day);
+              } else {
+                _previewOperatingDaysActive.remove(day);
+                _operatingHours[day] = null;
+                _breakTimes[day] = [];
+              }
+            });
+          },
+        ),
+      );
+    }).toList();
+
+    final horizontalInset =
+        FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: horizontalInset),
+          child: Row(
+            children: [
+              Text(
+                '운영 시간',
+                style: FabTabBarTokens.previewSectionTitleStyle(previewStyle)
+                    .copyWith(color: previewStyle.hint),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _promptAddBreakTime,
+                style: TextButton.styleFrom(
+                  foregroundColor: FabTabBarTokens.previewConfirmActionColor,
+                  minimumSize: Size.zero,
+                  padding: EdgeInsets.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                icon: const Icon(
+                  Icons.add,
+                  size: 18,
+                  color: FabTabBarTokens.previewConfirmActionColor,
+                ),
+                label: const Text(
+                  '휴식',
+                  style: TextStyle(
+                    color: FabTabBarTokens.previewConfirmActionColor,
+                    fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(
+          height: FabTabBarTokens.previewAcademySectionHeaderToCardSpacing,
+        ),
+        PreviewAcademyGroupedFieldsCard(
+          style: previewStyle,
+          rows: rows,
+        ),
+      ],
+    );
+  }
+
+  String _previewPaymentTypeLabel(PaymentType type) {
+    switch (type) {
+      case PaymentType.monthly:
+        return '월 결제';
+      case PaymentType.perClass:
+        return '횟수제';
+    }
+  }
+
+  Widget _buildOperatingHoursSection() {
+    final isPreview = widget.previewUseFabStyleTabBar;
+    final previewStyle = isPreview ? _previewAcademyPanelStyle(context) : null;
+    if (isPreview && previewStyle != null) {
+      return _buildPreviewOperatingHoursSection(previewStyle);
+    }
+
+    final sectionWidth = 780.0;
+    final blockWidth = isPreview ? 105.0 : 100.0;
+    final containerColor = isPreview
+        ? previewStyle!.groupedCardBackground
+        : const Color(0xFF18181A);
+    final containerRadius = isPreview
+        ? FabTabBarTokens.previewAcademyGroupedCardRadius
+        : 16.0;
+    final horizontalPadding = isPreview
+        ? FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal
+        : 28.0;
+
+    final hoursCard = Container(
+      width: isPreview ? double.infinity : null,
+      decoration: BoxDecoration(
+        color: containerColor,
+        borderRadius: BorderRadius.circular(containerRadius),
+      ),
+      padding: EdgeInsets.symmetric(
+        horizontal: horizontalPadding,
+        vertical: 24,
+      ),
+      child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '운영 시간',
+                      style: isPreview
+                          ? FabTabBarTokens.previewSectionTitleStyle(
+                              previewStyle!,
+                            )
+                          : const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w500,
+                            ),
+                    ),
                   const Spacer(),
                   TextButton.icon(
                     onPressed: _promptAddBreakTime,
                     icon: const Icon(Icons.add,
                         color: _kSignatureGreen, size: 18),
-                    label: const Text(
+                    label: Text(
                       '휴식',
                       style: TextStyle(
-                          color: _kSignatureGreen,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700),
+                        color: _kSignatureGreen,
+                        fontSize: isPreview
+                            ? FabTabBarTokens.previewAcademyBaseFontSize
+                            : 14,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     style: TextButton.styleFrom(
                       foregroundColor: _kSignatureGreen,
@@ -1863,11 +2067,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: Center(
                         child: Text(
                           day.koreanName,
-                          style: const TextStyle(
-                            fontSize: 15, // 기존 14 → 15 (1pt 크게)
-                            fontWeight: FontWeight.w500,
-                            color: Colors.grey, // 흰색 유지
-                          ),
+                          style: isPreview
+                              ? FabTabBarTokens.previewBodyTextStyle(
+                                  previewStyle!,
+                                  color: previewStyle.hint,
+                                  fontWeight: FontWeight.w500,
+                                )
+                              : const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.grey,
+                                ),
                         ),
                       ),
                     );
@@ -2526,7 +2736,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-        ),
+    );
+
+    if (isPreview) {
+      return _buildPreviewAcademySectionScope(child: hoursCard);
+    }
+
+    return Center(
+      child: SizedBox(
+        width: sectionWidth,
+        child: hoursCard,
       ),
     );
   }
@@ -2768,8 +2987,474 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  PreviewAcademyPanelStyle? _previewAcademyPanelStyle(BuildContext context) {
+    if (!widget.previewUseFabStyleTabBar) return null;
+    return FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+  }
+
+  InputDecoration _academyFieldDecoration(BuildContext context, String label) {
+    final preview = _previewAcademyPanelStyle(context);
+    if (preview != null) return preview.inputDecoration(label);
+    return InputDecoration(
+      labelText: label,
+      labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+      enabledBorder: OutlineInputBorder(
+        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+      ),
+      focusedBorder: const OutlineInputBorder(
+        borderSide: BorderSide(color: _kSignatureGreen),
+      ),
+    );
+  }
+
+  InputDecoration _academyDropdownDecoration(BuildContext context) {
+    final preview = _previewAcademyPanelStyle(context);
+    if (preview != null) return preview.dropdownDecoration();
+    return InputDecoration(
+      enabledBorder: OutlineInputBorder(
+        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+      ),
+      focusedBorder: const OutlineInputBorder(
+        borderSide: BorderSide(color: _kSignatureGreen),
+      ),
+    );
+  }
+
+  TextStyle _academySectionTitleStyle(BuildContext context) {
+    final previewStyle = _previewAcademyPanelStyle(context);
+    if (previewStyle != null) {
+      return FabTabBarTokens.previewSectionTitleStyle(previewStyle);
+    }
+    return const TextStyle(
+      color: Colors.white,
+      fontSize: 20,
+      fontWeight: FontWeight.w500,
+    );
+  }
+
+  Widget _buildPreviewAcademySectionScope({required Widget child}) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: FabTabBarTokens.previewAcademySectionMaxWidth,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: FabTabBarTokens.previewAcademySectionScopePaddingHorizontal,
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  void _previewAcademyFieldTap(String fieldLabel) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Preview: $fieldLabel 편집 (다이얼로그 추후 구현)'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Widget _buildAcademySettingsPreview() {
+    final academyStyle = _previewAcademyPanelStyle(context)!;
+
+    String displayValue(TextEditingController controller) {
+      final text = controller.text.trim();
+      return text.isEmpty ? '' : text;
+    }
+
+    return _buildPreviewAcademySectionScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
+          Text(
+            '학원정보',
+            textAlign: TextAlign.center,
+            style: FabTabBarTokens.previewPageTitleStyle(academyStyle),
+          ),
+          const SizedBox(height: 28),
+          Center(
+            child: GestureDetector(
+              onTap: _pickLogoImage,
+              child: _academyLogo != null && _academyLogo!.isNotEmpty
+                  ? CircleAvatar(
+                      radius: FabTabBarTokens.previewAcademyLogoRadius,
+                      backgroundImage: MemoryImage(_academyLogo!),
+                    )
+                  : CircleAvatar(
+                      radius: FabTabBarTokens.previewAcademyLogoRadius,
+                      backgroundColor:
+                          academyStyle.avatarPlaceholderBackground,
+                      child: Icon(
+                        Icons.school_outlined,
+                        size: FabTabBarTokens.previewAcademyLogoIconSize,
+                        color: academyStyle.avatarPlaceholderIcon,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademyLogoToChangeSpacing,
+          ),
+          Center(
+            child: TextButton(
+              onPressed: _pickLogoImage,
+              style: TextButton.styleFrom(
+                backgroundColor: academyStyle.changeButtonBackground,
+                foregroundColor: FabTabBarTokens.previewConfirmActionColor,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: FabTabBarTokens
+                      .previewAcademyChangeButtonPaddingVertical,
+                ),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              child: Text(
+                '변경',
+                style: TextStyle(
+                  fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+                  fontWeight: FontWeight.w600,
+                  color: FabTabBarTokens.previewConfirmActionColor,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademySectionListSpacing,
+          ),
+          PreviewAcademyGroupedFieldsCard(
+            style: academyStyle,
+            rows: [
+              PreviewAcademyInfoRow(
+                label: '학원명',
+                value: displayValue(_academyNameController),
+                onTap: () => _previewAcademyFieldTap('학원명'),
+              ),
+              PreviewAcademyInfoRow(
+                label: '학원주소',
+                value: displayValue(_academyAddressController),
+                onTap: () => _previewAcademyFieldTap('학원주소'),
+              ),
+              PreviewAcademyInfoRow(
+                label: '슬로건',
+                value: displayValue(_sloganController),
+                onTap: () => _previewAcademyFieldTap('슬로건'),
+              ),
+            ],
+          ),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademySectionListSpacing,
+          ),
+          _buildAcademySettingsPreviewCapacitySection(academyStyle),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademySectionListSpacing,
+          ),
+          _buildPreviewOperatingHoursSection(academyStyle),
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _previewAcademyInlineFieldDecoration(
+    PreviewAcademyPanelStyle style, {
+    String? hintText,
+  }) {
+    return InputDecoration(
+      hintText: hintText,
+      hintStyle: TextStyle(
+        color: style.hint,
+        fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+      ),
+      border: InputBorder.none,
+      enabledBorder: InputBorder.none,
+      focusedBorder: InputBorder.none,
+      isDense: true,
+      contentPadding: EdgeInsets.zero,
+    );
+  }
+
+  Widget _buildAcademySettingsPreviewCapacitySection(
+    PreviewAcademyPanelStyle academyStyle,
+  ) {
+    return PreviewAcademyGroupedFieldsCard(
+      style: academyStyle,
+      rows: [
+        PreviewAcademyInfoRow(
+          label: '기본 정원',
+          showChevron: false,
+          valueWidget: TextFormField(
+            controller: _capacityController,
+            textAlign: TextAlign.right,
+            keyboardType: TextInputType.number,
+            style: TextStyle(
+              color: academyStyle.inputText,
+              fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+            ),
+            decoration: _previewAcademyInlineFieldDecoration(academyStyle),
+          ),
+        ),
+        PreviewAcademyInfoRow(
+          label: '수업 시간',
+          showChevron: false,
+          valueWidget: TextFormField(
+            controller: _lessonDurationController,
+            textAlign: TextAlign.right,
+            keyboardType: TextInputType.number,
+            style: TextStyle(
+              color: academyStyle.inputText,
+              fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+            ),
+            decoration: _previewAcademyInlineFieldDecoration(
+              academyStyle,
+              hintText: '분',
+            ),
+          ),
+        ),
+        PreviewAcademyInfoRow(
+          label: '지불 방식',
+          showChevron: false,
+          valueWidget: PreviewAcademyPaymentTypeSelector(
+            style: academyStyle,
+            selectedId: _paymentType.name,
+            valueLabel: _previewPaymentTypeLabel(_paymentType),
+            options: const [
+              PreviewAcademyMenuOption(id: 'monthly', label: '월 결제'),
+              PreviewAcademyMenuOption(id: 'perClass', label: '횟수제'),
+            ],
+            onSelected: (id) {
+              setState(() {
+                _paymentType = id == 'monthly'
+                    ? PaymentType.monthly
+                    : PaymentType.perClass;
+              });
+            },
+          ),
+        ),
+        if (_paymentType == PaymentType.perClass)
+          PreviewAcademyInfoRow(
+            label: '기준 수강 횟수',
+            showChevron: false,
+            valueWidget: TextFormField(
+              controller: _courseCountController,
+              textAlign: TextAlign.right,
+              keyboardType: TextInputType.number,
+              style: TextStyle(
+                color: academyStyle.inputText,
+                fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+              ),
+              decoration: _previewAcademyInlineFieldDecoration(academyStyle),
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildAcademySettingsFooterWidgets() {
+    final archiveButton = Center(
+      child: ElevatedButton(
+        onPressed: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const StudentArchivesScreen(),
+            ),
+          );
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2A2A2A),
+          padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ),
+        child: const Text(
+          '퇴원 학생 아카이브',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+
+    final saveButton = Stack(
+      children: [
+        Center(
+          child: ElevatedButton(
+            onPressed: () async {
+                if (_operatingHours.values.where((v) => v != null).isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('하나 이상의 운영시간이 등록되어야 합니다.'),
+                      backgroundColor: _kSignatureGreen,
+                    ),
+                  );
+                  return;
+                }
+                try {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  final academySettings = AcademySettings(
+                    name: _academyNameController.text.trim(),
+                    address: _academyAddressController.text.trim(),
+                    slogan: _sloganController.text.trim(),
+                    defaultCapacity:
+                        int.tryParse(_capacityController.text.trim()) ?? 30,
+                    lessonDuration:
+                        int.tryParse(_lessonDurationController.text.trim()) ??
+                            50,
+                    logo: _academyLogo,
+                    sessionCycle:
+                        int.tryParse(_courseCountController.text.trim()) ?? 1,
+                    activeExamSeasonId:
+                        DataManager.instance.academySettings.activeExamSeasonId,
+                  );
+                  DataManager.instance.paymentType = _paymentType;
+                  await DataManager.instance.saveAcademySettings(academySettings);
+                  await DataManager.instance.savePaymentType(_paymentType);
+                  TimeOfDay? latestEnd;
+                  for (var v in _operatingHours.values) {
+                    if (v != null) {
+                      if (latestEnd == null ||
+                          v.endHour > latestEnd.hour ||
+                          (v.endHour == latestEnd.hour &&
+                              v.endMinute > latestEnd.minute)) {
+                        latestEnd =
+                            TimeOfDay(hour: v.endHour, minute: v.endMinute);
+                      }
+                    }
+                  }
+                  TimeOfDay? latestStart;
+                  if (latestEnd != null) {
+                    int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
+                    int startMinutes = endMinutes - 30;
+                    latestStart = TimeOfDay(
+                      hour: startMinutes ~/ 60,
+                      minute: startMinutes % 60,
+                    );
+                  }
+                  final List<OperatingHours> hoursList = DayOfWeek.values.map(
+                    (day) {
+                      final range = _operatingHours[day];
+                      final breaks = _breakTimes[day] ?? [];
+                      if (range != null) {
+                        return OperatingHours(
+                          dayOfWeek: day.index,
+                          startHour: range.startHour,
+                          startMinute: range.startMinute,
+                          endHour: range.endHour,
+                          endMinute: range.endMinute,
+                          breakTimes: breaks
+                              .map(
+                                (b) => BreakTime(
+                                  startHour: b.startHour,
+                                  startMinute: b.startMinute,
+                                  endHour: b.endHour,
+                                  endMinute: b.endMinute,
+                                ),
+                              )
+                              .toList(),
+                        );
+                      }
+                      return OperatingHours(
+                        dayOfWeek: day.index,
+                        startHour: latestStart?.hour ?? 9,
+                        startMinute: latestStart?.minute ?? 0,
+                        endHour: latestEnd?.hour ?? 18,
+                        endMinute: latestEnd?.minute ?? 0,
+                        breakTimes: breaks
+                            .map(
+                              (b) => BreakTime(
+                                startHour: b.startHour,
+                                startMinute: b.startMinute,
+                                endHour: b.endHour,
+                                endMinute: b.endMinute,
+                              ),
+                            )
+                            .toList(),
+                      );
+                    },
+                  ).toList();
+                  await DataManager.instance.saveOperatingHours(hoursList);
+                  await DataManager.instance.loadAcademySettings();
+                  setState(() {
+                    final logo = DataManager.instance.academySettings.logo;
+                    _academyLogo =
+                        (logo is Uint8List && logo.isNotEmpty) ? logo : null;
+                  });
+                  _onShowSnackBar();
+                  _snackBarController =
+                      ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('저장되었습니다!')),
+                  );
+                  _snackBarController?.closed.then((_) => _onHideSnackBar());
+                } catch (e) {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  _onShowSnackBar();
+                  _snackBarController =
+                      ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('오류가 발생했습니다.')),
+                  );
+                  _snackBarController?.closed.then((_) => _onHideSnackBar());
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: widget.previewUseFabStyleTabBar
+                    ? FabTabBarTokens.previewConfirmActionColor
+                    : _kSignatureGreen,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
+              ),
+              child: const Text(
+                '저장',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ],
+    );
+
+    final actionButtons = <Widget>[
+      archiveButton,
+      const SizedBox(height: 18),
+      saveButton,
+    ];
+
+    if (widget.previewUseFabStyleTabBar) {
+      return const [];
+    }
+
+    return [
+      const SizedBox(height: 32),
+      _buildOperatingHoursSection(),
+      const SizedBox(height: 40),
+      ...actionButtons,
+    ];
+  }
+
   Widget _buildAcademySettings() {
+    if (widget.previewUseFabStyleTabBar) {
+      return _buildAcademySettingsPreview();
+    }
+    return _buildAcademySettingsLegacy();
+  }
+
+  Widget _buildAcademySettingsLegacy() {
     const double academyInfoCardHeight = 680;
+    final academyStyle = _previewAcademyPanelStyle(context);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _academyInfoKey.currentContext;
       if (ctx != null) {
@@ -2800,19 +3485,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
                   decoration: BoxDecoration(
-                    color: Color(0xFF18181A),
+                    color: const Color(0xFF18181A),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      Text(
                         '학원 정보',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        style: _academySectionTitleStyle(context),
                       ),
                       const SizedBox(height: 24),
                       // 학원명 입력
@@ -2820,19 +3501,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         width: 300,
                         child: TextFormField(
                           controller: _academyNameController,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            labelText: '학원명',
-                            labelStyle:
-                                TextStyle(color: Colors.white.withOpacity(0.7)),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.3)),
-                            ),
-                            focusedBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: _kSignatureGreen),
-                            ),
+                          style: TextStyle(
+                            color: academyStyle?.inputText ?? Colors.white,
                           ),
+                          decoration:
+                              _academyFieldDecoration(context, '학원명'),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -2841,19 +3514,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         width: 600,
                         child: TextFormField(
                           controller: _academyAddressController,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            labelText: '학원 주소',
-                            labelStyle:
-                                TextStyle(color: Colors.white.withOpacity(0.7)),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.3)),
-                            ),
-                            focusedBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: _kSignatureGreen),
-                            ),
+                          style: TextStyle(
+                            color: academyStyle?.inputText ?? Colors.white,
                           ),
+                          decoration:
+                              _academyFieldDecoration(context, '학원 주소'),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -2862,19 +3527,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         width: 600,
                         child: TextFormField(
                           controller: _sloganController,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            labelText: '슬로건',
-                            labelStyle:
-                                TextStyle(color: Colors.white.withOpacity(0.7)),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.3)),
-                            ),
-                            focusedBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: _kSignatureGreen),
-                            ),
+                          style: TextStyle(
+                            color: academyStyle?.inputText ?? Colors.white,
                           ),
+                          decoration:
+                              _academyFieldDecoration(context, '슬로건'),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -2886,20 +3543,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Expanded(
                               child: TextFormField(
                                 controller: _capacityController,
-                                style: const TextStyle(color: Colors.white),
+                                style: TextStyle(
+                                  color: academyStyle?.inputText ?? Colors.white,
+                                ),
                                 keyboardType: TextInputType.number,
-                                decoration: InputDecoration(
-                                  labelText: '기본 정원',
-                                  labelStyle: TextStyle(
-                                      color: Colors.white.withOpacity(0.7)),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderSide: BorderSide(
-                                        color: Colors.white.withOpacity(0.3)),
-                                  ),
-                                  focusedBorder: const OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: _kSignatureGreen),
-                                  ),
+                                decoration: _academyFieldDecoration(
+                                  context,
+                                  '기본 정원',
                                 ),
                               ),
                             ),
@@ -2907,20 +3557,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Expanded(
                               child: TextFormField(
                                 controller: _lessonDurationController,
-                                style: const TextStyle(color: Colors.white),
+                                style: TextStyle(
+                                  color: academyStyle?.inputText ?? Colors.white,
+                                ),
                                 keyboardType: TextInputType.number,
-                                decoration: InputDecoration(
-                                  labelText: '수업 시간 (분)',
-                                  labelStyle: TextStyle(
-                                      color: Colors.white.withOpacity(0.7)),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderSide: BorderSide(
-                                        color: Colors.white.withOpacity(0.3)),
-                                  ),
-                                  focusedBorder: const OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: _kSignatureGreen),
-                                  ),
+                                decoration: _academyFieldDecoration(
+                                  context,
+                                  '수업 시간 (분)',
                                 ),
                               ),
                             ),
@@ -2928,13 +3571,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       const SizedBox(height: 30),
-                      const Text(
+                      Text(
                         '지불 방식',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        style: _academySectionTitleStyle(context),
                       ),
                       const SizedBox(height: 12),
                       // [수정] 지불 방식과 수강 횟수를 한 줄(Row)로 배치
@@ -2944,27 +3583,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             width: 290,
                             child: DropdownButtonFormField<PaymentType>(
                               value: _paymentType,
-                              decoration: InputDecoration(
-                                enabledBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(
-                                      color: Colors.white.withOpacity(0.3)),
-                                ),
-                                focusedBorder: const OutlineInputBorder(
-                                  borderSide:
-                                      BorderSide(color: _kSignatureGreen),
-                                ),
+                              decoration: _academyDropdownDecoration(context),
+                              dropdownColor: academyStyle?.dropdownBackground ??
+                                  const Color(0xFF1F1F1F),
+                              style: TextStyle(
+                                color: academyStyle?.inputText ?? Colors.white,
+                                fontSize: 16,
                               ),
-                              dropdownColor: const Color(0xFF1F1F1F),
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 16),
                               items: [
                                 DropdownMenuItem(
                                   value: PaymentType.monthly,
-                                  child: Text('월 결제'),
+                                  child: Text(
+                                    '월 결제',
+                                    style: TextStyle(
+                                      color: academyStyle?.inputText ??
+                                          Colors.white,
+                                    ),
+                                  ),
                                 ),
                                 DropdownMenuItem(
                                   value: PaymentType.perClass,
-                                  child: Text('횟수제'),
+                                  child: Text(
+                                    '횟수제',
+                                    style: TextStyle(
+                                      color: academyStyle?.inputText ??
+                                          Colors.white,
+                                    ),
+                                  ),
                                 ),
                               ],
                               onChanged: (PaymentType? value) {
@@ -2982,20 +3627,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               width: 290,
                               child: TextFormField(
                                 controller: _courseCountController,
-                                style: const TextStyle(color: Colors.white),
+                                style: TextStyle(
+                                  color: academyStyle?.inputText ?? Colors.white,
+                                ),
                                 keyboardType: TextInputType.number,
-                                decoration: InputDecoration(
-                                  labelText: '기준 수강 횟수',
-                                  labelStyle: TextStyle(
-                                      color: Colors.white.withOpacity(0.7)),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderSide: BorderSide(
-                                        color: Colors.white.withOpacity(0.3)),
-                                  ),
-                                  focusedBorder: const OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: _kSignatureGreen),
-                                  ),
+                                decoration: _academyFieldDecoration(
+                                  context,
+                                  '기준 수강 횟수',
                                 ),
                               ),
                             ),
@@ -3005,23 +3643,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          const Text(
+                          Text(
                             '학원 로고',
+                            style: _academySectionTitleStyle(context),
+                          ),
+                          const SizedBox(width: 16),
+                          Text(
+                            '권장 크기: 80x80px',
                             style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w500,
+                              color: academyStyle?.hint ?? Colors.white70,
+                              fontSize: 14,
                             ),
                           ),
                           const SizedBox(width: 16),
-                          const Text(
-                            '권장 크기: 80x80px',
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 14),
-                          ),
-                          const SizedBox(width: 16),
                           IconButton(
-                            icon: Icon(Icons.image, color: Colors.white70),
+                            icon: Icon(
+                              Icons.image,
+                              color: academyStyle?.icon ?? Colors.white70,
+                            ),
                             tooltip: '학원 로고 등록',
                             onPressed: _pickLogoImage,
                           ),
@@ -3046,9 +3685,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     )
                                   : CircleAvatar(
                                       radius: 45,
-                                      backgroundColor: Colors.grey[800],
-                                      child: Icon(Icons.image,
-                                          color: Colors.white54, size: 36),
+                                      backgroundColor: academyStyle
+                                              ?.avatarPlaceholderBackground ??
+                                          Colors.grey[800],
+                                      child: Icon(
+                                        Icons.image,
+                                        color: academyStyle
+                                                ?.avatarPlaceholderIcon ??
+                                            Colors.white54,
+                                        size: 36,
+                                      ),
                                     ),
                             ),
                           ),
@@ -3061,260 +3707,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 32),
-        _buildOperatingHoursSection(),
-        const SizedBox(height: 40),
-        Center(
-          child: ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                    builder: (_) => const StudentArchivesScreen()),
-              );
-            },
-            child: const Text(
-              '퇴원 학생 아카이브',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2A2A2A),
-              padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(999)),
-            ),
-          ),
-        ),
-        const SizedBox(height: 18),
-        // 저장 버튼
-        Stack(
-          children: [
-            Center(
-              child: ElevatedButton(
-                onPressed: () async {
-                  // 모든 요일이 휴무(운영시간 없음)일 경우 저장 제한
-                  if (_operatingHours.values.where((v) => v != null).isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('하나 이상의 운영시간이 등록되어야 합니다.',
-                            style: TextStyle(color: Colors.white)),
-                        backgroundColor: _kSignatureGreen,
-                      ),
-                    );
-                    return;
-                  }
-                  try {
-                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                    print('저장 시 _paymentType:  [36m [1m [4m$_paymentType [0m');
-                    print(
-                        '[DEBUG] 저장 버튼 클릭: _academyLogo type= [36m${_academyLogo.runtimeType} [0m, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
-                    final academySettings = AcademySettings(
-                      name: _academyNameController.text.trim(),
-                      address: _academyAddressController.text.trim(),
-                      slogan: _sloganController.text.trim(),
-                      defaultCapacity:
-                          int.tryParse(_capacityController.text.trim()) ?? 30,
-                      lessonDuration:
-                          int.tryParse(_lessonDurationController.text.trim()) ??
-                              50,
-                      logo: _academyLogo,
-                      sessionCycle:
-                          int.tryParse(_courseCountController.text.trim()) ??
-                              1, // [추가]
-                      activeExamSeasonId:
-                          DataManager.instance.academySettings.activeExamSeasonId,
-                    );
-                    DataManager.instance.paymentType =
-                        _paymentType; // [수정] public setter 사용
-                    await DataManager.instance
-                        .saveAcademySettings(academySettings);
-                    await DataManager.instance.savePaymentType(_paymentType);
-                    // 운영시간/휴식시간도 함께 저장
-                    // 1. 운영시간이 있는 요일 중 가장 마지막 endTime 찾기
-                    TimeOfDay? latestEnd;
-                    for (var v in _operatingHours.values) {
-                      if (v != null) {
-                        if (latestEnd == null ||
-                            v.endHour > latestEnd.hour ||
-                            (v.endHour == latestEnd.hour &&
-                                v.endMinute > latestEnd.minute)) {
-                          latestEnd =
-                              TimeOfDay(hour: v.endHour, minute: v.endMinute);
-                        }
-                      }
-                    }
-                    // 2. 30분 전 시간 계산
-                    TimeOfDay? latestStart;
-                    if (latestEnd != null) {
-                      int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
-                      int startMinutes = endMinutes - 30;
-                      latestStart = TimeOfDay(
-                          hour: startMinutes ~/ 60, minute: startMinutes % 60);
-                    }
-                    // 3. hoursList 생성 (휴무 요일은 latestStart~latestEnd로 저장)
-                    final List<OperatingHours> hoursList = DayOfWeek.values
-                        .map((day) {
-                          final range = _operatingHours[day];
-                          final breaks = _breakTimes[day] ?? [];
-                          print(
-                              '[DEBUG][저장] day=$day, breaks=${breaks.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
-                          if (range != null) {
-                            return OperatingHours(
-                              dayOfWeek: day.index,
-                              startHour: range.startHour,
-                              startMinute: range.startMinute,
-                              endHour: range.endHour,
-                              endMinute: range.endMinute,
-                              breakTimes: breaks
-                                  .map((b) => BreakTime(
-                                        startHour: b.startHour,
-                                        startMinute: b.startMinute,
-                                        endHour: b.endHour,
-                                        endMinute: b.endMinute,
-                                      ))
-                                  .toList(),
-                            );
-                          } else if (latestStart != null && latestEnd != null) {
-                            // 휴무 요일 처리: 가장 늦은 시간 30분 블록 저장
-                            return OperatingHours(
-                              dayOfWeek: day.index,
-                              startHour: latestStart.hour,
-                              startMinute: latestStart.minute,
-                              endHour: latestEnd.hour,
-                              endMinute: latestEnd.minute,
-                            );
-                          } else {
-                            // 완전 초기(모든 요일 휴무) 방어
-                            return null;
-                          }
-                        })
-                        .whereType<OperatingHours>()
-                        .toList();
-                    print('[DEBUG][저장] hoursList.length=${hoursList.length}');
-                    for (final h in hoursList) {
-                      print(
-                          '[DEBUG][저장] dayOfWeek=${h.dayOfWeek}, breakTimes.length=${h.breakTimes.length}, breakTimes=${h.breakTimes.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
-                    }
-                    await DataManager.instance.saveOperatingHours(hoursList);
-                    await DataManager.instance.loadAcademySettings();
-                    print(
-                        '[DEBUG] 저장 후 불러온 logo: type=${DataManager.instance.academySettings.logo?.runtimeType}, length=${DataManager.instance.academySettings.logo?.length}, isNull=${DataManager.instance.academySettings.logo == null}');
-                    setState(() {
-                      final logo = DataManager.instance.academySettings.logo;
-                      _academyLogo =
-                          (logo is Uint8List && logo.isNotEmpty) ? logo : null;
-                    });
-                    _onShowSnackBar();
-                    _snackBarController =
-                        ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('저장되었습니다!'),
-                      ),
-                    );
-                    _snackBarController?.closed.then((_) => _onHideSnackBar());
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                    print('Error saving settings: $e');
-                    _onShowSnackBar();
-                    _snackBarController =
-                        ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('오류가 발생했습니다.'),
-                      ),
-                    );
-                    _snackBarController?.closed.then((_) => _onHideSnackBar());
-                  }
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _kSignatureGreen,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
-                ),
-                child: const Text(
-                  '저장',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+        ..._buildAcademySettingsFooterWidgets(),
       ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: context.yggSurfaceBase,
-      body: Column(
-        children: [
+    void selectTab(int i) {
+      setState(() {
+        _prevTabIndex = _customTabIndex;
+        _customTabIndex = i;
+        _selectedType = i == 0
+            ? SettingType.academy
+            : (i == 1 ? SettingType.teachers : SettingType.general);
+      });
+    }
+
+    final content = Column(
+      children: [
+        if (!widget.previewUseFabStyleTabBar) ...[
           const SizedBox(height: 0),
           const SizedBox(height: 8),
           Center(
             child: PillTabSelector(
               selectedIndex: _customTabIndex,
               tabs: const ['학원', '선생님', '일반'],
-              onTabSelected: (i) {
-                setState(() {
-                  _prevTabIndex = _customTabIndex;
-                  _customTabIndex = i;
-                  _selectedType = i == 0
-                      ? SettingType.academy
-                      : (i == 1 ? SettingType.teachers : SettingType.general);
-                });
-              },
+              onTabSelected: selectTab,
             ),
           ),
           const SizedBox(height: 24),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              switchInCurve: Curves.easeInOut,
-              switchOutCurve: Curves.easeInOut,
-              layoutBuilder:
-                  (Widget? currentChild, List<Widget> previousChildren) {
-                return Stack(
-                  alignment: Alignment.topCenter,
-                  fit: StackFit.passthrough,
-                  children: <Widget>[
-                    ...previousChildren,
-                    if (currentChild != null) currentChild,
-                  ],
-                );
+        ],
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            switchInCurve: Curves.easeInOut,
+            switchOutCurve: Curves.easeInOut,
+            layoutBuilder:
+                (Widget? currentChild, List<Widget> previousChildren) {
+              return Stack(
+                alignment: Alignment.topCenter,
+                fit: StackFit.passthrough,
+                children: <Widget>[
+                  ...previousChildren,
+                  if (currentChild != null) currentChild,
+                ],
+              );
+            },
+            transitionBuilder: (child, animation) {
+              return FadeTransition(
+                opacity: animation,
+                child: child,
+              );
+            },
+            child: Builder(
+              key: ValueKey(_customTabIndex),
+              builder: (context) {
+                if (_customTabIndex == 0) {
+                  return _buildAcademySettingsContainer();
+                } else if (_customTabIndex == 1) {
+                  return _buildTeacherSettingsContainer();
+                } else {
+                  return _buildGeneralSettingsContainer();
+                }
               },
-              transitionBuilder: (child, animation) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: child,
-                );
-              },
-              child: Builder(
-                key: ValueKey(_customTabIndex),
-                builder: (context) {
-                  if (_customTabIndex == 0) {
-                    return _buildAcademySettingsContainer();
-                  } else if (_customTabIndex == 1) {
-                    return _buildTeacherSettingsContainer();
-                  } else {
-                    return _buildGeneralSettingsContainer();
-                  }
-                },
-              ),
             ),
           ),
-        ],
-      ),
-      floatingActionButton: const MainFabAlternative(),
+        ),
+      ],
+    );
+
+    return Scaffold(
+      backgroundColor: context.yggSurfaceBase,
+      body: widget.previewUseFabStyleTabBar
+          ? Stack(
+              children: [
+                Positioned.fill(child: content),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: FabTabBarTokens.fabBarBottomInset,
+                  child: Center(
+                    child: FabStyleTabBar(
+                      selectedIndex: _customTabIndex,
+                      tabs: const ['학원', '선생님', '일반'],
+                      onTabSelected: selectTab,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: FabTabBarTokens.fabBarRightInset,
+                  bottom: FabTabBarTokens.fabBarBottomInset,
+                  child: FabStyleActionButton(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Preview: FAB 메뉴는 목업 스타일만 적용됩니다.',
+                          ),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            )
+          : content,
+      floatingActionButton: widget.previewUseFabStyleTabBar
+          ? null
+          : const MainFabAlternative(),
     );
   }
-
   void _pickLogoImage() async {
     if (kIsWeb) {
       // 웹: FileUploadInputElement 사용 (주석 참고)
@@ -3453,6 +3957,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         endHour: endTime.hour,
         endMinute: endTime.minute,
       );
+      _previewOperatingDaysActive.add(day);
       print('[UI] _operatingHours after set:');
       _operatingHours.forEach((k, v) => print('  $k: $v'));
     });
@@ -3810,7 +4315,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           thumbVisibility: true,
           child: SingleChildScrollView(
             controller: _academyScrollController,
-            padding: const EdgeInsets.only(bottom: 24),
+            padding: EdgeInsets.only(
+              bottom: widget.previewUseFabStyleTabBar ? 120 : 24,
+            ),
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -3838,7 +4345,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           thumbVisibility: true,
           child: SingleChildScrollView(
             controller: _teacherScrollController,
-            padding: const EdgeInsets.only(bottom: 24),
+            padding: EdgeInsets.only(
+              bottom: widget.previewUseFabStyleTabBar ? 120 : 24,
+            ),
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -3866,7 +4375,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           thumbVisibility: true,
           child: SingleChildScrollView(
             controller: _generalScrollController,
-            padding: const EdgeInsets.only(bottom: 24),
+            padding: EdgeInsets.only(
+              bottom: widget.previewUseFabStyleTabBar ? 120 : 24,
+            ),
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(
               mainAxisSize: MainAxisSize.min,

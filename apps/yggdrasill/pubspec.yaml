@@ -167,6 +167,11 @@ flutter:
           weight: 700
         - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
           weight: 800
+  # Preview 목업 — 학원정보 섹션 제목 (Pretendard Bold)
+    - family: Pretendard
+      fonts:
+        - asset: assets/fonts/pretendard/Pretendard-Bold.otf
+          weight: 700
 msix_config:
   display_name: Yggdrasill
   publisher_display_name: How-Know
