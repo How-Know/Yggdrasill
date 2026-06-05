@@ -7339,10 +7339,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-  Widget _buildFigurePreviewThumbnail(ProblemBankQuestion q,
-      {bool expanded = false}) {
+  Widget _buildFigurePreviewThumbnail(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+    String? previewCacheKey,
+  }) {
     final asset = _latestFigureAssetOf(q);
-    final previewUrl = _figurePreviewUrls[q.id];
+    final previewUrl = _figurePreviewUrls[previewCacheKey ?? q.id];
     final statusText = _figureAssetStateText(asset);
     return Container(
       height: expanded ? null : 156,
@@ -7382,7 +7385,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 )
               else if (previewUrl == null || previewUrl.isEmpty)
                 const Text(
-                  '이미지 미리보기 로딩 중...',
+                  '이미지 미리보기 URL이 없습니다. 저장소 경로/권한을 확인하세요.',
                   style: TextStyle(color: Color(0xFF6E7E96), fontSize: 12.2),
                 )
               else
@@ -9983,12 +9986,55 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (!mounted || q.setCommonStem.isEmpty) return;
     final screen = MediaQuery.sizeOf(context);
     final commonQ = _commonStemPreviewQuestion(q);
+    final commonPreviewCacheKey = 'common:${q.id}';
     final groupLabel = _commonStemGroupQuestions(q)
         .map((item) => item.questionNumber.trim())
         .where((questionNumber) => questionNumber.isNotEmpty)
         .join(', ');
     final figureAssets = _orderedFigureAssetsOf(commonQ);
     final hasFigures = figureAssets.isNotEmpty;
+    if (hasFigures) {
+      final signedByPath = <String, String>{};
+      for (final asset in figureAssets) {
+        final bucket = '${asset['bucket'] ?? ''}'.trim();
+        final path = '${asset['path'] ?? ''}'.trim();
+        if (bucket.isEmpty || path.isEmpty) continue;
+        if (_figurePreviewUrlsByPath[commonQ.id]?[path]?.isNotEmpty == true) {
+          signedByPath[path] = _figurePreviewUrlsByPath[commonQ.id]![path]!;
+          continue;
+        }
+        try {
+          final signed = await _service.createStorageSignedUrl(
+            bucket: bucket,
+            path: path,
+            expiresInSeconds: 60 * 60 * 24,
+          );
+          if (signed.isNotEmpty) signedByPath[path] = signed;
+        } catch (_) {
+          // 공통발문 미리보기 URL 생성 실패 시 본문/편집 UI는 그대로 열어둔다.
+        }
+      }
+      if (mounted && signedByPath.isNotEmpty) {
+        final latest = _latestFigureAssetOf(commonQ);
+        final latestPath = '${latest?['path'] ?? ''}'.trim();
+        final fallbackLatestPath = latestPath.isNotEmpty
+            ? latestPath
+            : signedByPath.keys.first;
+        final latestSigned = signedByPath[fallbackLatestPath] ?? '';
+        setState(() {
+          if (latestSigned.isNotEmpty) {
+            _figurePreviewUrls[commonPreviewCacheKey] = latestSigned;
+            _figurePreviewPaths[commonPreviewCacheKey] = fallbackLatestPath;
+            _figurePreviewUrls[commonQ.id] = latestSigned;
+            _figurePreviewPaths[commonQ.id] = fallbackLatestPath;
+          }
+          _figurePreviewUrlsByPath[commonPreviewCacheKey] =
+              Map<String, String>.from(signedByPath);
+          _figurePreviewUrlsByPath[commonQ.id] =
+              Map<String, String>.from(signedByPath);
+        });
+      }
+    }
     final tableEntries = _parseTableEntries(commonQ);
     final hasTables = tableEntries.isNotEmpty;
     final hasSidebar = hasFigures || hasTables;
@@ -9996,7 +10042,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final dialogWidth = hasSidebar
         ? math.min(screen.width - 40, 880.0 + sidebarWidth)
         : math.min(screen.width - 40, 880.0);
-    final dialogMaxHeight = (screen.height - 40).clamp(480.0, 1600.0);
+    final dialogMaxHeight =
+        math.min((screen.height - 72).clamp(420.0, 1200.0), 760.0);
 
     final figureData = hasFigures ? _prepareFigureScaleData(commonQ) : null;
     final draftMap = figureData?.draftMap;
@@ -10085,7 +10132,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   ),
                   if (hasFigures) ...[
                     const SizedBox(height: 10),
-                    _buildFigurePreviewThumbnail(previewQ, expanded: true),
+                    _buildFigurePreviewThumbnail(
+                      previewQ,
+                      expanded: true,
+                      previewCacheKey: commonPreviewCacheKey,
+                    ),
                   ],
                 ],
               ),

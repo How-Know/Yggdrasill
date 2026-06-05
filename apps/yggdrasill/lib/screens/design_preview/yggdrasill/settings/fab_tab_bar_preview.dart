@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../../../widgets/app_time_picker_dialog.dart';
 
 /// FAB 스타일 탭바 색상·치수 토큰 (Preview 전용 — 본앱 미적용).
 class FabTabBarTokens {
@@ -132,17 +135,50 @@ class FabTabBarTokens {
   static const double previewAcademyInputSheetInnerPaddingHorizontal = 16;
   static const double previewAcademyInputSheetInnerPaddingBottom = 20;
 
-  /// 헤더 행 ↔ 입력 그룹 카드 (12 + 8)
-  static const double previewAcademyInputSheetHeaderToFieldSpacing = 20;
+  /// 헤더 행 ↔ 입력 그룹 카드
+  static const double previewAcademyInputSheetHeaderToFieldSpacing = 36;
 
   /// 입력 그룹 카드 안 — 카드 행 [previewAcademyGroupedRowPaddingHorizontal]과 동일
   static const double previewAcademyInputSheetFieldPaddingHorizontal = 24;
 
   /// 라벨 ↔ 입력란 가로 간격
-  static const double previewAcademyInputSheetLabelToFieldSpacing = 32;
+  static const double previewAcademyInputSheetLabelToFieldSpacing = 52;
+
+  /// 입력 시트 전용 — 다이얼로그 바깥 배경 (Dark)
+  static const Color previewAcademyInputSheetSurfaceDark = Color(0xFF1C1C1E);
+
+  /// 입력 시트 전용 — 입력 필드 그룹 배경 (Dark)
+  static const Color previewAcademyInputSheetFieldSurfaceDark = Color(0xFF2C2C2E);
+
+  /// 입력 시트 헤더 제목 글자 크기
+  static const double previewAcademyInputSheetTitleFontSize = 20;
 
   /// 입력 행 한 줄 상·하 패딩 (각각)
-  static const double previewAcademyInputSheetFieldRowPaddingVertical = 16;
+  static const double previewAcademyInputSheetFieldRowPaddingVertical = 20;
+
+  /// 입력 시트 열림·닫힘 슬라이드 애니메이션
+  static const Duration previewAcademyInputSheetTransitionDuration =
+      Duration(milliseconds: 280);
+
+  /// 운영시간 알약 배지 — 좌우·상하 패딩
+  static const double previewAcademyTimePillPaddingHorizontal = 20;
+  static const double previewAcademyTimePillPaddingVertical = 9;
+  static const double previewAcademyTimePillFontSize = 15;
+
+  /// 운영시간 알약 배지 — 통통한 pill 유지
+  static const double previewAcademyTimePillHeight = 44;
+
+  /// 운영시간 전용 행 — 스위치 ON/OFF와 알약 유무에 관계없이 동일 높이
+  static const double previewAcademyOperatingRowHeight = 80;
+
+  /// 운영시간 알약 배지 — 시작·종료 사이 간격
+  static const double previewAcademyTimePillGap = 6;
+
+  /// 운영시간 알약 배지 — 배경·글자 (다크/라이트)
+  static const Color previewAcademyTimePillBackgroundDark = Color(0xFF3A3A3C);
+  static const Color previewAcademyTimePillBackgroundLight = Color(0xFFE5E5EA);
+  static const Color previewAcademyTimePillTextDark = Color(0xFFFFFFFF);
+  static const Color previewAcademyTimePillTextLight = Color(0xFF1C1C1E);
 
   /// 학원 탭 카드 라벨 왼쪽 = scope(16) + 카드 행(24). 시트 inner(16) + 필드(24)와 동일.
   static const double previewAcademyInputSheetFieldInsetFromSheet =
@@ -159,10 +195,19 @@ class FabTabBarTokens {
   /// Preview — 「변경」 버튼 세로 패딩
   static const double previewAcademyChangeButtonPaddingVertical = 14;
 
-  /// Preview — 학원정보 탭 Pretendard (`Pretendard-Bold.otf` 등록)
+  /// Preview — 페이지·섹션 제목 Pretendard (`Pretendard-Bold.otf` 등록)
   static const String previewHeadlineFontFamily = 'Pretendard';
   static const FontWeight previewHeadlineFontWeight = FontWeight.w700;
-  static const FontWeight previewAcademyRowLabelFontWeight = FontWeight.w400;
+
+  /// Preview — 카드 행 **라벨** (학원명, 학원주소 …)
+  static const String previewAcademyLabelFontFamily = 'Pretendard';
+  static const double previewAcademyLabelFontSize = previewAcademyBaseFontSize;
+  static const FontWeight previewAcademyLabelFontWeight = FontWeight.w400;
+
+  /// Preview — 카드 행 **값·플레이스홀더** (앱 전역 기본 `KakaoSmallSans`)
+  static const String previewAcademyValueFontFamily = 'KakaoSmallSans';
+  static const double previewAcademyValueFontSize = previewAcademyBaseFontSize;
+  static const FontWeight previewAcademyValueFontWeight = FontWeight.w400;
 
   static TextStyle previewPageTitleStyle(PreviewAcademyPanelStyle style) {
     return TextStyle(
@@ -185,28 +230,49 @@ class FabTabBarTokens {
   }
 
   static TextStyle previewInternalTitleStyle(PreviewAcademyPanelStyle style) {
+    return previewAcademyLabelStyle(style);
+  }
+
+  static TextStyle previewSectionTitleStyle(PreviewAcademyPanelStyle style) {
+    return previewAcademyLabelStyle(style);
+  }
+
+  /// Preview — 카드·다이얼로그 행 라벨.
+  static TextStyle previewAcademyLabelStyle(PreviewAcademyPanelStyle style) {
     return TextStyle(
-      fontFamily: previewHeadlineFontFamily,
-      fontWeight: previewAcademyRowLabelFontWeight,
-      fontSize: previewAcademyBaseFontSize,
+      fontFamily: previewAcademyLabelFontFamily,
+      fontWeight: previewAcademyLabelFontWeight,
+      fontSize: previewAcademyLabelFontSize,
       color: style.title,
     );
   }
 
-  static TextStyle previewSectionTitleStyle(PreviewAcademyPanelStyle style) {
-    return previewInternalTitleStyle(style);
+  static TextStyle previewRowLabelStyle(PreviewAcademyPanelStyle style) {
+    return previewAcademyLabelStyle(style);
   }
 
-  static TextStyle previewRowLabelStyle(PreviewAcademyPanelStyle style) {
-    return previewInternalTitleStyle(style);
+  /// Preview — 입력 시트 헤더 제목 (예: 「학원정보」).
+  static TextStyle previewAcademyInputSheetTitleStyle(
+    PreviewAcademyPanelStyle style,
+  ) {
+    return previewPageTitleStyle(style).copyWith(
+      fontWeight: FontWeight.w600,
+      fontSize: previewAcademyInputSheetTitleFontSize,
+    );
+  }
+
+  /// Preview — 카드 행 값·미입력·힌트 공통 베이스.
+  static TextStyle previewAcademyValueStyle(PreviewAcademyPanelStyle style) {
+    return TextStyle(
+      fontFamily: previewAcademyValueFontFamily,
+      fontWeight: previewAcademyValueFontWeight,
+      fontSize: previewAcademyValueFontSize,
+      color: style.rowValue,
+    );
   }
 
   static TextStyle previewRowValueStyle(PreviewAcademyPanelStyle style) {
-    return TextStyle(
-      color: style.rowValue,
-      fontSize: previewAcademyBaseFontSize,
-      fontWeight: FontWeight.w400,
-    );
+    return previewAcademyValueStyle(style);
   }
 
   /// Preview — 카드 행 값/플레이스홀더 (학원정보·정원·지불방식 통일)
@@ -214,8 +280,17 @@ class FabTabBarTokens {
     PreviewAcademyPanelStyle style, {
     required bool isEmpty,
   }) {
-    return previewRowValueStyle(style).copyWith(
+    return previewAcademyValueStyle(style).copyWith(
       color: isEmpty ? style.hint : style.rowValue,
+    );
+  }
+
+  /// Preview — 다이얼로그 입력란에 타이핑되는 본문.
+  static TextStyle previewAcademyFieldInputStyle(
+    PreviewAcademyPanelStyle style,
+  ) {
+    return previewAcademyValueStyle(style).copyWith(
+      color: style.inputText,
     );
   }
 
@@ -439,6 +514,425 @@ class PreviewAcademyInfoRow {
     this.valueUsesHintStyle = false,
     this.onTap,
   });
+}
+
+/// Preview — 운영시간 등 카드 행에 쓰는 알약형 시간 배지.
+class PreviewAcademyTimePill extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String text;
+  final bool isPlaceholder;
+  final VoidCallback? onTap;
+
+  const PreviewAcademyTimePill({
+    super.key,
+    required this.style,
+    required this.text,
+    this.isPlaceholder = false,
+    this.onTap,
+  });
+
+  /// 12시간제 한국어 표기 (예: 오후 7:00).
+  static String formatTimeOfDay(TimeOfDay time) {
+    final period = time.hour < 12 ? '오전' : '오후';
+    final h12 = time.hour % 12;
+    final hour = h12 == 0 ? 12 : h12;
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$period $hour:$minute';
+  }
+
+  static const BorderRadius _pillRadius = BorderRadius.all(Radius.circular(999));
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final background = isDark
+        ? FabTabBarTokens.previewAcademyTimePillBackgroundDark
+        : FabTabBarTokens.previewAcademyTimePillBackgroundLight;
+    final textColor = isPlaceholder
+        ? style.hint
+        : isDark
+            ? FabTabBarTokens.previewAcademyTimePillTextDark
+            : FabTabBarTokens.previewAcademyTimePillTextLight;
+
+    final pillBody = Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: FabTabBarTokens.previewAcademyTimePillPaddingHorizontal,
+        vertical: FabTabBarTokens.previewAcademyTimePillPaddingVertical,
+      ),
+      child: Center(
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontFamily: FabTabBarTokens.previewAcademyValueFontFamily,
+            fontSize: FabTabBarTokens.previewAcademyTimePillFontSize,
+            fontWeight: FabTabBarTokens.previewAcademyValueFontWeight,
+            color: textColor,
+            height: 1.0,
+          ),
+        ),
+      ),
+    );
+
+    final pill = SizedBox(
+      height: FabTabBarTokens.previewAcademyTimePillHeight,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: _pillRadius,
+        ),
+        child: pillBody,
+      ),
+    );
+
+    if (onTap == null) return pill;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: pill,
+      ),
+    );
+  }
+}
+
+/// Preview — 휴식 시간 구간.
+@immutable
+class PreviewAcademyBreakTimeRange {
+  final int startHour;
+  final int startMinute;
+  final int endHour;
+  final int endMinute;
+
+  const PreviewAcademyBreakTimeRange({
+    required this.startHour,
+    required this.startMinute,
+    required this.endHour,
+    required this.endMinute,
+  });
+
+  String get displayLabel {
+    final start = PreviewAcademyTimePill.formatTimeOfDay(
+      TimeOfDay(hour: startHour, minute: startMinute),
+    );
+    final end = PreviewAcademyTimePill.formatTimeOfDay(
+      TimeOfDay(hour: endHour, minute: endMinute),
+    );
+    return '$start - $end';
+  }
+}
+
+/// Preview — 요일별 휴식 시간 목록 시트 (공용 다이얼로그 템플릿).
+class PreviewAcademyBreakTimesSheet extends StatefulWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+  final List<PreviewAcademyBreakTimeRange> initialBreaks;
+
+  const PreviewAcademyBreakTimesSheet({
+    super.key,
+    required this.style,
+    required this.title,
+    required this.initialBreaks,
+  });
+
+  static Future<List<PreviewAcademyBreakTimeRange>?> show({
+    required BuildContext context,
+    required PreviewAcademyPanelStyle style,
+    required String title,
+    required List<PreviewAcademyBreakTimeRange> initialBreaks,
+  }) {
+    return PreviewAcademyDialogRoute.show<List<PreviewAcademyBreakTimeRange>>(
+      context: context,
+      barrierLabel: title,
+      builder: (context) {
+        return PreviewAcademyBreakTimesSheet(
+          style: style,
+          title: title,
+          initialBreaks: initialBreaks,
+        );
+      },
+    );
+  }
+
+  @override
+  State<PreviewAcademyBreakTimesSheet> createState() =>
+      _PreviewAcademyBreakTimesSheetState();
+}
+
+class _PreviewAcademyBreakTimesSheetState
+    extends State<PreviewAcademyBreakTimesSheet> {
+  late List<PreviewAcademyBreakTimeRange> _breaks;
+
+  @override
+  void initState() {
+    super.initState();
+    _breaks = List.of(widget.initialBreaks);
+  }
+
+  void _close([List<PreviewAcademyBreakTimeRange>? value]) {
+    Navigator.of(context).pop(value);
+  }
+
+  Future<void> _pickBreakRange({
+    PreviewAcademyBreakTimeRange? initial,
+    required void Function(PreviewAcademyBreakTimeRange value) onPicked,
+  }) async {
+    final startInitial = initial != null
+        ? TimeOfDay(hour: initial.startHour, minute: initial.startMinute)
+        : TimeOfDay.now();
+    final start = await AppTimePickerDialog.show(
+      context: context,
+      title: widget.title,
+      initialTime: startInitial,
+    );
+    if (start == null || !mounted) return;
+
+    final endInitial = initial != null
+        ? TimeOfDay(hour: initial.endHour, minute: initial.endMinute)
+        : TimeOfDay(
+            hour: (start.hour + 1) % 24,
+            minute: start.minute,
+          );
+    final end = await AppTimePickerDialog.show(
+      context: context,
+      title: widget.title,
+      initialTime: endInitial,
+    );
+    if (end == null || !mounted) return;
+
+    onPicked(
+      PreviewAcademyBreakTimeRange(
+        startHour: start.hour,
+        startMinute: start.minute,
+        endHour: end.hour,
+        endMinute: end.minute,
+      ),
+    );
+  }
+
+  Future<void> _addBreak() async {
+    await _pickBreakRange(
+      onPicked: (value) => setState(() => _breaks.add(value)),
+    );
+  }
+
+  Future<void> _editBreak(int index) async {
+    await _pickBreakRange(
+      initial: _breaks[index],
+      onPicked: (value) => setState(() => _breaks[index] = value),
+    );
+  }
+
+  void _deleteBreak(int index) {
+    setState(() => _breaks.removeAt(index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[
+      for (int i = 0; i < _breaks.length; i++)
+        _PreviewAcademyBreakTimeListRow(
+          style: widget.style,
+          label: '휴식 ${i + 1}',
+          borderRadius: BorderRadius.vertical(
+            top: i == 0
+                ? const Radius.circular(
+                    FabTabBarTokens.previewAcademyGroupedCardRadius,
+                  )
+                : Radius.zero,
+          ),
+          startText: PreviewAcademyTimePill.formatTimeOfDay(
+            TimeOfDay(
+              hour: _breaks[i].startHour,
+              minute: _breaks[i].startMinute,
+            ),
+          ),
+          endText: PreviewAcademyTimePill.formatTimeOfDay(
+            TimeOfDay(
+              hour: _breaks[i].endHour,
+              minute: _breaks[i].endMinute,
+            ),
+          ),
+          onTap: () => _editBreak(i),
+          onDelete: () => _deleteBreak(i),
+        ),
+      if (_breaks.isNotEmpty)
+        Divider(
+          height: 1,
+          thickness: 1,
+          indent: FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+          endIndent:
+              FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+          color: widget.style.divider,
+        ),
+      _PreviewAcademyBreakTimeAddRow(
+        style: widget.style,
+        borderRadius: BorderRadius.vertical(
+          top: _breaks.isEmpty
+              ? const Radius.circular(
+                  FabTabBarTokens.previewAcademyGroupedCardRadius,
+                )
+              : Radius.zero,
+          bottom: const Radius.circular(
+            FabTabBarTokens.previewAcademyGroupedCardRadius,
+          ),
+        ),
+        onTap: _addBreak,
+      ),
+    ];
+
+    return PreviewAcademyDialogSheet(
+      style: widget.style,
+      title: widget.title,
+      onCancel: () => _close(),
+      onConfirm: () => _close(_breaks),
+      child: PreviewAcademyDialogGroupedFields(
+        style: widget.style,
+        children: children,
+      ),
+    );
+  }
+}
+
+class _PreviewAcademyBreakTimeListRow extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String label;
+  final BorderRadius borderRadius;
+  final String startText;
+  final String endText;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _PreviewAcademyBreakTimeListRow({
+    required this.style,
+    required this.label,
+    required this.borderRadius,
+    required this.startText,
+    required this.endText,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: borderRadius,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: borderRadius,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal:
+                FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+            vertical: FabTabBarTokens
+                .previewAcademyInputSheetFieldRowPaddingVertical,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
+                child: Text(
+                  label,
+                  style: FabTabBarTokens.previewRowLabelStyle(style),
+                ),
+              ),
+              const SizedBox(
+                width: FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
+              ),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PreviewAcademyTimePill(
+                        style: style,
+                        text: startText,
+                      ),
+                      const SizedBox(
+                        width: FabTabBarTokens.previewAcademyTimePillGap,
+                      ),
+                      PreviewAcademyTimePill(
+                        style: style,
+                        text: endText,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: onDelete,
+                behavior: HitTestBehavior.opaque,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Icon(Icons.close, size: 18, color: style.hint),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewAcademyBreakTimeAddRow extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final BorderRadius borderRadius;
+  final VoidCallback onTap;
+
+  const _PreviewAcademyBreakTimeAddRow({
+    required this.style,
+    required this.borderRadius,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: borderRadius,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: borderRadius,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal:
+                FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+            vertical: FabTabBarTokens
+                .previewAcademyInputSheetFieldRowPaddingVertical,
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.add,
+                size: 18,
+                color: FabTabBarTokens.previewConfirmActionColor,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '휴식 추가',
+                style: FabTabBarTokens.previewBodyTextStyle(
+                  style,
+                  color: FabTabBarTokens.previewConfirmActionColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Preview — 학원명·학원주소·슬로건 묶음 카드 (스크린샷 설정 앱형).
@@ -940,6 +1434,282 @@ class PreviewAcademyBasicInfoValues {
   });
 }
 
+/// Preview — 공통 입력 다이얼로그 경로/전환.
+///
+/// 학원정보 다이얼로그의 현재 모션(페이드 + 아래에서 슬라이드)을 기준으로 둔다.
+class PreviewAcademyDialogRoute {
+  PreviewAcademyDialogRoute._();
+
+  static Future<T?> show<T>({
+    required BuildContext context,
+    required String barrierLabel,
+    required WidgetBuilder builder,
+  }) {
+    return showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: barrierLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration:
+          FabTabBarTokens.previewAcademyInputSheetTransitionDuration,
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return builder(context);
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curve,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 1),
+              end: Offset.zero,
+            ).animate(curve),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Preview — 공통 입력 시트 shell.
+///
+/// 학원정보 다이얼로그의 배치·여백·색·버튼을 그대로 보존한다.
+class PreviewAcademyDialogSheet extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+  final VoidCallback onCancel;
+  final VoidCallback onConfirm;
+  final Widget child;
+
+  const PreviewAcademyDialogSheet({
+    super.key,
+    required this.style,
+    required this.title,
+    required this.onCancel,
+    required this.onConfirm,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sheetSurface = isDark
+        ? FabTabBarTokens.previewAcademyInputSheetSurfaceDark
+        : const Color(0xFFF2F2F7);
+    final headerIconBg =
+        isDark ? const Color(0xFF3A3A3C) : const Color(0xFFE5E5EA);
+    final subtleBorder = isDark
+        ? const Color(0x33FFFFFF)
+        : const Color(0x33000000);
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxWidth: FabTabBarTokens.previewAcademyInputSheetMaxWidth,
+            minHeight: FabTabBarTokens.previewAcademyInputSheetMinHeight,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal:
+                  FabTabBarTokens.previewAcademyInputSheetOuterPaddingHorizontal,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: sheetSurface,
+                borderRadius: BorderRadius.circular(
+                  FabTabBarTokens.previewAcademyInputSheetRadius,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 32,
+                    offset: Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(
+                  FabTabBarTokens.previewAcademyInputSheetBorderInset,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    FabTabBarTokens
+                        .previewAcademyInputSheetInnerPaddingHorizontal,
+                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingTop,
+                    FabTabBarTokens
+                        .previewAcademyInputSheetInnerPaddingHorizontal,
+                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingBottom,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        height: 44,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Center(
+                              child: Text(
+                                title,
+                                textAlign: TextAlign.center,
+                                style: FabTabBarTokens
+                                    .previewAcademyInputSheetTitleStyle(style),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: _PreviewAcademyInputSheetIconButton(
+                              backgroundColor: headerIconBg,
+                              borderColor: subtleBorder,
+                              icon: Icons.close,
+                              iconColor: style.title,
+                              onPressed: onCancel,
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: _PreviewAcademyInputSheetConfirmPill(
+                                borderColor: subtleBorder,
+                                onPressed: onConfirm,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(
+                        height: FabTabBarTokens
+                            .previewAcademyInputSheetHeaderToFieldSpacing,
+                      ),
+                      child,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Preview — 공통 입력 시트 그룹 카드.
+class PreviewAcademyDialogGroupedFields extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final List<Widget> children;
+
+  const PreviewAcademyDialogGroupedFields({
+    super.key,
+    required this.style,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final groupedFill = isDark
+        ? FabTabBarTokens.previewAcademyInputSheetFieldSurfaceDark
+        : Colors.white;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: groupedFill,
+        borderRadius: BorderRadius.circular(
+          FabTabBarTokens.previewAcademyGroupedCardRadius,
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: children,
+      ),
+    );
+  }
+}
+
+/// Preview — 공통 입력 시트 필드 행.
+class PreviewAcademyDialogFieldRow extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String label;
+  final TextEditingController controller;
+  final FocusNode? focusNode;
+  final TextInputAction textInputAction;
+  final VoidCallback? onSubmitted;
+  final TextInputType keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
+  final String emptyHintText;
+
+  const PreviewAcademyDialogFieldRow({
+    super.key,
+    required this.style,
+    required this.label,
+    required this.controller,
+    this.focusNode,
+    required this.textInputAction,
+    this.onSubmitted,
+    this.keyboardType = TextInputType.text,
+    this.inputFormatters,
+    this.emptyHintText = '필수입력',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hintStyle = FabTabBarTokens.previewAcademyFieldDisplayStyle(
+      style,
+      isEmpty: true,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal:
+            FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+        vertical: FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
+            child: Text(
+              label,
+              style: FabTabBarTokens.previewRowLabelStyle(style),
+            ),
+          ),
+          const SizedBox(
+            width: FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
+          ),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              keyboardType: keyboardType,
+              inputFormatters: inputFormatters,
+              style: FabTabBarTokens.previewAcademyFieldInputStyle(style),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                hintText:
+                    controller.text.trim().isEmpty ? emptyHintText : null,
+                hintStyle: hintStyle,
+              ),
+              textInputAction: textInputAction,
+              onSubmitted: (_) => onSubmitted?.call(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Preview — iOS형 기본 정보 입력 시트 (학원명·주소·슬로건).
 class PreviewAcademyFieldInputSheet extends StatefulWidget {
   final PreviewAcademyPanelStyle style;
@@ -963,32 +1733,15 @@ class PreviewAcademyFieldInputSheet extends StatefulWidget {
     PreviewAcademyBasicInfoField initialFocusField =
         PreviewAcademyBasicInfoField.academyName,
   }) {
-    return showGeneralDialog<PreviewAcademyBasicInfoValues>(
+    return PreviewAcademyDialogRoute.show<PreviewAcademyBasicInfoValues>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: title,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
-      transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      builder: (context) {
         return PreviewAcademyFieldInputSheet(
           style: style,
           title: title,
           initialValues: initialValues,
           initialFocusField: initialFocusField,
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final curve = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return FadeTransition(
-          opacity: curve,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.96, end: 1).animate(curve),
-            child: child,
-          ),
         );
       },
     );
@@ -1078,76 +1831,8 @@ class _PreviewAcademyFieldInputSheetState
     );
   }
 
-  Widget _buildFieldRow({
-    required String label,
-    required TextEditingController controller,
-    FocusNode? focusNode,
-    required TextInputAction textInputAction,
-    required VoidCallback? onSubmitted,
-  }) {
-    final hintStyle = FabTabBarTokens.previewAcademyFieldDisplayStyle(
-      widget.style,
-      isEmpty: true,
-    );
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal:
-            FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
-        vertical:
-            FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
-            child: Text(
-              label,
-              style: FabTabBarTokens.previewRowLabelStyle(widget.style),
-            ),
-          ),
-          const SizedBox(
-            width: FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              style: FabTabBarTokens.previewBodyTextStyle(
-                widget.style,
-                color: widget.style.inputText,
-              ),
-              decoration: InputDecoration(
-                isDense: true,
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-                hintText:
-                    controller.text.trim().isEmpty ? '필수입력' : null,
-                hintStyle: hintStyle,
-              ),
-              textInputAction: textInputAction,
-              onSubmitted: (_) => onSubmitted?.call(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final sheetSurface =
-        isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
-    final groupedFill =
-        isDark ? const Color(0xFF2C2C2E) : Colors.white;
-    final headerIconBg =
-        isDark ? const Color(0xFF3A3A3C) : const Color(0xFFE5E5EA);
-    final subtleBorder = isDark
-        ? const Color(0x33FFFFFF)
-        : const Color(0x33000000);
-
     final controllers = [_nameController, _addressController, _sloganController];
     final focusNodes = [_nameFocusNode, _addressFocusNode, _sloganFocusNode];
     final submitActions = <VoidCallback?>[
@@ -1156,120 +1841,218 @@ class _PreviewAcademyFieldInputSheetState
       _confirm,
     ];
 
-    return Material(
-      type: MaterialType.transparency,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            maxWidth: FabTabBarTokens.previewAcademyInputSheetMaxWidth,
-            minHeight: FabTabBarTokens.previewAcademyInputSheetMinHeight,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal:
-                  FabTabBarTokens.previewAcademyInputSheetOuterPaddingHorizontal,
-            ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: sheetSurface,
-                borderRadius: BorderRadius.circular(
-                  FabTabBarTokens.previewAcademyInputSheetRadius,
-                ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x33000000),
-                    blurRadius: 32,
-                    offset: Offset(0, 12),
-                  ),
-                ],
+    return PreviewAcademyDialogSheet(
+      style: widget.style,
+      title: widget.title,
+      onCancel: () => _close(),
+      onConfirm: _confirm,
+      child: PreviewAcademyDialogGroupedFields(
+        style: widget.style,
+        children: [
+          for (int i = 0; i < _fieldLabels.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 1,
+                thickness: 1,
+                indent:
+                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+                endIndent:
+                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+                color: widget.style.divider,
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(
-                  FabTabBarTokens.previewAcademyInputSheetBorderInset,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingHorizontal,
-                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingTop,
-                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingHorizontal,
-                    FabTabBarTokens.previewAcademyInputSheetInnerPaddingBottom,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SizedBox(
-                        height: 44,
-                        child: Row(
-                          children: [
-                            _PreviewAcademyInputSheetIconButton(
-                              backgroundColor: headerIconBg,
-                              borderColor: subtleBorder,
-                              icon: Icons.close,
-                              iconColor: widget.style.title,
-                              onPressed: () => _close(),
-                            ),
-                            Expanded(
-                              child: Text(
-                                widget.title,
-                                textAlign: TextAlign.center,
-                                style: FabTabBarTokens.previewPageTitleStyle(
-                                  widget.style,
-                                ).copyWith(fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                            _PreviewAcademyInputSheetConfirmPill(
-                              borderColor: subtleBorder,
-                              onPressed: _confirm,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(
-                        height: FabTabBarTokens
-                            .previewAcademyInputSheetHeaderToFieldSpacing,
-                      ),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: groupedFill,
-                          borderRadius: BorderRadius.circular(
-                            FabTabBarTokens.previewAcademyGroupedCardRadius,
-                          ),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (int i = 0; i < _fieldLabels.length; i++) ...[
-                              if (i > 0)
-                                Divider(
-                                  height: 1,
-                                  thickness: 1,
-                                  indent: FabTabBarTokens
-                                      .previewAcademyInputSheetFieldPaddingHorizontal,
-                                  endIndent: FabTabBarTokens
-                                      .previewAcademyInputSheetFieldPaddingHorizontal,
-                                  color: widget.style.divider,
-                                ),
-                              _buildFieldRow(
-                                label: _fieldLabels[i],
-                                controller: controllers[i],
-                                focusNode: focusNodes[i],
-                                textInputAction: i < _fieldLabels.length - 1
-                                    ? TextInputAction.next
-                                    : TextInputAction.done,
-                                onSubmitted: submitActions[i],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            PreviewAcademyDialogFieldRow(
+              style: widget.style,
+              label: _fieldLabels[i],
+              controller: controllers[i],
+              focusNode: focusNodes[i],
+              textInputAction: i < _fieldLabels.length - 1
+                  ? TextInputAction.next
+                  : TextInputAction.done,
+              onSubmitted: submitActions[i],
             ),
-          ),
-        ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Preview — 정원·수업 입력 시트에서 포커스할 필드.
+enum PreviewAcademyCapacityField {
+  capacity,
+  lessonDuration,
+}
+
+/// Preview — 기본 정원·수업 시간 입력 시트 결과.
+class PreviewAcademyCapacityValues {
+  final String capacity;
+  final String lessonDurationMinutes;
+
+  const PreviewAcademyCapacityValues({
+    required this.capacity,
+    required this.lessonDurationMinutes,
+  });
+}
+
+/// Preview — 기본 정원·수업 시간 입력 시트.
+class PreviewAcademyCapacityInputSheet extends StatefulWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+  final PreviewAcademyCapacityValues initialValues;
+  final PreviewAcademyCapacityField initialFocusField;
+
+  const PreviewAcademyCapacityInputSheet({
+    super.key,
+    required this.style,
+    required this.title,
+    required this.initialValues,
+    this.initialFocusField = PreviewAcademyCapacityField.capacity,
+  });
+
+  static Future<PreviewAcademyCapacityValues?> show({
+    required BuildContext context,
+    required PreviewAcademyPanelStyle style,
+    String title = '수업',
+    required PreviewAcademyCapacityValues initialValues,
+    PreviewAcademyCapacityField initialFocusField =
+        PreviewAcademyCapacityField.capacity,
+  }) {
+    return PreviewAcademyDialogRoute.show<PreviewAcademyCapacityValues>(
+      context: context,
+      barrierLabel: title,
+      builder: (context) {
+        return PreviewAcademyCapacityInputSheet(
+          style: style,
+          title: title,
+          initialValues: initialValues,
+          initialFocusField: initialFocusField,
+        );
+      },
+    );
+  }
+
+  @override
+  State<PreviewAcademyCapacityInputSheet> createState() =>
+      _PreviewAcademyCapacityInputSheetState();
+}
+
+class _PreviewAcademyCapacityInputSheetState
+    extends State<PreviewAcademyCapacityInputSheet> {
+  late final TextEditingController _capacityController;
+  late final TextEditingController _lessonDurationController;
+  late final FocusNode _capacityFocusNode;
+  late final FocusNode _lessonDurationFocusNode;
+
+  static const _fieldLabels = ['기본 정원', '수업 시간'];
+  static const _emptyHints = ['명', '분'];
+  static final _digitsOnly = FilteringTextInputFormatter.digitsOnly;
+
+  @override
+  void initState() {
+    super.initState();
+    _capacityController =
+        TextEditingController(text: widget.initialValues.capacity);
+    _lessonDurationController = TextEditingController(
+      text: widget.initialValues.lessonDurationMinutes,
+    );
+    _capacityFocusNode = FocusNode();
+    _lessonDurationFocusNode = FocusNode();
+    for (final c in [_capacityController, _lessonDurationController]) {
+      c.addListener(_onFieldChanged);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final focusNode = switch (widget.initialFocusField) {
+        PreviewAcademyCapacityField.capacity => _capacityFocusNode,
+        PreviewAcademyCapacityField.lessonDuration => _lessonDurationFocusNode,
+      };
+      focusNode.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final fieldContext = focusNode.context;
+        if (fieldContext != null) {
+          Scrollable.ensureVisible(
+            fieldContext,
+            alignment: 0.25,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      });
+    });
+  }
+
+  void _onFieldChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_capacityController, _lessonDurationController]) {
+      c.removeListener(_onFieldChanged);
+      c.dispose();
+    }
+    _capacityFocusNode.dispose();
+    _lessonDurationFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _close([PreviewAcademyCapacityValues? values]) {
+    Navigator.of(context).pop(values);
+  }
+
+  void _confirm() {
+    _close(
+      PreviewAcademyCapacityValues(
+        capacity: _capacityController.text.trim(),
+        lessonDurationMinutes: _lessonDurationController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controllers = [_capacityController, _lessonDurationController];
+    final focusNodes = [_capacityFocusNode, _lessonDurationFocusNode];
+    final submitActions = <VoidCallback?>[
+      _lessonDurationFocusNode.requestFocus,
+      _confirm,
+    ];
+
+    return PreviewAcademyDialogSheet(
+      style: widget.style,
+      title: widget.title,
+      onCancel: () => _close(),
+      onConfirm: _confirm,
+      child: PreviewAcademyDialogGroupedFields(
+        style: widget.style,
+        children: [
+          for (int i = 0; i < _fieldLabels.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 1,
+                thickness: 1,
+                indent:
+                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+                endIndent:
+                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+                color: widget.style.divider,
+              ),
+            PreviewAcademyDialogFieldRow(
+              style: widget.style,
+              label: _fieldLabels[i],
+              controller: controllers[i],
+              focusNode: focusNodes[i],
+              keyboardType: TextInputType.number,
+              inputFormatters: [_digitsOnly],
+              emptyHintText: _emptyHints[i],
+              textInputAction: i < _fieldLabels.length - 1
+                  ? TextInputAction.next
+                  : TextInputAction.done,
+              onSubmitted: submitActions[i],
+            ),
+          ],
+        ],
       ),
     );
   }

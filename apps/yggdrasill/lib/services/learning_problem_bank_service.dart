@@ -274,9 +274,6 @@ class LearningProblemQuestion {
         .where((e) => e.isNotEmpty)
         .toList(growable: false);
     final meta = _mapOrEmpty(map['meta']);
-    final cropPageMeta =
-        _mapOrEmpty(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
-    final displaySourcePage = _intOrZero(cropPageMeta['display_page']);
     return LearningProblemQuestion(
       id: '${map['id'] ?? ''}',
       questionUid:
@@ -293,9 +290,7 @@ class LearningProblemQuestion {
       subjectiveAnswer: '${map['subjective_answer'] ?? ''}'.trim(),
       reviewerNotes: '${map['reviewer_notes'] ?? ''}'.trim(),
       equations: equations,
-      sourcePage: displaySourcePage > 0
-          ? displaySourcePage
-          : _intOrZero(map['source_page']),
+      sourcePage: _intOrZero(map['source_page']),
       sourceOrder: _intOrZero(map['source_order']),
       curriculumCode: '${map['curriculum_code'] ?? ''}',
       sourceTypeCode: '${map['source_type_code'] ?? ''}',

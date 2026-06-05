@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../widgets/pill_tab_selector.dart';
+import '../../widgets/app_time_picker_dialog.dart';
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
@@ -140,6 +141,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Preview — 요일별 수업 여부(스위치). 시간 등록과 분리.
   final Set<DayOfWeek> _previewOperatingDaysActive = {};
+
+  /// Preview — 운영시간 행에서 인라인으로 펼쳐진 휴식 리스트.
+  final Set<DayOfWeek> _previewBreakTimesExpanded = {};
 
   int _customTabIndex = 0;
   int _prevTabIndex = 0;
@@ -1814,15 +1818,331 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildPreviewOperatingHoursPills(
+    PreviewAcademyPanelStyle previewStyle,
+    DayOfWeek day,
+  ) {
+    final range = _operatingHours[day];
+    final hasRange = range != null && !_isLastThirtyMarkerDay(day);
+
+    if (!hasRange) {
+      return PreviewAcademyTimePill(
+        style: previewStyle,
+        text: '시간 등록',
+        isPlaceholder: true,
+        onTap: () => _pickOperatingStartTime(context, day),
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        PreviewAcademyTimePill(
+          style: previewStyle,
+          text: PreviewAcademyTimePill.formatTimeOfDay(
+            TimeOfDay(hour: range.startHour, minute: range.startMinute),
+          ),
+          onTap: () => _pickOperatingStartTime(context, day),
+        ),
+        const SizedBox(width: FabTabBarTokens.previewAcademyTimePillGap),
+        PreviewAcademyTimePill(
+          style: previewStyle,
+          text: PreviewAcademyTimePill.formatTimeOfDay(
+            TimeOfDay(hour: range.endHour, minute: range.endMinute),
+          ),
+          onTap: () => _pickOperatingEndTime(context, day),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _saveOperatingHoursToDb() async {
+    final List<OperatingHours> hoursList =
+        _operatingHours.entries.where((e) => e.value != null).map((e) {
+      final range = e.value!;
+      final breaks = _breakTimes[e.key] ?? [];
+      return OperatingHours(
+        dayOfWeek: e.key.index,
+        startHour: range.startHour,
+        startMinute: range.startMinute,
+        endHour: range.endHour,
+        endMinute: range.endMinute,
+        breakTimes: breaks
+            .map((b) => BreakTime(
+                  startHour: b.startHour,
+                  startMinute: b.startMinute,
+                  endHour: b.endHour,
+                  endMinute: b.endMinute,
+                ))
+            .toList(),
+      );
+    }).toList();
+    await DataManager.instance.saveOperatingHours(hoursList);
+    final hours = await DataManager.instance.getOperatingHours();
+    if (!mounted) return;
+    setState(() {
+      for (var d in DayOfWeek.values) {
+        _operatingHours[d] = null;
+        _breakTimes[d] = [];
+      }
+      for (var hour in hours) {
+        final d = DayOfWeek.values[hour.dayOfWeek];
+        _operatingHours[d] = TimeRange(
+          startHour: hour.startHour,
+          startMinute: hour.startMinute,
+          endHour: hour.endHour,
+          endMinute: hour.endMinute,
+        );
+        _breakTimes[d] = hour.breakTimes
+            .map((breakTime) => TimeRange(
+                  startHour: breakTime.startHour,
+                  startMinute: breakTime.startMinute,
+                  endHour: breakTime.endHour,
+                  endMinute: breakTime.endMinute,
+                ))
+            .toList();
+      }
+      _syncPreviewOperatingDaysActiveFromHours();
+    });
+  }
+
+  bool _hasRegisteredOperatingHours(DayOfWeek day) {
+    final range = _operatingHours[day];
+    return range != null && !_isLastThirtyMarkerDay(day);
+  }
+
+  Future<void> _pickOperatingStartTime(
+    BuildContext context,
+    DayOfWeek day,
+  ) async {
+    final isNew = !_hasRegisteredOperatingHours(day);
+    final range = _operatingHours[day];
+    final initial = !isNew && range != null
+        ? TimeOfDay(hour: range.startHour, minute: range.startMinute)
+        : const TimeOfDay(hour: 9, minute: 0);
+    final picked = await AppTimePickerDialog.show(
+      context: context,
+      title: day.koreanName,
+      initialTime: initial,
+    );
+    if (picked == null) return;
+
+    setState(() {
+      final existing = _operatingHours[day];
+      if (!isNew && existing != null) {
+        _operatingHours[day] = TimeRange(
+          startHour: picked.hour,
+          startMinute: picked.minute,
+          endHour: existing.endHour,
+          endMinute: existing.endMinute,
+        );
+      } else {
+        _operatingHours[day] = TimeRange(
+          startHour: picked.hour,
+          startMinute: picked.minute,
+          endHour: (picked.hour + 1) % 24,
+          endMinute: picked.minute,
+        );
+      }
+      _previewOperatingDaysActive.add(day);
+    });
+
+    if (isNew) {
+      await _pickOperatingEndTime(context, day, fromRegistration: true);
+      return;
+    }
+    await _saveOperatingHoursToDb();
+  }
+
+  Future<void> _pickOperatingEndTime(
+    BuildContext context,
+    DayOfWeek day, {
+    bool fromRegistration = false,
+  }) async {
+    if (!_hasRegisteredOperatingHours(day)) {
+      if (fromRegistration) {
+        await _saveOperatingHoursToDb();
+        return;
+      }
+      await _pickOperatingStartTime(context, day);
+      return;
+    }
+
+    final range = _operatingHours[day]!;
+    final picked = await AppTimePickerDialog.show(
+      context: context,
+      title: day.koreanName,
+      initialTime: TimeOfDay(hour: range.endHour, minute: range.endMinute),
+    );
+    if (picked == null) {
+      if (fromRegistration) {
+        await _saveOperatingHoursToDb();
+      }
+      return;
+    }
+
+    setState(() {
+      _operatingHours[day] = TimeRange(
+        startHour: range.startHour,
+        startMinute: range.startMinute,
+        endHour: picked.hour,
+        endMinute: picked.minute,
+      );
+      _previewOperatingDaysActive.add(day);
+    });
+    await _saveOperatingHoursToDb();
+  }
+
+  Future<void> _openPreviewBreakTimesDialog(
+    BuildContext context,
+    DayOfWeek day,
+  ) async {
+    final previewStyle = _previewAcademyPanelStyle(context);
+    if (previewStyle == null) return;
+
+    final range = _operatingHours[day];
+    if (range == null || _isLastThirtyMarkerDay(day)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 운영시간을 등록하세요.')),
+      );
+      return;
+    }
+
+    final initialBreaks = (_breakTimes[day] ?? [])
+        .map(
+          (b) => PreviewAcademyBreakTimeRange(
+            startHour: b.startHour,
+            startMinute: b.startMinute,
+            endHour: b.endHour,
+            endMinute: b.endMinute,
+          ),
+        )
+        .toList();
+
+    final result = await PreviewAcademyBreakTimesSheet.show(
+      context: context,
+      style: previewStyle,
+      title: day.koreanName,
+      initialBreaks: initialBreaks,
+    );
+    if (result == null) return;
+
+    setState(() {
+      _breakTimes[day] = result
+          .map(
+            (b) => TimeRange(
+              startHour: b.startHour,
+              startMinute: b.startMinute,
+              endHour: b.endHour,
+              endMinute: b.endMinute,
+            ),
+          )
+          .toList();
+    });
+    await _saveOperatingHoursToDb();
+  }
+
+  void _togglePreviewBreakTimes(DayOfWeek day) {
+    if (!_hasRegisteredOperatingHours(day)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 운영시간을 등록하세요.')),
+      );
+      return;
+    }
+
+    setState(() {
+      if (_previewBreakTimesExpanded.contains(day)) {
+        _previewBreakTimesExpanded.remove(day);
+      } else {
+        _previewBreakTimesExpanded.add(day);
+      }
+    });
+  }
+
+  Future<void> _pickPreviewBreakRange({
+    required DayOfWeek day,
+    TimeRange? initial,
+    required ValueChanged<TimeRange> onPicked,
+  }) async {
+    final startInitial = initial != null
+        ? TimeOfDay(hour: initial.startHour, minute: initial.startMinute)
+        : TimeOfDay.now();
+    final start = await AppTimePickerDialog.show(
+      context: context,
+      title: day.koreanName,
+      initialTime: startInitial,
+    );
+    if (start == null || !mounted) return;
+
+    final endInitial = initial != null
+        ? TimeOfDay(hour: initial.endHour, minute: initial.endMinute)
+        : TimeOfDay(hour: (start.hour + 1) % 24, minute: start.minute);
+    final end = await AppTimePickerDialog.show(
+      context: context,
+      title: day.koreanName,
+      initialTime: endInitial,
+    );
+    if (end == null || !mounted) return;
+
+    onPicked(
+      TimeRange(
+        startHour: start.hour,
+        startMinute: start.minute,
+        endHour: end.hour,
+        endMinute: end.minute,
+      ),
+    );
+    await _saveOperatingHoursToDb();
+  }
+
+  Future<void> _addPreviewBreakTime(DayOfWeek day) async {
+    await _pickPreviewBreakRange(
+      day: day,
+      onPicked: (value) {
+        setState(() {
+          _breakTimes[day] ??= [];
+          _breakTimes[day]!.add(value);
+          _previewBreakTimesExpanded.add(day);
+        });
+      },
+    );
+  }
+
+  Future<void> _editPreviewBreakTime(DayOfWeek day, int index) async {
+    final breaks = _breakTimes[day];
+    if (breaks == null || index >= breaks.length) return;
+    await _pickPreviewBreakRange(
+      day: day,
+      initial: breaks[index],
+      onPicked: (value) {
+        setState(() {
+          _breakTimes[day]![index] = value;
+          _previewBreakTimesExpanded.add(day);
+        });
+      },
+    );
+  }
+
+  Future<void> _deletePreviewBreakTime(DayOfWeek day, int index) async {
+    setState(() {
+      final breaks = _breakTimes[day];
+      if (breaks == null || index >= breaks.length) return;
+      breaks.removeAt(index);
+      _previewBreakTimesExpanded.add(day);
+    });
+    await _saveOperatingHoursToDb();
+  }
+
   String _previewOperatingHoursTimeLabel(DayOfWeek day) {
     final range = _operatingHours[day];
     if (range == null || _isLastThirtyMarkerDay(day)) {
       return '';
     }
-    final start = _formatTimeOfDay(
+    final start = PreviewAcademyTimePill.formatTimeOfDay(
       TimeOfDay(hour: range.startHour, minute: range.startMinute),
     );
-    final end = _formatTimeOfDay(
+    final end = PreviewAcademyTimePill.formatTimeOfDay(
       TimeOfDay(hour: range.endHour, minute: range.endMinute),
     );
     final breaks = _breakTimes[day] ?? [];
@@ -1832,7 +2152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final breakSummary = breaks
         .map(
           (b) =>
-              '${_formatTimeOfDay(TimeOfDay(hour: b.startHour, minute: b.startMinute))}-${_formatTimeOfDay(TimeOfDay(hour: b.endHour, minute: b.endMinute))}',
+              '${PreviewAcademyTimePill.formatTimeOfDay(TimeOfDay(hour: b.startHour, minute: b.startMinute))}-${PreviewAcademyTimePill.formatTimeOfDay(TimeOfDay(hour: b.endHour, minute: b.endMinute))}',
         )
         .join(', ');
     return '$start - $end · 휴식 $breakSummary';
@@ -1864,64 +2184,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? const Color(0xFF3A3A3C)
         : const Color(0xFFE5E5EA);
 
-    final rows = DayOfWeek.values.map((day) {
-      final isActive = _previewOperatingDayIsActive(day);
-      final timeLabel = _previewOperatingHoursTimeLabel(day);
-      return PreviewAcademyInfoRow(
-        label: day.koreanName,
-        value: '',
-        suppressInkHighlight: true,
-        valueWidget: isActive
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      timeLabel.isEmpty ? '시간' : timeLabel,
-                      textAlign: TextAlign.right,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: FabTabBarTokens.previewRowValueStyle(previewStyle)
-                          .copyWith(
-                        color: timeLabel.isEmpty
-                            ? previewStyle.hint
-                            : previewStyle.rowValue,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.chevron_right,
-                    size: FabTabBarTokens.previewAcademyChevronSize,
-                    color: previewStyle.chevron,
-                  ),
-                ],
-              )
-            : const SizedBox.shrink(),
-        onTap: isActive
-            ? () => _selectOperatingHours(context, day)
-            : null,
-        showChevron: false,
-        trailing: PreviewAcademyIosSwitch(
-          key: ValueKey('preview-hours-switch-${day.name}'),
-          value: isActive,
-          inactiveColor: switchInactive,
-          onChanged: (enabled) {
-            setState(() {
-              if (enabled) {
-                _previewOperatingDaysActive.add(day);
-              } else {
-                _previewOperatingDaysActive.remove(day);
-                _operatingHours[day] = null;
-                _breakTimes[day] = [];
-              }
-            });
-          },
-        ),
-      );
-    }).toList();
-
     final horizontalInset =
         FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal;
 
@@ -1930,47 +2192,298 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         Padding(
           padding: EdgeInsets.symmetric(horizontal: horizontalInset),
-          child: Row(
-            children: [
-              Text(
-                '운영 시간',
-                style: FabTabBarTokens.previewSectionTitleStyle(previewStyle)
-                    .copyWith(color: previewStyle.hint),
-              ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _promptAddBreakTime,
-                style: TextButton.styleFrom(
-                  foregroundColor: FabTabBarTokens.previewConfirmActionColor,
-                  minimumSize: Size.zero,
-                  padding: EdgeInsets.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                icon: const Icon(
-                  Icons.add,
-                  size: 18,
-                  color: FabTabBarTokens.previewConfirmActionColor,
-                ),
-                label: const Text(
-                  '휴식',
-                  style: TextStyle(
-                    color: FabTabBarTokens.previewConfirmActionColor,
-                    fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
+          child: Text(
+            '운영 시간',
+            style: FabTabBarTokens.previewSectionTitleStyle(previewStyle)
+                .copyWith(color: previewStyle.hint),
           ),
         ),
         const SizedBox(
           height: FabTabBarTokens.previewAcademySectionHeaderToCardSpacing,
         ),
-        PreviewAcademyGroupedFieldsCard(
-          style: previewStyle,
-          rows: rows,
+        Container(
+          width: double.infinity,
+          decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
+            previewStyle,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _buildPreviewOperatingHoursCardChildren(
+              previewStyle,
+              switchInactive,
+            ),
+          ),
         ),
       ],
+    );
+  }
+
+  List<Widget> _buildPreviewOperatingHoursCardChildren(
+    PreviewAcademyPanelStyle previewStyle,
+    Color switchInactive,
+  ) {
+    final children = <Widget>[];
+    for (final day in DayOfWeek.values) {
+      if (children.isNotEmpty) {
+        children.add(_previewOperatingDivider(previewStyle));
+      }
+      children.add(
+        _buildPreviewOperatingHoursRow(previewStyle, day, switchInactive),
+      );
+      children.add(_buildPreviewBreakTimesInlineSection(previewStyle, day));
+    }
+    return children;
+  }
+
+  Widget _buildPreviewBreakTimesInlineSection(
+    PreviewAcademyPanelStyle previewStyle,
+    DayOfWeek day,
+  ) {
+    final isExpanded = _previewBreakTimesExpanded.contains(day) &&
+        _hasRegisteredOperatingHours(day);
+    final breaks = _breakTimes[day] ?? [];
+
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topCenter,
+      child: ClipRect(
+        child: isExpanded
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < breaks.length; i++) ...[
+                    _previewOperatingDivider(previewStyle),
+                    _buildPreviewBreakTimeInlineRow(
+                      previewStyle,
+                      day,
+                      i,
+                      breaks[i],
+                    ),
+                  ],
+                  _previewOperatingDivider(previewStyle),
+                  _buildPreviewBreakTimeAddInlineRow(previewStyle, day),
+                ],
+              )
+            : const SizedBox(width: double.infinity),
+      ),
+    );
+  }
+
+  Widget _previewOperatingDivider(PreviewAcademyPanelStyle previewStyle) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+      endIndent: FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+      color: previewStyle.divider,
+    );
+  }
+
+  Widget _buildPreviewOperatingHoursRow(
+    PreviewAcademyPanelStyle previewStyle,
+    DayOfWeek day,
+    Color switchInactive,
+  ) {
+    final isActive = _previewOperatingDayIsActive(day);
+    final canExpand = isActive && _hasRegisteredOperatingHours(day);
+    final isExpanded = _previewBreakTimesExpanded.contains(day);
+
+    return SizedBox(
+      height: FabTabBarTokens.previewAcademyOperatingRowHeight,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: canExpand ? () => _togglePreviewBreakTimes(day) : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal:
+                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+            ),
+            child: Row(
+              children: [
+                Text(
+                  day.koreanName,
+                  style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Align(
+                  alignment: Alignment.centerRight,
+                    child: isActive
+                        ? Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                fit: FlexFit.loose,
+                                child: IntrinsicWidth(
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: _buildPreviewOperatingHoursPills(
+                                      previewStyle,
+                                      day,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                isExpanded
+                                    ? Icons.keyboard_arrow_down
+                                    : Icons.chevron_right,
+                                size: FabTabBarTokens.previewAcademyChevronSize,
+                                color: previewStyle.chevron,
+                              ),
+                            ],
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                PreviewAcademyIosSwitch(
+                  key: ValueKey('preview-hours-switch-${day.name}'),
+                  value: isActive,
+                  inactiveColor: switchInactive,
+                  onChanged: (enabled) {
+                    setState(() {
+                      if (enabled) {
+                        _previewOperatingDaysActive.add(day);
+                      } else {
+                        _previewOperatingDaysActive.remove(day);
+                        _previewBreakTimesExpanded.remove(day);
+                        _operatingHours[day] = null;
+                        _breakTimes[day] = [];
+                      }
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewBreakTimeInlineRow(
+    PreviewAcademyPanelStyle previewStyle,
+    DayOfWeek day,
+    int index,
+    TimeRange breakTime,
+  ) {
+    return SizedBox(
+      height: FabTabBarTokens.previewAcademyOperatingRowHeight,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => _editPreviewBreakTime(day, index),
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal:
+                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+            ),
+            child: Row(
+              children: [
+                Text(
+                  '휴식 ${index + 1}',
+                  style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        PreviewAcademyTimePill(
+                          style: previewStyle,
+                          text: PreviewAcademyTimePill.formatTimeOfDay(
+                            TimeOfDay(
+                              hour: breakTime.startHour,
+                              minute: breakTime.startMinute,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(
+                          width: FabTabBarTokens.previewAcademyTimePillGap,
+                        ),
+                        PreviewAcademyTimePill(
+                          style: previewStyle,
+                          text: PreviewAcademyTimePill.formatTimeOfDay(
+                            TimeOfDay(
+                              hour: breakTime.endHour,
+                              minute: breakTime.endMinute,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => _deletePreviewBreakTime(day, index),
+                  behavior: HitTestBehavior.opaque,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Icon(
+                        Icons.close,
+                        size: 18,
+                        color: previewStyle.hint,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewBreakTimeAddInlineRow(
+    PreviewAcademyPanelStyle previewStyle,
+    DayOfWeek day,
+  ) {
+    return SizedBox(
+      height: FabTabBarTokens.previewAcademyOperatingRowHeight,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => _addPreviewBreakTime(day),
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal:
+                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.add,
+                  size: 18,
+                  color: FabTabBarTokens.previewConfirmActionColor,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '휴식 추가',
+                  style: FabTabBarTokens.previewBodyTextStyle(
+                    previewStyle,
+                    color: FabTabBarTokens.previewConfirmActionColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -3068,6 +3581,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _openPreviewAcademyCapacityDialog(
+    PreviewAcademyPanelStyle style, {
+    PreviewAcademyCapacityField initialFocusField =
+        PreviewAcademyCapacityField.capacity,
+  }) async {
+    final result = await PreviewAcademyCapacityInputSheet.show(
+      context: context,
+      style: style,
+      initialValues: PreviewAcademyCapacityValues(
+        capacity: _capacityController.text,
+        lessonDurationMinutes: _lessonDurationController.text,
+      ),
+      initialFocusField: initialFocusField,
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _capacityController.text = result.capacity;
+        _lessonDurationController.text = result.lessonDurationMinutes;
+      });
+    }
+  }
+
   Future<void> _openPreviewAcademyBasicInfoDialog(
     PreviewAcademyPanelStyle style, {
     PreviewAcademyBasicInfoField initialFocusField =
@@ -3270,12 +3805,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         PreviewAcademyInfoRow(
           label: '기본 정원',
           value: _previewAcademyRowValue(_capacityController),
-          onTap: () => _previewAcademyFieldTap('기본 정원'),
+          onTap: () => _openPreviewAcademyCapacityDialog(
+            academyStyle,
+            initialFocusField: PreviewAcademyCapacityField.capacity,
+          ),
         ),
         PreviewAcademyInfoRow(
           label: '수업 시간',
           value: _previewLessonDurationValue(),
-          onTap: () => _previewAcademyFieldTap('수업 시간'),
+          onTap: () => _openPreviewAcademyCapacityDialog(
+            academyStyle,
+            initialFocusField: PreviewAcademyCapacityField.lessonDuration,
+          ),
         ),
         PreviewAcademyInfoRow(
           label: '지불 방식',
@@ -3879,183 +4420,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _selectOperatingHours(
       BuildContext context, DayOfWeek day) async {
-    final TimeOfDay? startTime = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay(hour: 9, minute: 0),
-      builder: (BuildContext context, Widget? child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme(
-              brightness: Brightness.dark,
-              primary: _kSignatureGreen,
-              onPrimary: Colors.white,
-              secondary: _kSignatureGreen,
-              onSecondary: Colors.white,
-              error: Color(0xFFB00020),
-              onError: Colors.white,
-              background: Color(0xFF18181A),
-              onBackground: Colors.white,
-              surface: Color(0xFF18181A), // 프로그램 배경색
-              onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xFF18181A),
-            timePickerTheme: const TimePickerThemeData(
-              backgroundColor: Color(0xFF18181A), // 프로그램 배경색
-              hourMinuteColor: _kSignatureGreen,
-              hourMinuteTextColor: Colors.white,
-              dialHandColor: _kSignatureGreen,
-              dialBackgroundColor: Color(0xFF18181A),
-              entryModeIconColor: _kSignatureGreen,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(24))),
-              helpTextStyle:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              dayPeriodTextColor: Colors.white,
-              dayPeriodColor: _kSignatureGreen,
-            ),
-          ),
-          child: Localizations.override(
-            context: context,
-            locale: const Locale('ko'),
-            delegates: [
-              ...GlobalMaterialLocalizations.delegates,
-            ],
-            child: Builder(
-              builder: (context) {
-                return MediaQuery(
-                  data: MediaQuery.of(context)
-                      .copyWith(alwaysUse24HourFormat: false),
-                  child: child!,
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-    if (startTime == null) return;
-    final TimeOfDay? endTime = await showTimePicker(
-      context: context,
-      initialTime:
-          TimeOfDay(hour: startTime.hour + 1, minute: startTime.minute),
-      builder: (BuildContext context, Widget? child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme(
-              brightness: Brightness.dark,
-              primary: _kSignatureGreen,
-              onPrimary: Colors.white,
-              secondary: _kSignatureGreen,
-              onSecondary: Colors.white,
-              error: Color(0xFFB00020),
-              onError: Colors.white,
-              background: Color(0xFF18181A),
-              onBackground: Colors.white,
-              surface: Color(0xFF18181A), // 프로그램 배경색
-              onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xFF18181A),
-            timePickerTheme: const TimePickerThemeData(
-              backgroundColor: Color(0xFF18181A), // 프로그램 배경색
-              hourMinuteColor: _kSignatureGreen,
-              hourMinuteTextColor: Colors.white,
-              dialHandColor: _kSignatureGreen,
-              dialBackgroundColor: Color(0xFF18181A),
-              entryModeIconColor: _kSignatureGreen,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(24))),
-              helpTextStyle:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              dayPeriodTextColor: Colors.white,
-              dayPeriodColor: _kSignatureGreen,
-            ),
-          ),
-          child: Localizations.override(
-            context: context,
-            locale: const Locale('ko'),
-            delegates: [
-              ...GlobalMaterialLocalizations.delegates,
-            ],
-            child: Builder(
-              builder: (context) {
-                return MediaQuery(
-                  data: MediaQuery.of(context)
-                      .copyWith(alwaysUse24HourFormat: false),
-                  child: child!,
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-    if (endTime == null) return;
-    setState(() {
-      _operatingHours[day] = TimeRange(
-        startHour: startTime.hour,
-        startMinute: startTime.minute,
-        endHour: endTime.hour,
-        endMinute: endTime.minute,
-      );
-      _previewOperatingDaysActive.add(day);
-      print('[UI] _operatingHours after set:');
-      _operatingHours.forEach((k, v) => print('  $k: $v'));
-    });
-    // DB 저장을 위해 전체 운영시간을 OperatingHours 리스트로 변환
-    final List<OperatingHours> hoursList =
-        _operatingHours.entries.where((e) => e.value != null).map((e) {
-      final range = e.value!;
-      final breaks = _breakTimes[e.key] ?? [];
-      print('[UI] hoursList entry: day=$day, range=$range');
-      return OperatingHours(
-        dayOfWeek: e.key.index,
-        startHour: range.startHour,
-        startMinute: range.startMinute,
-        endHour: range.endHour,
-        endMinute: range.endMinute,
-        breakTimes: breaks
-            .map((b) => BreakTime(
-                  startHour: b.startHour,
-                  startMinute: b.startMinute,
-                  endHour: b.endHour,
-                  endMinute: b.endMinute,
-                ))
-            .toList(),
-      );
-    }).toList();
-    print('[UI] hoursList to save: ${hoursList.length}개');
-    await DataManager.instance.saveOperatingHours(hoursList);
-    final hours = await DataManager.instance.getOperatingHours();
-    print('[UI] hours loaded from DB: ${hours.length}개');
-    for (var h in hours) {
-      print(
-          '  start= [36m${h.startHour}:${h.startMinute} [0m, end=${h.endHour}:${h.endMinute}');
-    }
-    setState(() {
-      for (var d in DayOfWeek.values) {
-        _operatingHours[d] = null;
-        _breakTimes[d] = [];
-      }
-      for (var hour in hours) {
-        final d = DayOfWeek.values[hour.dayOfWeek];
-        _operatingHours[d] = TimeRange(
-          startHour: hour.startHour,
-          startMinute: hour.startMinute,
-          endHour: hour.endHour,
-          endMinute: hour.endMinute,
-        );
-        _breakTimes[d] = hour.breakTimes
-            .map((breakTime) => TimeRange(
-                  startHour: breakTime.startHour,
-                  startMinute: breakTime.startMinute,
-                  endHour: breakTime.endHour,
-                  endMinute: breakTime.endMinute,
-                ))
-            .toList();
-      }
-      print('[UI] _operatingHours after DB load:');
-      _operatingHours.forEach((k, v) => print('  $k: $v'));
-    });
+    await _pickOperatingStartTime(context, day);
   }
 
   void _showAddTeacherDialog() async {

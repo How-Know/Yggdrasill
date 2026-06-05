@@ -606,9 +606,6 @@ class ProblemBankQuestion {
     final textbookCourse = _mapOrEmpty(
       sourceRaw['textbook_course'] ?? meta['textbook_course'],
     );
-    final cropPageMeta =
-        _mapOrEmpty(meta['textbook_crop_page'] ?? meta['textbookCropPage']);
-    final displaySourcePage = _intOrZero(cropPageMeta['display_page']);
     final privateMaterial = sourceRaw['private_material'] == true;
     final mockPast = sourceRaw['mock_past_exam'] == true;
     final schoolPast = sourceRaw['school_past_exam'] == true;
@@ -626,9 +623,7 @@ class ProblemBankQuestion {
       academyId: '${map['academy_id'] ?? ''}',
       documentId: '${map['document_id'] ?? ''}',
       extractJobId: '${map['extract_job_id'] ?? ''}',
-      sourcePage: displaySourcePage > 0
-          ? displaySourcePage
-          : _intOrZero(map['source_page']),
+      sourcePage: _intOrZero(map['source_page']),
       sourceOrder: _intOrZero(map['source_order']),
       questionNumber: '${map['question_number'] ?? ''}',
       questionType: questionType,

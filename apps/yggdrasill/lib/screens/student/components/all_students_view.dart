@@ -3098,6 +3098,19 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant _StudentPinSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 같은 위치의 State가 재사용되므로, 선택 학생이 바뀌면 PIN을 다시 불러온다.
+    if (oldWidget.studentId != widget.studentId) {
+      _pin = null;
+      _pinSet = false;
+      _pinRequired = false;
+      _locked = false;
+      _load();
+    }
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
