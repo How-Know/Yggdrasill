@@ -49,7 +49,9 @@ String studentInfoTopic;
 String unboundTopic;
 static String deviceAckTopic;
 static uint32_t nextMqttReconnectMs = 0;
-static const char* kMqttHosts[] = { CFG_MQTT_HOST, "test.mosquitto.org", "broker.hivemq.com" };
+// 전용 로컬 브로커만 사용한다. 공용 브로커 폴백은 게이트웨이가 접속하지 않은
+// 브로커로 M5가 붙는 split-brain을 유발하므로 제거(모두 로컬 브로커로 고정).
+static const char* kMqttHosts[] = { CFG_MQTT_HOST };
 static int mqttHostIndex = 0;
 static uint8_t mqttConsecutiveDisconnects = 0;
 static char willPayloadBuf[128];
@@ -318,7 +320,7 @@ static void handle_group_transition_device_ack(const char* body) {
 
 // 서버 하원(unbound) 또는 로컬 로그아웃 시 공통: NVS 추적용 studentId + LittleFS 정리 (MQTT 송신 없음)
 void fw_clear_local_binding_state(void) {
-  if (LittleFS.begin()) {
+  if (LittleFS.begin(true)) {
     if (LittleFS.exists("/student_id.txt")) {
       LittleFS.remove("/student_id.txt");
       Serial.println("[BIND] Cleared student_id.txt (local binding cleared)");
@@ -545,7 +547,7 @@ void fw_commit_bind(const char* studentIdArg) {
   persist_student_id_nvs(studentId);
 
   // LittleFS에 바인딩된 학생 ID 저장 (재시작 후 복원용)
-  if (LittleFS.begin()) {
+  if (LittleFS.begin(true)) {
     File f = LittleFS.open("/student_id.txt", "w");
     if (f) {
       f.print(studentIdArg);

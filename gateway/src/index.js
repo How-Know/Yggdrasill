@@ -24,6 +24,11 @@ const MQTT_CLEAN_SESSION = String(process.env.MQTT_CLEAN_SESSION ?? 'false').toL
 const GW_HEALTH_INTERVAL_MS = Number.parseInt(process.env.GW_HEALTH_INTERVAL_MS ?? '10000', 10);
 const GW_STALE_WARN_MS = Number.parseInt(process.env.GW_STALE_WARN_MS ?? '90000', 10);
 const GW_STALE_HARD_RESET_MS = Number.parseInt(process.env.GW_STALE_HARD_RESET_MS ?? '180000', 10);
+// 인바운드 유휴(메시지 없음)만으로 연결을 강제 종료(close+reconnect)하지 않는다.
+// 진짜 끊김은 MQTT keepalive가 감지해 자동 재접속하므로, 파괴적 hard reset은
+// 명시적 opt-in일 때만 수행한다(기본 비활성). 재접속 순간 in-flight bind 유실 방지.
+const GW_STALE_HARD_RESET_ENABLED =
+  String(process.env.GW_STALE_HARD_RESET_ENABLED ?? 'false').toLowerCase() === 'true';
 const GW_STALE_ACTIVITY_WINDOW_MS = Number.parseInt(process.env.GW_STALE_ACTIVITY_WINDOW_MS ?? '600000', 10);
 const GW_RECOVERY_COOLDOWN_MS = Number.parseInt(process.env.GW_RECOVERY_COOLDOWN_MS ?? '60000', 10);
 const M5_FULL_RESYNC_DELAY_MS = Number.parseInt(process.env.M5_FULL_RESYNC_DELAY_MS ?? '1500', 10);
@@ -52,6 +57,7 @@ const cfg = {
   healthIntervalMs: validInt(GW_HEALTH_INTERVAL_MS, 10000),
   staleWarnMs: validInt(GW_STALE_WARN_MS, 90000),
   staleHardMs: validInt(GW_STALE_HARD_RESET_MS, 180000),
+  staleHardEnabled: GW_STALE_HARD_RESET_ENABLED,
   staleActivityWindowMs: validInt(GW_STALE_ACTIVITY_WINDOW_MS, 600000),
   recoveryCooldownMs: validInt(GW_RECOVERY_COOLDOWN_MS, 60000),
   m5FullResyncDelayMs: validInt(M5_FULL_RESYNC_DELAY_MS, 1500),
@@ -246,7 +252,9 @@ setInterval(() => {
   if (!lastActivityTs || now - lastActivityTs > cfg.staleActivityWindowMs) return;
 
   const staleMs = now - gatewayState.lastMessageTs;
-  if (staleMs >= cfg.staleHardMs) {
+  // 유휴(인바운드 없음)만으로는 연결을 강제 종료하지 않는다. 파괴적 hard reset은
+  // opt-in일 때만 — 평소엔 비파괴적 재구독(soft)만 수행해 in-flight bind 유실을 막는다.
+  if (cfg.staleHardEnabled && staleMs >= cfg.staleHardMs) {
     hardRecover('inbound_message_stale_hard');
     return;
   }
@@ -263,6 +271,7 @@ logEvent('log', '[gateway] mqtt runtime config', {
   healthIntervalMs: cfg.healthIntervalMs,
   staleWarnMs: cfg.staleWarnMs,
   staleHardMs: cfg.staleHardMs,
+  staleHardEnabled: cfg.staleHardEnabled,
   staleActivityWindowMs: cfg.staleActivityWindowMs,
   recoveryCooldownMs: cfg.recoveryCooldownMs,
   m5FullResyncDelayMs: cfg.m5FullResyncDelayMs,
@@ -1089,6 +1098,46 @@ try {
 } catch (_) {}
 
 
+async function queueHomeworksFromDirectStudentPayload(payload, source) {
+  const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
+  const academy_id = rec.academy_id;
+  const student_id = rec.student_id;
+  if (!academy_id || !student_id) {
+    console.warn('[gateway][rt] skip homework push; missing owner', {
+      source,
+      eventType: payload?.eventType,
+      id: rec.id ?? null
+    });
+    return;
+  }
+  await queueHomeworksToBoundDevices(academy_id, student_id, source);
+}
+
+function subscribeDirectStudentHomeworkTable(tableName) {
+  try {
+    try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+    const channel = supa
+      .channel(`public:${tableName}:m5`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: tableName },
+        async (payload) => {
+          try {
+            await queueHomeworksFromDirectStudentPayload(payload, tableName);
+          } catch (e) {
+            console.error(`[gateway] realtime ${tableName} handler error`, e);
+          }
+        }
+      )
+      .subscribe((status) => handleRealtimeSubscribeStatus(tableName, status));
+    console.log(`[gateway] realtime: ${tableName} subscribed init`);
+    return channel;
+  } catch (e) {
+    console.warn(`[gateway] realtime ${tableName} subscribe failed`, e);
+    return null;
+  }
+}
+
 // Realtime: listen homework_items changes and push updated homeworks to bound devices
 try {
   // ensure realtime auth is set (especially if anon/service token rotates)
@@ -1233,6 +1282,13 @@ try {
 } catch (e) {
   console.warn('[gateway] realtime homework_group_runtime subscribe failed', e);
 }
+
+// Realtime: detailed homework tables also affect the M5 payload. Without these
+// subscriptions, M5 only catches up on its stale watchdog refresh.
+subscribeDirectStudentHomeworkTable('homework_item_units');
+subscribeDirectStudentHomeworkTable('homework_item_pages');
+subscribeDirectStudentHomeworkTable('homework_item_problems');
+subscribeDirectStudentHomeworkTable('homework_assignment_checks');
 
 // Realtime: listen m5_device_bindings changes → notify device on unbind
 try {

@@ -605,6 +605,7 @@ class _TextbookAuthoringStageDialogState
     final aggregated = <TextbookVlmAnswerItem>[];
     final imageByNumber = <String, _ImageAnswerCrop>{};
     final pageByNumber = <String, ({int rawPage, int displayPage})>{};
+    final pageErrors = <String>[];
 
     try {
       for (var page = startPage; page <= endPage; page += 1) {
@@ -617,10 +618,14 @@ class _TextbookAuthoringStageDialogState
         final Uint8List png;
         try {
           final rendered = await _answerPagePng(page);
-          if (rendered == null) continue;
+          if (rendered == null) {
+            pageErrors.add('p$page: 답지 페이지 렌더 결과 없음');
+            continue;
+          }
           png = rendered;
         } catch (e) {
           debugPrint('[stage2] render failed page=$page err=$e');
+          pageErrors.add('p$page: 렌더 실패 $e');
           continue;
         }
         try {
@@ -692,6 +697,7 @@ class _TextbookAuthoringStageDialogState
           }
         } catch (e) {
           debugPrint('[stage2] vlm failed page=$page err=$e');
+          pageErrors.add('p$page: VLM 실패 $e');
         }
         if (!mounted) return;
         setState(() {
@@ -699,10 +705,29 @@ class _TextbookAuthoringStageDialogState
         });
       }
 
+      if (aggregated.isEmpty) {
+        final message = pageErrors.isEmpty
+            ? '답지 $startPage~$endPage 페이지에서 매칭 가능한 정답을 찾지 못했습니다.'
+            : pageErrors.take(3).join(' / ');
+        throw Exception(message);
+      }
+
       final report = TextbookAnswerMatchReport.match(
         expectedNumbers: expected,
         items: aggregated,
       );
+      if (report.matched.isEmpty) {
+        final detected = aggregated
+            .map((item) => item.problemNumber)
+            .where((number) => number.trim().isNotEmpty)
+            .take(12)
+            .join(', ');
+        throw Exception(
+          detected.isEmpty
+              ? '답지 $startPage~$endPage 페이지에서 정답은 감지됐지만 대상 문항과 매칭되지 않았습니다.'
+              : '대상 문항과 매칭된 정답이 없습니다. 감지 번호: $detected',
+        );
+      }
       final byNumber = <String, String>{
         for (final c in targetCrops) c.problemNumber: c.id,
       };
@@ -1189,6 +1214,7 @@ class _TextbookAuthoringStageDialogState
     final scanTotal = endPage - startPage + 1;
     final aggregated =
         <String, _SolutionRefWithPage>{}; // problem_number -> draft
+    final pageErrors = <String>[];
 
     try {
       for (var page = startPage; page <= endPage; page += 1) {
@@ -1201,10 +1227,14 @@ class _TextbookAuthoringStageDialogState
         final Uint8List png;
         try {
           final rendered = await _solutionPagePng(page);
-          if (rendered == null) continue;
+          if (rendered == null) {
+            pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
+            continue;
+          }
           png = rendered;
         } catch (e) {
           debugPrint('[stage3] render failed page=$page err=$e');
+          pageErrors.add('p$page: 렌더 실패 $e');
           continue;
         }
         try {
@@ -1236,11 +1266,19 @@ class _TextbookAuthoringStageDialogState
           }
         } catch (e) {
           debugPrint('[stage3] vlm failed page=$page err=$e');
+          pageErrors.add('p$page: VLM 실패 $e');
         }
         if (!mounted) return;
         setState(() {
           _solRefProgress = (page - startPage + 1) / scanTotal;
         });
+      }
+
+      if (aggregated.isEmpty) {
+        final message = pageErrors.isEmpty
+            ? '해설 $startPage~$endPage 페이지에서 대상 문항 좌표를 찾지 못했습니다.'
+            : pageErrors.take(3).join(' / ');
+        throw Exception(message);
       }
 
       final byNumber = <String, String>{
@@ -2544,6 +2582,15 @@ class _TextbookAuthoringStageDialogState
     }
     await _refreshPbRunStatuses();
     if (!mounted) return;
+    final failedPbRunMessages = _pbRunStatusByKey.entries
+        .where((entry) => entry.value == 'failed')
+        .map((entry) => _pbRunErrorByKey[entry.key] ?? '')
+        .where((message) => message.trim().isNotEmpty)
+        .toList(growable: false);
+    if (failedPbRunMessages.isNotEmpty) {
+      _toast('본문 문제 추출 실패: ${failedPbRunMessages.first}', error: true);
+      return;
+    }
     if (!_allPbRunsFinished) {
       _toast('본문 문제 추출이 아직 진행 중입니다: $_pbRunStatusText', error: true);
       return;

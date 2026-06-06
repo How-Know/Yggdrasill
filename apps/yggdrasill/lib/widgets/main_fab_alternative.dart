@@ -3,6 +3,7 @@ import 'memo_dialogs.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
+import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 /// 홈 하단 **확인** FAB·M5 **질문 칩**이 같은 레이아웃 경로(`GestureDetector` → 고정 `SizedBox` → `Container`)를 쓰도록 통일.
 /// Scaffold FAB 슬롯과 본문 하단은 배치만 다를 뿐, 픽셀 치수는 동일해야 한다.
@@ -157,10 +158,10 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
     }
     _menuOverlay = OverlayEntry(
       builder: (ctx) {
-        // FAB 위치 기준: 오른쪽 16, 아래쪽(_fabBottomPadding + FAB 높이 56 + 간격 12)
-        final double bottomOffset = _fabBottomPadding + 56 + 12;
+        // FAB 위치 기준: 목업 FAB 토큰과 동일한 오른쪽/하단 여백.
+        final double bottomOffset = FabTabBarTokens.fabBarBottomInset + 56 + 12;
         return Positioned(
-          right: 16,
+          right: FabTabBarTokens.fabBarRightInset,
           bottom: bottomOffset,
           child: IgnorePointer(
             ignoring: !_isFabExpanded,
@@ -367,12 +368,12 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       // 메뉴 버튼들은 오버레이에서 렌더링 (항상 최상단)
-                      // 🎯 메인 FAB 버튼 (직사각형 -> 원형 모양 변화)
                       AnimatedBuilder(
                         animation: _fabController,
                         builder: (context, child) {
-                          return GestureDetector(
-                            onTap: () {
+                          return FabStyleActionButton(
+                            icon: _isFabExpanded ? Icons.close : Icons.add,
+                            onPressed: () {
                               setState(() {
                                 _isFabExpanded = !_isFabExpanded;
                                 if (_isFabExpanded) {
@@ -384,34 +385,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                                 }
                               });
                             },
-                            child: Container(
-                              width: 56,
-                              height: 56,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1B6B63),
-                                borderRadius: BorderRadius.circular(
-                                    _shapeAnimation.value), // 동적으로 변하는 모서리
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    spreadRadius: 1,
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Center(
-                                child: AnimatedRotation(
-                                  duration: const Duration(milliseconds: 200),
-                                  turns: _isFabExpanded ? 0.125 : 0,
-                                  child: Icon(
-                                    _isFabExpanded ? Icons.close : Icons.add,
-                                    size: 24,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
                           );
                         },
                       ),

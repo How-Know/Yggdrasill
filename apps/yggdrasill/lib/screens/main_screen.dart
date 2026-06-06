@@ -16,6 +16,7 @@ import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
+import '../theme/ygg_semantic_colors.dart';
 import '../app_overlays.dart';
 import '../services/tenant_service.dart';
 import '../services/m5_question_request_store.dart';
@@ -2044,7 +2045,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         final entries = M5QuestionRequestStore.instance.pending.value;
         if (entries.isEmpty) return const SizedBox.shrink();
         return Material(
-          color: const Color(0xFF0B1112),
+          color: context.yggSurfaceBase,
           child: Padding(
             // 확인 FAB와 동일하게 Scaffold 하단 여백 16에 맞춤.
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -2095,27 +2096,30 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     // 안전 가드: 네비게이션 레일은 0~4까지만 허용하므로 표시 인덱스를 보정
     final int _railSelectedIndex =
         (_selectedIndex >= 0 && _selectedIndex <= 5) ? _selectedIndex : 0;
+    void selectDestination(int index) {
+      final closeRightSheet = closeRightSideSheetAction;
+      if (closeRightSheet != null) {
+        unawaited(closeRightSheet());
+      }
+      setState(() {
+        _selectedIndex = index;
+      });
+      hideGlobalMemoFloatingBanners.value = (index == 0 || index == 1);
+      rightSideSheetEdgeOpenEnabled.value = (index != 0);
+      if (index == 0) {
+        blockRightSideSheetOpen.value = !gradingModeActive.value;
+      } else {
+        blockRightSideSheetOpen.value = false;
+      }
+    }
+
     return Scaffold(
+      backgroundColor: context.yggSurfaceBase,
       body: Row(
         children: [
           CustomNavigationRail(
             selectedIndex: _railSelectedIndex,
-            onDestinationSelected: (int index) {
-              final closeRightSheet = closeRightSideSheetAction;
-              if (closeRightSheet != null) {
-                unawaited(closeRightSheet());
-              }
-              setState(() {
-                _selectedIndex = index;
-              });
-              hideGlobalMemoFloatingBanners.value = (index == 0 || index == 1);
-              rightSideSheetEdgeOpenEnabled.value = (index != 0);
-              if (index == 0) {
-                blockRightSideSheetOpen.value = !gradingModeActive.value;
-              } else {
-                blockRightSideSheetOpen.value = false;
-              }
-            },
+            onDestinationSelected: selectDestination,
             rotationAnimation: _rotationAnimation,
             onMenuPressed: _toggleSideSheet,
           ),
@@ -2195,7 +2199,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     curve: Curves.easeInOut,
                     width: containerWidth,
                     key: _sideSheetKey,
-                    color: const Color(0xFF0B1112),
+                    color: context.yggSurfaceBase,
                   ),
                 );
               }
@@ -2289,7 +2293,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                           curve: Curves.easeInOut,
                           width: containerWidth,
                           key: _sideSheetKey,
-                          color: const Color(0xFF0B1112),
+                          color: context.yggSurfaceBase,
                           child: Stack(
                             fit: StackFit.expand,
                             children: [

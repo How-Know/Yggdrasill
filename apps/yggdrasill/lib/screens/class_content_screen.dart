@@ -32,6 +32,7 @@ import 'learning/homework_edit_dialog.dart';
 import 'learning/models/problem_bank_export_models.dart'
     show kLearningQuestionModeObjective, previewAnswerForMode;
 import '../widgets/dialog_tokens.dart';
+import '../theme/ygg_semantic_colors.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../widgets/homework_overview_naesin_past_exam_panel.dart';
 import '../app_overlays.dart';
@@ -638,7 +639,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       child: Stack(
         children: [
           Container(
-            color: const Color(0xFF0B1112),
+            color: context.yggSurfaceBase,
             width: double.infinity,
             child: ValueListenableBuilder<List<AttendanceRecord>>(
               valueListenable: DataManager.instance.attendanceRecordsNotifier,

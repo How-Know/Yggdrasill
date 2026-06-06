@@ -33,7 +33,7 @@ const PDF_FIGURE_BUCKET = 'problem-previews';
 const ANSWER_IMAGE_MARKER_RE = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\]|\[\[PB_ANSWER_FIG_[^\]]+\]\])/i;
 const TEXTBOOK_VLM_CHUNK_MAX_PAGES = Math.max(
   1,
-  Number.parseInt(process.env.PB_TEXTBOOK_VLM_CHUNK_PAGES || '4', 10) || 4,
+  Number.parseInt(process.env.PB_TEXTBOOK_VLM_CHUNK_PAGES || '2', 10) || 2,
 );
 
 function parsePositiveInt(v) {
@@ -393,6 +393,43 @@ function missingExpectedQuestionNumbers(questions, expectedNumbers) {
   return expected.filter((key) => !found.has(key));
 }
 
+function foundQuestionNumbers(questions) {
+  return (Array.isArray(questions) ? questions : [])
+    .map((question) => compact(question?.question_number))
+    .filter(Boolean);
+}
+
+function alignQuestionNumbersByExpectedOrder(questions, expectedNumbers) {
+  const rows = Array.isArray(questions) ? questions : [];
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((number) => compact(number)).filter(Boolean)
+    : [];
+  if (rows.length === 0 || expected.length === 0 || rows.length !== expected.length) {
+    return null;
+  }
+
+  const expectedKeys = new Set(expectedQuestionKeys(expected));
+  const foundKeys = foundQuestionNumbers(rows)
+    .map((number) => problemNumberKey(number))
+    .filter(Boolean);
+  const overlap = foundKeys.filter((key) => expectedKeys.has(key)).length;
+  if (overlap > 0) return null;
+
+  return rows.map((question, index) => ({
+    ...(question || {}),
+    question_number: expected[index],
+    original_question_number: compact(question?.question_number),
+    uncertain_fields: Array.from(
+      new Set([
+        ...(Array.isArray(question?.uncertain_fields)
+          ? question.uncertain_fields
+          : []),
+        'question_number',
+      ]),
+    ),
+  }));
+}
+
 function isDailyQuotaExceededMessage(input) {
   const text = String(input || '').toLowerCase();
   return (
@@ -680,16 +717,39 @@ async function callGeminiChunkWithRetry({
         expectedQuestionNumbers: input.expectedQuestionNumbers,
         expectedIndependentSetRanges: input.expectedIndependentSetRanges,
       });
-      const chunkQuestions = Array.isArray(result?.parsedJson?.questions)
+      let chunkQuestions = Array.isArray(result?.parsedJson?.questions)
         ? result.parsedJson.questions
         : [];
-      const missingExpected = missingExpectedQuestionNumbers(
+      let missingExpected = missingExpectedQuestionNumbers(
         chunkQuestions,
         input.expectedQuestionNumbers,
       );
       if (missingExpected.length > 0) {
+        const originalNumbers = foundQuestionNumbers(chunkQuestions);
+        const alignedQuestions = alignQuestionNumbersByExpectedOrder(
+          chunkQuestions,
+          input.expectedQuestionNumbers,
+        );
+        if (alignedQuestions) {
+          result.parsedJson.questions = alignedQuestions;
+          chunkQuestions = alignedQuestions;
+          missingExpected = [];
+          if (typeof log === 'function') {
+            log('vlm_chunk_question_numbers_aligned', {
+              chunkIndex: input.chunkIndex,
+              totalChunks: input.totalChunks,
+              pageRange: input.pageRange,
+              count: chunkQuestions.length,
+              expectedHead: (input.expectedQuestionNumbers || []).slice(0, 8),
+              originalHead: originalNumbers.slice(0, 8),
+            });
+          }
+        }
+      }
+      if (missingExpected.length > 0) {
+        const found = foundQuestionNumbers(chunkQuestions);
         throw new Error(
-          `vlm_missing_expected_questions:${missingExpected.join(',')}`,
+          `vlm_missing_expected_questions:${missingExpected.join(',')};found=${found.slice(0, 24).join(',')};count=${found.length}`,
         );
       }
       if (typeof log === 'function') {

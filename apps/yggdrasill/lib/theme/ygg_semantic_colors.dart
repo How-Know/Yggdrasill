@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 역할 기반 색상 토큰. UI는 가능한 한 [Color] 리터럴 대신 이 확장을 사용한다.
 @immutable
@@ -25,7 +26,7 @@ class YggSemanticColors extends ThemeExtension<YggSemanticColors> {
     '#000000',
   ];
 
-  /// Dark 확정값 (2026-06-02)
+  /// 화면 전체 배경 — Dark mode (목업 확정)
   static const Color surfaceBaseDarkDefault = Color(0xFF000000);
 
   static String hex(Color color) {
@@ -63,5 +64,48 @@ extension YggSemanticColorsContext on BuildContext {
   Color get yggSurfaceBase {
     return Theme.of(this).extension<YggSemanticColors>()?.surfaceBase ??
         YggSemanticColors.surfaceBaseDarkDefault;
+  }
+}
+
+class AppThemeController {
+  AppThemeController._();
+
+  static const String _prefsKey = 'app_theme_mode';
+  static final ValueNotifier<ThemeMode> mode = ValueNotifier<ThemeMode>(
+    ThemeMode.light,
+  );
+
+  static Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    mode.value = _themeModeFromString(prefs.getString(_prefsKey));
+  }
+
+  static Future<void> setMode(ThemeMode next) async {
+    mode.value = next;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKey, _themeModeToString(next));
+  }
+
+  static ThemeMode _themeModeFromString(String? raw) {
+    switch ((raw ?? '').trim()) {
+      case 'system':
+      case 'light':
+        return ThemeMode.light;
+      case 'dark':
+        return ThemeMode.dark;
+      default:
+        return ThemeMode.light;
+    }
+  }
+
+  static String _themeModeToString(ThemeMode mode) {
+    switch (mode) {
+      case ThemeMode.system:
+        return 'system';
+      case ThemeMode.light:
+        return 'light';
+      case ThemeMode.dark:
+        return 'dark';
+    }
   }
 }

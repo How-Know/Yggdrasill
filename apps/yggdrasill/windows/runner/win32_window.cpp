@@ -264,6 +264,18 @@ HWND Win32Window::GetHandle() {
   return window_handle_;
 }
 
+void Win32Window::SetCaptionColor(COLORREF caption_color, bool dark_mode) {
+  if (!window_handle_) {
+    return;
+  }
+
+  BOOL enable_dark_mode = dark_mode ? TRUE : FALSE;
+  DwmSetWindowAttribute(window_handle_, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        &enable_dark_mode, sizeof(enable_dark_mode));
+  DwmSetWindowAttribute(window_handle_, DWMWA_CAPTION_COLOR, &caption_color,
+                        sizeof(caption_color));
+}
+
 void Win32Window::SetQuitOnClose(bool quit_on_close) {
   quit_on_close_ = quit_on_close;
 }
@@ -290,8 +302,10 @@ void Win32Window::UpdateTheme(HWND const window) {
     DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
                           &enable_dark_mode, sizeof(enable_dark_mode));
 
-    // Force custom caption color (#0B1112) regardless of system accent.
-    const COLORREF caption_color = RGB(0x0B, 0x11, 0x12);
+    // Startup fallback. Flutter applies the exact app-selected color after the
+    // engine is ready.
+    const COLORREF caption_color =
+        enable_dark_mode ? RGB(0x00, 0x00, 0x00) : RGB(0xFF, 0xFF, 0xFF);
     DwmSetWindowAttribute(window, DWMWA_CAPTION_COLOR, &caption_color,
                           sizeof(caption_color));
   }

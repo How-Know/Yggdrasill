@@ -2974,7 +2974,7 @@ static void on_screensaver_wake(void) {
 void ui_port_init() {
   // Load saved brightness/volume/student_id from LittleFS
   String savedStudentId = "";
-  if (LittleFS.begin()) {
+  if (LittleFS.begin(true)) {
     File f = LittleFS.open("/brightness.txt", "r");
     if (f) {
       String val = f.readStringUntil('\n');
@@ -3117,7 +3117,7 @@ static void volume_slider_cb(lv_event_t* e) {
   Serial.printf("Volume: %d\n", s_current_volume);
   M5.Speaker.setVolume(s_current_volume);
   // Save to LittleFS
-  if (LittleFS.begin()) {
+  if (LittleFS.begin(true)) {
     File f = LittleFS.open("/volume.txt", "w");
     if (f) { f.printf("%d", s_current_volume); f.close(); }
     LittleFS.end();
@@ -3130,7 +3130,7 @@ static void brightness_slider_cb(lv_event_t* e) {
   Serial.printf("Brightness: %d\n", s_current_brightness);
   M5.Display.setBrightness(s_current_brightness);
   // Save to LittleFS
-  if (LittleFS.begin()) {
+  if (LittleFS.begin(true)) {
     File f = LittleFS.open("/brightness.txt", "w");
     if (f) { f.printf("%d", s_current_brightness); f.close(); }
     LittleFS.end();

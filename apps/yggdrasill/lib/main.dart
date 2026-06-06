@@ -51,6 +51,18 @@ final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
 
+Color _windowSurfaceForThemeMode(ThemeMode mode) {
+  final effectiveMode = mode == ThemeMode.system
+      ? (ui.PlatformDispatcher.instance.platformBrightness == Brightness.dark
+          ? ThemeMode.dark
+          : ThemeMode.light)
+      : mode;
+
+  return effectiveMode == ThemeMode.dark
+      ? YggSemanticColors.surfaceBaseDarkDefault
+      : YggSemanticColors.surfaceBaseLight;
+}
+
 // ======== Window startup guard (desktop) ========
 //
 // 증상: 부팅 직후에는 최대화로 뜨는데, 앱 로딩(초기화) 중에 다시 작은 창으로 "복귀"되는 케이스가 있다.
@@ -792,6 +804,7 @@ void main() async {
     databaseFactory = databaseFactoryFfi;
   }
   final prefs = await SharedPreferences.getInstance();
+  await AppThemeController.load();
   final fullscreen = prefs.getBool('fullscreen_enabled') ?? false;
   final maximizeFlag = prefs.getBool('maximize_enabled') ?? false;
   // 창을 보여주기 전에 최소/초기 크기를 먼저 적용해 즉시 제한이 걸리도록 처리
@@ -801,6 +814,7 @@ void main() async {
     minimumSize: kMinSize,
     size: (fullscreen || maximizeFlag) ? null : kMinSize,
     center: !(fullscreen || maximizeFlag),
+    backgroundColor: _windowSurfaceForThemeMode(AppThemeController.mode.value),
   );
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
@@ -879,6 +893,9 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp>
     with WindowListener, WidgetsBindingObserver {
+  static const MethodChannel _windowChromeChannel =
+      MethodChannel('yggdrasill/window_chrome');
+
   bool _windowCloseInProgress = false;
   OverlayEntry? _closingOverlayEntry;
 
@@ -888,10 +905,45 @@ class _MyAppState extends State<MyApp>
   @override
   void initState() {
     super.initState();
+    AppThemeController.mode.addListener(_onThemeModeChanged);
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_applyWindowChromeForTheme(AppThemeController.mode.value));
+    });
     _scheduleStartupWindowState();
     unawaited(_initWindowCloseHandler());
     UpdateService.startAvailableUpdateNoticeAutoRefresh();
+  }
+
+  void _onThemeModeChanged() {
+    unawaited(_applyWindowChromeForTheme(AppThemeController.mode.value));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _applyWindowChromeForTheme(ThemeMode mode) async {
+    if (!_isDesktop) return;
+
+    final color = _windowSurfaceForThemeMode(mode);
+    try {
+      await windowManager.setBackgroundColor(color);
+    } catch (_) {
+      // Window background color is best-effort on desktop shells.
+    }
+
+    if (!Platform.isWindows) return;
+    final argb = color.toARGB32();
+    final darkChrome =
+        argb == YggSemanticColors.surfaceBaseDarkDefault.toARGB32();
+    try {
+      await _windowChromeChannel.invokeMethod<void>('setCaptionColor', {
+        'red': (argb >> 16) & 0xFF,
+        'green': (argb >> 8) & 0xFF,
+        'blue': argb & 0xFF,
+        'dark': darkChrome,
+      });
+    } catch (_) {
+      // Older Windows builds may ignore caption customization.
+    }
   }
 
   void _scheduleStartupWindowState() {
@@ -1010,6 +1062,7 @@ class _MyAppState extends State<MyApp>
 
   @override
   void dispose() {
+    AppThemeController.mode.removeListener(_onThemeModeChanged);
     WidgetsBinding.instance.removeObserver(this);
     UpdateService.stopAvailableUpdateNoticeAutoRefresh();
     _hideClosingOverlay();
@@ -1063,6 +1116,7 @@ class _MyAppState extends State<MyApp>
             scaffoldMessengerKey: rootScaffoldMessengerKey,
             navigatorKey: rootNavigatorKey,
             title: 'Yggdrasill',
+            themeMode: AppThemeController.mode.value,
             // 로케일 설정 추가
             localizationsDelegates: const [
               GlobalMaterialLocalizations.delegate,
@@ -1076,16 +1130,65 @@ class _MyAppState extends State<MyApp>
             locale: const Locale('ko', 'KR'), // 기본 로케일을 한국어로 설정
             theme: ThemeData(
               useMaterial3: true,
+              brightness: Brightness.light,
               extensions: const <ThemeExtension<dynamic>>[
-                YggSemanticColors(surfaceBase: YggSemanticColors.surfaceBaseDarkDefault),
+                YggSemanticColors(
+                  surfaceBase: YggSemanticColors.surfaceBaseLight,
+                ),
               ],
-              scaffoldBackgroundColor: const Color(0xFF1F1F1F),
+              scaffoldBackgroundColor: YggSemanticColors.surfaceBaseLight,
               appBarTheme: const AppBarTheme(
-                toolbarHeight: 80, // 기본 56에서 24px 추가
-                backgroundColor: Color(0xFF1F1F1F),
+                toolbarHeight: 80,
+                backgroundColor: YggSemanticColors.surfaceBaseLight,
               ),
               navigationRailTheme: const NavigationRailThemeData(
-                backgroundColor: Color(0xFF1F1F1F),
+                backgroundColor: YggSemanticColors.surfaceBaseLight,
+                selectedIconTheme: IconThemeData(color: Colors.black, size: 30),
+                unselectedIconTheme:
+                    IconThemeData(color: Colors.black54, size: 30),
+                minWidth: 84,
+                indicatorColor: Color(0xFFE5E5EA),
+                groupAlignment: -1,
+                useIndicator: true,
+              ),
+              floatingActionButtonTheme: const FloatingActionButtonThemeData(
+                backgroundColor: Color(0xFF1976D2),
+                foregroundColor: Colors.white,
+              ),
+              fontFamily: 'KakaoSmallSans',
+              textTheme: const TextTheme(
+                displayLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+                displayMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+                displaySmall: TextStyle(fontFamily: 'KakaoBigSans'),
+                headlineLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+                headlineMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+                headlineSmall: TextStyle(fontFamily: 'KakaoBigSans'),
+                titleLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+                titleMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+                titleSmall: TextStyle(fontFamily: 'KakaoBigSans'),
+                bodyLarge: TextStyle(fontFamily: 'KakaoSmallSans'),
+                bodyMedium: TextStyle(fontFamily: 'KakaoSmallSans'),
+                bodySmall: TextStyle(fontFamily: 'KakaoSmallSans'),
+                labelLarge: TextStyle(fontFamily: 'KakaoSmallSans'),
+                labelMedium: TextStyle(fontFamily: 'KakaoSmallSans'),
+                labelSmall: TextStyle(fontFamily: 'KakaoSmallSans'),
+              ),
+            ),
+            darkTheme: ThemeData(
+              useMaterial3: true,
+              brightness: Brightness.dark,
+              extensions: const <ThemeExtension<dynamic>>[
+                YggSemanticColors(
+                  surfaceBase: YggSemanticColors.surfaceBaseDarkDefault,
+                ),
+              ],
+              scaffoldBackgroundColor: YggSemanticColors.surfaceBaseDarkDefault,
+              appBarTheme: const AppBarTheme(
+                toolbarHeight: 80, // 기본 56에서 24px 추가
+                backgroundColor: YggSemanticColors.surfaceBaseDarkDefault,
+              ),
+              navigationRailTheme: const NavigationRailThemeData(
+                backgroundColor: YggSemanticColors.surfaceBaseDarkDefault,
                 selectedIconTheme: IconThemeData(color: Colors.white, size: 30),
                 unselectedIconTheme:
                     IconThemeData(color: Colors.white70, size: 30),
@@ -1102,8 +1205,8 @@ class _MyAppState extends State<MyApp>
                 ),
                 textStyle: TextStyle(color: Colors.white),
               ),
-              floatingActionButtonTheme: FloatingActionButtonThemeData(
-                backgroundColor: const Color(0xFF1976D2),
+              floatingActionButtonTheme: const FloatingActionButtonThemeData(
+                backgroundColor: Color(0xFF1976D2),
                 foregroundColor: Colors.white,
               ),
               fontFamily: 'KakaoSmallSans',

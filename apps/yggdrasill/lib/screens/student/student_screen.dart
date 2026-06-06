@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../widgets/pill_tab_selector.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import 'components/tendency_webview.dart';
 import 'components/student_registration_status_dialog.dart';
 // removed student_details_dialog
@@ -785,7 +786,7 @@ class StudentScreenState extends State<StudentScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Column(
         children: [
           const SizedBox(height: 0),
@@ -881,7 +882,7 @@ class StudentScreenState extends State<StudentScreen> {
                     decoration: BoxDecoration(
                       // ✅ 학생 탭 기본 배경과 동일하게 맞춰
                       // 탭바/상단바/웹 사이 "중복 디바이더"처럼 보이는 경계감을 줄인다.
-                      color: const Color(0xFF0B1112),
+                      color: context.yggSurfaceBase,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.transparent, width: 1),
                     ),

@@ -188,6 +188,7 @@ class TextbookStageBatchService {
     final imageByNumber = <String, _ImageAnswerCrop>{};
     final pageByNumber = <String, ({int rawPage, int displayPage})>{};
     final answerImagePageCache = <int, Uint8List>{};
+    final pageErrors = <String>[];
     final totalPages = doc.pages.length;
 
     Future<Uint8List?> answerImagePagePng(int page) async {
@@ -280,9 +281,18 @@ class TextbookStageBatchService {
             }
           }
         }
-      } catch (_) {
+      } catch (e) {
+        pageErrors.add('p$page: $e');
+        onStatus?.call('정답 VLM $page / $totalPages 페이지 실패: $e');
         continue;
       }
+    }
+
+    if (aggregated.isEmpty) {
+      final sample = pageErrors.isEmpty
+          ? '모든 정답 PDF 페이지에서 매칭 가능한 정답을 찾지 못했습니다.'
+          : pageErrors.take(3).join(' / ');
+      throw Exception('정답 VLM 추출 실패: $sample');
     }
 
     final report = TextbookAnswerMatchReport.match(

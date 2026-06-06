@@ -990,8 +990,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     'inline': '글 중간',
   };
 
-  // inline(글 중간) 배치의 기본 그림 높이(em). 본문 줄 높이에 맞춰 작게 들어간다.
-  static const double _figureInlineHeightEmDefault = 1.6;
   static const double _figureInlineHeightEmMin = 0.35;
   static const double _figureInlineHeightEmMax = 8.0;
 
@@ -7409,6 +7407,120 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  Widget _buildManualFigureDropPanel({
+    required String title,
+    required String subtitle,
+    required Future<void> Function(Uint8List bytes, String fileName) onUpload,
+  }) {
+    var hovering = false;
+    var uploading = false;
+    return StatefulBuilder(
+      builder: (context, setLocalState) {
+        Future<void> uploadBytes(Uint8List bytes, String fileName) async {
+          if (uploading) return;
+          setLocalState(() => uploading = true);
+          try {
+            await onUpload(bytes, fileName);
+          } finally {
+            if (context.mounted) {
+              setLocalState(() {
+                uploading = false;
+                hovering = false;
+              });
+            }
+          }
+        }
+
+        Future<void> pickFile() async {
+          final result = await FilePicker.platform.pickFiles(
+            type: FileType.image,
+            allowMultiple: false,
+            withData: true,
+          );
+          final file = result?.files.singleOrNull;
+          final bytes = file?.bytes ?? await _readBytesFromPath(file?.path);
+          if (file == null || bytes == null || bytes.isEmpty) {
+            _showSnack('이미지 파일을 읽지 못했습니다.', error: true);
+            return;
+          }
+          await uploadBytes(bytes, file.name);
+        }
+
+        return DropTarget(
+          enable: !uploading,
+          onDragEntered: (_) => setLocalState(() => hovering = true),
+          onDragExited: (_) => setLocalState(() => hovering = false),
+          onDragDone: (details) async {
+            final item = _firstItemWithExtension(
+              details.files,
+              const <String>['png', 'jpg', 'jpeg', 'webp'],
+            );
+            if (item == null) {
+              _showSnack('PNG/JPG/WEBP 이미지만 업로드할 수 있습니다.', error: true);
+              return;
+            }
+            final bytes = await _readDropItemBytes(item);
+            if (bytes == null || bytes.isEmpty) {
+              _showSnack('이미지 파일을 읽지 못했습니다.', error: true);
+              return;
+            }
+            await uploadBytes(bytes, _basenameFromPath(item.path));
+          },
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: uploading ? null : pickFile,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+              decoration: BoxDecoration(
+                color: hovering
+                    ? _accent.withValues(alpha: 0.14)
+                    : const Color(0xFF162022),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: hovering ? _accent : _border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        uploading
+                            ? Icons.hourglass_empty_rounded
+                            : Icons.add_photo_alternate_outlined,
+                        color: hovering ? _accent : _textSub,
+                        size: 17,
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    uploading ? '업로드 중...' : subtitle,
+                    style: const TextStyle(
+                      color: _textSub,
+                      fontSize: 11.2,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   static final RegExp _figureMarkerRegex =
       RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표|표)\]', caseSensitive: false);
 
@@ -9471,6 +9583,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 이미지 선지 문항도 figure_assets(본문 그림 + 선지 그림)를 가질 수 있으므로
     //   그림 크기 편집 섹션을 열어준다. 선지 그림은 위치/그룹 없이 "크기만" 조절.
     final hasFigures = q.figureRefs.isNotEmpty || figureAssets.isNotEmpty;
+    final hasFigureMarker = _figureMarkerCountRegex.hasMatch(q.stem);
     final imageChoiceStemFigCount = _imageChoiceStemFigureCount(q);
     final figureSizeOnlyKeys = <String>{};
     if (isImageChoice) {
@@ -9484,7 +9597,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);
     final hasAnswerFigures = answerFigureAssets.isNotEmpty;
     final hasSidebar =
-        hasFigures || hasTables || hasAnswerFigures || isImageChoice;
+        hasFigures ||
+            hasTables ||
+            hasAnswerFigures ||
+            isImageChoice ||
+            hasFigureMarker;
 
     // 다이얼로그 사이즈:
     // - 세로는 화면 높이의 최대 92% 까지 확보하되, 문항 세로 높이 필요에 따라 유연.
@@ -9536,6 +9653,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     };
     var imageChoiceRowsDraft = _imageChoiceRowsOf(q);
     var refreshing = false;
+    var dialogQ = q;
     final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
     String? serverPreviewUrl = existingUrl.isNotEmpty ? existingUrl : null;
 
@@ -9544,10 +9662,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       builder: (ctx) {
         return StatefulBuilder(
           builder: (dialogContext, setLocalState) {
+            final baseQ = dialogQ;
             final draftMeta = Map<String, dynamic>.from(
               (hasFigures || hasTables)
                   ? _buildDraftMeta(
-                      q,
+                      baseQ,
                       draftMap ?? const <String, double>{},
                       selectedPairKeys ?? const <String>{},
                       positionMap: positionMap,
@@ -9559,7 +9678,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       tablePositionMap: hasTables ? tablePositionMap : null,
                       tableOffsetXMap: hasTables ? tableOffsetXMap : null,
                     )
-                  : q.meta,
+                  : baseQ.meta,
             );
             if (isImageChoice) {
               _writeImageChoiceRowsMeta(draftMeta, imageChoiceRowsDraft);
@@ -9570,8 +9689,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             }
             final previewQ =
                 (hasFigures || hasTables || hasAnswerFigures || isImageChoice)
-                    ? q.copyWith(meta: draftMeta)
-                    : q;
+                    ? baseQ.copyWith(meta: draftMeta)
+                    : baseQ;
 
             // 그림 편집 변경사항을 _questions 에 반영한다. 표 편집 결과는 이어지는
             // _applyTableScalesLocal 호출에서 같이 반영돼야 한다.
@@ -9689,7 +9808,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ),
                   const SizedBox(height: 10),
                   _buildAnswerPreviewThumbnail(previewQ, expanded: true),
-                  if (hasFigures) ...[
+                  if (hasFigures ||
+                      _orderedFigureAssetsOf(previewQ).isNotEmpty) ...[
                     const SizedBox(height: 10),
                     _buildFigurePreviewThumbnail(previewQ, expanded: true),
                   ],
@@ -9712,6 +9832,35 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (hasFigureMarker) ...[
+                      _buildManualFigureDropPanel(
+                        title: '본문 그림 수동 업로드',
+                        subtitle: 'PNG/JPG/WEBP를 드롭하거나 눌러 선택하세요. '
+                            '마커보다 그림이 적으면 추가하고, 이미 있으면 마지막 그림을 교체합니다.',
+                        onUpload: (bytes, fileName) async {
+                          setLocalState(() => refreshing = true);
+                          final updated =
+                              await _uploadManualFigureForQuestion(
+                            q: dialogQ,
+                            bytes: bytes,
+                            fileName: fileName,
+                          );
+                          if (updated != null) {
+                            dialogQ = updated;
+                            final url =
+                                await _saveAndRefreshPreview(updated);
+                            if (url != null) {
+                              serverPreviewUrl = url;
+                            }
+                          }
+                          if (dialogContext.mounted) {
+                            setLocalState(() => refreshing = false);
+                          }
+                        },
+                      ),
+                      if (hasFigures || hasTables || hasAnswerFigures || isImageChoice)
+                        const SizedBox(height: 12),
+                    ],
                     if (hasFigures)
                       _buildFigureEditSection(
                         draftMap: draftMap!,
@@ -9982,10 +10131,236 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return updated;
   }
 
+  List<Map<String, dynamic>> _nextManualFigureAssets({
+    required List<Map<String, dynamic>> existingAssets,
+    required Map<String, dynamic> asset,
+    required int markerCount,
+  }) {
+    final next = existingAssets
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: true);
+    final normalized = Map<String, dynamic>.from(asset);
+    if (next.length < math.max(1, markerCount)) {
+      normalized['figure_index'] = next.length + 1;
+      next.add(normalized);
+    } else if (next.isEmpty) {
+      normalized['figure_index'] = 1;
+      next.add(normalized);
+    } else {
+      normalized['figure_index'] = next.length;
+      next[next.length - 1] = normalized;
+    }
+    return next;
+  }
+
+  Map<String, dynamic> _ensureManualFigureLayout(
+    Map<String, dynamic> meta,
+    int assetCount, {
+    double widthEm = 18,
+  }) {
+    final rawLayout = meta['figure_layout'];
+    final layout = rawLayout is Map
+        ? Map<String, dynamic>.from(rawLayout)
+        : <String, dynamic>{};
+    final rawItems = layout['items'];
+    final items = rawItems is List
+        ? rawItems
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList(growable: true)
+        : <Map<String, dynamic>>[];
+    for (var i = items.length; i < assetCount; i += 1) {
+      items.add(<String, dynamic>{
+        'assetKey': 'idx:${i + 1}',
+        'position': 'below-stem',
+        'anchor': 'center',
+        'widthEm': widthEm,
+        'offsetXEm': 0,
+        'offsetYEm': 0,
+      });
+    }
+    if (items.length > assetCount) {
+      items.removeRange(assetCount, items.length);
+    }
+    return <String, dynamic>{
+      'version': 1,
+      'items': items,
+      'groups': layout['groups'] is List ? layout['groups'] : <dynamic>[],
+    };
+  }
+
+  Future<ProblemBankQuestion?> _uploadManualFigureForQuestion({
+    required ProblemBankQuestion q,
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    if (bytes.isEmpty) {
+      _showSnack('이미지 파일을 읽지 못했습니다.', error: true);
+      return null;
+    }
+    try {
+      final markerCount = _figureMarkerCountRegex.allMatches(q.stem).length;
+      final asset = await _service.uploadManualFigureAsset(
+        academyId: q.academyId,
+        documentId: q.documentId,
+        questionNumber: q.questionNumber,
+        bytes: bytes,
+        fileName: fileName,
+      );
+      final current = _questions.firstWhere(
+        (item) => item.id == q.id,
+        orElse: () => q,
+      );
+      final meta = Map<String, dynamic>.from(current.meta);
+      final assets = _nextManualFigureAssets(
+        existingAssets: _orderedFigureAssetsOf(current),
+        asset: asset,
+        markerCount: markerCount,
+      );
+      meta['figure_assets'] = assets;
+      meta['figure_count'] = assets.length;
+      meta['figure_layout'] = _ensureManualFigureLayout(
+        meta,
+        assets.length,
+      );
+      meta['figure_review_required'] = false;
+      meta['figure_crop_source'] = 'manager_manual_upload';
+      meta['manual_replacements'] = <dynamic>[
+        ...(meta['manual_replacements'] is List
+            ? meta['manual_replacements'] as List
+            : const <dynamic>[]),
+        <String, dynamic>{
+          'question_number': q.questionNumber,
+          'asset_id': asset['id'],
+          'bucket': asset['bucket'],
+          'path': asset['path'],
+          'source_name': fileName,
+          'replaced_at': DateTime.now().toUtc().toIso8601String(),
+          'reason': 'manager_manual_figure_drop',
+        },
+      ];
+      final updated = current.copyWith(
+        figureRefs: List<String>.filled(assets.length, '[그림]'),
+        meta: meta,
+      );
+      await _service.updateQuestionMeta(
+        questionId: updated.id,
+        meta: meta,
+        figureRefs: updated.figureRefs,
+      );
+      final signed = await _service.createStorageSignedUrl(
+        bucket: '${asset['bucket'] ?? ''}',
+        path: '${asset['path'] ?? ''}',
+        expiresInSeconds: 60 * 60 * 24,
+      );
+      if (mounted) {
+        setState(() {
+          _questions = <ProblemBankQuestion>[
+            for (final item in _questions)
+              item.id == updated.id ? updated : item,
+          ];
+          if (signed.isNotEmpty) {
+            _figurePreviewUrls[updated.id] = signed;
+            _figurePreviewPaths[updated.id] = '${asset['path'] ?? ''}';
+            _figurePreviewUrlsByPath[updated.id] = <String, String>{
+              '${asset['path'] ?? ''}': signed,
+            };
+          }
+        });
+      }
+      _showSnack('수동 그림을 반영했습니다.');
+      return updated;
+    } catch (e) {
+      _showSnack('수동 그림 반영 실패: $e', error: true);
+      return null;
+    }
+  }
+
+  Future<ProblemBankQuestion?> _uploadManualCommonFigureForQuestion({
+    required ProblemBankQuestion q,
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    if (bytes.isEmpty) {
+      _showSnack('이미지 파일을 읽지 못했습니다.', error: true);
+      return null;
+    }
+    try {
+      final group = _commonStemGroupQuestions(q);
+      if (group.isEmpty) return null;
+      final markerCount = _figureMarkerCountRegex.allMatches(q.setCommonStem).length;
+      final groupLabel = group
+          .map((item) => item.questionNumber.trim())
+          .where((number) => number.isNotEmpty)
+          .join('~');
+      final asset = await _service.uploadManualFigureAsset(
+        academyId: q.academyId,
+        documentId: q.documentId,
+        questionNumber: groupLabel.isEmpty ? q.questionNumber : groupLabel,
+        bytes: bytes,
+        fileName: fileName,
+        commonStem: true,
+      );
+      final existingAssets = q.setCommonFigureAssets
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+      final assets = _nextManualFigureAssets(
+        existingAssets: existingAssets,
+        asset: asset,
+        markerCount: markerCount,
+      );
+      final draftMeta = <String, dynamic>{
+        'figure_assets': assets,
+        'figure_count': assets.length,
+        'figure_layout': _ensureManualFigureLayout(
+          <String, dynamic>{'figure_layout': q.setCommonFigureLayout},
+          assets.length,
+          widthEm: 33,
+        ),
+        if (q.setCommonTableScales.isNotEmpty)
+          'table_scales': q.setCommonTableScales,
+        if (q.setCommonTableLayout.isNotEmpty)
+          'table_layout': q.setCommonTableLayout,
+      };
+      final updatedGroup = _applyCommonStemDraftToGroup(q, draftMeta);
+      for (final item in updatedGroup) {
+        await _service.updateQuestionMeta(
+          questionId: item.id,
+          meta: item.meta,
+        );
+      }
+      final signed = await _service.createStorageSignedUrl(
+        bucket: '${asset['bucket'] ?? ''}',
+        path: '${asset['path'] ?? ''}',
+        expiresInSeconds: 60 * 60 * 24,
+      );
+      final sourceUpdated = updatedGroup.firstWhere(
+        (item) => item.id == q.id,
+        orElse: () => updatedGroup.first,
+      );
+      if (mounted && signed.isNotEmpty) {
+        final commonKey = 'common:${q.id}';
+        setState(() {
+          _figurePreviewUrls[commonKey] = signed;
+          _figurePreviewPaths[commonKey] = '${asset['path'] ?? ''}';
+          _figurePreviewUrlsByPath[commonKey] = <String, String>{
+            '${asset['path'] ?? ''}': signed,
+          };
+        });
+      }
+      _showSnack('공통발문 수동 그림을 반영했습니다.');
+      return sourceUpdated;
+    } catch (e) {
+      _showSnack('공통발문 그림 반영 실패: $e', error: true);
+      return null;
+    }
+  }
+
   Future<void> _openCommonStemPreviewDialog(ProblemBankQuestion q) async {
     if (!mounted || q.setCommonStem.isEmpty) return;
     final screen = MediaQuery.sizeOf(context);
-    final commonQ = _commonStemPreviewQuestion(q);
+    var sourceQ = q;
+    var commonQ = _commonStemPreviewQuestion(sourceQ);
     final commonPreviewCacheKey = 'common:${q.id}';
     final groupLabel = _commonStemGroupQuestions(q)
         .map((item) => item.questionNumber.trim())
@@ -9993,6 +10368,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         .join(', ');
     final figureAssets = _orderedFigureAssetsOf(commonQ);
     final hasFigures = figureAssets.isNotEmpty;
+    final hasFigureMarker = _figureMarkerCountRegex.hasMatch(commonQ.stem);
     if (hasFigures) {
       final signedByPath = <String, String>{};
       for (final asset in figureAssets) {
@@ -10037,7 +10413,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
     final tableEntries = _parseTableEntries(commonQ);
     final hasTables = tableEntries.isNotEmpty;
-    final hasSidebar = hasFigures || hasTables;
+    final hasSidebar = hasFigures || hasTables || hasFigureMarker;
     const double sidebarWidth = 360;
     final dialogWidth = hasSidebar
         ? math.min(screen.width - 40, 880.0 + sidebarWidth)
@@ -10076,7 +10452,37 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             .toDouble(),
     };
     var refreshing = false;
+    String? commonServerPreviewUrl = '';
 
+    Future<void> refreshCommonServerPreview(
+      ProblemBankQuestion previewQuestion,
+      void Function(void Function())? setLocalState,
+    ) async {
+      final academyId = _academyId;
+      if (academyId == null || academyId.isEmpty) return;
+      if (setLocalState != null) {
+        setLocalState(() => refreshing = true);
+      }
+      try {
+        final url = await _service.renderCustomQuestionThumbnail(
+          academyId: academyId,
+          question: previewQuestion,
+        );
+        if (url.isNotEmpty) {
+          commonServerPreviewUrl = url;
+        }
+      } catch (e) {
+        _showSnack('공통발문 서버 미리보기 생성 실패: $e', error: true);
+      } finally {
+        if (setLocalState != null) {
+          setLocalState(() => refreshing = false);
+        }
+      }
+    }
+
+    await refreshCommonServerPreview(commonQ, null);
+
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (ctx) {
@@ -10110,6 +10516,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 for (final item in updatedGroup) {
                   await _saveAndRefreshPreview(item);
                 }
+                await refreshCommonServerPreview(previewQ, null);
                 if (ctx.mounted) {
                   setLocalState(() {
                     refreshing = false;
@@ -10124,13 +10531,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _buildPdfPreviewPaperContent(
-                    previewQ,
-                    expanded: true,
-                    scrollable: false,
-                    showQuestionNumberPrefix: false,
-                  ),
-                  if (hasFigures) ...[
+                  if (commonServerPreviewUrl != null &&
+                      commonServerPreviewUrl!.isNotEmpty)
+                    _buildServerPdfPreviewThumbnail(
+                      previewQ,
+                      previewUrl: commonServerPreviewUrl!,
+                      expanded: true,
+                    )
+                  else
+                    _buildPdfPreviewPaperContent(
+                      previewQ,
+                      expanded: true,
+                      scrollable: false,
+                      showQuestionNumberPrefix: false,
+                    ),
+                  if (hasFigures ||
+                      _orderedFigureAssetsOf(previewQ).isNotEmpty) ...[
                     const SizedBox(height: 10),
                     _buildFigurePreviewThumbnail(
                       previewQ,
@@ -10156,6 +10572,38 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          if (hasFigureMarker) ...[
+                            _buildManualFigureDropPanel(
+                              title: '공통발문 그림 수동 업로드',
+                              subtitle: 'PNG/JPG/WEBP를 드롭하거나 눌러 선택하세요. '
+                                  '세트에 묶인 모든 문항의 공통발문 이미지로 반영됩니다.',
+                              onUpload: (bytes, fileName) async {
+                                setLocalState(() => refreshing = true);
+                                final updatedSource =
+                                    await _uploadManualCommonFigureForQuestion(
+                                  q: sourceQ,
+                                  bytes: bytes,
+                                  fileName: fileName,
+                                );
+                                if (updatedSource != null) {
+                                  sourceQ = updatedSource;
+                                  commonQ =
+                                      _commonStemPreviewQuestion(updatedSource);
+                                  final updatedGroup =
+                                      _commonStemGroupQuestions(updatedSource);
+                                  for (final item in updatedGroup) {
+                                    await _saveAndRefreshPreview(item);
+                                  }
+                                  await refreshCommonServerPreview(commonQ, null);
+                                }
+                                if (dialogContext.mounted) {
+                                  setLocalState(() => refreshing = false);
+                                }
+                              },
+                            ),
+                            if (hasFigures || hasTables)
+                              const SizedBox(height: 12),
+                          ],
                           if (hasFigures)
                             _buildFigureEditSection(
                               draftMap: draftMap!,

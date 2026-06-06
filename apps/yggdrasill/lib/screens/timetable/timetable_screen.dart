@@ -20,6 +20,7 @@ import 'package:morphable_shape/morphable_shape.dart';
 import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import 'package:flutter/services.dart';
 import 'components/self_study_registration_view.dart';
 import '../../models/self_study_time_block.dart';
@@ -1841,10 +1842,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
         child: Stack(
           children: [
             Scaffold(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: context.yggSurfaceBase,
               body: Container(
                 constraints: const BoxConstraints.expand(),
-                color: const Color(0xFF0B1112), // 프로그램 전체 배경색
+                color: context.yggSurfaceBase, // 프로그램 전체 배경색
                 child: Column(
                   children: [
                     const SizedBox(height: 8), // TimetableHeader 위 여백
@@ -2105,7 +2106,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           timetableChild: Container(
             width: double.infinity,
             decoration: BoxDecoration(
-              color: const Color(0xFF0B1112),
+              color: context.yggSurfaceBase,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(

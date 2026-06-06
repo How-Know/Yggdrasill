@@ -1,8 +1,45 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
 #include <optional>
+#include <variant>
 
 #include "flutter/generated_plugin_registrant.h"
+
+namespace {
+
+int GetIntArgument(const flutter::EncodableMap& arguments,
+                   const char* key,
+                   int fallback = 0) {
+  const auto it = arguments.find(flutter::EncodableValue(key));
+  if (it == arguments.end()) {
+    return fallback;
+  }
+
+  if (const auto value = std::get_if<int32_t>(&it->second)) {
+    return static_cast<int>(*value);
+  }
+  if (const auto value = std::get_if<int64_t>(&it->second)) {
+    return static_cast<int>(*value);
+  }
+  return fallback;
+}
+
+bool GetBoolArgument(const flutter::EncodableMap& arguments,
+                     const char* key,
+                     bool fallback = false) {
+  const auto it = arguments.find(flutter::EncodableValue(key));
+  if (it == arguments.end()) {
+    return fallback;
+  }
+
+  if (const auto value = std::get_if<bool>(&it->second)) {
+    return *value;
+  }
+  return fallback;
+}
+
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,6 +62,36 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+
+  window_chrome_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "yggdrasill/window_chrome",
+          &flutter::StandardMethodCodec::GetInstance());
+  window_chrome_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "setCaptionColor") {
+          result->NotImplemented();
+          return;
+        }
+
+        const auto* arguments =
+            std::get_if<flutter::EncodableMap>(call.arguments());
+        if (!arguments) {
+          result->Error("bad_args", "Expected caption color arguments.");
+          return;
+        }
+
+        const int red = GetIntArgument(*arguments, "red");
+        const int green = GetIntArgument(*arguments, "green");
+        const int blue = GetIntArgument(*arguments, "blue");
+        const bool dark = GetBoolArgument(*arguments, "dark");
+        SetCaptionColor(RGB(red, green, blue), dark);
+        result->Success();
+      });
+
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +107,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  window_chrome_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

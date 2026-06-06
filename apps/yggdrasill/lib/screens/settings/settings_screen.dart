@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../widgets/pill_tab_selector.dart';
 import '../../widgets/app_time_picker_dialog.dart';
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
@@ -12,7 +11,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import '../../models/teacher.dart';
-import '../../widgets/main_fab_alternative.dart';
 import '../../widgets/teacher_registration_dialog.dart';
 import '../../widgets/teacher_details_dialog.dart';
 import 'package:animations/animations.dart';
@@ -27,6 +25,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'student_archives_screen.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 enum SettingType {
@@ -78,8 +77,8 @@ class TimeRange {
 }
 
 class SettingsScreen extends StatefulWidget {
-  /// Preview 전용: 기존 상단 PillTabSelector 대신 하단 중앙 FAB 스타일 탭바를 표시한다.
-  /// 기본값은 false라 본앱 라우트에는 적용되지 않는다.
+  /// Preview 전용: 설정 셸에서 + 버튼 목업까지 같이 띄울 때 사용하던 플래그.
+  /// 본앱의 설정 내부 탭바는 항상 FAB 스타일 탭바를 사용한다.
   final bool previewUseFabStyleTabBar;
 
   const SettingsScreen({
@@ -94,6 +93,11 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   static const Color _kSignatureGreen = Color(0xFF33A373);
   static const String _kSystemDefaultPrinterValue = '__system_default__';
+
+  /// 본앱에도 새 학원 탭 UI를 적용한다.
+  ///
+  /// [previewUseFabStyleTabBar]는 하단 FAB형 탭바 목업 전용으로만 남긴다.
+  bool get _usePreviewAcademyUi => true;
 
   SettingType _selectedType = SettingType.academy;
   DayOfWeek? _selectedDay = DayOfWeek.monday;
@@ -170,7 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isTabAnimating = false;
   bool _fullscreenEnabled = false; // [추가] 전체화면 스위치 상태
   bool _maximizeEnabled = false; // [추가] 최대창 시작 스위치 상태
-  ThemeMode _selectedThemeMode = ThemeMode.dark; // [추가] 테마 선택 상태
+  ThemeMode _selectedThemeMode = ThemeMode.light; // [추가] 테마 선택 상태
   bool _isOwner = false; // 원장 여부 캐시
   bool _isSuperAdmin = false; // 플랫폼 관리자 여부
   bool _resettingPlannedAll = false; // [추가] 예정 수업 전체 재생성 진행 상태
@@ -185,6 +189,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedThemeMode = AppThemeController.mode.value;
     _loadSettings();
     _loadFullscreenSetting();
     _loadPrinterRoutingSettings();
@@ -370,7 +375,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         title: const Text('occurrence 백필(임시 도구)',
             style: TextStyle(
                 color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
@@ -421,7 +426,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             final double? v =
                 (total <= 0) ? null : (done / total).clamp(0.0, 1.0);
             return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('백필 진행 중',
                   style: TextStyle(
                       color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
@@ -501,7 +506,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         title: const Text('출석 cycle/회차 백필(임시 도구)',
             style: TextStyle(
                 color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
@@ -553,7 +558,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             final double? v =
                 (total <= 0) ? null : (done / total).clamp(0.0, 1.0);
             return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('백필 진행 중',
                   style: TextStyle(
                       color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
@@ -1499,12 +1504,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SegmentedButton<ThemeMode>(
                   segments: const [
                     ButtonSegment<ThemeMode>(
-                      value: ThemeMode.system,
-                      label: Text('시스템'),
-                    ),
-                    ButtonSegment<ThemeMode>(
                       value: ThemeMode.light,
-                      label: Text('라이트'),
+                      label: Text('기본'),
                     ),
                     ButtonSegment<ThemeMode>(
                       value: ThemeMode.dark,
@@ -1513,9 +1514,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                   selected: {_selectedThemeMode},
                   onSelectionChanged: (Set<ThemeMode> newSelection) {
+                    final next = newSelection.first;
                     setState(() {
-                      _selectedThemeMode = newSelection.first;
+                      _selectedThemeMode = next;
                     });
+                    AppThemeController.setMode(next);
                   },
                   style: ButtonStyle(
                     backgroundColor:
@@ -1736,7 +1739,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 final ok = await showDialog<bool>(
                                   context: context,
                                   builder: (ctx) => AlertDialog(
-                                    backgroundColor: const Color(0xFF0B1112),
+                                    backgroundColor: kDlgBg,
                                     title: const Text('예정 수업 전체 재생성',
                                         style: TextStyle(
                                             color: Color(0xFFEAF2F2),
@@ -1826,11 +1829,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final hasRange = range != null && !_isLastThirtyMarkerDay(day);
 
     if (!hasRange) {
-      return PreviewAcademyTimePill(
-        style: previewStyle,
-        text: '시간 등록',
-        isPlaceholder: true,
-        onTap: () => _pickOperatingStartTime(context, day),
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => _pickOperatingStartTime(context, day),
+          behavior: HitTestBehavior.opaque,
+          child: Text(
+            '시간 등록',
+            textAlign: TextAlign.right,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: FabTabBarTokens.previewAcademyFieldDisplayStyle(
+              previewStyle,
+              isEmpty: true,
+            ),
+          ),
+        ),
       );
     }
 
@@ -2310,7 +2324,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Align(
-                  alignment: Alignment.centerRight,
+                    alignment: Alignment.centerRight,
                     child: isActive
                         ? Row(
                             mainAxisAlignment: MainAxisAlignment.end,
@@ -2341,7 +2355,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : const SizedBox.shrink(),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 16),
                 PreviewAcademyIosSwitch(
                   key: ValueKey('preview-hours-switch-${day.name}'),
                   value: isActive,
@@ -2508,9 +2522,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final containerColor = isPreview
         ? previewStyle!.groupedCardBackground
         : const Color(0xFF18181A);
-    final containerRadius = isPreview
-        ? FabTabBarTokens.previewAcademyGroupedCardRadius
-        : 16.0;
+    final containerRadius =
+        isPreview ? FabTabBarTokens.previewAcademyGroupedCardRadius : 16.0;
     final horizontalPadding = isPreview
         ? FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal
         : 28.0;
@@ -2526,491 +2539,138 @@ class _SettingsScreenState extends State<SettingsScreen> {
         vertical: 24,
       ),
       child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      '운영 시간',
-                      style: isPreview
-                          ? FabTabBarTokens.previewSectionTitleStyle(
-                              previewStyle!,
-                            )
-                          : const TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w500,
-                            ),
-                    ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _promptAddBreakTime,
-                    icon: const Icon(Icons.add,
-                        color: _kSignatureGreen, size: 18),
-                    label: Text(
-                      '휴식',
-                      style: TextStyle(
-                        color: _kSignatureGreen,
-                        fontSize: isPreview
-                            ? FabTabBarTokens.previewAcademyBaseFontSize
-                            : 14,
-                        fontWeight: FontWeight.w700,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Text(
+                '운영 시간',
+                style: isPreview
+                    ? FabTabBarTokens.previewSectionTitleStyle(
+                        previewStyle!,
+                      )
+                    : const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w500,
                       ),
-                    ),
-                    style: TextButton.styleFrom(
-                      foregroundColor: _kSignatureGreen,
-                      minimumSize: const Size(0, 32),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 6),
-                    ),
-                  ),
-                ],
               ),
-              const SizedBox(height: 14),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min, // 내부 내용만큼만 가로로
-                  children: DayOfWeek.values.map((day) {
-                    return Container(
-                      width: blockWidth,
-                      margin: const EdgeInsets.only(right: 4.0),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF18181A), // 컨테이너와 동일하게
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: Color(0xFF1F1F1F),
-                            width: 3), // 아웃라인 카드 스타일(배경색)
-                      ),
-                      child: Center(
-                        child: Text(
-                          day.koreanName,
-                          style: isPreview
-                              ? FabTabBarTokens.previewBodyTextStyle(
-                                  previewStyle!,
-                                  color: previewStyle.hint,
-                                  fontWeight: FontWeight.w500,
-                                )
-                              : const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey,
-                                ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _promptAddBreakTime,
+                icon: const Icon(Icons.add, color: _kSignatureGreen, size: 18),
+                label: Text(
+                  '휴식',
+                  style: TextStyle(
+                    color: _kSignatureGreen,
+                    fontSize: isPreview
+                        ? FabTabBarTokens.previewAcademyBaseFontSize
+                        : 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  foregroundColor: _kSignatureGreen,
+                  minimumSize: const Size(0, 32),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 ),
               ),
-              const SizedBox(height: 8),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 4,
-                runSpacing: 8,
-                children: DayOfWeek.values.map((day) {
-                  int dayIndex = day.index;
-                  final hasOperatingHours = _operatingHours[day] != null;
-                  // 마지막 30분(휴무) 요일 판별
-                  bool isLastThirty = false;
-                  if (_operatingHours[day] != null) {
-                    // 전체 요일 중 가장 늦은 endTime 찾기
-                    TimeOfDay? latestEnd;
-                    for (var v in _operatingHours.values) {
-                      if (v != null) {
-                        if (latestEnd == null ||
-                            v.endHour > latestEnd.hour ||
-                            (v.endHour == latestEnd.hour &&
-                                v.endMinute > latestEnd.minute)) {
-                          latestEnd =
-                              TimeOfDay(hour: v.endHour, minute: v.endMinute);
-                        }
-                      }
-                    }
-                    // 30분 전 시간 계산
-                    TimeOfDay? latestStart;
-                    if (latestEnd != null) {
-                      int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
-                      int startMinutes = endMinutes - 30;
-                      latestStart = TimeOfDay(
-                          hour: startMinutes ~/ 60, minute: startMinutes % 60);
-                    }
-                    final range = _operatingHours[day]!;
-                    if (latestStart != null &&
-                        latestEnd != null &&
-                        range.startHour == latestStart.hour &&
-                        range.startMinute == latestStart.minute &&
-                        range.endHour == latestEnd.hour &&
-                        range.endMinute == latestEnd.minute) {
-                      isLastThirty = true;
+            ],
+          ),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min, // 내부 내용만큼만 가로로
+              children: DayOfWeek.values.map((day) {
+                return Container(
+                  width: blockWidth,
+                  margin: const EdgeInsets.only(right: 4.0),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF18181A), // 컨테이너와 동일하게
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: Color(0xFF1F1F1F), width: 3), // 아웃라인 카드 스타일(배경색)
+                  ),
+                  child: Center(
+                    child: Text(
+                      day.koreanName,
+                      style: isPreview
+                          ? FabTabBarTokens.previewBodyTextStyle(
+                              previewStyle!,
+                              color: previewStyle.hint,
+                              fontWeight: FontWeight.w500,
+                            )
+                          : const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.grey,
+                            ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 4,
+            runSpacing: 8,
+            children: DayOfWeek.values.map((day) {
+              int dayIndex = day.index;
+              final hasOperatingHours = _operatingHours[day] != null;
+              // 마지막 30분(휴무) 요일 판별
+              bool isLastThirty = false;
+              if (_operatingHours[day] != null) {
+                // 전체 요일 중 가장 늦은 endTime 찾기
+                TimeOfDay? latestEnd;
+                for (var v in _operatingHours.values) {
+                  if (v != null) {
+                    if (latestEnd == null ||
+                        v.endHour > latestEnd.hour ||
+                        (v.endHour == latestEnd.hour &&
+                            v.endMinute > latestEnd.minute)) {
+                      latestEnd =
+                          TimeOfDay(hour: v.endHour, minute: v.endMinute);
                     }
                   }
-                  print(
-                      '[DEBUG][UI] 렌더링 day=${day.name} index=$dayIndex hasOperatingHours=$hasOperatingHours isLastThirty=$isLastThirty range=${_operatingHours[day]}');
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 운영시간 카드
-                      hasOperatingHours && !isLastThirty
-                          ? MouseRegion(
-                              cursor: SystemMouseCursors.click,
-                              onEnter: (_) => setState(() =>
-                                  _hoveredOperatingHourCards.add(dayIndex)),
-                              onExit: (_) => setState(() =>
-                                  _hoveredOperatingHourCards.remove(dayIndex)),
-                              child: GestureDetector(
-                                onTapDown: (details) async {
-                                  final selected = await showMenu<String>(
-                                    context: context,
-                                    position: RelativeRect.fromLTRB(
-                                      details.globalPosition.dx,
-                                      details.globalPosition.dy,
-                                      details.globalPosition.dx,
-                                      details.globalPosition.dy,
-                                    ),
-                                    items: [
-                                      PopupMenuItem(
-                                        value: 'edit',
-                                        child: const Text('수정',
-                                            style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 13)), // 기존 12 → 13
-                                        height: 32,
-                                      ),
-                                      PopupMenuItem(
-                                        value: 'delete',
-                                        child: const Text('삭제',
-                                            style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 13)),
-                                        height: 32,
-                                      ),
-                                    ],
-                                    color: const Color(0xFF1F1F1F),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                  );
-                                  if (selected == 'edit') {
-                                    // 운영시간 수정 다이얼로그 연결
-                                    final currentRange = _operatingHours[day]!;
-                                    final TimeOfDay? newStart =
-                                        await showTimePicker(
-                                      context: context,
-                                      initialTime: TimeOfDay(
-                                          hour: currentRange.startHour,
-                                          minute: currentRange.startMinute),
-                                      builder: (BuildContext context,
-                                          Widget? child) {
-                                        return Theme(
-                                          data: Theme.of(context).copyWith(
-                                            colorScheme: const ColorScheme(
-                                              brightness: Brightness.dark,
-                                              primary: _kSignatureGreen,
-                                              onPrimary: Colors.white,
-                                              secondary: _kSignatureGreen,
-                                              onSecondary: Colors.white,
-                                              error: Color(0xFFB00020),
-                                              onError: Colors.white,
-                                              background: Color(0xFF18181A),
-                                              onBackground: Colors.white,
-                                              surface: Color(0xFF18181A),
-                                              onSurface: Colors.white,
-                                            ),
-                                            dialogBackgroundColor:
-                                                const Color(0xFF18181A),
-                                            timePickerTheme:
-                                                const TimePickerThemeData(
-                                              backgroundColor:
-                                                  Color(0xFF18181A),
-                                              hourMinuteColor: _kSignatureGreen,
-                                              hourMinuteTextColor: Colors.white,
-                                              dialHandColor: _kSignatureGreen,
-                                              dialBackgroundColor:
-                                                  Color(0xFF18181A),
-                                              entryModeIconColor:
-                                                  _kSignatureGreen,
-                                              shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.all(
-                                                          Radius.circular(24))),
-                                              helpTextStyle: TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.bold),
-                                              dayPeriodTextColor: Colors.white,
-                                              dayPeriodColor: _kSignatureGreen,
-                                            ),
-                                          ),
-                                          child: Localizations.override(
-                                            context: context,
-                                            locale: const Locale('ko'),
-                                            delegates: [
-                                              ...GlobalMaterialLocalizations
-                                                  .delegates,
-                                            ],
-                                            child: Builder(
-                                              builder: (context) {
-                                                return MediaQuery(
-                                                  data: MediaQuery.of(context)
-                                                      .copyWith(
-                                                          alwaysUse24HourFormat:
-                                                              false),
-                                                  child: child!,
-                                                );
-                                              },
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    );
-                                    if (newStart == null) return;
-                                    final TimeOfDay? newEnd =
-                                        await showTimePicker(
-                                      context: context,
-                                      initialTime: TimeOfDay(
-                                          hour: currentRange.endHour,
-                                          minute: currentRange.endMinute),
-                                      builder: (BuildContext context,
-                                          Widget? child) {
-                                        return Theme(
-                                          data: Theme.of(context).copyWith(
-                                            colorScheme: const ColorScheme(
-                                              brightness: Brightness.dark,
-                                              primary: _kSignatureGreen,
-                                              onPrimary: Colors.white,
-                                              secondary: _kSignatureGreen,
-                                              onSecondary: Colors.white,
-                                              error: Color(0xFFB00020),
-                                              onError: Colors.white,
-                                              background: Color(0xFF18181A),
-                                              onBackground: Colors.white,
-                                              surface: Color(0xFF18181A),
-                                              onSurface: Colors.white,
-                                            ),
-                                            dialogBackgroundColor:
-                                                const Color(0xFF18181A),
-                                            timePickerTheme:
-                                                const TimePickerThemeData(
-                                              backgroundColor:
-                                                  Color(0xFF18181A),
-                                              hourMinuteColor: _kSignatureGreen,
-                                              hourMinuteTextColor: Colors.white,
-                                              dialHandColor: _kSignatureGreen,
-                                              dialBackgroundColor:
-                                                  Color(0xFF18181A),
-                                              entryModeIconColor:
-                                                  _kSignatureGreen,
-                                              shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.all(
-                                                          Radius.circular(24))),
-                                              helpTextStyle: TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.bold),
-                                              dayPeriodTextColor: Colors.white,
-                                              dayPeriodColor: _kSignatureGreen,
-                                            ),
-                                          ),
-                                          child: Localizations.override(
-                                            context: context,
-                                            locale: const Locale('ko'),
-                                            delegates: [
-                                              ...GlobalMaterialLocalizations
-                                                  .delegates,
-                                            ],
-                                            child: Builder(
-                                              builder: (context) {
-                                                return MediaQuery(
-                                                  data: MediaQuery.of(context)
-                                                      .copyWith(
-                                                          alwaysUse24HourFormat:
-                                                              false),
-                                                  child: child!,
-                                                );
-                                              },
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    );
-                                    if (newEnd == null) return;
-                                    setState(() {
-                                      _operatingHours[day] = TimeRange(
-                                        startHour: newStart.hour,
-                                        startMinute: newStart.minute,
-                                        endHour: newEnd.hour,
-                                        endMinute: newEnd.minute,
-                                      );
-                                    });
-                                    // DB 저장
-                                    final List<OperatingHours> hoursList =
-                                        _operatingHours.entries
-                                            .where((e) => e.value != null)
-                                            .map((e) {
-                                      final range = e.value!;
-                                      final breaks = _breakTimes[e.key] ?? [];
-                                      return OperatingHours(
-                                        dayOfWeek: e.key.index,
-                                        startHour: range.startHour,
-                                        startMinute: range.startMinute,
-                                        endHour: range.endHour,
-                                        endMinute: range.endMinute,
-                                        breakTimes: breaks
-                                            .map((b) => BreakTime(
-                                                  startHour: b.startHour,
-                                                  startMinute: b.startMinute,
-                                                  endHour: b.endHour,
-                                                  endMinute: b.endMinute,
-                                                ))
-                                            .toList(),
-                                      );
-                                    }).toList();
-                                    await DataManager.instance
-                                        .saveOperatingHours(hoursList);
-                                    final hours = await DataManager.instance
-                                        .getOperatingHours();
-                                    setState(() {
-                                      for (var d in DayOfWeek.values) {
-                                        _operatingHours[d] = null;
-                                        _breakTimes[d] = [];
-                                      }
-                                      for (var hour in hours) {
-                                        final d =
-                                            DayOfWeek.values[hour.dayOfWeek];
-                                        _operatingHours[d] = TimeRange(
-                                          startHour: hour.startHour,
-                                          startMinute: hour.startMinute,
-                                          endHour: hour.endHour,
-                                          endMinute: hour.endMinute,
-                                        );
-                                        _breakTimes[d] = hour.breakTimes
-                                            .map((breakTime) => TimeRange(
-                                                  startHour:
-                                                      breakTime.startHour,
-                                                  startMinute:
-                                                      breakTime.startMinute,
-                                                  endHour: breakTime.endHour,
-                                                  endMinute:
-                                                      breakTime.endMinute,
-                                                ))
-                                            .toList();
-                                      }
-                                    });
-                                    return;
-                                  } else if (selected == 'delete') {
-                                    setState(() {
-                                      _operatingHours[day] = null;
-                                      _breakTimes[day]?.clear();
-                                    });
-                                  }
-                                },
-                                child: AnimatedContainer(
-                                  duration: Duration(milliseconds: 150),
-                                  width: blockWidth,
-                                  height: 60,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF18181A),
-                                    borderRadius: BorderRadius.circular(8),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.white.withOpacity(0.07),
-                                        blurRadius: 0,
-                                        spreadRadius: 0,
-                                        offset: Offset(0, 0),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Center(
-                                    child: Padding(
-                                      padding:
-                                          const EdgeInsets.fromLTRB(4, 6, 4, 9),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            _formatTimeOfDay(TimeOfDay(
-                                                hour: _operatingHours[day]!
-                                                    .startHour,
-                                                minute: _operatingHours[day]!
-                                                    .startMinute)),
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                              height: 1.05,
-                                            ),
-                                            maxLines: 1,
-                                            textAlign: TextAlign.center,
-                                          ),
-                                          const Text(
-                                            '-',
-                                            style: TextStyle(
-                                              color: Colors.white54,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w700,
-                                              height: 1.0,
-                                            ),
-                                            maxLines: 1,
-                                            textAlign: TextAlign.center,
-                                          ),
-                                          Text(
-                                            _formatTimeOfDay(TimeOfDay(
-                                                hour: _operatingHours[day]!
-                                                    .endHour,
-                                                minute: _operatingHours[day]!
-                                                    .endMinute)),
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                              height: 1.05,
-                                            ),
-                                            maxLines: 1,
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            )
-                          : Container(
-                              width: blockWidth,
-                              height: 60,
-                              margin: const EdgeInsets.only(bottom: 0),
-                              padding: EdgeInsets.zero,
-                              child: Center(
-                                child: TextButton(
-                                  onPressed: () =>
-                                      _selectOperatingHours(context, day),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: _kSignatureGreen,
-                                    textStyle: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w500),
-                                    padding: EdgeInsets.zero,
-                                  ),
-                                  child: const Text('휴무'),
-                                ),
-                              ),
-                            ),
-                      // 운영시간 카드와 휴식시간 카드 사이 여백
-                      if ((_breakTimes[day]?.isNotEmpty ?? false) &&
-                          hasOperatingHours)
-                        const SizedBox(height: 6),
-                      // 휴식시간 카드들
-                      ...((_breakTimes[day]?.asMap().entries ?? [])
-                          .map((entry) {
-                        final breakIndex = entry.key;
-                        final breakTime = entry.value;
-                        final breakKey = 'br${dayIndex}_$breakIndex';
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 1),
+                }
+                // 30분 전 시간 계산
+                TimeOfDay? latestStart;
+                if (latestEnd != null) {
+                  int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
+                  int startMinutes = endMinutes - 30;
+                  latestStart = TimeOfDay(
+                      hour: startMinutes ~/ 60, minute: startMinutes % 60);
+                }
+                final range = _operatingHours[day]!;
+                if (latestStart != null &&
+                    latestEnd != null &&
+                    range.startHour == latestStart.hour &&
+                    range.startMinute == latestStart.minute &&
+                    range.endHour == latestEnd.hour &&
+                    range.endMinute == latestEnd.minute) {
+                  isLastThirty = true;
+                }
+              }
+              print(
+                  '[DEBUG][UI] 렌더링 day=${day.name} index=$dayIndex hasOperatingHours=$hasOperatingHours isLastThirty=$isLastThirty range=${_operatingHours[day]}');
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 운영시간 카드
+                  hasOperatingHours && !isLastThirty
+                      ? MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          onEnter: (_) => setState(
+                              () => _hoveredOperatingHourCards.add(dayIndex)),
+                          onExit: (_) => setState(() =>
+                              _hoveredOperatingHourCards.remove(dayIndex)),
                           child: GestureDetector(
                             onTapDown: (details) async {
                               final selected = await showMenu<String>(
@@ -3027,15 +2687,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     child: const Text('수정',
                                         style: TextStyle(
                                             color: Colors.white,
-                                            fontSize: 12)), // 기존 11 → 12
-                                    height: 28,
+                                            fontSize: 13)), // 기존 12 → 13
+                                    height: 32,
                                   ),
                                   PopupMenuItem(
                                     value: 'delete',
                                     child: const Text('삭제',
                                         style: TextStyle(
-                                            color: Colors.white, fontSize: 12)),
-                                    height: 28,
+                                            color: Colors.white, fontSize: 13)),
+                                    height: 32,
                                   ),
                                 ],
                                 color: const Color(0xFF1F1F1F),
@@ -3044,13 +2704,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                               );
                               if (selected == 'edit') {
-                                // 운영시간 등록과 동일한 스타일의 showTimePicker 2개 호출
+                                // 운영시간 수정 다이얼로그 연결
+                                final currentRange = _operatingHours[day]!;
                                 final TimeOfDay? newStart =
                                     await showTimePicker(
                                   context: context,
                                   initialTime: TimeOfDay(
-                                      hour: breakTime.startHour,
-                                      minute: breakTime.startMinute),
+                                      hour: currentRange.startHour,
+                                      minute: currentRange.startMinute),
                                   builder:
                                       (BuildContext context, Widget? child) {
                                     return Theme(
@@ -3068,8 +2729,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           surface: Color(0xFF18181A),
                                           onSurface: Colors.white,
                                         ),
-                                        dialogBackgroundColor:
-                                            const Color(0xFF18181A),
+                                        dialogBackgroundColor: kDlgBg,
                                         timePickerTheme:
                                             const TimePickerThemeData(
                                           backgroundColor: Color(0xFF18181A),
@@ -3115,8 +2775,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 final TimeOfDay? newEnd = await showTimePicker(
                                   context: context,
                                   initialTime: TimeOfDay(
-                                      hour: breakTime.endHour,
-                                      minute: breakTime.endMinute),
+                                      hour: currentRange.endHour,
+                                      minute: currentRange.endMinute),
                                   builder:
                                       (BuildContext context, Widget? child) {
                                     return Theme(
@@ -3134,8 +2794,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           surface: Color(0xFF18181A),
                                           onSurface: Colors.white,
                                         ),
-                                        dialogBackgroundColor:
-                                            const Color(0xFF18181A),
+                                        dialogBackgroundColor: kDlgBg,
                                         timePickerTheme:
                                             const TimePickerThemeData(
                                           backgroundColor: Color(0xFF18181A),
@@ -3179,17 +2838,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 );
                                 if (newEnd == null) return;
                                 setState(() {
-                                  final idx =
-                                      _breakTimes[day]?.indexOf(breakTime) ??
-                                          -1;
-                                  if (idx != -1) {
-                                    _breakTimes[day]![idx] = TimeRange(
-                                      startHour: newStart.hour,
-                                      startMinute: newStart.minute,
-                                      endHour: newEnd.hour,
-                                      endMinute: newEnd.minute,
-                                    );
-                                  }
+                                  _operatingHours[day] = TimeRange(
+                                    startHour: newStart.hour,
+                                    startMinute: newStart.minute,
+                                    endHour: newEnd.hour,
+                                    endMinute: newEnd.minute,
+                                  );
                                 });
                                 // DB 저장
                                 final List<OperatingHours> hoursList =
@@ -3216,47 +2870,371 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 }).toList();
                                 await DataManager.instance
                                     .saveOperatingHours(hoursList);
+                                final hours = await DataManager.instance
+                                    .getOperatingHours();
+                                setState(() {
+                                  for (var d in DayOfWeek.values) {
+                                    _operatingHours[d] = null;
+                                    _breakTimes[d] = [];
+                                  }
+                                  for (var hour in hours) {
+                                    final d = DayOfWeek.values[hour.dayOfWeek];
+                                    _operatingHours[d] = TimeRange(
+                                      startHour: hour.startHour,
+                                      startMinute: hour.startMinute,
+                                      endHour: hour.endHour,
+                                      endMinute: hour.endMinute,
+                                    );
+                                    _breakTimes[d] = hour.breakTimes
+                                        .map((breakTime) => TimeRange(
+                                              startHour: breakTime.startHour,
+                                              startMinute:
+                                                  breakTime.startMinute,
+                                              endHour: breakTime.endHour,
+                                              endMinute: breakTime.endMinute,
+                                            ))
+                                        .toList();
+                                  }
+                                });
+                                return;
                               } else if (selected == 'delete') {
                                 setState(() {
-                                  _breakTimes[day]?.remove(breakTime);
-                                  print(
-                                      '[DEBUG][휴식삭제] day=$day, _breakTimes[day]=${_breakTimes[day]?.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
+                                  _operatingHours[day] = null;
+                                  _breakTimes[day]?.clear();
                                 });
                               }
                             },
                             child: AnimatedContainer(
                               duration: Duration(milliseconds: 150),
                               width: blockWidth,
+                              height: 60,
                               decoration: BoxDecoration(
                                 color: const Color(0xFF18181A),
                                 borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: _kSignatureGreen),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.white.withOpacity(0.07),
+                                    blurRadius: 0,
+                                    spreadRadius: 0,
+                                    offset: Offset(0, 0),
+                                  ),
+                                ],
                               ),
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(4, 0, 4, 3),
-                                child: Center(
-                                  child: Text(
-                                    '${_formatTimeOfDay(TimeOfDay(hour: breakTime.startHour, minute: breakTime.startMinute))} - ${_formatTimeOfDay(TimeOfDay(hour: breakTime.endHour, minute: breakTime.endMinute))}',
-                                    style: const TextStyle(
-                                      color: _kSignatureGreen,
-                                      fontSize: 12, // 기존 11 → 12
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
+                              child: Center(
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(4, 6, 4, 9),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _formatTimeOfDay(TimeOfDay(
+                                            hour:
+                                                _operatingHours[day]!.startHour,
+                                            minute: _operatingHours[day]!
+                                                .startMinute)),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          height: 1.05,
+                                        ),
+                                        maxLines: 1,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      const Text(
+                                        '-',
+                                        style: TextStyle(
+                                          color: Colors.white54,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          height: 1.0,
+                                        ),
+                                        maxLines: 1,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      Text(
+                                        _formatTimeOfDay(TimeOfDay(
+                                            hour: _operatingHours[day]!.endHour,
+                                            minute: _operatingHours[day]!
+                                                .endMinute)),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          height: 1.05,
+                                        ),
+                                        maxLines: 1,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        );
-                      }).toList()),
-                    ],
-                  );
-                }).toList(),
-              ),
-            ],
+                        )
+                      : Container(
+                          width: blockWidth,
+                          height: 60,
+                          margin: const EdgeInsets.only(bottom: 0),
+                          padding: EdgeInsets.zero,
+                          child: Center(
+                            child: TextButton(
+                              onPressed: () =>
+                                  _selectOperatingHours(context, day),
+                              style: TextButton.styleFrom(
+                                foregroundColor: _kSignatureGreen,
+                                textStyle: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w500),
+                                padding: EdgeInsets.zero,
+                              ),
+                              child: const Text('휴무'),
+                            ),
+                          ),
+                        ),
+                  // 운영시간 카드와 휴식시간 카드 사이 여백
+                  if ((_breakTimes[day]?.isNotEmpty ?? false) &&
+                      hasOperatingHours)
+                    const SizedBox(height: 6),
+                  // 휴식시간 카드들
+                  ...((_breakTimes[day]?.asMap().entries ?? []).map((entry) {
+                    final breakIndex = entry.key;
+                    final breakTime = entry.value;
+                    final breakKey = 'br${dayIndex}_$breakIndex';
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 1),
+                      child: GestureDetector(
+                        onTapDown: (details) async {
+                          final selected = await showMenu<String>(
+                            context: context,
+                            position: RelativeRect.fromLTRB(
+                              details.globalPosition.dx,
+                              details.globalPosition.dy,
+                              details.globalPosition.dx,
+                              details.globalPosition.dy,
+                            ),
+                            items: [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: const Text('수정',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12)), // 기존 11 → 12
+                                height: 28,
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: const Text('삭제',
+                                    style: TextStyle(
+                                        color: Colors.white, fontSize: 12)),
+                                height: 28,
+                              ),
+                            ],
+                            color: const Color(0xFF1F1F1F),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          );
+                          if (selected == 'edit') {
+                            // 운영시간 등록과 동일한 스타일의 showTimePicker 2개 호출
+                            final TimeOfDay? newStart = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay(
+                                  hour: breakTime.startHour,
+                                  minute: breakTime.startMinute),
+                              builder: (BuildContext context, Widget? child) {
+                                return Theme(
+                                  data: Theme.of(context).copyWith(
+                                    colorScheme: const ColorScheme(
+                                      brightness: Brightness.dark,
+                                      primary: _kSignatureGreen,
+                                      onPrimary: Colors.white,
+                                      secondary: _kSignatureGreen,
+                                      onSecondary: Colors.white,
+                                      error: Color(0xFFB00020),
+                                      onError: Colors.white,
+                                      background: Color(0xFF18181A),
+                                      onBackground: Colors.white,
+                                      surface: Color(0xFF18181A),
+                                      onSurface: Colors.white,
+                                    ),
+                                    dialogBackgroundColor: kDlgBg,
+                                    timePickerTheme: const TimePickerThemeData(
+                                      backgroundColor: Color(0xFF18181A),
+                                      hourMinuteColor: _kSignatureGreen,
+                                      hourMinuteTextColor: Colors.white,
+                                      dialHandColor: _kSignatureGreen,
+                                      dialBackgroundColor: Color(0xFF18181A),
+                                      entryModeIconColor: _kSignatureGreen,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.all(
+                                              Radius.circular(24))),
+                                      helpTextStyle: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold),
+                                      dayPeriodTextColor: Colors.white,
+                                      dayPeriodColor: _kSignatureGreen,
+                                    ),
+                                  ),
+                                  child: Localizations.override(
+                                    context: context,
+                                    locale: const Locale('ko'),
+                                    delegates: [
+                                      ...GlobalMaterialLocalizations.delegates,
+                                    ],
+                                    child: Builder(
+                                      builder: (context) {
+                                        return MediaQuery(
+                                          data: MediaQuery.of(context).copyWith(
+                                              alwaysUse24HourFormat: false),
+                                          child: child!,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                            if (newStart == null) return;
+                            final TimeOfDay? newEnd = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay(
+                                  hour: breakTime.endHour,
+                                  minute: breakTime.endMinute),
+                              builder: (BuildContext context, Widget? child) {
+                                return Theme(
+                                  data: Theme.of(context).copyWith(
+                                    colorScheme: const ColorScheme(
+                                      brightness: Brightness.dark,
+                                      primary: _kSignatureGreen,
+                                      onPrimary: Colors.white,
+                                      secondary: _kSignatureGreen,
+                                      onSecondary: Colors.white,
+                                      error: Color(0xFFB00020),
+                                      onError: Colors.white,
+                                      background: Color(0xFF18181A),
+                                      onBackground: Colors.white,
+                                      surface: Color(0xFF18181A),
+                                      onSurface: Colors.white,
+                                    ),
+                                    dialogBackgroundColor: kDlgBg,
+                                    timePickerTheme: const TimePickerThemeData(
+                                      backgroundColor: Color(0xFF18181A),
+                                      hourMinuteColor: _kSignatureGreen,
+                                      hourMinuteTextColor: Colors.white,
+                                      dialHandColor: _kSignatureGreen,
+                                      dialBackgroundColor: Color(0xFF18181A),
+                                      entryModeIconColor: _kSignatureGreen,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.all(
+                                              Radius.circular(24))),
+                                      helpTextStyle: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold),
+                                      dayPeriodTextColor: Colors.white,
+                                      dayPeriodColor: _kSignatureGreen,
+                                    ),
+                                  ),
+                                  child: Localizations.override(
+                                    context: context,
+                                    locale: const Locale('ko'),
+                                    delegates: [
+                                      ...GlobalMaterialLocalizations.delegates,
+                                    ],
+                                    child: Builder(
+                                      builder: (context) {
+                                        return MediaQuery(
+                                          data: MediaQuery.of(context).copyWith(
+                                              alwaysUse24HourFormat: false),
+                                          child: child!,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                            if (newEnd == null) return;
+                            setState(() {
+                              final idx =
+                                  _breakTimes[day]?.indexOf(breakTime) ?? -1;
+                              if (idx != -1) {
+                                _breakTimes[day]![idx] = TimeRange(
+                                  startHour: newStart.hour,
+                                  startMinute: newStart.minute,
+                                  endHour: newEnd.hour,
+                                  endMinute: newEnd.minute,
+                                );
+                              }
+                            });
+                            // DB 저장
+                            final List<OperatingHours> hoursList =
+                                _operatingHours.entries
+                                    .where((e) => e.value != null)
+                                    .map((e) {
+                              final range = e.value!;
+                              final breaks = _breakTimes[e.key] ?? [];
+                              return OperatingHours(
+                                dayOfWeek: e.key.index,
+                                startHour: range.startHour,
+                                startMinute: range.startMinute,
+                                endHour: range.endHour,
+                                endMinute: range.endMinute,
+                                breakTimes: breaks
+                                    .map((b) => BreakTime(
+                                          startHour: b.startHour,
+                                          startMinute: b.startMinute,
+                                          endHour: b.endHour,
+                                          endMinute: b.endMinute,
+                                        ))
+                                    .toList(),
+                              );
+                            }).toList();
+                            await DataManager.instance
+                                .saveOperatingHours(hoursList);
+                          } else if (selected == 'delete') {
+                            setState(() {
+                              _breakTimes[day]?.remove(breakTime);
+                              print(
+                                  '[DEBUG][휴식삭제] day=$day, _breakTimes[day]=${_breakTimes[day]?.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
+                            });
+                          }
+                        },
+                        child: AnimatedContainer(
+                          duration: Duration(milliseconds: 150),
+                          width: blockWidth,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF18181A),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: _kSignatureGreen),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 0, 4, 3),
+                            child: Center(
+                              child: Text(
+                                '${_formatTimeOfDay(TimeOfDay(hour: breakTime.startHour, minute: breakTime.startMinute))} - ${_formatTimeOfDay(TimeOfDay(hour: breakTime.endHour, minute: breakTime.endMinute))}',
+                                style: const TextStyle(
+                                  color: _kSignatureGreen,
+                                  fontSize: 12, // 기존 11 → 12
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList()),
+                ],
+              );
+            }).toList(),
           ),
+        ],
+      ),
     );
 
     if (isPreview) {
@@ -3319,7 +3297,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF18181A),
+          backgroundColor: kDlgBg,
           title: const Text('요일 선택',
               style: TextStyle(
                   color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
@@ -3380,7 +3358,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               surface: Color(0xFF18181A),
               onSurface: Colors.white,
             ),
-            dialogBackgroundColor: const Color(0xFF18181A),
+            dialogBackgroundColor: kDlgBg,
             timePickerTheme: const TimePickerThemeData(
               backgroundColor: Color(0xFF18181A),
               hourMinuteColor: _kSignatureGreen,
@@ -3435,7 +3413,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 surface: Color(0xFF18181A),
                 onSurface: Colors.white,
               ),
-              dialogBackgroundColor: const Color(0xFF18181A),
+              dialogBackgroundColor: kDlgBg,
               timePickerTheme: const TimePickerThemeData(
                 backgroundColor: Color(0xFF18181A),
                 hourMinuteColor: _kSignatureGreen,
@@ -3509,7 +3487,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   PreviewAcademyPanelStyle? _previewAcademyPanelStyle(BuildContext context) {
-    if (!widget.previewUseFabStyleTabBar) return null;
+    if (!_usePreviewAcademyUi && !widget.previewUseFabStyleTabBar) return null;
     return FabTabBarTokens.previewAcademyPanelStyleFor(
       Theme.of(context).brightness,
     );
@@ -3564,7 +3542,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(
-            horizontal: FabTabBarTokens.previewAcademySectionScopePaddingHorizontal,
+            horizontal:
+                FabTabBarTokens.previewAcademySectionScopePaddingHorizontal,
           ),
           child: child,
         ),
@@ -3572,13 +3551,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _previewAcademyFieldTap(String fieldLabel) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Preview: $fieldLabel 편집 (다이얼로그 추후 구현)'),
-        duration: const Duration(seconds: 2),
-      ),
+  Future<void> _saveAcademyProfileSettings() async {
+    final academySettings = AcademySettings(
+      name: _academyNameController.text.trim(),
+      address: _academyAddressController.text.trim(),
+      slogan: _sloganController.text.trim(),
+      defaultCapacity: int.tryParse(_capacityController.text.trim()) ?? 30,
+      lessonDuration: int.tryParse(_lessonDurationController.text.trim()) ?? 50,
+      logo: _academyLogo,
+      sessionCycle: int.tryParse(_courseCountController.text.trim()) ?? 1,
+      activeExamSeasonId:
+          DataManager.instance.academySettings.activeExamSeasonId,
     );
+    DataManager.instance.paymentType = _paymentType;
+    await DataManager.instance.saveAcademySettings(academySettings);
+    await DataManager.instance.savePaymentType(_paymentType);
+  }
+
+  Future<void> _previewAcademyFieldTap(String fieldLabel) async {
+    if (fieldLabel != '기준 수강 횟수') return;
+    final style = _previewAcademyPanelStyle(context);
+    if (style == null) return;
+    final result = await PreviewAcademySingleNumberInputSheet.show(
+      context: context,
+      style: style,
+      title: '수업',
+      label: '기준 수강 횟수',
+      emptyHintText: '회',
+      initialValue: _courseCountController.text,
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _courseCountController.text = result;
+    });
+    await _saveAcademyProfileSettings();
   }
 
   Future<void> _openPreviewAcademyCapacityDialog(
@@ -3600,6 +3606,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _capacityController.text = result.capacity;
         _lessonDurationController.text = result.lessonDurationMinutes;
       });
+      await _saveAcademyProfileSettings();
     }
   }
 
@@ -3624,13 +3631,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _academyAddressController.text = result.academyAddress;
         _sloganController.text = result.slogan;
       });
+      await _saveAcademyProfileSettings();
     }
   }
 
   Future<void> _openPreviewPaymentMenu(PreviewAcademyPanelStyle style) async {
-    final box =
-        _previewPaymentMenuAnchorKey.currentContext?.findRenderObject()
-            as RenderBox?;
+    final box = _previewPaymentMenuAnchorKey.currentContext?.findRenderObject()
+        as RenderBox?;
     if (box == null) return;
 
     final pickedId = await PreviewAcademyGlassMenu.show(
@@ -3646,10 +3653,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (pickedId != null && mounted) {
       setState(() {
-        _paymentType = pickedId == 'monthly'
-            ? PaymentType.monthly
-            : PaymentType.perClass;
+        _paymentType =
+            pickedId == 'monthly' ? PaymentType.monthly : PaymentType.perClass;
       });
+      await _saveAcademyProfileSettings();
     }
   }
 
@@ -3690,10 +3697,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     )
                   : CircleAvatar(
                       radius: FabTabBarTokens.previewAcademyLogoRadius,
-                      backgroundColor:
-                          FabTabBarTokens.paletteFor(
-                            Theme.of(context).brightness,
-                          ).highlight,
+                      backgroundColor: FabTabBarTokens.paletteFor(
+                        Theme.of(context).brightness,
+                      ).highlight,
                       child: Icon(
                         Icons.school_outlined,
                         size: FabTabBarTokens.previewAcademyLogoIconSize,
@@ -3713,8 +3719,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 foregroundColor: FabTabBarTokens.previewConfirmActionColor,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
-                  vertical: FabTabBarTokens
-                      .previewAcademyChangeButtonPaddingVertical,
+                  vertical:
+                      FabTabBarTokens.previewAcademyChangeButtonPaddingVertical,
                 ),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -3873,85 +3879,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Center(
           child: ElevatedButton(
             onPressed: () async {
-                if (_operatingHours.values.where((v) => v != null).isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('하나 이상의 운영시간이 등록되어야 합니다.'),
-                      backgroundColor: _kSignatureGreen,
-                    ),
-                  );
-                  return;
-                }
-                try {
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                  final academySettings = AcademySettings(
-                    name: _academyNameController.text.trim(),
-                    address: _academyAddressController.text.trim(),
-                    slogan: _sloganController.text.trim(),
-                    defaultCapacity:
-                        int.tryParse(_capacityController.text.trim()) ?? 30,
-                    lessonDuration:
-                        int.tryParse(_lessonDurationController.text.trim()) ??
-                            50,
-                    logo: _academyLogo,
-                    sessionCycle:
-                        int.tryParse(_courseCountController.text.trim()) ?? 1,
-                    activeExamSeasonId:
-                        DataManager.instance.academySettings.activeExamSeasonId,
-                  );
-                  DataManager.instance.paymentType = _paymentType;
-                  await DataManager.instance.saveAcademySettings(academySettings);
-                  await DataManager.instance.savePaymentType(_paymentType);
-                  TimeOfDay? latestEnd;
-                  for (var v in _operatingHours.values) {
-                    if (v != null) {
-                      if (latestEnd == null ||
-                          v.endHour > latestEnd.hour ||
-                          (v.endHour == latestEnd.hour &&
-                              v.endMinute > latestEnd.minute)) {
-                        latestEnd =
-                            TimeOfDay(hour: v.endHour, minute: v.endMinute);
-                      }
+              if (_operatingHours.values.where((v) => v != null).isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('하나 이상의 운영시간이 등록되어야 합니다.'),
+                    backgroundColor: _kSignatureGreen,
+                  ),
+                );
+                return;
+              }
+              try {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                final academySettings = AcademySettings(
+                  name: _academyNameController.text.trim(),
+                  address: _academyAddressController.text.trim(),
+                  slogan: _sloganController.text.trim(),
+                  defaultCapacity:
+                      int.tryParse(_capacityController.text.trim()) ?? 30,
+                  lessonDuration:
+                      int.tryParse(_lessonDurationController.text.trim()) ?? 50,
+                  logo: _academyLogo,
+                  sessionCycle:
+                      int.tryParse(_courseCountController.text.trim()) ?? 1,
+                  activeExamSeasonId:
+                      DataManager.instance.academySettings.activeExamSeasonId,
+                );
+                DataManager.instance.paymentType = _paymentType;
+                await DataManager.instance.saveAcademySettings(academySettings);
+                await DataManager.instance.savePaymentType(_paymentType);
+                TimeOfDay? latestEnd;
+                for (var v in _operatingHours.values) {
+                  if (v != null) {
+                    if (latestEnd == null ||
+                        v.endHour > latestEnd.hour ||
+                        (v.endHour == latestEnd.hour &&
+                            v.endMinute > latestEnd.minute)) {
+                      latestEnd =
+                          TimeOfDay(hour: v.endHour, minute: v.endMinute);
                     }
                   }
-                  TimeOfDay? latestStart;
-                  if (latestEnd != null) {
-                    int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
-                    int startMinutes = endMinutes - 30;
-                    latestStart = TimeOfDay(
-                      hour: startMinutes ~/ 60,
-                      minute: startMinutes % 60,
-                    );
-                  }
-                  final List<OperatingHours> hoursList = DayOfWeek.values.map(
-                    (day) {
-                      final range = _operatingHours[day];
-                      final breaks = _breakTimes[day] ?? [];
-                      if (range != null) {
-                        return OperatingHours(
-                          dayOfWeek: day.index,
-                          startHour: range.startHour,
-                          startMinute: range.startMinute,
-                          endHour: range.endHour,
-                          endMinute: range.endMinute,
-                          breakTimes: breaks
-                              .map(
-                                (b) => BreakTime(
-                                  startHour: b.startHour,
-                                  startMinute: b.startMinute,
-                                  endHour: b.endHour,
-                                  endMinute: b.endMinute,
-                                ),
-                              )
-                              .toList(),
-                        );
-                      }
+                }
+                TimeOfDay? latestStart;
+                if (latestEnd != null) {
+                  int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
+                  int startMinutes = endMinutes - 30;
+                  latestStart = TimeOfDay(
+                    hour: startMinutes ~/ 60,
+                    minute: startMinutes % 60,
+                  );
+                }
+                final List<OperatingHours> hoursList = DayOfWeek.values.map(
+                  (day) {
+                    final range = _operatingHours[day];
+                    final breaks = _breakTimes[day] ?? [];
+                    if (range != null) {
                       return OperatingHours(
                         dayOfWeek: day.index,
-                        startHour: latestStart?.hour ?? 9,
-                        startMinute: latestStart?.minute ?? 0,
-                        endHour: latestEnd?.hour ?? 18,
-                        endMinute: latestEnd?.minute ?? 0,
+                        startHour: range.startHour,
+                        startMinute: range.startMinute,
+                        endHour: range.endHour,
+                        endMinute: range.endMinute,
                         breakTimes: breaks
                             .map(
                               (b) => BreakTime(
@@ -3963,49 +3950,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             )
                             .toList(),
                       );
-                    },
-                  ).toList();
-                  await DataManager.instance.saveOperatingHours(hoursList);
-                  await DataManager.instance.loadAcademySettings();
-                  setState(() {
-                    final logo = DataManager.instance.academySettings.logo;
-                    _academyLogo =
-                        (logo is Uint8List && logo.isNotEmpty) ? logo : null;
-                  });
-                  _onShowSnackBar();
-                  _snackBarController =
-                      ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('저장되었습니다!')),
-                  );
-                  _snackBarController?.closed.then((_) => _onHideSnackBar());
-                } catch (e) {
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                  _onShowSnackBar();
-                  _snackBarController =
-                      ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('오류가 발생했습니다.')),
-                  );
-                  _snackBarController?.closed.then((_) => _onHideSnackBar());
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: widget.previewUseFabStyleTabBar
-                    ? FabTabBarTokens.previewConfirmActionColor
-                    : _kSignatureGreen,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
-              ),
-              child: const Text(
-                '저장',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
+                    }
+                    return OperatingHours(
+                      dayOfWeek: day.index,
+                      startHour: latestStart?.hour ?? 9,
+                      startMinute: latestStart?.minute ?? 0,
+                      endHour: latestEnd?.hour ?? 18,
+                      endMinute: latestEnd?.minute ?? 0,
+                      breakTimes: breaks
+                          .map(
+                            (b) => BreakTime(
+                              startHour: b.startHour,
+                              startMinute: b.startMinute,
+                              endHour: b.endHour,
+                              endMinute: b.endMinute,
+                            ),
+                          )
+                          .toList(),
+                    );
+                  },
+                ).toList();
+                await DataManager.instance.saveOperatingHours(hoursList);
+                await DataManager.instance.loadAcademySettings();
+                setState(() {
+                  final logo = DataManager.instance.academySettings.logo;
+                  _academyLogo =
+                      (logo is Uint8List && logo.isNotEmpty) ? logo : null;
+                });
+                _onShowSnackBar();
+                _snackBarController =
+                    ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('저장되었습니다!')),
+                );
+                _snackBarController?.closed.then((_) => _onHideSnackBar());
+              } catch (e) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                _onShowSnackBar();
+                _snackBarController =
+                    ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('오류가 발생했습니다.')),
+                );
+                _snackBarController?.closed.then((_) => _onHideSnackBar());
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: widget.previewUseFabStyleTabBar
+                  ? FabTabBarTokens.previewConfirmActionColor
+                  : _kSignatureGreen,
+              padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
+            ),
+            child: const Text(
+              '저장',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
-        ],
+        ),
+      ],
     );
 
     final actionButtons = <Widget>[
@@ -4027,7 +4031,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildAcademySettings() {
-    if (widget.previewUseFabStyleTabBar) {
+    if (_usePreviewAcademyUi) {
       return _buildAcademySettingsPreview();
     }
     return _buildAcademySettingsLegacy();
@@ -4085,8 +4089,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           style: TextStyle(
                             color: academyStyle?.inputText ?? Colors.white,
                           ),
-                          decoration:
-                              _academyFieldDecoration(context, '학원명'),
+                          decoration: _academyFieldDecoration(context, '학원명'),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -4098,8 +4101,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           style: TextStyle(
                             color: academyStyle?.inputText ?? Colors.white,
                           ),
-                          decoration:
-                              _academyFieldDecoration(context, '학원 주소'),
+                          decoration: _academyFieldDecoration(context, '학원 주소'),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -4111,8 +4113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           style: TextStyle(
                             color: academyStyle?.inputText ?? Colors.white,
                           ),
-                          decoration:
-                              _academyFieldDecoration(context, '슬로건'),
+                          decoration: _academyFieldDecoration(context, '슬로건'),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -4125,7 +4126,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               child: TextFormField(
                                 controller: _capacityController,
                                 style: TextStyle(
-                                  color: academyStyle?.inputText ?? Colors.white,
+                                  color:
+                                      academyStyle?.inputText ?? Colors.white,
                                 ),
                                 keyboardType: TextInputType.number,
                                 decoration: _academyFieldDecoration(
@@ -4139,7 +4141,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               child: TextFormField(
                                 controller: _lessonDurationController,
                                 style: TextStyle(
-                                  color: academyStyle?.inputText ?? Colors.white,
+                                  color:
+                                      academyStyle?.inputText ?? Colors.white,
                                 ),
                                 keyboardType: TextInputType.number,
                                 decoration: _academyFieldDecoration(
@@ -4209,7 +4212,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               child: TextFormField(
                                 controller: _courseCountController,
                                 style: TextStyle(
-                                  color: academyStyle?.inputText ?? Colors.white,
+                                  color:
+                                      academyStyle?.inputText ?? Colors.white,
                                 ),
                                 keyboardType: TextInputType.number,
                                 decoration: _academyFieldDecoration(
@@ -4307,18 +4311,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final content = Column(
       children: [
-        if (!widget.previewUseFabStyleTabBar) ...[
-          const SizedBox(height: 0),
-          const SizedBox(height: 8),
-          Center(
-            child: PillTabSelector(
-              selectedIndex: _customTabIndex,
-              tabs: const ['학원', '선생님', '일반'],
-              onTabSelected: selectTab,
-            ),
-          ),
-          const SizedBox(height: 24),
-        ],
         Expanded(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 200),
@@ -4360,47 +4352,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       backgroundColor: context.yggSurfaceBase,
-      body: widget.previewUseFabStyleTabBar
-          ? Stack(
-              children: [
-                Positioned.fill(child: content),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: FabTabBarTokens.fabBarBottomInset,
-                  child: Center(
-                    child: FabStyleTabBar(
-                      selectedIndex: _customTabIndex,
-                      tabs: const ['학원', '선생님', '일반'],
-                      onTabSelected: selectTab,
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: FabTabBarTokens.fabBarRightInset,
-                  bottom: FabTabBarTokens.fabBarBottomInset,
-                  child: FabStyleActionButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Preview: FAB 메뉴는 목업 스타일만 적용됩니다.',
-                          ),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            )
-          : content,
-      floatingActionButton: widget.previewUseFabStyleTabBar
-          ? null
-          : const MainFabAlternative(),
+      body: Stack(
+        children: [
+          Positioned.fill(child: content),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: FabTabBarTokens.fabBarBottomInset,
+            child: Center(
+              child: FabStyleTabBar(
+                selectedIndex: _customTabIndex,
+                tabs: const ['학원', '선생님', '일반'],
+                onTabSelected: selectTab,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
-  void _pickLogoImage() async {
+
+  Future<void> _pickLogoImage() async {
     if (kIsWeb) {
       // 웹: FileUploadInputElement 사용 (주석 참고)
     } else {
@@ -4412,6 +4384,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           print(
               '[DEBUG] _pickLogoImage: _academyLogo type=${_academyLogo.runtimeType}, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
         });
+        await _saveAcademyProfileSettings();
       } else {
         print('[DEBUG] _pickLogoImage: result is null or bytes is null');
       }

@@ -5039,6 +5039,167 @@ async function batchRenderThumbnails(res, req) {
   }
 }
 
+async function renderCustomPreviewThumbnail(res, req) {
+  console.log('[pb-api] POST /pb/preview/custom-thumbnail');
+  let body;
+  try { body = await readJson(req); } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' }); return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const rawQuestion = body?.question && typeof body.question === 'object'
+    ? body.question
+    : null;
+  if (!isUuid(academyId) || !rawQuestion) {
+    sendJson(res, 400, { ok: false, error: 'academyId(uuid) and question required' });
+    return;
+  }
+
+  const qid = String(rawQuestion.id || rawQuestion.question_uid || randomUUID()).trim();
+  const question = {
+    id: qid,
+    question_uid: String(rawQuestion.question_uid || qid).trim(),
+    academy_id: academyId,
+    document_id: String(rawQuestion.document_id || '').trim(),
+    question_type: String(rawQuestion.question_type || '주관식').trim() || '주관식',
+    stem: String(rawQuestion.stem || '').trim(),
+    choices: Array.isArray(rawQuestion.choices) ? rawQuestion.choices : [],
+    allow_objective: rawQuestion.allow_objective === true,
+    allow_subjective: rawQuestion.allow_subjective !== false,
+    objective_choices: Array.isArray(rawQuestion.objective_choices)
+      ? rawQuestion.objective_choices
+      : [],
+    objective_answer_key: String(rawQuestion.objective_answer_key || ''),
+    subjective_answer: String(rawQuestion.subjective_answer || ''),
+    objective_generated: rawQuestion.objective_generated === true,
+    figure_refs: Array.isArray(rawQuestion.figure_refs) ? rawQuestion.figure_refs : [],
+    equations: Array.isArray(rawQuestion.equations) ? rawQuestion.equations : [],
+    confidence: Number(rawQuestion.confidence || 0.9),
+    flags: Array.isArray(rawQuestion.flags) ? rawQuestion.flags : [],
+    reviewer_notes: '',
+    source_page: Number(rawQuestion.source_page || 1),
+    source_order: Number(rawQuestion.source_order || 1),
+    meta: rawQuestion.meta && typeof rawQuestion.meta === 'object'
+      ? rawQuestion.meta
+      : {},
+    question_number: String(rawQuestion.question_number || '').trim(),
+    mode: 'subjective',
+    questionMode: 'subjective',
+  };
+  if (!question.stem) {
+    sendJson(res, 400, { ok: false, error: 'question.stem required' });
+    return;
+  }
+
+  const PREVIEW_PAGE_WIDTH_MM = 115;
+  const PREVIEW_PAGE_HEIGHT_MM = 800;
+  const previewGeometry = `paperwidth=${PREVIEW_PAGE_WIDTH_MM}mm,paperheight=${PREVIEW_PAGE_HEIGHT_MM}mm,left=5mm,right=5mm,top=5mm,bottom=5mm`;
+  const batchFont = resolveBatchPreviewFont();
+
+  try {
+    const rendered = await renderPdfWithXeLatex({
+      questions: [question],
+      renderConfig: {
+        hidePreviewHeader: true,
+        hideQuestionNumber: true,
+        mathEngine: 'xelatex',
+        disableIndependentSetGrouping: true,
+        includeCoverPage: false,
+        includeAcademyLogo: false,
+        includeAnswerSheet: false,
+        includeExplanation: false,
+        includeQuestionScore: false,
+        layoutColumns: 1,
+        maxQuestionsPerPage: 1,
+        geometryOverride: previewGeometry,
+      },
+      profile: 'naesin',
+      paper: 'A4',
+      modeByQuestionId: { [question.question_uid]: 'subjective' },
+      questionMode: 'subjective',
+      layoutColumns: 1,
+      maxQuestionsPerPage: 1,
+      renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
+      fontFamilyRequested: batchFont.family,
+      fontFamilyResolved: batchFont.family,
+      fontRegularPath: batchFont.path,
+      fontBoldPath: '',
+      fontSize: 11,
+      supabaseClient: supa,
+    });
+
+    const tmpDir = path.join(os.tmpdir(), `pb-custom-thumb-${randomUUID()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpPdf = path.join(tmpDir, 'doc.pdf');
+    fs.writeFileSync(tmpPdf, rendered.bytes);
+    try {
+      const dpi = Math.max(150, Math.round((BATCH_THUMB_WIDTH_PX / PREVIEW_PAGE_WIDTH_MM) * 25.4));
+      const pngBase = path.join(tmpDir, 'page');
+      await execFileAsync(
+        'pdftoppm',
+        ['-png', '-r', String(dpi), tmpPdf, pngBase],
+        { timeout: 120_000, windowsHide: true },
+      );
+      const singlePath = fs.existsSync(`${pngBase}-1.png`)
+        ? `${pngBase}-1.png`
+        : `${pngBase}.png`;
+      if (!fs.existsSync(singlePath)) {
+        sendJson(res, 500, { ok: false, error: 'render_failed: thumbnail_not_found' });
+        return;
+      }
+      const raw = fs.readFileSync(singlePath);
+      const meta = await sharp(raw).metadata();
+      const origW = meta.width || 1;
+      const origH = meta.height || 1;
+      let contentBottom = origH;
+      try {
+        const trimResult = await sharp(raw)
+          .trim({ background: { r: 255, g: 255, b: 255, alpha: 1 }, threshold: 10 })
+          .toBuffer({ resolveWithObject: true });
+        const tTop = Number(trimResult.info.trimOffsetTop) || 0;
+        const tH = Number(trimResult.info.height) || origH;
+        const padding = Math.max(100, Math.round(origH * 0.03));
+        contentBottom = Math.min(origH, tTop + tH + padding);
+      } catch (_) { /* keep full height */ }
+      const cropH = Math.max(Math.max(80, Math.round(origH * 0.05)), contentBottom);
+      const cropped = await sharp(raw)
+        .extract({ left: 0, top: 0, width: origW, height: cropH })
+        .resize({ width: BATCH_THUMB_WIDTH_PX })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+      const sourceHash = createHash('sha256')
+        .update(JSON.stringify({ academyId, question }))
+        .digest('hex')
+        .slice(0, 20);
+      const storagePath =
+        `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/custom/${qid}_${sourceHash}.png`;
+      const { error: upErr } = await supa.storage
+        .from(BATCH_THUMB_BUCKET)
+        .upload(storagePath, cropped, { contentType: 'image/png', upsert: true });
+      if (upErr) {
+        sendJson(res, 500, { ok: false, error: `upload_failed:${upErr.message}` });
+        return;
+      }
+      const { data: signedData } = await supa.storage
+        .from(BATCH_THUMB_BUCKET)
+        .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC);
+      sendJson(res, 200, {
+        ok: true,
+        thumbnail: {
+          url: signedData?.signedUrl || '',
+          width: BATCH_THUMB_WIDTH_PX,
+          storagePath,
+        },
+        pageCount: rendered.pageCount || 0,
+      });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: `render_failed: ${compact(err?.message || err)}` });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Textbook PDF dual-track endpoints
 // ---------------------------------------------------------------------------
@@ -7609,6 +7770,11 @@ async function handler(req, res) {
 
     if (method === 'POST' && url.pathname === '/pb/preview/batch-render') {
       await batchRenderThumbnails(res, req);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/custom-thumbnail') {
+      await renderCustomPreviewThumbnail(res, req);
       return;
     }
 

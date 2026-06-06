@@ -49,6 +49,9 @@ class Win32Window {
   // window properties. Returns nullptr if the window has been destroyed.
   HWND GetHandle();
 
+  // Sets the Windows caption color to match the Flutter app surface.
+  void SetCaptionColor(COLORREF caption_color, bool dark_mode);
+
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
 

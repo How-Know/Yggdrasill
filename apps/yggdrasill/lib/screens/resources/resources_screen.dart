@@ -28,6 +28,7 @@ import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_viewer_preference.dart';
+import '../../theme/ygg_semantic_colors.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -2375,7 +2376,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     // ignore: avoid_print
     print('[RES] ResourcesScreen build');
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Stack(
         children: [
           Column(

@@ -14,6 +14,7 @@ class FabTabBarTokens {
   static const double previewAcademyBaseFontSize = 16;
 
   static const double fabBarHeight = 56;
+
   /// [MainFabAlternative] + 버튼과 동일한 하단 여백
   /// (Scaffold FAB margin 16 + FAB 내부 `bottom` padding 16)
   static const double fabBarBottomInset = 32;
@@ -119,6 +120,7 @@ class FabTabBarTokens {
 
   /// Preview — iOS형 입력 시트 (학원명 등)
   static const double previewAcademyInputSheetRadius = 34;
+
   /// 600 × 1.3
   static const double previewAcademyInputSheetMaxWidth = 780;
   static const double previewAcademyInputSheetMinHeight = 320;
@@ -148,7 +150,8 @@ class FabTabBarTokens {
   static const Color previewAcademyInputSheetSurfaceDark = Color(0xFF1C1C1E);
 
   /// 입력 시트 전용 — 입력 필드 그룹 배경 (Dark)
-  static const Color previewAcademyInputSheetFieldSurfaceDark = Color(0xFF2C2C2E);
+  static const Color previewAcademyInputSheetFieldSurfaceDark =
+      Color(0xFF2C2C2E);
 
   /// 입력 시트 헤더 제목 글자 크기
   static const double previewAcademyInputSheetTitleFontSize = 20;
@@ -183,7 +186,7 @@ class FabTabBarTokens {
   /// 학원 탭 카드 라벨 왼쪽 = scope(16) + 카드 행(24). 시트 inner(16) + 필드(24)와 동일.
   static const double previewAcademyInputSheetFieldInsetFromSheet =
       previewAcademySectionScopePaddingHorizontal +
-      previewAcademyGroupedRowPaddingHorizontal;
+          previewAcademyGroupedRowPaddingHorizontal;
 
   /// Preview — 학원 로고 (지름 180)
   static const double previewAcademyLogoDiameter = 180;
@@ -219,7 +222,8 @@ class FabTabBarTokens {
   }
 
   /// Preview — 학원 탭 최상단 「학원정보」 전용 (32px).
-  static TextStyle previewAcademyMainTitleStyle(PreviewAcademyPanelStyle style) {
+  static TextStyle previewAcademyMainTitleStyle(
+      PreviewAcademyPanelStyle style) {
     return TextStyle(
       fontFamily: previewHeadlineFontFamily,
       fontWeight: previewHeadlineFontWeight,
@@ -496,8 +500,10 @@ class PreviewAcademyInfoRow {
   final Widget? trailing;
   final bool showChevron;
   final bool suppressInkHighlight;
+
   /// `trailing`이 chevron(20px)과 같은 열에 올 때 값 텍스트 오른쪽을 맞춤.
   final bool trailingAlignsWithChevron;
+
   /// 값이 있어도 [style.hint] 색으로 표시 (미입력·월결제 등).
   final bool valueUsesHintStyle;
   final VoidCallback? onTap;
@@ -540,7 +546,8 @@ class PreviewAcademyTimePill extends StatelessWidget {
     return '$period $hour:$minute';
   }
 
-  static const BorderRadius _pillRadius = BorderRadius.all(Radius.circular(999));
+  static const BorderRadius _pillRadius =
+      BorderRadius.all(Radius.circular(999));
 
   @override
   Widget build(BuildContext context) {
@@ -764,7 +771,8 @@ class _PreviewAcademyBreakTimesSheetState
         Divider(
           height: 1,
           thickness: 1,
-          indent: FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+          indent:
+              FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
           endIndent:
               FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
           color: widget.style.divider,
@@ -830,8 +838,8 @@ class _PreviewAcademyBreakTimeListRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(
             horizontal:
                 FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
-            vertical: FabTabBarTokens
-                .previewAcademyInputSheetFieldRowPaddingVertical,
+            vertical:
+                FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -844,7 +852,8 @@ class _PreviewAcademyBreakTimeListRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(
-                width: FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
+                width:
+                    FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
               ),
               Expanded(
                 child: Align(
@@ -908,8 +917,8 @@ class _PreviewAcademyBreakTimeAddRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(
             horizontal:
                 FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
-            vertical: FabTabBarTokens
-                .previewAcademyInputSheetFieldRowPaddingVertical,
+            vertical:
+                FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
           ),
           child: Row(
             children: [
@@ -969,7 +978,8 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
               Divider(
                 height: 1,
                 thickness: 1,
-                indent: FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+                indent:
+                    FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
                 endIndent:
                     FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
                 color: style.divider,
@@ -978,7 +988,8 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
               builder: (context) {
                 final row = rows[i];
                 final valueIsEmpty = row.value.isEmpty;
-                final valueTextStyle = FabTabBarTokens.previewAcademyFieldDisplayStyle(
+                final valueTextStyle =
+                    FabTabBarTokens.previewAcademyFieldDisplayStyle(
                   style,
                   isEmpty: row.valueUsesHintStyle || valueIsEmpty,
                 );
@@ -987,9 +998,7 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
                   valueArea = row.valueWidget!;
                 } else {
                   valueArea = Text(
-                    valueIsEmpty
-                        ? (row.emptyPlaceholder ?? '미입력')
-                        : row.value,
+                    valueIsEmpty ? (row.emptyPlaceholder ?? '미입력') : row.value,
                     textAlign: TextAlign.right,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -1066,8 +1075,8 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(
                     horizontal: FabTabBarTokens
                         .previewAcademyGroupedRowPaddingHorizontal,
-                    vertical: FabTabBarTokens
-                        .previewAcademyGroupedRowPaddingVertical,
+                    vertical:
+                        FabTabBarTokens.previewAcademyGroupedRowPaddingVertical,
                   ),
                   child: Row(
                     children: [
@@ -1104,7 +1113,8 @@ class PreviewAcademyIosSwitch extends StatefulWidget {
   });
 
   @override
-  State<PreviewAcademyIosSwitch> createState() => _PreviewAcademyIosSwitchState();
+  State<PreviewAcademyIosSwitch> createState() =>
+      _PreviewAcademyIosSwitchState();
 }
 
 class _PreviewAcademyIosSwitchState extends State<PreviewAcademyIosSwitch>
@@ -1319,9 +1329,8 @@ class _PreviewAcademyGlassMenuPanelState
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(radius),
               border: Border.all(
-                color: isDark
-                    ? const Color(0x33FFFFFF)
-                    : const Color(0x40FFFFFF),
+                color:
+                    isDark ? const Color(0x33FFFFFF) : const Color(0x40FFFFFF),
                 width: 0.5,
               ),
               boxShadow: const [
@@ -1341,8 +1350,10 @@ class _PreviewAcademyGlassMenuPanelState
                   Positioned.fill(
                     child: BackdropFilter(
                       filter: ImageFilter.blur(
-                        sigmaX: FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
-                        sigmaY: FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
+                        sigmaX:
+                            FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
+                        sigmaY:
+                            FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
                       ),
                       child: const ColoredBox(color: Colors.transparent),
                     ),
@@ -1350,59 +1361,60 @@ class _PreviewAcademyGlassMenuPanelState
                   ColoredBox(
                     color: glassTint,
                     child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      for (int i = 0; i < widget.options.length; i++)
-                        MouseRegion(
-                          onEnter: (_) => setState(() => _hoveredIndex = i),
-                          onExit: (_) => setState(() => _hoveredIndex = null),
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () => widget
-                                .onOptionSelected(widget.options[i].id),
-                            child: ColoredBox(
-                              color: _hoveredIndex == i
-                                  ? hoverOverlay
-                                  : Colors.transparent,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 14,
-                                ),
-                                child: Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 28,
-                                      child: widget.options[i].id ==
-                                              widget.selectedId
-                                          ? Icon(
-                                              Icons.check,
-                                              size: FabTabBarTokens
-                                                  .previewAcademyBaseFontSize,
-                                              color: widget.style.title,
-                                            )
-                                          : null,
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (int i = 0; i < widget.options.length; i++)
+                            MouseRegion(
+                              onEnter: (_) => setState(() => _hoveredIndex = i),
+                              onExit: (_) =>
+                                  setState(() => _hoveredIndex = null),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => widget
+                                    .onOptionSelected(widget.options[i].id),
+                                child: ColoredBox(
+                                  color: _hoveredIndex == i
+                                      ? hoverOverlay
+                                      : Colors.transparent,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 14,
                                     ),
-                                    Expanded(
-                                      child: Text(
-                                        widget.options[i].label,
-                                        style: FabTabBarTokens
-                                            .previewMenuItemTextStyle(
-                                          widget.style,
+                                    child: Row(
+                                      children: [
+                                        SizedBox(
+                                          width: 28,
+                                          child: widget.options[i].id ==
+                                                  widget.selectedId
+                                              ? Icon(
+                                                  Icons.check,
+                                                  size: FabTabBarTokens
+                                                      .previewAcademyBaseFontSize,
+                                                  color: widget.style.title,
+                                                )
+                                              : null,
                                         ),
-                                      ),
+                                        Expanded(
+                                          child: Text(
+                                            widget.options[i].label,
+                                            style: FabTabBarTokens
+                                                .previewMenuItemTextStyle(
+                                              widget.style,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1503,9 +1515,8 @@ class PreviewAcademyDialogSheet extends StatelessWidget {
         : const Color(0xFFF2F2F7);
     final headerIconBg =
         isDark ? const Color(0xFF3A3A3C) : const Color(0xFFE5E5EA);
-    final subtleBorder = isDark
-        ? const Color(0x33FFFFFF)
-        : const Color(0x33000000);
+    final subtleBorder =
+        isDark ? const Color(0x33FFFFFF) : const Color(0x33000000);
 
     return Material(
       type: MaterialType.transparency,
@@ -1517,8 +1528,8 @@ class PreviewAcademyDialogSheet extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(
-              horizontal:
-                  FabTabBarTokens.previewAcademyInputSheetOuterPaddingHorizontal,
+              horizontal: FabTabBarTokens
+                  .previewAcademyInputSheetOuterPaddingHorizontal,
             ),
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -1567,11 +1578,11 @@ class PreviewAcademyDialogSheet extends StatelessWidget {
                             Align(
                               alignment: Alignment.centerLeft,
                               child: _PreviewAcademyInputSheetIconButton(
-                              backgroundColor: headerIconBg,
-                              borderColor: subtleBorder,
-                              icon: Icons.close,
-                              iconColor: style.title,
-                              onPressed: onCancel,
+                                backgroundColor: headerIconBg,
+                                borderColor: subtleBorder,
+                                icon: Icons.close,
+                                iconColor: style.title,
+                                onPressed: onCancel,
                               ),
                             ),
                             Align(
@@ -1670,7 +1681,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(
         horizontal:
             FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
-        vertical: FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
+        vertical:
+            FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -1696,8 +1708,7 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
                 isDense: true,
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.zero,
-                hintText:
-                    controller.text.trim().isEmpty ? emptyHintText : null,
+                hintText: controller.text.trim().isEmpty ? emptyHintText : null,
                 hintStyle: hintStyle,
               ),
               textInputAction: textInputAction,
@@ -1833,7 +1844,11 @@ class _PreviewAcademyFieldInputSheetState
 
   @override
   Widget build(BuildContext context) {
-    final controllers = [_nameController, _addressController, _sloganController];
+    final controllers = [
+      _nameController,
+      _addressController,
+      _sloganController
+    ];
     final focusNodes = [_nameFocusNode, _addressFocusNode, _sloganFocusNode];
     final submitActions = <VoidCallback?>[
       _addressFocusNode.requestFocus,
@@ -1854,10 +1869,10 @@ class _PreviewAcademyFieldInputSheetState
               Divider(
                 height: 1,
                 thickness: 1,
-                indent:
-                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
-                endIndent:
-                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+                indent: FabTabBarTokens
+                    .previewAcademyInputSheetFieldPaddingHorizontal,
+                endIndent: FabTabBarTokens
+                    .previewAcademyInputSheetFieldPaddingHorizontal,
                 color: widget.style.divider,
               ),
             PreviewAcademyDialogFieldRow(
@@ -2032,10 +2047,10 @@ class _PreviewAcademyCapacityInputSheetState
               Divider(
                 height: 1,
                 thickness: 1,
-                indent:
-                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
-                endIndent:
-                    FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+                indent: FabTabBarTokens
+                    .previewAcademyInputSheetFieldPaddingHorizontal,
+                endIndent: FabTabBarTokens
+                    .previewAcademyInputSheetFieldPaddingHorizontal,
                 color: widget.style.divider,
               ),
             PreviewAcademyDialogFieldRow(
@@ -2052,6 +2067,111 @@ class _PreviewAcademyCapacityInputSheetState
               onSubmitted: submitActions[i],
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Preview — 공통 입력 시트 기반 단일 숫자 입력.
+class PreviewAcademySingleNumberInputSheet extends StatefulWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+  final String label;
+  final String emptyHintText;
+  final String initialValue;
+
+  const PreviewAcademySingleNumberInputSheet({
+    super.key,
+    required this.style,
+    required this.title,
+    required this.label,
+    required this.emptyHintText,
+    required this.initialValue,
+  });
+
+  static Future<String?> show({
+    required BuildContext context,
+    required PreviewAcademyPanelStyle style,
+    required String title,
+    required String label,
+    required String emptyHintText,
+    required String initialValue,
+  }) {
+    return PreviewAcademyDialogRoute.show<String>(
+      context: context,
+      barrierLabel: title,
+      builder: (context) {
+        return PreviewAcademySingleNumberInputSheet(
+          style: style,
+          title: title,
+          label: label,
+          emptyHintText: emptyHintText,
+          initialValue: initialValue,
+        );
+      },
+    );
+  }
+
+  @override
+  State<PreviewAcademySingleNumberInputSheet> createState() =>
+      _PreviewAcademySingleNumberInputSheetState();
+}
+
+class _PreviewAcademySingleNumberInputSheetState
+    extends State<PreviewAcademySingleNumberInputSheet> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+
+  static final _digitsOnly = FilteringTextInputFormatter.digitsOnly;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+    _focusNode = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _close([String? value]) {
+    Navigator.of(context).pop(value);
+  }
+
+  void _confirm() {
+    _close(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PreviewAcademyDialogSheet(
+      style: widget.style,
+      title: widget.title,
+      onCancel: () => _close(),
+      onConfirm: _confirm,
+      child: PreviewAcademyDialogGroupedFields(
+        style: widget.style,
+        children: [
+          PreviewAcademyDialogFieldRow(
+            style: widget.style,
+            label: widget.label,
+            controller: _controller,
+            focusNode: _focusNode,
+            keyboardType: TextInputType.number,
+            inputFormatters: [_digitsOnly],
+            emptyHintText: widget.emptyHintText,
+            textInputAction: TextInputAction.done,
+            onSubmitted: _confirm,
+          ),
         ],
       ),
     );
@@ -2377,56 +2497,56 @@ class FabStyleTabBar extends StatelessWidget {
               borderRadius: BorderRadius.circular(radius),
             ),
             child: SizedBox(
-            width: slotWidth * tabs.length,
-            child: Stack(
-              children: [
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  left: selectedIndex * slotWidth,
-                  top: 0,
-                  bottom: 0,
-                  width: slotWidth,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: palette.highlight,
-                      borderRadius: BorderRadius.circular(innerHeight / 2),
+              width: slotWidth * tabs.length,
+              child: Stack(
+                children: [
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOutCubic,
+                    left: selectedIndex * slotWidth,
+                    top: 0,
+                    bottom: 0,
+                    width: slotWidth,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: palette.highlight,
+                        borderRadius: BorderRadius.circular(innerHeight / 2),
+                      ),
                     ),
                   ),
-                ),
-                Row(
-                  children: tabs.asMap().entries.map((entry) {
-                    final index = entry.key;
-                    final label = entry.value;
-                    final isSelected = selectedIndex == index;
-                    return GestureDetector(
-                      onTap: () => onTabSelected(index),
-                      behavior: HitTestBehavior.opaque,
-                      child: SizedBox(
-                        width: slotWidth,
-                        child: Center(
-                          child: AnimatedDefaultTextStyle(
-                            duration: const Duration(milliseconds: 200),
-                            style: TextStyle(
-                              color: isSelected
-                                  ? palette.labelSelected
-                                  : palette.labelUnselected,
-                              fontWeight: FontWeight.w600,
-                              fontSize: fontSize,
+                  Row(
+                    children: tabs.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final label = entry.value;
+                      final isSelected = selectedIndex == index;
+                      return GestureDetector(
+                        onTap: () => onTabSelected(index),
+                        behavior: HitTestBehavior.opaque,
+                        child: SizedBox(
+                          width: slotWidth,
+                          child: Center(
+                            child: AnimatedDefaultTextStyle(
+                              duration: const Duration(milliseconds: 200),
+                              style: TextStyle(
+                                color: isSelected
+                                    ? palette.labelSelected
+                                    : palette.labelUnselected,
+                                fontWeight: FontWeight.w600,
+                                fontSize: fontSize,
+                              ),
+                              child: Text(label),
                             ),
-                            child: Text(label),
                           ),
                         ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
     );
   }
 }

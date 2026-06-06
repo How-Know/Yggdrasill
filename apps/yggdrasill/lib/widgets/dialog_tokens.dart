@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// ✅ 신형 다이얼로그 톤(학생등록/수업시간/메모 다이얼로그와 통일)
-const Color kDlgBg = Color(0xFF0B1112);
-const Color kDlgPanelBg = Color(0xFF10171A);
-const Color kDlgFieldBg = Color(0xFF15171C);
-const Color kDlgBorder = Color(0xFF223131);
+/// 목업 다이얼로그 톤.
+///
+/// 학원 탭 공통 입력 다이얼로그와 동일하게
+/// - 바깥 시트: #1C1C1E
+/// - 내부 입력/패널: #2C2C2E
+/// 를 기준으로 둔다.
+const Color kDlgBg = Color(0xFF1C1C1E);
+const Color kDlgPanelBg = Color(0xFF2C2C2E);
+const Color kDlgFieldBg = Color(0xFF2C2C2E);
+const Color kDlgBorder = Color(0xFF38383A);
 const Color kDlgText = Color(0xFFEAF2F2);
 const Color kDlgTextSub = Color(0xFF9FB3B3);
 const Color kDlgAccent = Color(0xFF33A373);

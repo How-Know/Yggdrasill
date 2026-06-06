@@ -537,7 +537,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               .toList(growable: false)
             ..sort();
           for (final pageNumber in visiblePages) {
-            final refs = questionsByPage[pageNumber] ?? const [];
+            final refs = (questionsByPage[pageNumber] ?? const [])
+                .where(
+                  (ref) => _privateMaterialRefMatchesSmall(
+                    ref,
+                    bigOrder: bigOrder,
+                    midOrder: midOrder,
+                    subKey: subKey,
+                  ),
+                )
+                .toList(growable: false);
             if (refs.isEmpty) continue;
             final page = small.pages.putIfAbsent(
               '$bigOrder|$midOrder|$subKey|$pageNumber',
@@ -575,6 +584,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final meta = _mapFromDynamic(row['meta']);
       final vlmMeta = _mapFromDynamic(meta['vlm']);
       final cropPageMeta = _mapFromDynamic(meta['textbook_crop_page']);
+      final textbookScope = _mapFromDynamic(
+        meta['textbook_scope'] ?? meta['textbookScope'],
+      );
       final displayPage = _intFromDynamic(cropPageMeta['display_page']);
       final rawPage = _intFromDynamic(cropPageMeta['raw_page']);
       final sourcePage = _intFromDynamic(row['source_page']);
@@ -603,6 +615,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           insertionOrder: sourceOrder,
           displayPage: pageNumber,
           rawPage: rawPage,
+          bigOrder: _intFromDynamic(
+            textbookScope['big_order'] ?? textbookScope['bigOrder'],
+          ),
+          midOrder: _intFromDynamic(
+            textbookScope['mid_order'] ?? textbookScope['midOrder'],
+          ),
+          subKey: '${textbookScope['sub_key'] ?? textbookScope['subKey'] ?? ''}'
+              .trim(),
           difficultyLabel:
               '${meta['textbook_difficulty_label'] ?? cropPageMeta['label'] ?? cropPageMeta['difficulty_label'] ?? ''}'
                   .trim(),
@@ -614,6 +634,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       );
     }
     return out;
+  }
+
+  bool _privateMaterialRefMatchesSmall(
+    _PrivateMaterialPageQuestionRef ref, {
+    required int bigOrder,
+    required int midOrder,
+    required String subKey,
+  }) {
+    final refSubKey = ref.subKey.trim();
+    final hasScope =
+        ref.bigOrder != null || ref.midOrder != null || refSubKey.isNotEmpty;
+    if (!hasScope) return true;
+    if (ref.bigOrder != null && ref.bigOrder != bigOrder) return false;
+    if (ref.midOrder != null && ref.midOrder != midOrder) return false;
+    if (refSubKey.isNotEmpty && refSubKey != subKey.trim()) return false;
+    return true;
   }
 
   Set<int> _metadataPagesForSmall(Map<String, dynamic> smallMap) {
@@ -5150,6 +5186,9 @@ class _PrivateMaterialPageQuestionRef {
     required this.insertionOrder,
     required this.displayPage,
     this.rawPage,
+    this.bigOrder,
+    this.midOrder,
+    this.subKey = '',
     this.difficultyLabel = '',
     this.contentGroupKind = '',
     this.contentGroupLabel = '',
@@ -5162,6 +5201,9 @@ class _PrivateMaterialPageQuestionRef {
   final int insertionOrder;
   final int displayPage;
   final int? rawPage;
+  final int? bigOrder;
+  final int? midOrder;
+  final String subKey;
   final String difficultyLabel;
   final String contentGroupKind;
   final String contentGroupLabel;

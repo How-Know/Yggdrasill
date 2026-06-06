@@ -1902,6 +1902,73 @@ class ProblemBankService {
     }
   }
 
+  Future<Map<String, dynamic>> uploadManualFigureAsset({
+    required String academyId,
+    required String documentId,
+    required String questionNumber,
+    required Uint8List bytes,
+    required String fileName,
+    bool commonStem = false,
+  }) async {
+    final aid = academyId.trim();
+    final docId = documentId.trim();
+    final number = questionNumber.trim().isEmpty
+        ? 'question'
+        : questionNumber.trim();
+    if (aid.isEmpty || docId.isEmpty) {
+      throw Exception('manual_figure_missing_scope');
+    }
+    if (bytes.isEmpty) {
+      throw Exception('manual_figure_empty_file');
+    }
+    final lower = fileName.toLowerCase();
+    final ext = lower.endsWith('.jpg') || lower.endsWith('.jpeg')
+        ? '.jpg'
+        : lower.endsWith('.webp')
+            ? '.webp'
+            : '.png';
+    final contentType = ext == '.jpg'
+        ? 'image/jpeg'
+        : ext == '.webp'
+            ? 'image/webp'
+            : 'image/png';
+    final hash = sha256.convert(bytes).toString();
+    final now = DateTime.now().toUtc();
+    final assetId = '${now.microsecondsSinceEpoch}_${hash.substring(0, 12)}';
+    final safeName = _safeFileNameWithExt(
+      '${number}_${hash.substring(0, 12)}',
+      ext,
+      fallback: 'figure',
+    );
+    final folder = commonStem ? 'manual-common-figures' : 'manual-figures';
+    final objectPath = '$aid/$docId/$folder/$assetId/$safeName';
+    await _client.storage.from('problem-previews').uploadBinary(
+          objectPath,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: contentType,
+            upsert: true,
+          ),
+        );
+    return <String, dynamic>{
+      'id': assetId,
+      'bucket': 'problem-previews',
+      'path': objectPath,
+      'source': commonStem
+          ? 'manager_manual_common_stem_upload'
+          : 'manager_manual_upload',
+      'status': 'manual_uploaded',
+      'approved': true,
+      'mime_type': contentType,
+      'size_bytes': bytes.length,
+      'content_hash': hash,
+      'figure_index': 1,
+      'created_at': now.toIso8601String(),
+      'review_required': false,
+      'manual_source_name': fileName,
+    };
+  }
+
   Future<List<ProblemBankQuestion>> listQuestions({
     required String academyId,
     required String documentId,
@@ -2514,10 +2581,15 @@ class ProblemBankService {
   Future<void> updateQuestionMeta({
     required String questionId,
     required Map<String, dynamic> meta,
+    List<String>? figureRefs,
   }) async {
+    final update = <String, dynamic>{'meta': meta};
+    if (figureRefs != null) {
+      update['figure_refs'] = figureRefs;
+    }
     await _client
         .from('pb_questions')
-        .update({'meta': meta}).eq('id', questionId);
+        .update(update).eq('id', questionId);
   }
 
   Future<void> bulkSetChecked({
@@ -3008,6 +3080,47 @@ class ProblemBankService {
     } catch (e) {
       throw Exception('batch_render_thumbnails_failed: $e');
     }
+  }
+
+  Future<String> renderCustomQuestionThumbnail({
+    required String academyId,
+    required ProblemBankQuestion question,
+  }) async {
+    if (!hasGateway || academyId.trim().isEmpty) return '';
+    final result = await _gatewayPost(
+      '/pb/preview/custom-thumbnail',
+      body: <String, dynamic>{
+        'academyId': academyId.trim(),
+        'question': <String, dynamic>{
+          'id': question.id,
+          'question_uid': question.questionUid,
+          'document_id': question.documentId,
+          'question_number': question.questionNumber,
+          'question_type': question.questionType,
+          'stem': question.stem,
+          'choices': question.choices.map((c) => c.toMap()).toList(),
+          'allow_objective': question.allowObjective,
+          'allow_subjective': question.allowSubjective,
+          'objective_choices':
+              question.objectiveChoices.map((c) => c.toMap()).toList(),
+          'objective_answer_key': question.objectiveAnswerKey,
+          'subjective_answer': question.subjectiveAnswer,
+          'objective_generated': question.objectiveGenerated,
+          'figure_refs': question.figureRefs,
+          'equations': question.equations.map((e) => e.toMap()).toList(),
+          'confidence': question.confidence,
+          'flags': question.flags,
+          'source_page': question.sourcePage,
+          'source_order': question.sourceOrder,
+          'meta': question.meta,
+        },
+      },
+    );
+    final thumbnail = result['thumbnail'];
+    if (thumbnail is Map) {
+      return '${thumbnail['url'] ?? ''}'.trim();
+    }
+    return '';
   }
 
   Future<Map<String, ProblemBankPdfPreviewArtifact>>
