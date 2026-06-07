@@ -30,6 +30,7 @@ import { v2ConstantMacroLines } from './v2_constants.js';
 function measuredWrapMacroLines() {
   return [
     '\\newsavebox{\\YggWrapObjectBox}',
+    '\\newsavebox{\\YggWrapTextBox}',
     '\\newcount\\YggWrapLineCount',
     '\\newcount\\YggWrapTextLineCount',
     '\\newcount\\YggWrapClearCount',
@@ -79,6 +80,40 @@ function measuredWrapMacroLines() {
     '}',
     '\\newcommand{\\YggMeasuredWrapEnd}[1]{%',
     '  \\YggWrapClearRemaining{\\the\\YggWrapLineCount}{#1}%',
+    '  \\par\\endgroup',
+    '}',
+    // 본문 줄 수를 JS 로 추정하지 않고 TeX 에서 직접 측정하는 통합 매크로.
+    //   #1 side, #2 그림폭, #3 columnsep(gap), #4 그림객체, #5 본문.
+    //   1) 그림 높이 → 예약 줄 수(\YggWrapLineCount)
+    //   2) "좁아진 폭(\linewidth-그림폭-gap)" 에서 본문 실제 높이 → 본문 줄 수(\YggWrapTextLineCount)
+    //   3) 그림보다 본문이 짧으면 그 차이만큼 빈 줄을 채워, 후속(선지)이 항상 그림 하단 아래에서
+    //      시작하도록 보장한다. (본문/그림 하단 중 더 아래를 기준으로 배치)
+    '\\long\\def\\YggMeasuredWrapAuto#1#2#3#4#5{%',
+    '  \\par\\begingroup',
+    '  \\setlength{\\columnsep}{#3}%',
+    '  \\setlength{\\intextsep}{0pt}%',
+    '  \\sbox{\\YggWrapObjectBox}{\\begin{minipage}{#2}\\vspace{0pt}#4\\end{minipage}}%',
+    '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapObjectBox+\\dp\\YggWrapObjectBox+0.35\\baselineskip\\relax',
+    '  \\YggWrapLineCount=0\\relax',
+    '  \\loop\\ifdim\\YggWrapObjectHeight>0pt',
+    '    \\advance\\YggWrapLineCount by 1\\relax',
+    '    \\advance\\YggWrapObjectHeight by -\\baselineskip',
+    '  \\repeat',
+    '  \\ifnum\\YggWrapLineCount<2 \\YggWrapLineCount=2\\fi',
+    '  \\sbox{\\YggWrapTextBox}{\\begin{minipage}{\\dimexpr\\linewidth-#2-#3\\relax}\\vspace{0pt}\\noindent #5\\end{minipage}}%',
+    '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapTextBox+\\dp\\YggWrapTextBox\\relax',
+    '  \\YggWrapTextLineCount=0\\relax',
+    '  \\loop\\ifdim\\YggWrapObjectHeight>0pt',
+    '    \\advance\\YggWrapTextLineCount by 1\\relax',
+    '    \\advance\\YggWrapObjectHeight by -\\baselineskip',
+    '  \\repeat',
+    '  \\begin{wrapfigure}[\\the\\YggWrapLineCount]{#1}{#2}',
+    '    \\vspace{-0.10\\baselineskip}',
+    '    \\usebox{\\YggWrapObjectBox}',
+    '    \\vspace{-0.15\\baselineskip}',
+    '  \\end{wrapfigure}',
+    '  \\noindent #5\\par',
+    '  \\YggWrapClearRemaining{\\the\\YggWrapLineCount}{\\the\\YggWrapTextLineCount}%',
     '  \\par\\endgroup',
     '}',
   ];
@@ -4704,22 +4739,16 @@ function renderOneQuestion(question, {
     const widthEm = Math.max(2, Math.min(50, Number(expr.widthEm) || 20));
     const occupiedWidthEm = inlineFigureOccupiedWidthEm(widthEm, offsetX);
     const occupiedWidthExpr = `${occupiedWidthEm.toFixed(2)}em`;
-    const figureWrapGapEm = 0.00;
-    const objectFrac = Math.max(0.2, Math.min(0.70, (occupiedWidthEm + figureWrapGapEm) / 42));
-    const textLines = estimateTextWrapLines(textSeg, 1 - objectFrac);
+    // 본문과 그림 사이 최소 여백(columnsep). 0 이면 본문 줄 끝 글자가 그림에 딱 붙는
+    // 경우가 생겨, 아주 작은 간격을 항상 확보한다. (오른쪽 float 은 그림 왼쪽 여백이 됨)
+    const figureWrapGapEm = 0.40;
     // offsetX moves inline figures toward the text column. Reserve the moved
     // visual footprint, then place the image against the inner edge.
     const objectAlign = position === 'inline-right' ? 'l' : 'r';
     const object = `\\makebox[\\linewidth][${objectAlign}]{${expr.include}}`;
-    const fixedWrapLines = estimateFigureWrapLineCount(i, widthEm);
-    const beginMacro = fixedWrapLines > 0
-      ? `\\YggMeasuredWrapBeginFixed{${side}}{${occupiedWidthExpr}}{${object}}{${figureWrapGapEm.toFixed(2)}em}{${fixedWrapLines}}`
-      : `\\YggMeasuredWrapBegin{${side}}{${occupiedWidthExpr}}{${object}}{${figureWrapGapEm.toFixed(2)}em}`;
-    return [
-      beginMacro,
-      `\\noindent ${text}`,
-      `\\YggMeasuredWrapEnd{${textLines}}`,
-    ].join('\n') + '\n';
+    // 본문 줄 수는 TeX 에서 직접 측정한다(JS 추정은 짧은 본문에서 과대평가 → 그림이 선지와
+    // 겹치는 원인이었음). \YggMeasuredWrapAuto 가 본문/그림 하단 중 더 아래를 기준으로 정렬.
+    return `\\YggMeasuredWrapAuto{${side}}{${occupiedWidthExpr}}{${figureWrapGapEm.toFixed(2)}em}{${object}}{${text}}\n`;
   }
 
   function renderLegacyInlineTableWithTextLatex(rows, scale, layout, textSeg, position) {
@@ -4846,10 +4875,15 @@ function renderOneQuestion(question, {
           : (String(choices[idx]?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
         const imgWidth = `${(baseImgFrac * choiceWidthScale(idx)).toFixed(3)}\\linewidth`;
         const include = `\\includegraphics[width=${imgWidth},keepaspectratio]{${normalized}}`;
+        // 하단 여유: raisebox 의 depth 를 이미지 실제 깊이보다 0.12em 더 잡아, 박스 경계/
+        // baseline 그리드 반올림으로 이미지 마지막 래스터 줄이 잘려 보이는 현상을 방지한다.
+        // (렌더러 자체는 이미지를 자르지 않으므로 시각적 안전망 성격의 미세 보정)
         return [
           `\\begin{minipage}[t]{${cellWidth.toFixed(2)}\\linewidth}`,
           `\\noindent ${escapeLatexText(label)}\\enspace`,
-          `\\raisebox{\\dimexpr\\ht\\strutbox-\\height-0.55em\\relax}{${include}}`,
+          `\\raisebox{\\dimexpr\\ht\\strutbox-\\height-0.55em\\relax}`
+            + `[\\dimexpr\\ht\\strutbox-0.55em\\relax]`
+            + `[\\dimexpr\\height-\\ht\\strutbox+0.55em+0.12em\\relax]{${include}}`,
           '\\end{minipage}',
         ].join('');
       }).filter(Boolean);

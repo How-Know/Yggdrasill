@@ -304,7 +304,7 @@ class FabTabBarTokens {
     FontWeight fontWeight = FontWeight.w400,
   }) {
     return TextStyle(
-      fontFamily: previewHeadlineFontFamily,
+      fontFamily: previewAcademyValueFontFamily,
       fontSize: previewAcademyBaseFontSize,
       fontWeight: fontWeight,
       color: color ?? style.inputText,
@@ -336,7 +336,7 @@ class FabTabBarTokens {
   // Light — 글래스: 배경색 인지와 뒤 콘텐츠 비침의 균형
   static const Color fabBarLightBase = Color(0xFFFFFFFF);
   static const Color fabBarLightSurface = Color(0x80FFFFFF);
-  static const Color fabBarLightHighlight = Color(0x99E6E6E6);
+  static const Color fabBarLightHighlight = Color(0xB8CFCFCF);
   static const Color fabBarLightLabelSelected = Color(0xFF000000);
   static const Color fabBarLightLabelUnselected = Color(0xFF6B6B6B);
 
@@ -2528,6 +2528,8 @@ class FabStyleTabBar extends StatelessWidget {
                             child: AnimatedDefaultTextStyle(
                               duration: const Duration(milliseconds: 200),
                               style: TextStyle(
+                                fontFamily: FabTabBarTokens
+                                    .previewAcademyLabelFontFamily,
                                 color: isSelected
                                     ? palette.labelSelected
                                     : palette.labelUnselected,

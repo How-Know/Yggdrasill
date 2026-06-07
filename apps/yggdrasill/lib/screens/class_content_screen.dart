@@ -15749,7 +15749,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: Container(
-              color: kDlgBg,
+              color: const Color(0xFF15171C),
               child: Stack(
                 children: [
                   if (widget.downLabel.isNotEmpty && widget.canSlideDown)

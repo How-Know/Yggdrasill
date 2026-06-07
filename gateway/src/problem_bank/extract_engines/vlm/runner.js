@@ -77,7 +77,20 @@ function safeObjectPathPart(value, fallback = 'item') {
   return safe || fallback;
 }
 
-async function renderPdfPageToPng(pdfBuffer, pageNumber, { dpi = 220 } = {}) {
+function countPlainFigureMarkers(value) {
+  return (String(value || '').match(/\[(?:그림|도형)\]/g) || []).length;
+}
+
+function isImageChoiceVlmQuestion(vlmQ) {
+  const choices = Array.isArray(vlmQ?.choices) ? vlmQ.choices : [];
+  if (choices.length !== 5) return false;
+  const markerChoices = choices.filter((choice) =>
+    /^\s*\[(?:그림|도형)\]\s*$/.test(String(choice?.text || '')),
+  );
+  return markerChoices.length === 5;
+}
+
+async function renderPdfPageToPng(pdfBuffer, pageNumber, { dpi = 360 } = {}) {
   const page = Number.parseInt(String(pageNumber ?? ''), 10);
   if (!Number.isFinite(page) || page <= 0) return null;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-pdf-figure-'));
@@ -100,7 +113,9 @@ async function renderPdfPageToPng(pdfBuffer, pageNumber, { dpi = 220 } = {}) {
   }
 }
 
-async function cropPdfFigureFromPagePng(pagePng, bbox1k) {
+async function cropPdfFigureFromPagePng(pagePng, bbox1k, {
+  imageChoiceFigure = false,
+} = {}) {
   if (!Buffer.isBuffer(pagePng) || pagePng.length === 0 || !bbox1k) return null;
   const meta = await sharp(pagePng).metadata();
   const width = Number(meta.width || 0);
@@ -111,11 +126,22 @@ async function cropPdfFigureFromPagePng(pagePng, bbox1k) {
   const [y1, x1, y2, x2] = bbox1k;
   // VLM bbox already includes the detected figure; keep only a small guard band
   // so adjacent problem text is not pulled into the initial crop.
-  const pad = Math.max(4, Math.round(Math.min(width, height) * 0.006));
-  const left = Math.max(0, Math.floor((x1 / 1000) * width) - pad);
-  const top = Math.max(0, Math.floor((y1 / 1000) * height) - pad);
-  const right = Math.min(width, Math.ceil((x2 / 1000) * width) + pad);
-  const bottom = Math.min(height, Math.ceil((y2 / 1000) * height) + pad);
+  //
+  // Image-choice crops need asymmetric handling:
+  // - the left side sits next to ①~⑤ labels, so expanding left can pull in a clipped
+  //   circled number;
+  // - the right/top/bottom sides often contain the actual drawing contour, so a small
+  //   outward guard prevents shaving the figure itself.
+  const minSide = Math.min(width, height);
+  const pad = Math.max(4, Math.round(minSide * 0.006));
+  const leftPad = imageChoiceFigure ? 0 : pad;
+  const topPad = imageChoiceFigure ? Math.max(8, Math.round(minSide * 0.01)) : pad;
+  const rightPad = imageChoiceFigure ? Math.max(12, Math.round(minSide * 0.018)) : pad;
+  const bottomPad = imageChoiceFigure ? Math.max(8, Math.round(minSide * 0.01)) : pad;
+  const left = Math.max(0, Math.floor((x1 / 1000) * width) - leftPad);
+  const top = Math.max(0, Math.floor((y1 / 1000) * height) - topPad);
+  const right = Math.min(width, Math.ceil((x2 / 1000) * width) + rightPad);
+  const bottom = Math.min(height, Math.ceil((y2 / 1000) * height) + bottomPad);
   const cropWidth = Math.max(1, right - left);
   const cropHeight = Math.max(1, bottom - top);
   if (cropWidth < 16 || cropHeight < 16) return null;
@@ -1068,6 +1094,9 @@ async function attachPdfFigureAssets({
     .filter((x) => x.bbox1k);
   if (candidates.length === 0) return vlmQ;
 
+  const stemFigureCount = countPlainFigureMarkers(vlmQ?.stem || '');
+  const imageChoiceQuestion = isImageChoiceVlmQuestion(vlmQ);
+
   const rawPage = Number(cropPage?.rawPage || cropPage?.raw_page || vlmQ?.source_page);
   if (!Number.isFinite(rawPage) || rawPage <= 0) return vlmQ;
 
@@ -1103,7 +1132,10 @@ async function attachPdfFigureAssets({
   const assets = [];
   for (const candidate of candidates) {
     try {
-      const cropped = await cropPdfFigureFromPagePng(pagePng, candidate.bbox1k);
+      const cropped = await cropPdfFigureFromPagePng(pagePng, candidate.bbox1k, {
+        imageChoiceFigure:
+          imageChoiceQuestion && Number(candidate.index || 0) > stemFigureCount,
+      });
       if (!cropped) continue;
       const hash = createHash('sha256').update(cropped.bytes).digest('hex');
       const objectPath =
