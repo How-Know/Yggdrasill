@@ -3,6 +3,9 @@ import 'package:uuid/uuid.dart';
 import '../../services/tag_preset_service.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
+
 class TagPresetScreen extends StatefulWidget {
   const TagPresetScreen({super.key});
   @override
@@ -34,7 +37,7 @@ class _TagPresetScreenState extends State<TagPresetScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           title: const Text('태그 프리셋 추가', style: TextStyle(color: Colors.white)),
           content: SizedBox(
             width: 520,
@@ -134,9 +137,9 @@ class _TagPresetScreenState extends State<TagPresetScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: context.yggSurfaceBase,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: context.yggSurfaceBase,
         title: const Text('태그 프리셋 관리', style: TextStyle(color: Colors.white70)),
         actions: [
           IconButton(onPressed: _addPreset, icon: const Icon(Icons.add, color: Colors.white70)),

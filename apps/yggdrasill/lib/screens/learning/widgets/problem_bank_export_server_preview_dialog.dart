@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../../../theme/ygg_semantic_colors.dart';
+
 class ProblemBankPreviewQuestionScoreEntry {
   const ProblemBankPreviewQuestionScoreEntry({
     required this.questionId,
@@ -3516,7 +3518,7 @@ class _ProblemBankExportServerPreviewDialogState
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: Container(
-                      color: const Color(0xFF0B1112),
+                      color: context.yggSurfaceBase,
                       child: uri == null
                           ? Center(
                               child: Text(
@@ -3535,7 +3537,7 @@ class _ProblemBankExportServerPreviewDialogState
                                   'preview_${_viewerRevision}_${uri.toString()}'),
                               controller: _viewerController,
                               params: PdfViewerParams(
-                                backgroundColor: const Color(0xFF0B1112),
+                                backgroundColor: context.yggSurfaceBase,
                                 margin: 10,
                                 layoutPages: _layoutTwoPageVertical,
                                 pageAnchor: PdfPageAnchor.center,

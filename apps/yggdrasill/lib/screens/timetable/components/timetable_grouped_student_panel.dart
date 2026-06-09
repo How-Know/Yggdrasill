@@ -6,6 +6,7 @@ import '../../../models/student_time_block.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import 'student_time_info_dialog.dart';
+import '../../../theme/ygg_semantic_colors.dart';
 
 class TimelineExtraCardEntry {
   final Widget card;
@@ -173,7 +174,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
             constraints: BoxConstraints(minHeight: maxHeight ?? 160),
             decoration: showPanelFrame
                 ? BoxDecoration(
-                    color: const Color(0xFF0B1112),
+                    color: context.yggSurfaceBase,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: levelBarColor, width: 1),
                   )
@@ -253,7 +254,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
         padding: bodyPadding,
         decoration: showPanelFrame
             ? BoxDecoration(
-                color: const Color(0xFF0B1112),
+                color: context.yggSurfaceBase,
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: levelBarColor, width: 1),
               )

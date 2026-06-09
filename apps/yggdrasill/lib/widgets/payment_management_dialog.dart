@@ -7,8 +7,8 @@ import '../models/payment_record.dart';
 import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
 import '../utils/attendance_judgement.dart';
+import '../widgets/dialog_tokens.dart';
 
-const Color _pmBg = Color(0xFF0B1112);
 const Color _pmPanelBg = Color(0xFF10171A);
 const Color _pmCardBg = Color(0xFF15171C);
 const Color _pmBorder = Color(0xFF223131);
@@ -332,7 +332,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
       context: context,
       builder: (context) {
         return Dialog(
-          backgroundColor: _pmBg,
+          backgroundColor: kDlgBg,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           insetPadding: const EdgeInsets.all(24),
           child: Container(
@@ -340,7 +340,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
             height: 560,
             padding: const EdgeInsets.fromLTRB(26, 26, 26, 18),
             decoration: BoxDecoration(
-              color: _pmBg,
+              color: kDlgBg,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _pmBorder),
             ),
@@ -655,7 +655,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: _pmBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
         width: 1176,
@@ -1057,7 +1057,7 @@ class _PaymentRecordAndScheduleDialogState
 
   @override
   Widget build(BuildContext context) {
-    const bg = _pmBg;
+    const bg = kDlgBg;
     const panel = _pmPanelBg;
     const cardBg = _pmCardBg;
     const border = _pmBorder;
@@ -1217,10 +1217,10 @@ class _PaymentRecordAndScheduleDialogState
             colorScheme: const ColorScheme.dark(
               primary: _pmAccent,
               onPrimary: Colors.white,
-              surface: _pmBg,
+              surface: kDlgBg,
               onSurface: _pmText,
             ),
-            dialogBackgroundColor: _pmBg,
+            dialogBackgroundColor: kDlgBg,
           ),
           child: child!,
         ),
@@ -1925,10 +1925,10 @@ class _QueryRangeDropdown extends StatelessWidget {
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF1B6B63),
               onPrimary: Colors.white,
-              surface: Color(0xFF0B1112),
+              surface: kDlgBg,
               onSurface: Color(0xFFEAF2F2),
             ),
-            dialogBackgroundColor: const Color(0xFF0B1112),
+            dialogBackgroundColor: kDlgBg,
           ),
           child: child!,
         );
@@ -2031,7 +2031,7 @@ class _QueryRangeDropdown extends StatelessWidget {
             width: 160,
             child: PopupMenuButton<_QueryRangePreset>(
               tooltip: '기간 프리셋',
-              color: const Color(0xFF0B1112),
+              color: kDlgBg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
                 side: BorderSide(color: border.withOpacity(0.9), width: 1),

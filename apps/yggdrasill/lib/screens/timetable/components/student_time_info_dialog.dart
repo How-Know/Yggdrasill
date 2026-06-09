@@ -12,6 +12,8 @@ import '../../../services/data_manager.dart';
 import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/pill_tab_selector.dart';
 import '../../../widgets/makeup_quick_dialog.dart';
+import '../../../widgets/dialog_tokens.dart';
+import '../../../theme/ygg_semantic_colors.dart';
 
 /// 학생의 "시간 관련 기록"을 요약해서 보여주는 다이얼로그.
 ///
@@ -93,7 +95,7 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xFF0B1112);
+    const bg = kDlgBg;
     const panel = Color(0xFF15171C);
     const border = Color(0xFF223131);
     const text = Color(0xFFEAF2F2);
@@ -560,10 +562,10 @@ class _ScheduleHistoryTab extends StatelessWidget {
                   colorScheme: const ColorScheme.dark(
                     primary: Color(0xFF1B6B63),
                     onPrimary: Colors.white,
-                    surface: Color(0xFF0B1112),
+                    surface: kDlgBg,
                     onSurface: Color(0xFFEAF2F2),
                   ),
-                  dialogBackgroundColor: const Color(0xFF0B1112),
+                  dialogBackgroundColor: kDlgBg,
                 ),
                 child: child!,
               );
@@ -582,10 +584,10 @@ class _ScheduleHistoryTab extends StatelessWidget {
                   colorScheme: const ColorScheme.dark(
                     primary: Color(0xFF1B6B63),
                     onPrimary: Colors.white,
-                    surface: Color(0xFF0B1112),
+                    surface: kDlgBg,
                     onSurface: Color(0xFFEAF2F2),
                   ),
-                  dialogBackgroundColor: const Color(0xFF0B1112),
+                  dialogBackgroundColor: kDlgBg,
                 ),
                 child: child!,
               );
@@ -608,7 +610,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           final ok = await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('일정 하드삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
               content: Text(
                 '이 일정(수업 블록)을 서버에서 완전히 삭제합니다.\n\n'
@@ -702,7 +704,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           final action = await showDialog<String>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('종료일 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
               content: Text(
                 '현재 종료일: ${current == null ? "현재(무기한)" : _ymd(current)}\n\n'
@@ -764,7 +766,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
             context: context,
             builder: (ctx) {
               return AlertDialog(
-                backgroundColor: const Color(0xFF0B1112),
+                backgroundColor: kDlgBg,
                 title: const Text('수업명 변경', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
                 content: SizedBox(
                   width: 520,
@@ -834,7 +836,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
               return StatefulBuilder(builder: (ctx, setState) {
                 String fmt(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
                 return AlertDialog(
-                  backgroundColor: const Color(0xFF0B1112),
+                  backgroundColor: kDlgBg,
                   title: const Text('시간 변경', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
                   content: SizedBox(
                     width: 420,
@@ -1337,7 +1339,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: kDlgBg,
           title: const Text('예정 수업 선택', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 720,
@@ -1372,7 +1374,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         title: const Text('예정 연결', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
         content: Text(
           '이 추가수업을 선택한 예정 수업과 연결하여 보강(상쇄) 처리할까요?\n\n'
@@ -1694,10 +1696,10 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                   colorScheme: const ColorScheme.dark(
                     primary: Color(0xFF1B6B63),
                     onPrimary: Colors.white,
-                    surface: Color(0xFF0B1112),
+                    surface: kDlgBg,
                     onSurface: Color(0xFFEAF2F2),
                   ),
-                  dialogBackgroundColor: const Color(0xFF0B1112),
+                  dialogBackgroundColor: kDlgBg,
                 ),
                 child: child!,
               );
@@ -1717,10 +1719,10 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                   colorScheme: const ColorScheme.dark(
                     primary: Color(0xFF1B6B63),
                     onPrimary: Colors.white,
-                    surface: Color(0xFF0B1112),
+                    surface: kDlgBg,
                     onSurface: Color(0xFFEAF2F2),
                   ),
-                  dialogBackgroundColor: const Color(0xFF0B1112),
+                  dialogBackgroundColor: kDlgBg,
                 ),
                 child: child!,
               );
@@ -1786,7 +1788,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             context: context,
             builder: (ctx) => StatefulBuilder(
               builder: (ctx, setState) => AlertDialog(
-                backgroundColor: const Color(0xFF0B1112),
+                backgroundColor: kDlgBg,
                 title: const Text('시간 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
                 content: SizedBox(
                   width: 420,
@@ -1856,7 +1858,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final action = await showDialog<String>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('등원 시간 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
               content: const Text(
                 '어떻게 변경할까요?',
@@ -1903,7 +1905,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final action = await showDialog<String>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('하원 시간 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
               content: const Text(
                 '어떻게 변경할까요?',
@@ -1950,7 +1952,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final selected = await showDialog<String?>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               title: const Text('수업명 변경', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
               content: SizedBox(
                 width: 520,
@@ -2553,10 +2555,10 @@ class _QueryRangeDropdown extends StatelessWidget {
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF1B6B63),
               onPrimary: Colors.white,
-              surface: Color(0xFF0B1112),
+              surface: kDlgBg,
               onSurface: Color(0xFFEAF2F2),
             ),
-            dialogBackgroundColor: const Color(0xFF0B1112),
+            dialogBackgroundColor: kDlgBg,
           ),
           child: child!,
         );
@@ -2661,7 +2663,7 @@ class _QueryRangeDropdown extends StatelessWidget {
             width: 160,
             child: PopupMenuButton<_QueryRangePreset>(
               tooltip: '기간 프리셋',
-              color: const Color(0xFF0B1112),
+              color: kDlgBg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
                 side: BorderSide(color: border.withOpacity(0.9), width: 1),

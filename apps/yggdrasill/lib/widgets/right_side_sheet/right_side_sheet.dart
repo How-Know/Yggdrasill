@@ -30,8 +30,7 @@ import '../../services/tag_preset_service.dart';
 import '../../services/tenant_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../memo_dialogs.dart';
-
-const Color _rsBg = Color(0xFF0B1112);
+import '../../theme/ygg_semantic_colors.dart';
 const Color _rsPanelBg = Color(0xFF10171A);
 const Color _rsFieldBg = Color(0xFF15171C);
 const Color _rsBorder = Color(0xFF223131);
@@ -584,7 +583,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
       useRootNavigator: true,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: _rsBg,
+          backgroundColor: context.yggSurfaceBase,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: _rsBorder),
@@ -1115,7 +1114,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
       useRootNavigator: true,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: _rsBg,
+          backgroundColor: context.yggSurfaceBase,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: _rsBorder),
@@ -1309,9 +1308,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
     return Material(
       color: Colors.transparent,
       child: Container(
-        decoration: const BoxDecoration(
-          color: _rsBg,
-          border: Border(left: BorderSide(color: _rsBorder, width: 1)),
+        decoration: BoxDecoration(
+          color: context.yggSurfaceBase,
+          border: const Border(left: BorderSide(color: _rsBorder, width: 1)),
         ),
         child: SafeArea(
           child: Column(
@@ -2199,7 +2198,7 @@ class _InquiryMemosReorderListState extends State<_InquiryMemosReorderList> {
                           child: Transform.scale(
                             scale: 1.0 + 0.02 * v,
                             child: Material(
-                              color: _rsBg,
+                              color: context.yggSurfaceBase,
                               surfaceTintColor: Colors.transparent,
                               shadowColor: Colors.black.withOpacity(0.35),
                               elevation: 12 * v,
@@ -5373,7 +5372,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     await _showTopOverlayDialog<void>(
       builder: (dialogContext, closeDialog) {
         return AlertDialog(
-          backgroundColor: _rsBg,
+          backgroundColor: context.yggSurfaceBase,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: _rsBorder),
@@ -5494,7 +5493,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             }
 
             return AlertDialog(
-              backgroundColor: _rsBg,
+              backgroundColor: context.yggSurfaceBase,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: const BorderSide(color: _rsBorder),
@@ -6640,7 +6639,7 @@ class _BooksSection extends StatelessWidget {
                         child: Transform.scale(
                           scale: 1.0 + 0.02 * v,
                           child: Material(
-                            color: _rsBg,
+                            color: context.yggSurfaceBase,
                             surfaceTintColor: Colors.transparent,
                             shadowColor: Colors.black.withOpacity(0.35),
                             elevation: 12 * v,
@@ -6933,7 +6932,7 @@ class _QuestionSourceInfoDialog extends StatelessWidget {
         rows.where((row) => row.value.trim().isNotEmpty).toList();
 
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
         side: const BorderSide(color: _rsBorder),
@@ -7423,7 +7422,7 @@ class _BookSelectDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _rsBorder),
@@ -7702,7 +7701,7 @@ class _AnswerKeyGradesEditDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _rsBorder),
@@ -7936,7 +7935,7 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
     }
 
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _rsBorder),
@@ -8112,7 +8111,7 @@ class _BookAddDialogState extends State<_BookAddDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _rsBorder),
@@ -8293,7 +8292,7 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _rsBorder),
@@ -8824,7 +8823,7 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
     final bodyHeight = desiredH.clamp(360.0, maxH).toDouble();
 
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _rsBorder),

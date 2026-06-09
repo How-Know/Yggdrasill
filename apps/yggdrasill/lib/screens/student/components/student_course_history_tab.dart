@@ -8,6 +8,7 @@ import '../../../models/student.dart';
 import '../../../services/data_manager.dart';
 import '../../../services/homework_store.dart';
 import '../../../services/tag_store.dart';
+import '../../../widgets/dialog_tokens.dart';
 import '../../learning/tag_preset_dialog.dart';
 import '../../../widgets/flow_setup_dialog.dart';
 
@@ -141,7 +142,7 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                           data: Theme.of(context).copyWith(
                             colorScheme: const ColorScheme.dark(
                                 primary: Color(0xFF1B6B63)),
-                            dialogBackgroundColor: const Color(0xFF0B1112),
+                            dialogBackgroundColor: kDlgBg,
                           ),
                           child: child!,
                         );
@@ -817,7 +818,7 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
         return StatefulBuilder(
           builder: (context, setLocal) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
               title: Text(

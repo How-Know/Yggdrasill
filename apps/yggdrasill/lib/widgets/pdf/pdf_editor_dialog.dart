@@ -9,8 +9,9 @@ import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
+import '../dialog_tokens.dart';
+
 // Dialog design language (shared with other dialogs like memo/student registration)
-const Color _dlgBg = Color(0xFF0B1112);
 const Color _dlgPanelBg = Color(0xFF10171A);
 const Color _dlgFieldBg = Color(0xFF15171C);
 const Color _dlgBorder = Color(0xFF223131);
@@ -126,7 +127,7 @@ class _PdfEditorDialogState extends State<PdfEditorDialog> with SingleTickerProv
     );
 
     return AlertDialog(
-      backgroundColor: _dlgBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _dlgBorder),
@@ -753,7 +754,7 @@ class _PdfPreviewSelectDialogState extends State<PdfPreviewSelectDialog> {
     );
 
     return AlertDialog(
-      backgroundColor: _dlgBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _dlgBorder),

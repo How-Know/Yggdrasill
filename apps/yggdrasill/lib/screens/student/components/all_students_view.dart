@@ -28,6 +28,7 @@ import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/dialog_tokens.dart';
 import '../../../widgets/textbook_flow_link_action.dart';
 import '../../../app_overlays.dart';
+import '../../../theme/ygg_semantic_colors.dart';
 import 'student_promotion_dialog.dart';
 import 'student_notification_consent_dialog.dart';
 import 'package:uuid/uuid.dart';
@@ -657,7 +658,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         surface: Color(0xFF15171C),
                         onSurface: Colors.white70,
                       ),
-                      dialogBackgroundColor: const Color(0xFF0B1112),
+                      dialogBackgroundColor: context.yggSurfaceBase,
                     );
 
                     final DateTime? picked = await showDatePicker(
@@ -931,7 +932,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 padding: const EdgeInsets.only(
                     left: 34, right: 24, top: 24, bottom: 24),
                 decoration: BoxDecoration(
-                  color: Color(0xFF0B1112),
+                  color: context.yggSurfaceBase,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 clipBehavior: Clip.hardEdge,
@@ -1121,7 +1122,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 ),
                 padding: const EdgeInsets.only(top: 24),
                 decoration: BoxDecoration(
-                  color: Color(0xFF0B1112),
+                  color: context.yggSurfaceBase,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Stack(
@@ -1267,7 +1268,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   )
                                 : Container(
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF0B1112),
+                                      color: context.yggSurfaceBase,
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
                                           color: const Color(0xFF223131),
@@ -1303,7 +1304,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         child: Offstage(
           offstage: !show,
           child: Container(
-            color: const Color(0xFF0B1112),
+            color: context.yggSurfaceBase,
             child: _buildGroupListView(),
           ),
         ),
@@ -2054,7 +2055,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       studentId: student.id,
     );
 
-    final Color bgColor = const Color(0xFF0B1112);
+    final Color bgColor = context.yggSurfaceBase;
     final Color outlineColor = const Color(0xFF223131);
     final TextStyle labelStyle =
         const TextStyle(color: Color(0xFFAEC0C0), fontSize: 14);
@@ -2100,7 +2101,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
         decoration: BoxDecoration(
-          color: const Color(0xFF0B1112),
+          color: context.yggSurfaceBase,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: outlineColor.withOpacity(0.4), width: 2),
         ),
@@ -2665,7 +2666,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                         surface: Color(0xFF15171C),
                         onSurface: Colors.white70,
                       ),
-                      dialogBackgroundColor: const Color(0xFF0B1112),
+                      dialogBackgroundColor: context.yggSurfaceBase,
                     );
 
                     if (activePause != null) {
@@ -3253,7 +3254,7 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1112),
+        color: context.yggSurfaceBase,
         borderRadius: BorderRadius.circular(14),
         border:
             Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),

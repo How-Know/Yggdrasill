@@ -16,8 +16,9 @@ import '../../services/consult_trial_lesson_service.dart';
 import '../../services/data_manager.dart';
 import '../timetable/components/timetable_header.dart';
 import '../timetable/views/classes_view.dart';
+import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
 
-const Color _bg = Color(0xFF0B1112);
 const Color _panelBg = Color(0xFF10171A);
 const Color _border = Color(0xFF223131);
 const Color _text = Color(0xFFEAF2F2);
@@ -409,7 +410,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: _bg,
+          backgroundColor: context.yggSurfaceBase,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: _border),
@@ -557,7 +558,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
         return StatefulBuilder(builder: (ctx2, setSB) {
           final canSave = ctrl.text.trim().isNotEmpty;
           return AlertDialog(
-            backgroundColor: _bg,
+            backgroundColor: context.yggSurfaceBase,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
               side: const BorderSide(color: _border),
@@ -664,7 +665,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           title: const Text('노트 이름 변경', style: TextStyle(color: Colors.white)),
           content: TextField(
             controller: ctrl,
@@ -709,7 +710,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           title: const Text('노트 삭제', style: TextStyle(color: Colors.white)),
           content: Text('정말 삭제할까요?\n\n"${n.title}"', style: const TextStyle(color: Colors.white70)),
           actions: [
@@ -1015,7 +1016,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           title: const Text('펜 색상', style: TextStyle(color: Colors.white)),
           content: SingleChildScrollView(
             child: BlockPicker(
@@ -1055,7 +1056,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           title: Text(isEraser ? '지우개 두께' : '펜 두께', style: const TextStyle(color: Colors.white)),
           content: StatefulBuilder(builder: (ctx2, setSB) {
             return Column(
@@ -1075,7 +1076,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
                   width: 260,
                   height: 60,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0B1112),
+                    color: context.yggSurfaceBase,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.white12),
                   ),
@@ -1485,9 +1486,9 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
         return ok;
       },
       child: Scaffold(
-        backgroundColor: _bg,
+        backgroundColor: context.yggSurfaceBase,
         appBar: AppBar(
-          backgroundColor: _bg,
+          backgroundColor: context.yggSurfaceBase,
           foregroundColor: _text,
           elevation: 0,
           titleSpacing: 0,
@@ -1678,7 +1679,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
                                           child: Container(
                                             padding: EdgeInsets.fromLTRB(pad, pad, 44, pad),
                                             decoration: BoxDecoration(
-                                              color: const Color(0xFF0B1112).withOpacity(0.92),
+                                              color: context.yggSurfaceBase.withOpacity(0.92),
                                               borderRadius: BorderRadius.circular(10),
                                               border: Border.all(color: _accent, width: 2),
                                             ),
@@ -2098,7 +2099,7 @@ class _ConsultTimetablePickerDialogState extends State<_ConsultTimetablePickerDi
   Widget build(BuildContext context) {
     final hasSelection = _selected.isNotEmpty;
     return AlertDialog(
-      backgroundColor: _bg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _border),

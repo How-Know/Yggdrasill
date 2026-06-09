@@ -59,6 +59,16 @@ class FabTabBarTokens {
   /// Preview — 그룹 카드 행 세로 패딩 (상·하 각각)
   static const double previewAcademyGroupedRowPaddingVertical = 26;
 
+  /// Preview — 2줄 행(아바타 + 제목/부제) 세로 패딩 (상·하 각각).
+  /// 1줄 행보다 콘텐츠가 한 줄 더 높으므로 패딩은 줄여 전체 높이를 맞춘다.
+  static const double previewAcademyGroupedTwoLineRowPaddingVertical = 16;
+
+  /// Preview — 2줄 행 제목 ↔ 부제 사이 간격
+  static const double previewAcademyTwoLineRowTitleToSubtitleSpacing = 3;
+
+  /// Preview — 2줄 행 리딩(아바타) ↔ 텍스트 사이 간격
+  static const double previewAcademyTwoLineRowLeadingGap = 14;
+
   /// Preview — 그룹 카드 리스트 **내부** 좌우 패딩 (행·디바이더 indent/endIndent)
   static const double previewAcademyGroupedRowPaddingHorizontal = 24;
 
@@ -77,6 +87,7 @@ class FabTabBarTokens {
 
   /// Preview — iOS형 드롭다운·글래스 메뉴 라운드
   static const double previewAcademyMenuRadius = 28;
+  static const double previewAcademyMenuTopOffsetFromArrow = 12;
 
   /// Preview — 운영시간 요일 활성 스위치 (가로 pill, 기준 76 대비 −10%)
   static const double previewAcademySwitchWidth = 68.4;
@@ -153,6 +164,17 @@ class FabTabBarTokens {
   static const Color previewAcademyInputSheetFieldSurfaceDark =
       Color(0xFF2C2C2E);
 
+  /// Preview — 다이얼로그 위험 동작 문구 (삭제 등, iOS형 코랄 레드)
+  static const Color previewAcademyDialogDestructiveTextColor =
+      Color(0xFFEC7367);
+
+  /// Preview — 공통 입력 시트 그룹 카드 배경.
+  static Color previewAcademyDialogGroupedFillColor(Brightness brightness) {
+    return brightness == Brightness.dark
+        ? previewAcademyInputSheetFieldSurfaceDark
+        : Colors.white;
+  }
+
   /// 입력 시트 헤더 제목 글자 크기
   static const double previewAcademyInputSheetTitleFontSize = 20;
 
@@ -192,13 +214,23 @@ class FabTabBarTokens {
   static const double previewAcademyLogoDiameter = 180;
   static const double previewAcademyLogoRadius = 90;
 
+  /// Preview — 선생님 프로필 아바타 반지름 (로고 원보다 15% 작게).
+  static const double previewTeacherAvatarRadius =
+      previewAcademyLogoRadius * 0.85;
+
+  /// Preview — 선생님 아바타 테두리 두께 (겹쳐 쌓일 때 배경색 테두리로 구분).
+  static const double previewTeacherAvatarBorderWidth = 5;
+
+  /// Preview — 겹쳐 쌓이는 아바타들의 가로 겹침 비율(지름 대비). 값↑ = 더 많이 겹침.
+  static const double previewTeacherAvatarOverlapFraction = 0.42;
+
   /// Preview — 학원 로고 플레이스홀더 아이콘 크기
   static const double previewAcademyLogoIconSize = 69;
 
   /// Preview — 「변경」 버튼 세로 패딩
   static const double previewAcademyChangeButtonPaddingVertical = 14;
 
-  /// Preview — 페이지·섹션 제목 Pretendard (`Pretendard-Bold.otf` 등록)
+  /// Preview — 페이지·섹션 제목 Pretendard (Regular / SemiBold / Bold 등록)
   static const String previewHeadlineFontFamily = 'Pretendard';
   static const FontWeight previewHeadlineFontWeight = FontWeight.w700;
 
@@ -277,6 +309,28 @@ class FabTabBarTokens {
 
   static TextStyle previewRowValueStyle(PreviewAcademyPanelStyle style) {
     return previewAcademyValueStyle(style);
+  }
+
+  /// Preview — 2줄 행 **제목** (예: 선생님 이름). 라벨 폰트, 약간 큼·세미볼드.
+  static TextStyle previewAcademyTwoLineTitleStyle(
+    PreviewAcademyPanelStyle style,
+  ) {
+    return TextStyle(
+      fontFamily: previewAcademyLabelFontFamily,
+      fontWeight: FontWeight.w600,
+      fontSize: 17,
+      color: style.title,
+    );
+  }
+
+  /// Preview — 2줄 행 **부제** (예: 역할/설명). 값 폰트, 작게·회색.
+  static TextStyle previewAcademyTwoLineSubtitleStyle(
+    PreviewAcademyPanelStyle style,
+  ) {
+    return previewAcademyValueStyle(style).copyWith(
+      fontSize: 14,
+      color: style.rowValue,
+    );
   }
 
   /// Preview — 카드 행 값/플레이스홀더 (학원정보·정원·지불방식 통일)
@@ -1097,6 +1151,253 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
   }
 }
 
+/// Preview — 「운영 시간」「앱」 등 섹션 라벨.
+class PreviewAcademySectionHeader extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+
+  const PreviewAcademySectionHeader({
+    super.key,
+    required this.style,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+      ),
+      child: Text(
+        title,
+        style: FabTabBarTokens.previewSectionTitleStyle(style)
+            .copyWith(color: style.hint),
+      ),
+    );
+  }
+}
+
+/// Preview — 섹션 라벨 + 공용 그룹 카드.
+class PreviewAcademyLabeledCardSection extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String title;
+  final Widget card;
+
+  const PreviewAcademyLabeledCardSection({
+    super.key,
+    required this.style,
+    required this.title,
+    required this.card,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        PreviewAcademySectionHeader(style: style, title: title),
+        const SizedBox(
+          height: FabTabBarTokens.previewAcademySectionHeaderToCardSpacing,
+        ),
+        card,
+      ],
+    );
+  }
+}
+
+/// Preview — 임의의 행 위젯들을 iOS형 그룹 카드(라운드 + 행간 디바이더)로 감싼다.
+///
+/// 1줄 행([PreviewAcademyInfoRow] → [PreviewAcademyGroupedFieldsCard])과
+/// 2줄 행([PreviewAcademyTwoLineRow])을 분리해 관리하기 위한 공용 셸.
+class PreviewAcademyGroupedRowsCard extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final List<Widget> rows;
+
+  const PreviewAcademyGroupedRowsCard({
+    super.key,
+    required this.style,
+    required this.rows,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(style),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (int i = 0; i < rows.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 1,
+                thickness: 1,
+                indent:
+                    FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+                endIndent:
+                    FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+                color: style.divider,
+              ),
+            rows[i],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 카드 하단 「+ … 추가」 행. 터치 영역은 아이콘·라벨 근처만 (행 전체 X).
+class PreviewAcademyCardAddActionRow extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String label;
+  final VoidCallback? onTap;
+  final double rowHeight;
+
+  const PreviewAcademyCardAddActionRow({
+    super.key,
+    required this.style,
+    required this.label,
+    this.onTap,
+    this.rowHeight = FabTabBarTokens.previewAcademyOperatingRowHeight,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return SizedBox(
+      height: rowHeight,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal:
+                FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+          ),
+          child: MouseRegion(
+            cursor:
+                enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+            child: GestureDetector(
+              onTap: onTap,
+              behavior: HitTestBehavior.deferToChild,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.add,
+                      size: 18,
+                      color: FabTabBarTokens.previewConfirmActionColor,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      label,
+                      style: FabTabBarTokens.previewBodyTextStyle(
+                        style,
+                        color: FabTabBarTokens.previewConfirmActionColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Preview — 그룹 카드 안에서 쓰는 2줄 행(리딩 아바타 + 제목/부제 + trailing/chevron).
+class PreviewAcademyTwoLineRow extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final Widget? leading;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final bool showChevron;
+  final VoidCallback? onTap;
+
+  const PreviewAcademyTwoLineRow({
+    super.key,
+    required this.style,
+    this.leading,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+    this.showChevron = true,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget content = Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+        vertical: FabTabBarTokens.previewAcademyGroupedTwoLineRowPaddingVertical,
+      ),
+      child: Row(
+        children: [
+          if (leading != null) ...[
+            leading!,
+            const SizedBox(
+              width: FabTabBarTokens.previewAcademyTwoLineRowLeadingGap,
+            ),
+          ],
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: FabTabBarTokens.previewAcademyTwoLineTitleStyle(style),
+                ),
+                const SizedBox(
+                  height: FabTabBarTokens
+                      .previewAcademyTwoLineRowTitleToSubtitleSpacing,
+                ),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      FabTabBarTokens.previewAcademyTwoLineSubtitleStyle(style),
+                ),
+              ],
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 4),
+            trailing!,
+          ] else if (showChevron) ...[
+            const SizedBox(width: 4),
+            Icon(
+              Icons.chevron_right,
+              size: FabTabBarTokens.previewAcademyChevronSize,
+              color: style.chevron,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: content,
+      ),
+    );
+  }
+}
+
 /// Preview — 스크린샷 기준 가로 pill 커스텀 스위치 (요일 활성 on/off).
 class PreviewAcademyIosSwitch extends StatefulWidget {
   final bool value;
@@ -1255,23 +1556,32 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
         final heightFactor = 0.08 + 0.92 * t;
         final scaleX = 0.96 + 0.04 * t;
         final slideY = (1 - t) * -6;
+        final radius = BorderRadius.circular(
+          FabTabBarTokens.previewAcademyMenuRadius,
+        );
 
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(
-            FabTabBarTokens.previewAcademyMenuRadius,
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            boxShadow:
+                FabTabBarTokens.paletteFor(Theme.of(context).brightness)
+                    .boxShadows,
           ),
-          clipBehavior: Clip.antiAlias,
-          child: Align(
-            alignment: Alignment.topRight,
-            heightFactor: heightFactor,
-            child: Transform.translate(
-              offset: Offset(0, slideY),
-              child: Transform.scale(
-                scaleX: scaleX,
-                scaleY: 1,
-                alignment: Alignment.topRight,
-                filterQuality: FilterQuality.high,
-                child: child,
+          child: ClipRRect(
+            borderRadius: radius,
+            clipBehavior: Clip.antiAlias,
+            child: Align(
+              alignment: Alignment.topRight,
+              heightFactor: heightFactor,
+              child: Transform.translate(
+                offset: Offset(0, slideY),
+                child: Transform.scale(
+                  scaleX: scaleX,
+                  scaleY: 1,
+                  alignment: Alignment.topRight,
+                  filterQuality: FilterQuality.high,
+                  child: child,
+                ),
               ),
             ),
           ),
@@ -1333,13 +1643,6 @@ class _PreviewAcademyGlassMenuPanelState
                     isDark ? const Color(0x33FFFFFF) : const Color(0x40FFFFFF),
                 width: 0.5,
               ),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x1A000000),
-                  blurRadius: 20,
-                  offset: Offset(0, 6),
-                ),
-              ],
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(radius),
@@ -1425,7 +1728,6 @@ class _PreviewAcademyGlassMenuPanelState
     );
   }
 }
-
 /// Preview — 기본 정보 입력 시트에서 포커스할 필드.
 enum PreviewAcademyBasicInfoField {
   academyName,
@@ -1625,10 +1927,9 @@ class PreviewAcademyDialogGroupedFields extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final groupedFill = isDark
-        ? FabTabBarTokens.previewAcademyInputSheetFieldSurfaceDark
-        : Colors.white;
+    final groupedFill = FabTabBarTokens.previewAcademyDialogGroupedFillColor(
+      Theme.of(context).brightness,
+    );
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1645,6 +1946,72 @@ class PreviewAcademyDialogGroupedFields extends StatelessWidget {
   }
 }
 
+/// Preview — 다이얼로그 하단 위험 동작 카드 (삭제 등).
+class PreviewAcademyDialogDestructiveCard extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String label;
+  final VoidCallback? onTap;
+
+  const PreviewAcademyDialogDestructiveCard({
+    super.key,
+    required this.style,
+    required this.label,
+    this.onTap,
+  });
+
+  static const Color destructiveColor =
+      FabTabBarTokens.previewAcademyDialogDestructiveTextColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final groupedFill = FabTabBarTokens.previewAcademyDialogGroupedFillColor(
+      Theme.of(context).brightness,
+    );
+
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal:
+            FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+        vertical:
+            FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
+      ),
+      child: Center(
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: FabTabBarTokens.previewAcademyInputSheetTitleStyle(style)
+              .copyWith(
+            color: onTap == null ? style.hint : destructiveColor,
+          ),
+        ),
+      ),
+    );
+
+    return Opacity(
+      opacity: onTap == null ? 0.45 : 1,
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: groupedFill,
+          borderRadius: BorderRadius.circular(
+            FabTabBarTokens.previewAcademyGroupedCardRadius,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: onTap == null
+            ? content
+            : Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onTap,
+                  child: content,
+                ),
+              ),
+      ),
+    );
+  }
+}
+
 /// Preview — 공통 입력 시트 필드 행.
 class PreviewAcademyDialogFieldRow extends StatelessWidget {
   final PreviewAcademyPanelStyle style;
@@ -1656,6 +2023,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
   final TextInputType keyboardType;
   final List<TextInputFormatter>? inputFormatters;
   final String emptyHintText;
+  final int? maxLines;
+  final int? minLines;
 
   const PreviewAcademyDialogFieldRow({
     super.key,
@@ -1668,6 +2037,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
     this.keyboardType = TextInputType.text,
     this.inputFormatters,
     this.emptyHintText = '필수입력',
+    this.maxLines = 1,
+    this.minLines = 1,
   });
 
   @override
@@ -1703,6 +2074,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
               focusNode: focusNode,
               keyboardType: keyboardType,
               inputFormatters: inputFormatters,
+              maxLines: maxLines,
+              minLines: minLines,
               style: FabTabBarTokens.previewAcademyFieldInputStyle(style),
               decoration: InputDecoration(
                 isDense: true,
@@ -1716,6 +2089,82 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Preview — 공통 입력 시트 드롭다운(피커) 행.
+///
+/// [PreviewAcademyInfoRow] 지불 방식 행과 동일하게 위·아래 화살표를 쓰고
+/// 행 전체가 탭 대상이다.
+class PreviewAcademyDialogPickerRow extends StatelessWidget {
+  final PreviewAcademyPanelStyle style;
+  final String label;
+  final String value;
+  final GlobalKey? anchorKey;
+  final VoidCallback? onTap;
+  final bool valueMuted;
+
+  const PreviewAcademyDialogPickerRow({
+    super.key,
+    required this.style,
+    required this.label,
+    required this.value,
+    this.anchorKey,
+    this.onTap,
+    this.valueMuted = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final valueStyle =
+        FabTabBarTokens.previewAcademyFieldInputStyle(style).copyWith(
+      color: valueMuted ? style.hint : null,
+    );
+
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal:
+            FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+        vertical:
+            FabTabBarTokens.previewAcademyInputSheetFieldRowPaddingVertical,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
+            child: Text(
+              label,
+              style: FabTabBarTokens.previewRowLabelStyle(style),
+            ),
+          ),
+          const SizedBox(
+            width: FabTabBarTokens.previewAcademyInputSheetLabelToFieldSpacing,
+          ),
+          Expanded(
+            child: Text(value, style: valueStyle),
+          ),
+          if (onTap != null) ...[
+            const SizedBox(width: 4),
+            PreviewAcademyPaymentMenuAnchor(
+              key: anchorKey,
+              style: style,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) return row;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: row,
       ),
     );
   }
@@ -2398,12 +2847,14 @@ class PreviewAcademyGlassMenu {
     required String selectedId,
     required List<PreviewAcademyMenuOption> options,
   }) {
-    final anchorBottomRight =
-        anchor.localToGlobal(anchor.size.bottomRight(Offset.zero));
+    // 오른쪽 위 화살표 기준으로 항상 같은 높이에서 펼쳐지게 한다.
+    final anchorTopRight =
+        anchor.localToGlobal(anchor.size.topRight(Offset.zero));
     final screenSize = MediaQuery.sizeOf(context);
     const menuWidth = 240.0;
-    final top = anchorBottomRight.dy + 6;
-    final left = (anchorBottomRight.dx - menuWidth)
+    final top =
+        anchorTopRight.dy - FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
+    final left = (anchorTopRight.dx - menuWidth)
         .clamp(8.0, screenSize.width - menuWidth - 8);
 
     final overlay = Overlay.of(context, rootOverlay: true);

@@ -1641,7 +1641,15 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     const segs = String(text).split(/\u0000YGGINLFIG(\d+)\u0000/g);
     let acc = '';
     for (let s = 0; s < segs.length; s += 1) {
-      if (s % 2 === 1) { acc += inlineFigResolver(Number(segs[s])); continue; }
+      if (s % 2 === 1) {
+        // smartTexLineCore 가 세그먼트 leading/trailing 공백을 trim 하므로,
+        // 마커 양옆 원본 띄어쓰기(글자와 그림 사이 간격)가 사라진다. 원본에 공백이
+        // 있었으면 정식 어절 공백(\ )을 복원한다.
+        const leftSpace = /\s$/.test(segs[s - 1] || '') ? '\\ ' : '';
+        const rightSpace = /^\s/.test(segs[s + 1] || '') ? '\\ ' : '';
+        acc += leftSpace + inlineFigResolver(Number(segs[s])) + rightSpace;
+        continue;
+      }
       if (segs[s]) acc += smartTexLine(segs[s], equations, stemTexOptions);
     }
     return acc;
@@ -3082,6 +3090,10 @@ function stripImageChoiceFigureMarkers(stem) {
 function blankChoiceLabels(question) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const raw = Array.isArray(meta.blank_choice_labels) ? meta.blank_choice_labels : [];
+  const configured = raw
+    .map((label) => String(label || '').trim())
+    .filter(Boolean);
+  if (configured.length >= 2 && configured.length <= 4) return configured;
   const fallback = ['(가)', '(나)', '(다)'];
   return fallback.map((label, idx) => {
     const value = String(raw[idx] || '').trim();
@@ -3090,9 +3102,17 @@ function blankChoiceLabels(question) {
 }
 
 function blankChoiceCells(text, columnCount) {
-  const parts = String(text || '')
-    .split(/\s*,\s*/)
-    .map((v) => v.trim());
+  const raw = String(text || '').trim();
+  let parts = raw.split(/\s*,\s*/).map((v) => v.trim());
+  // 추출 시 쉼표 구분자가 누락된 표형 보기 처리:
+  //   "(ㄴ)(ㄱ)(ㄷ)" 또는 "(ㄴ) (ㄱ) (ㄷ)" 처럼 괄호 그룹이 열 개수만큼 연속하면
+  //   쉼표 대신 괄호 그룹 단위로 분리한다. (쉼표가 정상이면 폴백을 타지 않음)
+  if (parts.filter(Boolean).length < columnCount) {
+    const groups = raw.match(/[(（][^()（）]*[)）]/g);
+    if (groups && groups.length >= columnCount) {
+      parts = groups.map((g) => g.trim());
+    }
+  }
   while (parts.length < columnCount) parts.push('');
   return parts.slice(0, columnCount);
 }
@@ -3126,27 +3146,40 @@ function renderBlankChoicesLatex(question, choices, equations, options = {}) {
   const widthScale = blankChoiceWidthScale(question);
   const columnScales = blankChoiceColumnScales(question, labels.length);
   const hasCustomColumns = columnScales.some((v) => Math.abs(v - 1.0) > 0.001);
-  const tabColSepPt = hasCustomColumns ? '2.00' : (6 * widthScale).toFixed(2);
-  const baseEm = [4.4, 4.4, 9.2];
-  const boxCell = (content, idx) => {
-    if (!hasCustomColumns) return content;
-    const w = ((baseEm[idx] || 5.0) * widthScale * columnScales[idx]).toFixed(2);
-    return `\\makebox[${w}em][c]{${content}}`;
-  };
-  const header = [''].concat(labels.map((label, idx) => boxCell(escapeLatexText(label), idx))).join(' & ');
+  const hasWidthScale = Math.abs(widthScale - 1.0) > 0.001;
+  const shouldBoxCells = hasWidthScale || hasCustomColumns;
+  // makebox 가 열 "너비" 를 책임지더라도, 열 사이 간격(tabcolsep)이 2pt 로 붙으면
+  //   넓은 열들이 서로 달라붙어 "왼쪽으로 몰린" 것처럼 보인다. 너비 배율에 비례해
+  //   간격도 함께 키워 열이 시각적으로 분리되도록 한다.
+  const tabColSepPt = shouldBoxCells
+    ? Math.max(6, 6 * widthScale).toFixed(2)
+    : '6.00';
+  // 표형 보기의 "가로"는 번호열을 제외한 데이터 열 전체에 균등하게 적용한다.
+  // 개별 열 차이는 columnScales 로만 조절한다.
+  const baseDataColumnEm = 5.8;
+  // 데이터 열은 고정폭 + 가운데 정렬 컬럼(`>{\centering\arraybackslash}m{W}`)으로 그린다.
+  //   과거 `c` + \makebox[W][c] 방식은 셀 내부에서 내용이 좌측으로 치우쳐 보이는 문제가
+  //   있었으므로, 열 타입 자체가 가로/세로 중앙정렬을 보장하도록 바꾼다.
+  const dataColSpec = labels
+    .map((_, idx) => {
+      const w = (baseDataColumnEm * widthScale * columnScales[idx]).toFixed(2);
+      return `>{\\centering\\arraybackslash}m{${w}em}`;
+    })
+    .join('');
+  const header = [''].concat(labels.map((label) => escapeLatexText(label))).join(' & ');
   const rows = choices.map((choice, idx) => {
     const label = typeof choice === 'string'
       ? (CIRCLED_DIGITS[idx] || String(idx + 1))
       : (String(choice?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
     const rawText = typeof choice === 'string' ? choice : choice?.text || '';
     const cells = blankChoiceCells(rawText, labels.length)
-      .map((cell, cellIdx) => boxCell(smartTexLine(cell, equations), cellIdx));
+      .map((cell) => smartTexLine(cell, equations));
     return [label].concat(cells).join(' & ');
   });
   return [
     `{${stretchWithFontTex('1.7', options.fontSizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em`,
     `\\setlength{\\tabcolsep}{${tabColSepPt}pt}`,
-    '\\noindent\\begin{tabular}{@{}lccc@{}}',
+    `\\noindent\\begin{tabular}{@{}l${dataColSpec}@{}}`,
     header + ' \\\\',
     rows.join(' \\\\\n'),
     '\\end{tabular}\\par}',
@@ -4675,9 +4708,18 @@ function renderOneQuestion(question, {
           }
         }
         pendingEmpty = 0;
-        const rendered = renderStemTextLine(sub, equations, '', {
+        // wrap(어울림) 본문 안에도 inline-text(글 중간) 그림이 섞여 있을 수 있다.
+        // 일반 본문 경로와 동일하게 [그림] 마커를 sentinel 로 치환한 뒤 resolver 로
+        // 글자 흐름 안에 끼워넣는다. (마커는 figIdx 를 순서대로 소비한다.)
+        const withFigs = replaceFigureMarkersTextPath(sub);
+        let rendered = renderStemTextLine(withFigs, equations, '', {
           fontSizePt: questionFontSizePt,
+          inlineFigureResolver: (figI) => renderInlineTextFigureLatex(figI),
         });
+        rendered = rendered.replace(
+          inlineFigureSplitRegex(),
+          (_m, n) => renderInlineTextFigureLatex(Number(n)),
+        );
         if (rendered.trim()) out.push(rendered);
       }
     }
@@ -4709,10 +4751,10 @@ function renderOneQuestion(question, {
     return Math.max(1, count);
   }
 
-  function renderLegacyInlineFigureWithTextLatex(i, textSeg, position) {
+  function renderLegacyInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
-    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    const text = (preRenderedText != null ? preRenderedText : renderTextSegmentInlineLatex(textSeg)).trim();
     if (!text) return renderFigureLatex(i);
     const gap = '0.90em';
     const figWidth = expr.widthExpr;
@@ -4725,13 +4767,13 @@ function renderOneQuestion(question, {
     return `\\par\\noindent${figBox}\\hspace{${gap}}${textBox}\\par\n`;
   }
 
-  function renderInlineFigureWithTextLatex(i, textSeg, position) {
+  function renderInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
     if (useLegacyInlineWrapMode()) {
-      return renderLegacyInlineFigureWithTextLatex(i, textSeg, position);
+      return renderLegacyInlineFigureWithTextLatex(i, textSeg, position, preRenderedText);
     }
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
-    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    const text = (preRenderedText != null ? preRenderedText : renderTextSegmentInlineLatex(textSeg)).trim();
     if (!text) return renderFigureLatex(i);
     const layout = layoutForIndex(i) || {};
     const offsetX = safeFigureOffsetX(layout);
@@ -5208,6 +5250,9 @@ function renderOneQuestion(question, {
           (nextPosition === 'inline-left' || nextPosition === 'inline-right')
           && figureSegWillEmit(sIdx + 1)
         ) {
+          // 본문(seg)을 먼저 렌더해 그 안의 inline-text 그림 마커가 wrap 그림보다
+          // 먼저 figIdx 슬롯을 소비하도록 한다. (읽는 순서: 본문 마커 → wrap 그림)
+          const wrapText = renderTextSegmentInlineLatex(seg);
           const i = resolveFigureIndexForSegment(sIdx + 1, nextFigText);
           if (!figIdxConsumedByGroup.has(i)) {
             emittedFigIdxs.add(i);
@@ -5215,6 +5260,7 @@ function renderOneQuestion(question, {
               i,
               seg,
               nextPosition,
+              wrapText,
             );
             if (renderedInline && renderedInline.trim()) {
               parts.push(renderedInline);
@@ -5953,6 +5999,70 @@ function groupIndependentSetQuestionsForRender(questions) {
   return out;
 }
 
+// 독립형 세트 그룹의 "분할 정책"을 읽는다.
+//   매니저앱이 세트 첫 문항 meta 에 set_render_mode = 'split' | 'join' | 'auto' 로 저장한다.
+//   - 'split' : 항상 분할 (공통발문+Q1 머리조각 + 나머지 평문항)
+//   - 'join'  : 항상 통짜 유지 (절대 분할 안 함)
+//   - 'auto'  : 높이 추정으로 슬롯 초과 시에만 분할 (기본)
+function independentSetSplitMode(group) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  for (const item of items) {
+    const meta = item?.meta && typeof item.meta === 'object' ? item.meta : {};
+    const raw = String(
+      meta.set_render_mode
+        ?? meta.setRenderMode
+        ?? meta.set_split_mode
+        ?? meta.independent_set_render_mode
+        ?? '',
+    ).trim().toLowerCase();
+    if (raw === 'split' || raw === 'join' || raw === 'auto') return raw;
+  }
+  return 'auto';
+}
+
+// 한 슬롯 높이를 넘는 독립형 세트 그룹을 "머리조각 + 평문항"으로 분할한다.
+//   머리조각: 공통발문 + 첫 번째 하위문항 (전체 범위 [15~18] 헤더 유지)
+//   나머지 하위문항: 공통발문 없는 일반 문항으로 풀어서 다음 슬롯부터 자연스럽게 흐르게 한다.
+//   (공통발문 위에 범위 헤더가 있으므로 Q2~ 에는 별도 지문 참조 표시를 달지 않는다.)
+function splitOversizedIndependentSetGroups(list, { capacityRatio = 0.55 } = {}) {
+  const source = Array.isArray(list) ? list : [];
+  const out = [];
+  for (const block of source) {
+    if (block?.__render_kind !== 'independent_set_group') {
+      out.push(block);
+      continue;
+    }
+    const items = Array.isArray(block.items) ? block.items : [];
+    if (items.length <= 1) {
+      out.push(block);
+      continue;
+    }
+    const mode = independentSetSplitMode(block);
+    let shouldSplit;
+    if (mode === 'join') {
+      shouldSplit = false;
+    } else if (mode === 'split') {
+      shouldSplit = true;
+    } else {
+      shouldSplit = estimateAssignmentSlotFillRatio(block) > capacityRatio;
+    }
+    if (!shouldSplit) {
+      out.push(block);
+      continue;
+    }
+    // 머리조각: 전체 범위 헤더를 보존한 채 첫 문항만 그룹으로 유지.
+    const fullHeaderLabel = formatIndependentSetHeaderLabelLatex(block);
+    out.push({
+      ...block,
+      items: items.slice(0, 1),
+      header_label: fullHeaderLabel,
+    });
+    // 나머지 하위문항은 평문항으로 풀어 슬롯 패커가 자연스럽게 배치하도록 한다.
+    for (const rest of items.slice(1)) out.push(rest);
+  }
+  return out;
+}
+
 function wrapIndependentSetQuestionsForSinglePreview(questions) {
   const source = Array.isArray(questions) ? questions : [];
   return source.map((question) => {
@@ -5995,6 +6105,66 @@ function chunkQuestionsForMockGrid(questions, questionsPerPage) {
     pages.push(list.slice(i, i + size));
   }
   return pages;
+}
+
+// 높이 기반 모의고사 2단 배치.
+//   각 단(column)을 "추정 높이(fill ratio)" 합이 columnCapacity 를 넘지 않을 때까지 채운다.
+//   - 키 큰 조각(largeThreshold 초과: 분할된 [공통발문+Q1] 머리조각 등) 은 단 하나를 독차지.
+//   - 작은 문항은 한 단에 여러 개를 쌓는다(기존 2개/단 밀도 유지).
+//   기존 균등-분할(chunkQuestionsForMockGrid) 과 달리, 키 큰 조각이 반쪽 슬롯에 들어가
+//   넘쳐 겹치는 문제를 막는다. 반환 형식은 chunkQuestionsForAssignmentGrid 와 동일.
+function chunkQuestionsForMockGridHeightAware(
+  questions,
+  { columnCapacity = 1.0, largeThreshold = 0.55, columnsPerPage = 2, maxPerColumn = 2 } = {},
+) {
+  const list = Array.isArray(questions) ? questions : [];
+  const pages = [];
+  const pageColumnCounts = [];
+  let columns = [];
+  let curCol = [];
+  let curFill = 0;
+  const flushCol = () => {
+    columns.push(curCol);
+    curCol = [];
+    curFill = 0;
+  };
+  const flushPage = () => {
+    if (curCol.length > 0) flushCol();
+    if (columns.length === 0) return;
+    const flat = [];
+    const counts = [];
+    for (const c of columns) {
+      flat.push(...c);
+      counts.push(c.length);
+    }
+    while (counts.length < columnsPerPage) counts.push(0);
+    pages.push(flat);
+    pageColumnCounts.push({
+      left: Math.max(1, counts[0]),
+      right: Math.max(0, counts[1] || 0),
+    });
+    columns = [];
+  };
+  for (const q of list) {
+    const ratio = estimateAssignmentSlotFillRatio(q);
+    const isLarge = ratio >= largeThreshold;
+    // 현재 단에 못 들어가면 단을 넘긴다.
+    const wouldOverflow = curCol.length > 0
+      && (isLarge || curFill + ratio > columnCapacity || curCol.length >= maxPerColumn);
+    if (wouldOverflow) {
+      flushCol();
+      if (columns.length >= columnsPerPage) flushPage();
+    }
+    curCol.push(q);
+    curFill += ratio;
+    // 키 큰 조각은 단을 독차지 → 즉시 단 마감.
+    if (isLarge || curFill >= columnCapacity || curCol.length >= maxPerColumn) {
+      flushCol();
+      if (columns.length >= columnsPerPage) flushPage();
+    }
+  }
+  flushPage();
+  return { pages, pageColumnCounts };
 }
 
 function estimateAssignmentSlotFillRatio(question) {
@@ -7136,6 +7306,10 @@ export function buildDocumentTexSource(questions, options = {}) {
     disableIndependentSetGrouping = false,
     previewIndependentSetCommonStem = false,
     reviewPdf = false,
+    // 독립형 세트 그룹이 한 슬롯을 넘으면 '공통발문+Q1 머리조각 + 나머지 평문항' 으로
+    //   자동 분할한다. 이 임계치(fill ratio)를 넘는 세트가 분할 대상이 된다.
+    //   매니저앱에서 세트별 set_render_mode='split'|'join' 으로 강제 오버라이드 가능.
+    independentSetSplitCapacity = 0.55,
     // 클라이언트(Flutter) 가 '새로고침' / 'PDF 생성' 경로에서 true 로 넘겨주는 플래그.
     //   true 이면 모드 전환 기반 자동 라벨 생성(예: '5지선다형') 을 전면 중단하고,
     //   columnLabelAnchors 에 들어있는 항목들만 그대로 사용한다.
@@ -7178,15 +7352,20 @@ export function buildDocumentTexSource(questions, options = {}) {
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
 
   const qList = Array.isArray(questions) ? questions : [];
+  // 독립형 세트(independent_set)는 프로필과 무관하게 [15~16] 헤더 + 공통발문 1회 +
+  //   하위문항 형태로 "그룹핑"하는 것이 기본 동작이다(PDF 출처 DB 문제와 동일).
+  //   오직 disableIndependentSetGrouping 이 명시적으로 켜진 경우에만 그룹핑을 끄고,
+  //   이때 previewIndependentSetCommonStem 이 있으면 문항별로 공통발문을 붙인다.
   const visualQList = (profile === 'review_compact' || reviewPdf === true)
     ? qList
-    : (isAssignmentProfile
-        ? (disableIndependentSetGrouping === true
-            ? (previewIndependentSetCommonStem === true
-                ? wrapIndependentSetQuestionsForSinglePreview(qList)
-                : qList)
-            : groupIndependentSetQuestionsForRender(qList))
-        : qList);
+    : (disableIndependentSetGrouping === true
+        ? (previewIndependentSetCommonStem === true
+            ? wrapIndependentSetQuestionsForSinglePreview(qList)
+            : qList)
+        : splitOversizedIndependentSetGroups(
+            groupIndependentSetQuestionsForRender(qList),
+            { capacityRatio: independentSetSplitCapacity },
+          ));
   if (profile === 'review_compact' || reviewPdf === true) {
     const resolveReviewAnswer = (q) => {
       const exp = String(q?.export_answer || '').trim();
@@ -7300,6 +7479,20 @@ export function buildDocumentTexSource(questions, options = {}) {
       const assignmentPlan = chunkQuestionsForAssignmentGrid(visualQList);
       pages = assignmentPlan.pages;
       assignmentPageColumnCounts = assignmentPlan.pageColumnCounts;
+    } else if (
+      isMockExamProfile
+      && leftSlots === rightSlots
+      && visualQList.some((q) => estimateAssignmentSlotFillRatio(q) >= 0.55)
+    ) {
+      // 키 큰 조각(분할된 [공통발문+Q1] 머리조각 등)이 섞인 모의고사 페이지는
+      //   균등 슬롯 분할 시 넘쳐 겹치므로, 높이 기반으로 단을 배치한다.
+      //   (작은 문항만 있는 일반 문서는 기존 균등 분할을 유지해 레이아웃 변화 없음)
+      const mockPlan = chunkQuestionsForMockGridHeightAware(visualQList, {
+        columnsPerPage: 2,
+        maxPerColumn: Math.max(1, leftSlots),
+      });
+      pages = mockPlan.pages;
+      assignmentPageColumnCounts = mockPlan.pageColumnCounts;
     } else {
       pages = chunkQuestionsForMockGrid(visualQList, qPerPage);
     }

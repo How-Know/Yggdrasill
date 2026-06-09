@@ -91,6 +91,15 @@ static volatile bool g_student_info_pending = false;
 static String g_student_info_pending_json;
 static volatile bool g_force_unbind_pending = false;
 
+// 초기 연결 안정화 보강 상태
+//  - 미바인딩(학생 리스트) 화면에서 list_today 응답이 늦거나 유실될 때 자동 재요청
+//  - 첫 데이터(학생 리스트/학생 정보) 수신 전까지는 절전 진입을 막아
+//    "연결 중"이 빈/꺼진 화면처럼 보이지 않게 함
+static volatile bool g_students_received = false;
+static uint32_t g_last_list_request_ms = 0;
+static const uint32_t LIST_REQUEST_RETRY_MS = 6000;
+static bool g_first_ui_data_ready = false;
+
 // GROUP_CMD_V2 (server-authoritative group transition) states
 static const char* GROUP_CMD_V2_TARGET_DEVICE = "m5-device-001";
 static const uint32_t GROUP_CMD_V2_ACK_TIMEOUT_MS = 2500;
@@ -184,6 +193,18 @@ static void configureMqttServer() {
   const char* host = kMqttHosts[mqttHostIndex % (sizeof(kMqttHosts)/sizeof(kMqttHosts[0]))];
   mqtt.setServer(host, MQTT_PORT);
   Serial.print("MQTT host: "); Serial.println(host);
+}
+
+// 미바인딩(학생 리스트) 화면에서 오늘 학생 목록을 요청한다.
+// onMqttConnect와 loop()의 재요청 워치독에서 공통으로 사용.
+static void fw_request_list_today() {
+  String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  DynamicJsonDocument cmd(64);
+  cmd["action"] = "list_today";
+  String payload; serializeJson(cmd, payload);
+  mqtt.publish(cmdTopic.c_str(), 1, false, payload.c_str());
+  g_last_list_request_ms = millis();
+  Serial.println("[MQTT] Requested list_today");
 }
 
 void fw_publish_list_homeworks(const char* studentIdArg);
@@ -382,12 +403,10 @@ void onMqttConnect(bool sessionPresent) {
     }
     fw_publish_student_info(studentId.c_str());
   } else {
-    // 바인딩 없으면 학생 리스트 요청
-    DynamicJsonDocument cmd(64);
-    cmd["action"] = "list_today";
-    String payload; serializeJson(cmd, payload);
-    mqtt.publish(cmdTopic.c_str(), 1, false, payload.c_str());
-    Serial.println("[MQTT] Requested list_today");
+    // 바인딩 없으면 학생 리스트 요청. 응답 수신 추적을 리셋해, 응답이 늦거나
+    // 유실되면 loop()의 워치독이 자동 재요청하도록 한다.
+    g_students_received = false;
+    fw_request_list_today();
   }
   
   // Optionally also check for updates once
@@ -400,8 +419,8 @@ void onMqttConnect(bool sessionPresent) {
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
-  M5.Display.setCursor(0, 40);
-  M5.Display.printf("MQTT disconnect: %d\n", (int)reason);
+  // 화면 직접 출력은 async-tcp 스레드에서 LVGL flush와 경합하고,
+  // 사용자에게 "MQTT disconnect: 0"이 그대로 노출되므로 제거. 시리얼 로그만 남김.
   Serial.print("MQTT disconnect reason: "); Serial.println((int)reason);
   // 3초 후 재시도
   nextMqttReconnectMs = millis() + 3000;
@@ -934,6 +953,7 @@ void loop() {
                     (unsigned)arr.size(),
                     (unsigned)json_copy.length());
       ui_port_update_homeworks(arr);
+      g_first_ui_data_ready = true;
       publish_homeworks_sync_ack(meta, (unsigned)arr.size());
     } else {
       Serial.printf("[M5SYNC][parse_error] device=%s student=%s err=%s len=%u\n",
@@ -983,6 +1003,8 @@ void loop() {
         }
         Serial.print("students_today count="); Serial.println((int)arr.size());
         ui_port_update_students(arr);
+        g_students_received = true;
+        g_first_ui_data_ready = true;
       }
     }
   }
@@ -1000,6 +1022,7 @@ void loop() {
       if (!err && doc.containsKey("info")) {
         JsonObject info = doc["info"].as<JsonObject>();
         ui_port_update_student_info(info);
+        g_first_ui_data_ready = true;
       }
     }
   }
@@ -1013,6 +1036,11 @@ void loop() {
   }
 
   lv_timer_handler();
+  // 첫 데이터(학생 리스트/학생 정보/과제) 수신 전에는 절전 진입을 막아
+  // "연결 중" 상태가 빈 화면/꺼진 화면처럼 보이지 않게 한다.
+  if (!g_first_ui_data_ready) {
+    screensaver_keep_awake();
+  }
   screensaver_poll();
   screensaver_check_shake();
   
@@ -1086,6 +1114,15 @@ void loop() {
         fw_publish_student_info(studentId.c_str());
         fw_publish_list_homeworks(studentId.c_str());
       }
+    }
+  }
+
+  // 미바인딩(학생 리스트) 화면 워치독: 연결됐는데 학생 리스트가 아직 안 왔으면
+  // 일정 주기로 list_today를 재요청한다(초기 요청 유실/타이밍 누락 대비).
+  if (mqtt.connected() && studentId.length() == 0 && !g_students_received) {
+    if (g_last_list_request_ms == 0 || (now - g_last_list_request_ms) >= LIST_REQUEST_RETRY_MS) {
+      Serial.println("[MQTT][WATCHDOG] students list not received -> re-request list_today");
+      fw_request_list_today();
     }
   }
 

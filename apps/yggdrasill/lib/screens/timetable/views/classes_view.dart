@@ -7,6 +7,7 @@ import '../../../models/group_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/education_level.dart';
 import '../../../widgets/app_snackbar.dart';
+import '../../../widgets/dialog_tokens.dart';
 import 'components/timetable_cell.dart';
 import '../components/timetable_drag_selector.dart';
 import '../components/timetable_content_view.dart';
@@ -237,10 +238,10 @@ class _ClassesViewState extends State<ClassesView>
               colorScheme: ColorScheme.dark(
                 primary: green,
                 onPrimary: Colors.white,
-                surface: Color(0xFF0B1112),
+                surface: kDlgBg,
                 onSurface: Colors.white,
               ),
-              dialogBackgroundColor: const Color(0xFF0B1112),
+              dialogBackgroundColor: kDlgBg,
             ),
             child: child ?? const SizedBox.shrink(),
           );
@@ -375,7 +376,7 @@ class _ClassesViewState extends State<ClassesView>
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: const BorderSide(color: Color(0xFF223131)),

@@ -9,6 +9,7 @@ import '../../services/data_manager.dart';
 import 'components/attendance_indicator.dart';
 import 'components/student_course_history_tab.dart';
 import '../../utils/attendance_judgement.dart';
+import '../../theme/ygg_semantic_colors.dart';
 
 class StudentCourseDetailScreen extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
@@ -53,7 +54,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: context.yggSurfaceBase,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: Color(0xFF223131)),
@@ -182,7 +183,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
@@ -366,7 +367,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final monthLabel = '${_currentDate.year}년 ${_currentDate.month}월';
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1112),
+        color: context.yggSurfaceBase,
         borderRadius: BorderRadius.circular(16),
       ),
       padding: const EdgeInsets.all(20),
@@ -388,7 +389,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   height: panelHeight + 48,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0B1112),
+                      color: context.yggSurfaceBase,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: const Color(0xFF223131)),
                     ),
@@ -934,7 +935,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1112),
+        color: context.yggSurfaceBase,
         borderRadius: BorderRadius.circular(16),
       ),
       padding: const EdgeInsets.all(20),
@@ -1547,7 +1548,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: context.yggSurfaceBase,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: Color(0xFF223131)),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/tenant_service.dart';
 import '../services/data_manager.dart';
+import '../widgets/dialog_tokens.dart';
 
 class ClassContentEventsDialog extends StatefulWidget {
   const ClassContentEventsDialog({super.key});
@@ -199,14 +200,14 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.all(24),
       child: Container(
         padding: const EdgeInsets.fromLTRB(26, 26, 26, 18),
         width: 770,
         height: 640,
-        color: const Color(0xFF0B1112),
+        color: kDlgBg,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

@@ -24,6 +24,8 @@ import '../../consult/consult_notes_screen.dart';
 import '../../../services/consult_note_controller.dart';
 import '../../../widgets/dark_panel_route.dart';
 import '../../../widgets/schedule_locked_by_makeup_dialog.dart';
+import '../../../theme/ygg_semantic_colors.dart';
+import '../../../widgets/dialog_tokens.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -137,7 +139,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       barrierColor: Colors.black54,
       builder: (context) {
         return Dialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -518,7 +520,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           child: Container(
             padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
             decoration: BoxDecoration(
-              color: const Color(0xFF0B1112),
+              color: context.yggSurfaceBase,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: levelBarColor, width: 1),
             ),
@@ -678,7 +680,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       child: Container(
                         padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF0B1112),
+                          color: context.yggSurfaceBase,
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
                               color: const Color(0xFF223131), width: 1),
@@ -907,7 +909,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('수업 삭제', style: TextStyle(color: Colors.white)),
         content: const Text('정말로 이 수업을 삭제하시겠습니까?',
@@ -999,9 +1001,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 curve: Curves.easeInOutCubic,
                 offset: isClassListSheetOpen ? Offset.zero : const Offset(1, 0),
                 child: Container(
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF0B1112),
-                    border: Border(
+                  decoration: BoxDecoration(
+                    color: context.yggSurfaceBase,
+                    border: const Border(
                       left: BorderSide(color: Color(0xFF223131), width: 1),
                     ),
                   ),
@@ -2442,10 +2444,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF1B6B63),
               onPrimary: Colors.white,
-              surface: Color(0xFF0B1112),
+              surface: kDlgBg,
               onSurface: Color(0xFFEAF2F2),
             ),
-            dialogBackgroundColor: const Color(0xFF0B1112),
+            dialogBackgroundColor: kDlgBg,
           ),
           child: child ?? const SizedBox.shrink(),
         ),
@@ -2463,10 +2465,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF1B6B63),
               onPrimary: Colors.white,
-              surface: Color(0xFF0B1112),
+              surface: kDlgBg,
               onSurface: Color(0xFFEAF2F2),
             ),
-            dialogBackgroundColor: const Color(0xFF0B1112),
+            dialogBackgroundColor: kDlgBg,
           ),
           child: child ?? const SizedBox.shrink(),
         ),
@@ -2486,7 +2488,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       barrierDismissible: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: kDlgBg,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: Color(0xFF223131)),
@@ -2644,7 +2646,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       context: context,
       barrierDismissible: true,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: Color(0xFF223131)),
@@ -2715,7 +2717,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       context: context,
       barrierDismissible: true,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: Color(0xFF223131)),
@@ -3513,7 +3515,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: kDlgBg,
           title: const Text(
             '수업기간 수정',
             style: TextStyle(
@@ -3679,7 +3681,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         final choice = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            backgroundColor: const Color(0xFF0B1112),
+            backgroundColor: kDlgBg,
             title: const Text('수업시간 삭제',
                 style: TextStyle(
                     color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
@@ -3721,7 +3723,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            backgroundColor: const Color(0xFF0B1112),
+            backgroundColor: kDlgBg,
             title: const Text('수업시간 삭제',
                 style: TextStyle(
                     color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
@@ -3754,7 +3756,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: kDlgBg,
           title: const Text('수업시간 삭제',
               style: TextStyle(
                   color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
@@ -5260,7 +5262,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           child: Container(
             padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
             decoration: BoxDecoration(
-              color: const Color(0xFF0B1112),
+              color: context.yggSurfaceBase,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: const Color(0xFF223131), width: 1),
             ),
@@ -5675,7 +5677,7 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))

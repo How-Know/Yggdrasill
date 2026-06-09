@@ -6,6 +6,7 @@ import '../../../models/session_override.dart';
 import '../../../models/class_info.dart';
 import '../../../models/attendance_record.dart';
 import '../../../services/data_manager.dart';
+import '../../../widgets/dialog_tokens.dart';
 
 class AttendanceCheckView extends StatefulWidget {
   final StudentWithInfo? selectedStudent;
@@ -225,7 +226,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               }
             }
             return AlertDialog(
-              backgroundColor: const Color(0xFF1F1F1F),
+              backgroundColor: kDlgBg,
               contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 14),
               title: Row(
                 children: [
@@ -327,7 +328,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                               tapDownPosition!.dx,
                               tapDownPosition!.dy,
                             ),
-                            color: const Color(0xFF1F1F1F),
+                            color: kDlgBg,
                              items: isReplacement
                                  ? [
                                      _menuItem('replacement_change', '보강시간 변경'),
@@ -395,7 +396,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                        height: itemHeight,
                        decoration: isGhost
                            ? BoxDecoration(
-                               color: const Color(0xFF1F1F1F), // 다이얼로그 배경색과 일치
+                               color: kDlgBg, // 다이얼로그 배경색과 일치
                                borderRadius: BorderRadius.circular(8),
                                border: Border.all(color: const Color(0xFF303030)),
                              )
@@ -2311,7 +2312,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                     tapDownPosition!.dx,
                     tapDownPosition!.dy,
                   ),
-                  color: const Color(0xFF1F1F1F),
+                  color: kDlgBg,
                   items: isReplacement
                       ? [
                           _menuItem('replacement_change', '보강시간 변경'),
@@ -2474,7 +2475,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: kDlgBg,
         title: const Text('보강 취소', style: TextStyle(color: Colors.white)),
         content: const Text('해당 보강을 취소하시겠습니까?', style: TextStyle(color: Colors.white70)),
         actions: [
@@ -2655,7 +2656,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: kDlgBg,
         title: const Text('휴강 취소', style: TextStyle(color: Colors.white)),
         content: const Text('이 회차의 휴강을 취소하고 원래 일정을 복구할까요?', style: TextStyle(color: Colors.white70)),
         actions: [
@@ -2701,7 +2702,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: kDlgBg,
         content: Text(message, style: const TextStyle(color: Colors.white)),
         actions: [
           TextButton(
@@ -2762,7 +2763,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF1F1F1F),
+              backgroundColor: kDlgBg,
               title: const Text('이번 회차만 변경', style: TextStyle(color: Colors.white, fontSize: 18)),
               content: SizedBox(
                 width: 360,
@@ -3078,7 +3079,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF1F1F1F),
+              backgroundColor: kDlgBg,
               title: const Text(
                 '출석 시간 수정',
                 style: TextStyle(color: Colors.white, fontSize: 18),
@@ -3609,7 +3610,7 @@ Future<void> showAttendanceEditDialog({
       return StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
-            backgroundColor: const Color(0xFF1F1F1F),
+            backgroundColor: kDlgBg,
             title: const Text('출석 시간 수정', style: TextStyle(color: Colors.white, fontSize: 18)),
             content: SizedBox(
               width: 300,

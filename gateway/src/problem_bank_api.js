@@ -706,12 +706,12 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_stable_01';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_stable_04';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. V1 의 캐시/렌더 결과와 절대로 충돌하지
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_wrapfig_leftgap_01';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_wrapfig_leftgap_05';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -1076,6 +1076,11 @@ function buildRenderHashPayload({
     // disableAutoLabels 가 true 이면 서버가 auto 라벨을 만들지 않아 출력 PDF 가 달라진다.
     //   캐시 오염을 막기 위해 hash 에 포함.
     disableAutoLabels: renderConfig.disableAutoLabels === true,
+    // 독립형 세트 공통발문 처리 플래그도 출력 PDF 를 바꾸므로 hash 에 포함.
+    previewIndependentSetCommonStem:
+      renderConfig.previewIndependentSetCommonStem === true,
+    disableIndependentSetGrouping:
+      renderConfig.disableIndependentSetGrouping === true,
   };
 }
 
@@ -1132,6 +1137,10 @@ function buildExportOptions({
     mathEngine: renderConfig.mathEngine,
     // 워커가 옵션을 다시 정규화할 때도 플래그를 살리기 위해 함께 저장.
     disableAutoLabels: renderConfig.disableAutoLabels === true,
+    previewIndependentSetCommonStem:
+      renderConfig.previewIndependentSetCommonStem === true,
+    disableIndependentSetGrouping:
+      renderConfig.disableIndependentSetGrouping === true,
     renderHash,
     previewOnly,
   };

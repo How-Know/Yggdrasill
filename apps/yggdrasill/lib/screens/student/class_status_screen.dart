@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import 'components/class_status_dashboard.dart';
 
 class ClassStatusScreen extends StatelessWidget {
@@ -8,7 +9,7 @@ class ClassStatusScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -24,7 +25,7 @@ class ClassStatusScreen extends StatelessWidget {
                   ),
                   padding: const EdgeInsets.only(left: 34, right: 24, top: 24, bottom: 24),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0B1112),
+                    color: context.yggSurfaceBase,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
@@ -94,7 +95,7 @@ class ClassStatusScreen extends StatelessWidget {
                       Expanded(
                         child: Container(
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B1112), // 배경색 통일
+                            color: context.yggSurfaceBase, // 배경색 통일
                             borderRadius: BorderRadius.circular(16),
                             // AllStudentsView는 메인 리스트에 테두리가 없거나 미미함, 여기서는 투명하게 처리하거나 제거
                           ),

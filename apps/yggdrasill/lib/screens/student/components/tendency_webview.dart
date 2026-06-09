@@ -15,9 +15,7 @@ import '../../../services/app_config.dart';
 import '../../../services/data_manager.dart';
 import '../../../services/tag_preset_service.dart';
 import '../../../widgets/app_snackbar.dart';
-
-// ✅ 학생 탭(앱) 톤과 통일
-const Color _bg = Color(0xFF0B1112);
+import '../../../theme/ygg_semantic_colors.dart';
 const Color _border = Color(0xFF223131);
 const Color _text = Color(0xFFEAF2F2);
 const Color _sub = Color(0xFF9FB3B3);
@@ -396,7 +394,7 @@ class _TendencyWebViewState extends State<TendencyWebView> {
         Container(
           height: 40,
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: const BoxDecoration(color: _bg),
+          decoration: BoxDecoration(color: context.yggSurfaceBase),
           alignment: Alignment.centerLeft,
           child: Row(
             children: [
@@ -422,7 +420,13 @@ class _TendencyWebViewState extends State<TendencyWebView> {
                 // Flutter 쪽에서 휠 이벤트를 감지해 JS로 스크롤을 전달한다.
                 child: webViewWidget,
               ),
-              const Positioned(left: 0, right: 0, top: 0, height: 1, child: ColoredBox(color: _bg)),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: 1,
+                child: ColoredBox(color: context.yggSurfaceBase),
+              ),
             ],
           ),
         ),

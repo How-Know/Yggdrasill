@@ -826,6 +826,14 @@ void screensaver_dismiss(void) {
     }
 }
 
+void screensaver_keep_awake(void) {
+    // 이미 절전/세이버 상태면 복귀시키고, 어떤 경우든 유휴 타이머를 리셋한다.
+    if (g_saver_scr || g_display_sleeping) {
+        screensaver_dismiss();
+    }
+    g_last_activity_ms = lv_tick_get();
+}
+
 void screensaver_blink_set(uint32_t blink_ms, uint32_t interval_ms) {
     g_blink_ms = blink_ms;
     g_blink_interval_ms = interval_ms;

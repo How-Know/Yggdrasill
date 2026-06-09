@@ -10,6 +10,8 @@ import 'package:mneme_flutter/models/session_override.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:mneme_flutter/widgets/custom_form_dropdown.dart';
 
+import 'dialog_tokens.dart';
+
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
   final Future<void> Function(Student, StudentBasicInfo) onSave;
@@ -164,10 +166,10 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF33A373), // ✅ 시간표/수업블록 다이얼로그와 통일
               onPrimary: Colors.white,
-              surface: Color(0xFF0B1112),
+              surface: kDlgBg,
               onSurface: Color(0xFFEAF2F2),
             ),
-            dialogBackgroundColor: const Color(0xFF0B1112),
+            dialogBackgroundColor: kDlgBg,
           ),
           child: child!,
         );
@@ -312,7 +314,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: Color(0xFF223131)),

@@ -3204,7 +3204,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return showDialog<String?>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: const Text('기록 입력',
             style: TextStyle(color: Colors.white, fontSize: 20)),
@@ -5099,7 +5099,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final action = await showDialog<HomeworkAnswerViewerAction>(
         context: context,
         builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           title: const Text(
@@ -5705,7 +5705,7 @@ Future<String?> _openRecordNoteDialogGlobal(BuildContext context) async {
   return showDialog<String?>(
     context: context,
     builder: (ctx) => AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: const Text('기록 입력',
           style: TextStyle(color: Colors.white, fontSize: 20)),
@@ -5781,7 +5781,7 @@ Future<void> _openClassTagDialogLikeSideSheet(
           }
 
           return AlertDialog(
-            backgroundColor: const Color(0xFF1F1F1F),
+            backgroundColor: kDlgBg,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             title: const Text('수업 태그',

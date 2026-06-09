@@ -1464,7 +1464,14 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     const segs = String(text).split(/\u0000YGGINLFIG(\d+)\u0000/g);
     let acc = '';
     for (let s = 0; s < segs.length; s += 1) {
-      if (s % 2 === 1) { acc += inlineFigResolver(Number(segs[s])); continue; }
+      if (s % 2 === 1) {
+        // smartTexLineCore 가 세그먼트 leading/trailing 공백을 trim 하므로,
+        // 마커 양옆 원본 띄어쓰기가 사라진다. 원본에 공백이 있었으면 복원한다.
+        const leftSpace = /\s$/.test(segs[s - 1] || '') ? '\\ ' : '';
+        const rightSpace = /^\s/.test(segs[s + 1] || '') ? '\\ ' : '';
+        acc += leftSpace + inlineFigResolver(Number(segs[s])) + rightSpace;
+        continue;
+      }
       if (segs[s]) acc += smartTexLine(segs[s], equations, stemTexOptions);
     }
     return acc;
@@ -2890,6 +2897,10 @@ function stripImageChoiceFigureMarkers(stem) {
 function blankChoiceLabels(question) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const raw = Array.isArray(meta.blank_choice_labels) ? meta.blank_choice_labels : [];
+  const configured = raw
+    .map((label) => String(label || '').trim())
+    .filter(Boolean);
+  if (configured.length >= 2 && configured.length <= 4) return configured;
   const fallback = ['(가)', '(나)', '(다)'];
   return fallback.map((label, idx) => {
     const value = String(raw[idx] || '').trim();
@@ -2898,9 +2909,17 @@ function blankChoiceLabels(question) {
 }
 
 function blankChoiceCells(text, columnCount) {
-  const parts = String(text || '')
-    .split(/\s*,\s*/)
-    .map((v) => v.trim());
+  const raw = String(text || '').trim();
+  let parts = raw.split(/\s*,\s*/).map((v) => v.trim());
+  // 추출 시 쉼표 구분자가 누락된 표형 보기 처리:
+  //   "(ㄴ)(ㄱ)(ㄷ)" 또는 "(ㄴ) (ㄱ) (ㄷ)" 처럼 괄호 그룹이 열 개수만큼 연속하면
+  //   쉼표 대신 괄호 그룹 단위로 분리한다. (쉼표가 정상이면 폴백을 타지 않음)
+  if (parts.filter(Boolean).length < columnCount) {
+    const groups = raw.match(/[(（][^()（）]*[)）]/g);
+    if (groups && groups.length >= columnCount) {
+      parts = groups.map((g) => g.trim());
+    }
+  }
   while (parts.length < columnCount) parts.push('');
   return parts.slice(0, columnCount);
 }
@@ -2934,27 +2953,40 @@ function renderBlankChoicesLatex(question, choices, equations) {
   const widthScale = blankChoiceWidthScale(question);
   const columnScales = blankChoiceColumnScales(question, labels.length);
   const hasCustomColumns = columnScales.some((v) => Math.abs(v - 1.0) > 0.001);
-  const tabColSepPt = hasCustomColumns ? '2.00' : (6 * widthScale).toFixed(2);
-  const baseEm = [4.4, 4.4, 9.2];
-  const boxCell = (content, idx) => {
-    if (!hasCustomColumns) return content;
-    const w = ((baseEm[idx] || 5.0) * widthScale * columnScales[idx]).toFixed(2);
-    return `\\makebox[${w}em][c]{${content}}`;
-  };
-  const header = [''].concat(labels.map((label, idx) => boxCell(escapeLatexText(label), idx))).join(' & ');
+  const hasWidthScale = Math.abs(widthScale - 1.0) > 0.001;
+  const shouldBoxCells = hasWidthScale || hasCustomColumns;
+  // makebox 가 열 "너비" 를 책임지더라도, 열 사이 간격(tabcolsep)이 2pt 로 붙으면
+  //   넓은 열들이 서로 달라붙어 "왼쪽으로 몰린" 것처럼 보인다. 너비 배율에 비례해
+  //   간격도 함께 키워 열이 시각적으로 분리되도록 한다.
+  const tabColSepPt = shouldBoxCells
+    ? Math.max(6, 6 * widthScale).toFixed(2)
+    : '6.00';
+  // 표형 보기의 "가로"는 번호열을 제외한 데이터 열 전체에 균등하게 적용한다.
+  // 개별 열 차이는 columnScales 로만 조절한다.
+  const baseDataColumnEm = 5.8;
+  // 데이터 열은 고정폭 + 가운데 정렬 컬럼(`>{\centering\arraybackslash}m{W}`)으로 그린다.
+  //   과거 `c` + \makebox[W][c] 방식은 셀 내부에서 내용이 좌측으로 치우쳐 보이는 문제가
+  //   있었으므로, 열 타입 자체가 가로/세로 중앙정렬을 보장하도록 바꾼다.
+  const dataColSpec = labels
+    .map((_, idx) => {
+      const w = (baseDataColumnEm * widthScale * columnScales[idx]).toFixed(2);
+      return `>{\\centering\\arraybackslash}m{${w}em}`;
+    })
+    .join('');
+  const header = [''].concat(labels.map((label) => escapeLatexText(label))).join(' & ');
   const rows = choices.map((choice, idx) => {
     const label = typeof choice === 'string'
       ? (CIRCLED_DIGITS[idx] || String(idx + 1))
       : (String(choice?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
     const rawText = typeof choice === 'string' ? choice : choice?.text || '';
     const cells = blankChoiceCells(rawText, labels.length)
-      .map((cell, cellIdx) => boxCell(smartTexLine(cell, equations), cellIdx));
+      .map((cell) => smartTexLine(cell, equations));
     return [label].concat(cells).join(' & ');
   });
   return [
     '{\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em',
     `\\setlength{\\tabcolsep}{${tabColSepPt}pt}`,
-    '\\noindent\\begin{tabular}{@{}lccc@{}}',
+    `\\noindent\\begin{tabular}{@{}l${dataColSpec}@{}}`,
     header + ' \\\\',
     rows.join(' \\\\\n'),
     '\\end{tabular}\\par}',
@@ -4514,7 +4546,17 @@ function renderOneQuestion(question, {
           }
         }
         pendingEmpty = 0;
-        const rendered = renderStemTextLine(sub, equations);
+        // wrap(어울림) 본문 안에도 inline-text(글 중간) 그림이 섞여 있을 수 있다.
+        // 일반 본문 경로와 동일하게 [그림] 마커를 sentinel 로 치환한 뒤 resolver 로
+        // 글자 흐름 안에 끼워넣는다. (마커는 figIdx 를 순서대로 소비한다.)
+        const withFigs = replaceFigureMarkersTextPath(sub);
+        let rendered = renderStemTextLine(withFigs, equations, '', {
+          inlineFigureResolver: (figI) => renderInlineTextFigureLatex(figI),
+        });
+        rendered = rendered.replace(
+          inlineFigureSplitRegex(),
+          (_m, n) => renderInlineTextFigureLatex(Number(n)),
+        );
         if (rendered.trim()) out.push(rendered);
       }
     }
@@ -4546,10 +4588,10 @@ function renderOneQuestion(question, {
     return Math.max(1, count);
   }
 
-  function renderLegacyInlineFigureWithTextLatex(i, textSeg, position) {
+  function renderLegacyInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
-    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    const text = (preRenderedText != null ? preRenderedText : renderTextSegmentInlineLatex(textSeg)).trim();
     if (!text) return renderFigureLatex(i);
     const gap = '0.90em';
     const figWidth = expr.widthExpr;
@@ -4562,13 +4604,13 @@ function renderOneQuestion(question, {
     return `\\par\\noindent${figBox}\\hspace{${gap}}${textBox}\\par\n`;
   }
 
-  function renderInlineFigureWithTextLatex(i, textSeg, position) {
+  function renderInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
     if (useLegacyInlineWrapMode()) {
-      return renderLegacyInlineFigureWithTextLatex(i, textSeg, position);
+      return renderLegacyInlineFigureWithTextLatex(i, textSeg, position, preRenderedText);
     }
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
-    const text = renderTextSegmentInlineLatex(textSeg).trim();
+    const text = (preRenderedText != null ? preRenderedText : renderTextSegmentInlineLatex(textSeg)).trim();
     if (!text) return renderFigureLatex(i);
     const layout = layoutForIndex(i) || {};
     const offsetX = safeFigureOffsetX(layout);
@@ -5047,6 +5089,9 @@ function renderOneQuestion(question, {
           (nextPosition === 'inline-left' || nextPosition === 'inline-right')
           && figureSegWillEmit(sIdx + 1)
         ) {
+          // 본문(seg)을 먼저 렌더해 그 안의 inline-text 그림 마커가 wrap 그림보다
+          // 먼저 figIdx 슬롯을 소비하도록 한다. (읽는 순서: 본문 마커 → wrap 그림)
+          const wrapText = renderTextSegmentInlineLatex(seg);
           const i = resolveFigureIndexForSegment(sIdx + 1, nextFigText);
           if (!figIdxConsumedByGroup.has(i)) {
             emittedFigIdxs.add(i);
@@ -5054,6 +5099,7 @@ function renderOneQuestion(question, {
               i,
               seg,
               nextPosition,
+              wrapText,
             );
             if (renderedInline && renderedInline.trim()) {
               parts.push(renderedInline);
@@ -6992,15 +7038,17 @@ export function buildDocumentTexSource(questions, options = {}) {
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
 
   const qList = Array.isArray(questions) ? questions : [];
+  // 독립형 세트(independent_set)는 프로필과 무관하게 [15~16] 헤더 + 공통발문 1회 +
+  //   하위문항 형태로 "그룹핑"하는 것이 기본 동작이다(PDF 출처 DB 문제와 동일).
+  //   오직 disableIndependentSetGrouping 이 명시적으로 켜진 경우에만 그룹핑을 끄고,
+  //   이때 previewIndependentSetCommonStem 이 있으면 문항별로 공통발문을 붙인다.
   const visualQList = (profile === 'review_compact' || reviewPdf === true)
     ? qList
-    : (isAssignmentProfile
-        ? (disableIndependentSetGrouping === true
-            ? (previewIndependentSetCommonStem === true
-                ? wrapIndependentSetQuestionsForSinglePreview(qList)
-                : qList)
-            : groupIndependentSetQuestionsForRender(qList))
-        : qList);
+    : (disableIndependentSetGrouping === true
+        ? (previewIndependentSetCommonStem === true
+            ? wrapIndependentSetQuestionsForSinglePreview(qList)
+            : qList)
+        : groupIndependentSetQuestionsForRender(qList));
   if (profile === 'review_compact' || reviewPdf === true) {
     const resolveReviewAnswer = (q) => {
       const exp = String(q?.export_answer || '').trim();

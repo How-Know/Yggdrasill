@@ -4,8 +4,9 @@ import '../../../services/data_manager.dart';
 import '../../../models/session_override.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
-/// [makeup_quick_dialog] 보강 확인 다이얼로그와 톤 통일
-const Color _mkDialogBg = Color(0xFF0B1112);
+import '../../../theme/ygg_semantic_colors.dart';
+import '../../../widgets/dialog_tokens.dart';
+
 const Color _mkFieldBg = Color(0xFF15171C);
 const Color _mkBorder = Color(0xFF223131);
 const Color _mkText = Color(0xFFEAF2F2);
@@ -77,7 +78,7 @@ class _MakeupViewState extends State<MakeupView> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFF0B1112),
+      color: context.yggSurfaceBase,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(26, 26, 26, 16),
         child: Column(
@@ -523,7 +524,7 @@ class _MonthToolbar extends StatelessWidget {
                   colorScheme: const ColorScheme.dark(
                     primary: Color(0xFF1976D2),
                   ),
-                  dialogBackgroundColor: const Color(0xFF1F1F1F),
+                  dialogBackgroundColor: kDlgBg,
                 ),
                 child: child!,
               ),
@@ -710,7 +711,7 @@ class _CompletedTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1112),
+        color: context.yggSurfaceBase,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.transparent),
         boxShadow: const [],
@@ -1048,7 +1049,7 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       title: const Text(
         '추가 수업',
         style: TextStyle(color: Colors.white, fontSize: 18),
@@ -1293,7 +1294,7 @@ class _ProxyContentState extends State<_ProxyContent> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       content: SizedBox(
         width: 520,
         height: 540,
@@ -1508,7 +1509,7 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _mkDialogBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _mkBorder),
@@ -1721,7 +1722,7 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.dark(primary: _mkAccent),
-          dialogBackgroundColor: _mkDialogBg,
+          dialogBackgroundColor: kDlgBg,
         ),
         child: child!,
       ),
@@ -1745,7 +1746,7 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           timePickerTheme: TimePickerThemeData(
-            backgroundColor: _mkDialogBg,
+            backgroundColor: kDlgBg,
             dialHandColor: _mkAccent,
             dialBackgroundColor: _mkFieldBg,
             hourMinuteTextColor: Colors.white,
@@ -1755,7 +1756,7 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
           ),
           colorScheme: const ColorScheme.dark(
             primary: _mkAccent,
-            surface: _mkDialogBg,
+            surface: kDlgBg,
           ),
         ),
         child: child!,

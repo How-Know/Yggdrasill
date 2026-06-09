@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import '../../services/student_archive_service.dart';
 
 import '../../services/tenant_service.dart';
+import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
 
 class StudentArchivesScreen extends StatefulWidget {
   const StudentArchivesScreen({super.key});
@@ -253,7 +255,7 @@ class _StudentArchivesScreenState extends State<StudentArchivesScreen> {
                   constraints: const BoxConstraints(maxHeight: 520),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1F1F1F),
+                      color: kDlgBg,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: const Color(0xFF2E3338)),
                     ),
@@ -395,7 +397,7 @@ class _StudentArchivesScreenState extends State<StudentArchivesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: context.yggSurfaceBase,
       appBar: AppBar(
         backgroundColor: const Color(0xFF18181A),
         foregroundColor: Colors.white,
@@ -536,9 +538,9 @@ class _StudentArchivesScreenState extends State<StudentArchivesScreen> {
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFF1F1F1F),
-        border: Border(
+      decoration: BoxDecoration(
+        color: context.yggSurfaceBase,
+        border: const Border(
           bottom: BorderSide(color: Color(0xFF2E3338)),
         ),
       ),

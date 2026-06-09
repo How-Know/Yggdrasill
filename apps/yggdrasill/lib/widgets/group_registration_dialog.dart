@@ -4,6 +4,8 @@ import 'package:uuid/uuid.dart';
 import 'app_snackbar.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+import 'dialog_tokens.dart';
+
 class GroupRegistrationDialog extends StatefulWidget {
   final bool editMode;
   final GroupInfo? groupInfo;
@@ -266,7 +268,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: Color(0xFF223131)),

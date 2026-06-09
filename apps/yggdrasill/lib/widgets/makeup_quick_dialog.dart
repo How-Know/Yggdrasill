@@ -12,7 +12,8 @@ import '../models/operating_hours.dart';
 import '../screens/timetable/views/classes_view.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
-const Color _mkBg = Color(0xFF0B1112);
+import 'dialog_tokens.dart';
+
 const Color _mkPanelBg = Color(0xFF10171A);
 const Color _mkFieldBg = Color(0xFF15171C);
 const Color _mkBorder = Color(0xFF223131);
@@ -85,7 +86,7 @@ class _StudentScheduleListDialogState extends State<StudentScheduleListDialog> {
     final visible = (_sessions.length < 8 ? _sessions.length : 8);
     final dialogHeight = (visible * itemHeight) + 40;
     return AlertDialog(
-      backgroundColor: _mkBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _mkBorder),
@@ -342,7 +343,7 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _mkBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _mkBorder),
@@ -701,7 +702,7 @@ class _MakeupOriginalLessonPickerDialogState extends State<_MakeupOriginalLesson
     }
 
     return AlertDialog(
-      backgroundColor: _mkBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _mkBorder),
@@ -924,7 +925,7 @@ class _MakeupReserveConfirmDialogState extends State<_MakeupReserveConfirmDialog
   Widget build(BuildContext context) {
     final isReplace = widget.isReplace;
     return AlertDialog(
-      backgroundColor: _mkBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _mkBorder),
@@ -1198,7 +1199,7 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _mkBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _mkBorder),

@@ -118,6 +118,10 @@ function splitBlankChoiceCells(text, columnCount) {
 function normalizeBlankChoiceLabels(labels) {
   const fallback = ['(가)', '(나)', '(다)'];
   const raw = Array.isArray(labels) ? labels : [];
+  const configured = raw
+    .map((label) => String(label || '').trim())
+    .filter(Boolean);
+  if (configured.length >= 2 && configured.length <= 4) return configured;
   return fallback.map((label, idx) => {
     const value = String(raw[idx] || '').trim();
     return value || label;
@@ -171,11 +175,13 @@ export function renderBlankChoiceContainer(question, choices, mathRenderer, equa
   const labels = normalizeBlankChoiceLabels(meta.blank_choice_labels);
   const widthScale = blankChoiceWidthScale(question);
   const columnScales = blankChoiceColumnScales(question, labels.length);
-  const baseEm = [4.4, 4.4, 9.2];
+  // Number column is fixed; data columns grow evenly by widthScale.
+  // Per-column differences are represented only by columnScales.
+  const baseDataColumnEm = 5.8;
   const gridColumns = [
     '2.2em',
     ...columnScales.map((scale, idx) =>
-      `minmax(calc(${baseEm[idx] || 5.0}em * ${widthScale * scale}), max-content)`),
+      `minmax(calc(${baseDataColumnEm}em * ${widthScale * scale}), max-content)`),
   ].join(' ');
   const header = [''].concat(labels)
     .map((label) => `<div class="blank-choice-header">${escapeHtml(label)}</div>`)

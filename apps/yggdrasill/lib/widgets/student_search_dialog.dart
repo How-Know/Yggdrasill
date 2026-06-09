@@ -6,6 +6,8 @@ import '../models/class_info.dart';
 import 'custom_form_dropdown.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+import 'dialog_tokens.dart';
+
 // ✅ 성능: Windows 환경에서 과도한 print는 UI 지연을 유발할 수 있어 기본 OFF.
 // 필요할 때만 실행 옵션으로 켜서 사용:
 // flutter run ... --dart-define=YG_STUDENT_SEARCH_DEBUG=true
@@ -258,7 +260,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
       child: ConstrainedBox(

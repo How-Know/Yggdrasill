@@ -5,7 +5,8 @@ import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:uuid/uuid.dart';
 
-const Color _dlgBg = Color(0xFF0B1112);
+import 'dialog_tokens.dart';
+
 const Color _dlgPanelBg = Color(0xFF10171A);
 const Color _dlgFieldBg = Color(0xFF15171C);
 const Color _dlgBorder = Color(0xFF223131);
@@ -134,7 +135,7 @@ class _MemoInputDialogState extends State<MemoInputDialog> {
     final isInquiry = _categoryKey == MemoCategory.inquiry;
 
     return AlertDialog(
-      backgroundColor: _dlgBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _dlgBorder),
@@ -320,7 +321,7 @@ class _MemoEditDialogState extends State<MemoEditDialog> {
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.dark(primary: _dlgAccent),
-          dialogBackgroundColor: _dlgBg,
+          dialogBackgroundColor: kDlgBg,
         ),
         child: child!,
       ),
@@ -332,7 +333,7 @@ class _MemoEditDialogState extends State<MemoEditDialog> {
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.dark(primary: _dlgAccent),
-          dialogBackgroundColor: _dlgBg,
+          dialogBackgroundColor: kDlgBg,
         ),
         child: child!,
       ),
@@ -354,7 +355,7 @@ class _MemoEditDialogState extends State<MemoEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _dlgBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _dlgBorder),
@@ -517,7 +518,7 @@ class _MemoInquiryEditDialogState extends State<MemoInquiryEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _dlgBg,
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _dlgBorder),

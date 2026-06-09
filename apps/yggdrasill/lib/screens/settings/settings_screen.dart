@@ -3,7 +3,6 @@ import '../../widgets/app_time_picker_dialog.dart';
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
-import '../../services/attendance_service.dart';
 import '../../models/payment_type.dart';
 import '../../services/academy_db.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -12,11 +11,9 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import '../../models/teacher.dart';
 import '../../widgets/teacher_registration_dialog.dart';
-import '../../widgets/teacher_details_dialog.dart';
 import 'package:animations/animations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import '../../services/sync_service.dart';
 import '../../services/update_service.dart';
 import '../../services/print_routing_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -32,6 +29,12 @@ enum SettingType {
   academy,
   teachers,
   general,
+}
+
+enum _GeneralLaunchMode {
+  defaultMode,
+  fullscreen,
+  maximize,
 }
 
 enum DayOfWeek {
@@ -157,6 +160,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   final GlobalKey _academyInfoKey = GlobalKey();
   final GlobalKey _previewPaymentMenuAnchorKey = GlobalKey();
+  final GlobalKey _previewThemeMenuAnchorKey = GlobalKey();
+  final GlobalKey _previewLaunchModeMenuAnchorKey = GlobalKey();
+  final GlobalKey _previewGeneralPrinterMenuAnchorKey = GlobalKey();
+  final GlobalKey _previewTodoPrinterMenuAnchorKey = GlobalKey();
   double _academyInfoHeight = 0;
 
   final Set<int> _hoveredTabs = {};
@@ -177,10 +184,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ThemeMode _selectedThemeMode = ThemeMode.light; // [추가] 테마 선택 상태
   bool _isOwner = false; // 원장 여부 캐시
   bool _isSuperAdmin = false; // 플랫폼 관리자 여부
-  bool _resettingPlannedAll = false; // [추가] 예정 수업 전체 재생성 진행 상태
-  bool _occurrenceBackfillRunning = false; // [임시] occurrence 백필 도구 실행 상태
-  bool _cycleOrderBackfillRunning =
-      false; // [임시] 출석 cycle/session_order 백필 도구 실행 상태
   bool _printerSettingsLoading = false;
   String _generalPrinterValue = _kSystemDefaultPrinterValue;
   String _todoPrinterValue = _kSystemDefaultPrinterValue;
@@ -278,61 +281,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildPrinterRoutingRow({
-    required String label,
-    required String selectedValue,
-    required ValueChanged<String?> onChanged,
-  }) {
-    final options = _printerValuesForDropdown(selectedValue);
-    final normalizedValue = options.contains(selectedValue)
-        ? selectedValue
-        : _kSystemDefaultPrinterValue;
-    return Row(
-      children: [
-        SizedBox(
-          width: 124,
-          child: Text(
-            label,
-            style: const TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-        ),
-        Expanded(
-          child: DropdownButtonFormField<String>(
-            value: normalizedValue,
-            isExpanded: true,
-            items: [
-              for (final value in options)
-                DropdownMenuItem<String>(
-                  value: value,
-                  child: Text(
-                    _printerLabel(value),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: _printerSettingsLoading ? null : onChanged,
-            dropdownColor: const Color(0xFF1F1F1F),
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-            decoration: const InputDecoration(
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: _kSignatureGreen),
-              ),
-              disabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24),
-              ),
-            ),
-            iconEnabledColor: Colors.white70,
-          ),
-        ),
-      ],
-    );
-  }
-
   Future<void> _loadOwnerFlag() async {
     try {
       final isOwner = await TenantService.instance.isOwnerOfActiveAcademy();
@@ -360,269 +308,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _isSuperAdmin = false;
       });
-    }
-  }
-
-  Future<void> _runOccurrenceBackfillTool() async {
-    if (!_isOwner && !_isSuperAdmin) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('권한이 없습니다. (원장/플랫폼 관리자만 실행 가능)')),
-      );
-      return;
-    }
-    if (_occurrenceBackfillRunning) return;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kDlgBg,
-        title: const Text('occurrence 백필(임시 도구)',
-            style: TextStyle(
-                color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
-        content: const Text(
-          '원본 회차(lesson_occurrences)를 생성/보장하고,\n'
-          'attendance_records / session_overrides의 occurrence_id를 채웁니다.\n\n'
-          '- 보강(replace): 원본 cycle/회차 고정\n'
-          '- 추가수업(add): extra occurrence로 분리(사이클 집계 제외)\n\n'
-          '데이터 양에 따라 시간이 오래 걸릴 수 있습니다.',
-          style: TextStyle(
-              color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('취소',
-                style: TextStyle(
-                    color: Colors.white70, fontWeight: FontWeight.w700)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('실행',
-                style: TextStyle(
-                    color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    setState(() => _occurrenceBackfillRunning = true);
-
-    String phase = '시작 준비 중...';
-    int done = 0;
-    int total = 1;
-    String finalMessage = '';
-    BuildContext? dialogCtx;
-    StateSetter? dialogSetState;
-
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        dialogCtx = ctx;
-        return StatefulBuilder(
-          builder: (ctx, setStateDialog) {
-            dialogSetState = setStateDialog;
-            final double? v =
-                (total <= 0) ? null : (done / total).clamp(0.0, 1.0);
-            return AlertDialog(
-              backgroundColor: kDlgBg,
-              title: const Text('백필 진행 중',
-                  style: TextStyle(
-                      color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
-              content: SizedBox(
-                width: 520,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(phase,
-                        style: const TextStyle(
-                            color: Colors.white70,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 14),
-                    LinearProgressIndicator(value: v, minHeight: 6),
-                    const SizedBox(height: 10),
-                    Text('$done / $total',
-                        style: const TextStyle(
-                            color: Colors.white54,
-                            fontWeight: FontWeight.w600)),
-                    if (finalMessage.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text(finalMessage,
-                          style: const TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    try {
-      // dialog build가 완료되기 전에 progress callback이 먼저 올 수 있어서 약간 대기
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      final res = await AttendanceService.instance.runOccurrenceBackfillTool(
-        onProgress: (p, d, t) {
-          phase = p;
-          done = d;
-          total = t <= 0 ? 1 : t;
-          dialogSetState?.call(() {});
-        },
-      );
-      finalMessage =
-          '완료: regular cycle=${res.ensuredCycles}, overrides=${res.updatedOverrides}, attendance=${res.updatedAttendance}, extra=${res.createdExtraOccurrences}';
-      dialogSetState?.call(() {});
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    } catch (e) {
-      finalMessage = '실패: $e';
-      dialogSetState?.call(() {});
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    } finally {
-      if (mounted) setState(() => _occurrenceBackfillRunning = false);
-      try {
-        if (dialogCtx != null) Navigator.of(dialogCtx!).pop();
-      } catch (_) {}
-      if (mounted && finalMessage.isNotEmpty) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(finalMessage)));
-      }
-    }
-  }
-
-  Future<void> _runCycleOrderBackfillTool() async {
-    if (!_isOwner && !_isSuperAdmin) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('권한이 없습니다. (원장/플랫폼 관리자만 실행 가능)')),
-      );
-      return;
-    }
-    if (_cycleOrderBackfillRunning) return;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kDlgBg,
-        title: const Text('출석 cycle/회차 백필(임시 도구)',
-            style: TextStyle(
-                color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
-        content: const Text(
-          '모든 학생의 attendance_records에 대해 cycle/session_order를 재계산합니다.\n\n'
-          '- 등록일자 이전(class_date_time < registration_date) 기록은 cycle/session_order를 null로 비웁니다.\n'
-          '- 결제 사이클 내 수업을 시간순(+set_id tie-break)으로 나열한 값을 회차로 사용합니다.\n'
-          '- 보강(replace)은 원본 시간 기준으로 계산합니다.\n\n'
-          '⚠️ 대량 업데이트로 인해 updated_at/version이 변경됩니다.\n'
-          '실행 중에는 다른 기기에서 출석/시간표 편집을 피해주세요.',
-          style: TextStyle(
-              color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('취소',
-                style: TextStyle(
-                    color: Colors.white70, fontWeight: FontWeight.w700)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('실행',
-                style: TextStyle(
-                    color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    setState(() => _cycleOrderBackfillRunning = true);
-
-    String phase = '시작 준비 중...';
-    int done = 0;
-    int total = 1;
-    String finalMessage = '';
-    BuildContext? dialogCtx;
-    StateSetter? dialogSetState;
-
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        dialogCtx = ctx;
-        return StatefulBuilder(
-          builder: (ctx, setStateDialog) {
-            dialogSetState = setStateDialog;
-            final double? v =
-                (total <= 0) ? null : (done / total).clamp(0.0, 1.0);
-            return AlertDialog(
-              backgroundColor: kDlgBg,
-              title: const Text('백필 진행 중',
-                  style: TextStyle(
-                      color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
-              content: SizedBox(
-                width: 520,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(phase,
-                        style: const TextStyle(
-                            color: Colors.white70,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 14),
-                    LinearProgressIndicator(value: v, minHeight: 6),
-                    const SizedBox(height: 10),
-                    Text('$done / $total',
-                        style: const TextStyle(
-                            color: Colors.white54,
-                            fontWeight: FontWeight.w600)),
-                    if (finalMessage.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text(finalMessage,
-                          style: const TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    try {
-      final res =
-          await AttendanceService.instance.runCycleSessionOrderBackfillTool(
-        pastDays: 365 * 2,
-        futureDays: 365,
-        onProgress: (p, d, t) {
-          phase = p;
-          done = d;
-          total = t;
-          dialogSetState?.call(() {});
-        },
-      );
-      finalMessage =
-          '스캔: ${res.scanned}건\n업데이트: ${res.updated}건\n등록일 이전 null 처리: ${res.clearedBeforeRegistration}건';
-      dialogSetState?.call(() {});
-      await Future.delayed(const Duration(milliseconds: 350));
-    } catch (e) {
-      finalMessage = '실패: $e';
-      dialogSetState?.call(() {});
-    } finally {
-      if (mounted) setState(() => _cycleOrderBackfillRunning = false);
-      if (dialogCtx != null && Navigator.of(dialogCtx!).canPop()) {
-        Navigator.of(dialogCtx!).pop();
-      }
-      if (mounted && finalMessage.isNotEmpty) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(finalMessage)));
-      }
     }
   }
 
@@ -709,1114 +394,350 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildGeneralSettings() {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(top: 48),
-        child: SizedBox(
-          width: 650,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            decoration: BoxDecoration(
-              color: Color(0xFF18181A),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 업데이트 섹션
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Text(
-                    '업데이트',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        '최신 버전 확인 및 설치를 진행합니다.',
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ),
-                    FutureBuilder<PackageInfo>(
-                      future: PackageInfo.fromPlatform(),
-                      builder: (context, snapshot) {
-                        final ver = snapshot.data?.version ?? '';
-                        final build = snapshot.data?.buildNumber ?? '';
-                        final text = (ver.isEmpty && build.isEmpty)
-                            ? '버전 확인 중...'
-                            : '현재 버전: $ver+$build';
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 12.0),
-                          child: Text(text,
-                              style: const TextStyle(color: Colors.white60)),
-                        );
-                      },
-                    ),
-                    FilledButton.icon(
-                      onPressed: () async {
-                        await UpdateService.oneClickUpdate(context);
-                      },
-                      style: FilledButton.styleFrom(
-                          backgroundColor: _kSignatureGreen),
-                      icon: const Icon(Icons.refresh, size: 18),
-                      label: const Text('업데이트 확인'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Text(
-                    '프린터',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1F1F1F),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text(
-                              '자동 인쇄 프린터를 일반 출력/알림장으로 분리합니다.',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          OutlinedButton.icon(
-                            onPressed: _printerSettingsLoading
-                                ? null
-                                : () async {
-                                    await _loadPrinterRoutingSettings(
-                                      refreshList: true,
-                                    );
-                                    if (!mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          '프린터 목록을 새로고침했습니다.',
-                                          style: TextStyle(color: Colors.white),
-                                        ),
-                                        backgroundColor: _kSignatureGreen,
-                                      ),
-                                    );
-                                  },
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: _kSignatureGreen,
-                              side: const BorderSide(color: _kSignatureGreen),
-                            ),
-                            icon: _printerSettingsLoading
-                                ? const SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: _kSignatureGreen,
-                                    ),
-                                  )
-                                : const Icon(Icons.refresh, size: 16),
-                            label: const Text('새로고침'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      _buildPrinterRoutingRow(
-                        label: '일반 인쇄',
-                        selectedValue: _generalPrinterValue,
-                        onChanged: (value) async {
-                          if (value == null) return;
-                          setState(() {
-                            _generalPrinterValue = value;
-                          });
-                          await _savePrinterRoutingSettings(
-                            channel: PrintRoutingChannel.general,
-                            uiValue: value,
-                          );
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                '일반 인쇄 프린터가 저장되었습니다.',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                              backgroundColor: _kSignatureGreen,
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _buildPrinterRoutingRow(
-                        label: '알림장 인쇄',
-                        selectedValue: _todoPrinterValue,
-                        onChanged: (value) async {
-                          if (value == null) return;
-                          setState(() {
-                            _todoPrinterValue = value;
-                          });
-                          await _savePrinterRoutingSettings(
-                            channel: PrintRoutingChannel.todoSheet,
-                            uiValue: value,
-                          );
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                '알림장 인쇄 프린터가 저장되었습니다.',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                              backgroundColor: _kSignatureGreen,
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '설정은 현재 PC에만 저장됩니다.',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.6),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // [임시] 관리 도구
-                if (_isOwner || _isSuperAdmin) ...[
-                  const Padding(
-                    padding: EdgeInsets.only(top: 24),
-                    child: Text(
-                      '관리 도구(임시)',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1F1F1F),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '원본 회차(occurrence) 백필',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'lesson_occurrences 생성 + attendance/session_overrides occurrence_id 채움\n'
-                                '(보강은 원본 cycle 귀속, 추가수업은 extra로 분리)',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                  height: 1.35,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: _occurrenceBackfillRunning
-                              ? null
-                              : () async => _runOccurrenceBackfillTool(),
-                          style: FilledButton.styleFrom(
-                              backgroundColor: _kSignatureGreen),
-                          child: _occurrenceBackfillRunning
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Text('실행'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1F1F1F),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '출석 cycle/회차 백필',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'attendance_records의 cycle/session_order를 재계산\n'
-                                '(등록일 이전은 null, 결제 사이클 내 시간순 정렬 기반)',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                  height: 1.35,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: _cycleOrderBackfillRunning
-                              ? null
-                              : () async => _runCycleOrderBackfillTool(),
-                          style: FilledButton.styleFrom(
-                              backgroundColor: _kSignatureGreen),
-                          child: _cycleOrderBackfillRunning
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Text('실행'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                // AI 기능 토글
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Text(
-                    'AI',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                FutureBuilder<bool>(
-                  future: () async {
-                    try {
-                      // platform_config에서 API 키가 설정되어 있는지 확인
-                      final res = await Supabase.instance.client
-                          .from('platform_config')
-                          .select('config_value')
-                          .eq('config_key', 'openai_api_key')
-                          .maybeSingle();
-                      return res != null &&
-                          (res['config_value'] as String? ?? '').isNotEmpty;
-                    } catch (_) {
-                      return false;
-                    }
-                  }(),
-                  builder: (context, snapshot) {
-                    final hasApiKey = snapshot.data ?? false;
-                    return FutureBuilder<bool>(
-                      future: SharedPreferences.getInstance().then(
-                          (p) => p.getBool('ai_summary_enabled') ?? false),
-                      builder: (context, enabledSnapshot) {
-                        final isEnabled = enabledSnapshot.data ?? false;
-                        return Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1F1F1F),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.white12),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'AI 요약 사용',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      hasApiKey
-                                          ? 'AI가 자동으로 메모를 요약합니다.'
-                                          : 'API 키가 설정되지 않았습니다. 관리자에게 문의하세요.',
-                                      style: TextStyle(
-                                        color: hasApiKey
-                                            ? Colors.white70
-                                            : Colors.amber,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Switch.adaptive(
-                                value: hasApiKey && isEnabled,
-                                onChanged: hasApiKey
-                                    ? (value) async {
-                                        final p = await SharedPreferences
-                                            .getInstance();
-                                        await p.setBool(
-                                            'ai_summary_enabled', value);
-                                        setState(() {});
-                                      }
-                                    : null,
-                                activeColor: _kSignatureGreen,
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-                const SizedBox(height: 28),
-                // 결제 데이터 보정 섹션은 요청으로 제거되었습니다.
-                // 카카오 연동
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Text(
-                    '카카오 연동',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                // Base URL 입력
-                FutureBuilder<String?>(
-                  future: SharedPreferences.getInstance()
-                      .then((p) => p.getString('kakao_api_base_url')),
-                  builder: (context, snapshot) {
-                    final controller = ImeAwareTextEditingController(
-                        text: snapshot.data ?? '');
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              labelText: '서버 주소 (예: https://api.yourapp.com)',
-                              labelStyle: TextStyle(color: Colors.white70),
-                              hintText: '백엔드 서버 기본 주소를 입력하세요',
-                              hintStyle: TextStyle(color: Colors.white24),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Colors.white24),
-                              ),
-                              focusedBorder: const OutlineInputBorder(
-                                borderSide: BorderSide(color: _kSignatureGreen),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            final value = controller.text.trim();
-                            if (value.isEmpty) {
-                              await prefs.remove('kakao_api_base_url');
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('서버 주소가 제거되었습니다.',
-                                    style: TextStyle(color: Colors.white)),
-                                backgroundColor: _kSignatureGreen,
-                              ));
-                            } else {
-                              await prefs.setString(
-                                  'kakao_api_base_url', value);
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('서버 주소가 저장되었습니다.',
-                                    style: TextStyle(color: Colors.white)),
-                                backgroundColor: _kSignatureGreen,
-                              ));
-                            }
-                            setState(() {});
-                          },
-                          style: FilledButton.styleFrom(
-                              backgroundColor: _kSignatureGreen),
-                          child: const Text('저장'),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 12),
-                // 설문 웹 Base URL
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Text(
-                    '설문 웹',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                FutureBuilder<String?>(
-                  future: SharedPreferences.getInstance()
-                      .then((p) => p.getString('survey_base_url')),
-                  builder: (context, snapshot) {
-                    final controller = ImeAwareTextEditingController(
-                        text: snapshot.data ?? 'http://localhost:5173');
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
-                              labelText:
-                                  '설문 웹 주소 (예: http://localhost:5173 또는 배포 URL)',
-                              labelStyle: TextStyle(color: Colors.white70),
-                              hintText: '설문 웹의 기본 주소를 입력하세요',
-                              hintStyle: TextStyle(color: Colors.white24),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Colors.white24),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: _kSignatureGreen),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            final value = controller.text.trim();
-                            if (value.isEmpty) {
-                              await prefs.remove('survey_base_url');
-                            } else {
-                              await prefs.setString('survey_base_url', value);
-                            }
-                            ScaffoldMessenger.of(context)
-                                .showSnackBar(const SnackBar(
-                              content: Text('설문 웹 주소가 저장되었습니다.',
-                                  style: TextStyle(color: Colors.white)),
-                              backgroundColor: _kSignatureGreen,
-                            ));
-                            setState(() {});
-                          },
-                          style: FilledButton.styleFrom(
-                              backgroundColor: _kSignatureGreen),
-                          child: const Text('저장'),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                // API 토큰 입력
-                FutureBuilder<String?>(
-                  future: SharedPreferences.getInstance()
-                      .then((p) => p.getString('kakao_api_token')),
-                  builder: (context, snapshot) {
-                    final controller = ImeAwareTextEditingController(
-                        text: snapshot.data ?? '');
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            style: const TextStyle(color: Colors.white),
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              labelText: 'API 토큰 (선택)',
-                              labelStyle: TextStyle(color: Colors.white70),
-                              hintText: '백엔드 인증용 토큰이 있다면 입력하세요',
-                              hintStyle: TextStyle(color: Colors.white24),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Colors.white24),
-                              ),
-                              focusedBorder: const OutlineInputBorder(
-                                borderSide: BorderSide(color: _kSignatureGreen),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            final value = controller.text.trim();
-                            if (value.isEmpty) {
-                              await prefs.remove('kakao_api_token');
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('API 토큰이 제거되었습니다.',
-                                    style: TextStyle(color: Colors.white)),
-                                backgroundColor: _kSignatureGreen,
-                              ));
-                            } else {
-                              await prefs.setString('kakao_api_token', value);
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('API 토큰이 저장되었습니다.',
-                                    style: TextStyle(color: Colors.white)),
-                                backgroundColor: _kSignatureGreen,
-                              ));
-                            }
-                            setState(() {});
-                          },
-                          style: FilledButton.styleFrom(
-                              backgroundColor: _kSignatureGreen),
-                          child: const Text('저장'),
-                        ),
-                        const SizedBox(width: 8),
-                        Icon(
-                            (snapshot.data != null &&
-                                    (snapshot.data ?? '').isNotEmpty)
-                                ? Icons.check_circle
-                                : Icons.error_outline,
-                            color: (snapshot.data != null &&
-                                    (snapshot.data ?? '').isNotEmpty)
-                                ? Colors.lightGreen
-                                : Colors.orangeAccent,
-                            size: 18),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 12),
-                // 내부 동기화 토큰(SYNC_TOKEN) 입력
-                FutureBuilder<String?>(
-                  future: SharedPreferences.getInstance()
-                      .then((p) => p.getString('kakao_internal_token')),
-                  builder: (context, snapshot) {
-                    final controller = ImeAwareTextEditingController(
-                        text: snapshot.data ?? '');
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            style: const TextStyle(color: Colors.white),
-                            obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: '내부 동기화 토큰 (SYNC_TOKEN)',
-                              labelStyle: TextStyle(color: Colors.white70),
-                              hintText: '배포 서버의 SYNC_TOKEN 값을 입력하세요',
-                              hintStyle: TextStyle(color: Colors.white24),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Colors.white24),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: _kSignatureGreen),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            final value = controller.text.trim();
-                            if (value.isEmpty) {
-                              await prefs.remove('kakao_internal_token');
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('내부 동기화 토큰이 제거되었습니다.',
-                                    style: TextStyle(color: Colors.white)),
-                                backgroundColor: _kSignatureGreen,
-                              ));
-                            } else {
-                              await prefs.setString(
-                                  'kakao_internal_token', value);
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('내부 동기화 토큰이 저장되었습니다.',
-                                    style: TextStyle(color: Colors.white)),
-                                backgroundColor: _kSignatureGreen,
-                              ));
-                            }
-                            setState(() {});
-                          },
-                          style: FilledButton.styleFrom(
-                              backgroundColor: _kSignatureGreen),
-                          child: const Text('저장'),
-                        ),
-                        const SizedBox(width: 8),
-                        Icon(
-                            (snapshot.data != null &&
-                                    (snapshot.data ?? '').isNotEmpty)
-                                ? Icons.check_circle
-                                : Icons.error_outline,
-                            color: (snapshot.data != null &&
-                                    (snapshot.data ?? '').isNotEmpty)
-                                ? Colors.lightGreen
-                                : Colors.orangeAccent,
-                            size: 18),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                // 데이터 동기화 섹션
-                const Text(
-                  '데이터 동기화',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    FilledButton(
-                      onPressed: () async {
-                        final scaffold = ScaffoldMessenger.of(context);
-                        scaffold.showSnackBar(const SnackBar(
-                          content: Text('초기 동기화 재실행 중...',
-                              style: TextStyle(color: Colors.white)),
-                          backgroundColor: _kSignatureGreen,
-                          duration: Duration(milliseconds: 1200),
-                        ));
-                        await SyncService.instance.resetInitialSyncFlag();
-                        await SyncService.instance.runInitialSyncIfNeeded();
-                        scaffold.showSnackBar(const SnackBar(
-                          content: Text('초기 동기화 트리거 완료',
-                              style: TextStyle(color: Colors.white)),
-                          backgroundColor: _kSignatureGreen,
-                        ));
-                      },
-                      style: FilledButton.styleFrom(
-                          backgroundColor: _kSignatureGreen),
-                      child: const Text('초기 동기화 재실행'),
-                    ),
-                    const SizedBox(width: 8),
-                    // 학생-전화 동기화 토글(기본 off)
-                    FutureBuilder<bool>(
-                      future: SharedPreferences.getInstance().then(
-                          (p) => p.getBool('enable_students_sync') ?? false),
-                      builder: (context, snap) {
-                        final enabled = snap.data ?? false;
-                        return Row(children: [
-                          Switch(
-                            value: enabled,
-                            onChanged: (v) async {
-                              final prefs =
-                                  await SharedPreferences.getInstance();
-                              await prefs.setBool('enable_students_sync', v);
-                              setState(() {});
-                            },
-                            activeColor: _kSignatureGreen,
-                          ),
-                          const Text('학생/전화 동기화',
-                              style: TextStyle(color: Colors.white70)),
-                        ]);
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: () async {
-                        final scaffold = ScaffoldMessenger.of(context);
-                        scaffold.showSnackBar(const SnackBar(
-                          content: Text('수동 동기화(최근 7주) 시작',
-                              style: TextStyle(color: Colors.white)),
-                          backgroundColor: _kSignatureGreen,
-                          duration: Duration(milliseconds: 800),
-                        ));
-                        await SyncService.instance.manualSync(days: 49);
-                        scaffold.showSnackBar(const SnackBar(
-                          content: Text('수동 동기화 완료',
-                              style: TextStyle(color: Colors.white)),
-                          backgroundColor: _kSignatureGreen,
-                        ));
-                      },
-                      style: OutlinedButton.styleFrom(
-                          foregroundColor: _kSignatureGreen,
-                          side: const BorderSide(color: _kSignatureGreen)),
-                      child: const Text('지금 동기화(7주)'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 28),
-                // 테마 설정
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Text(
-                    '테마',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SegmentedButton<ThemeMode>(
-                  segments: const [
-                    ButtonSegment<ThemeMode>(
-                      value: ThemeMode.light,
-                      label: Text('기본'),
-                    ),
-                    ButtonSegment<ThemeMode>(
-                      value: ThemeMode.dark,
-                      label: Text('다크'),
-                    ),
-                  ],
-                  selected: {_selectedThemeMode},
-                  onSelectionChanged: (Set<ThemeMode> newSelection) {
-                    final next = newSelection.first;
-                    setState(() {
-                      _selectedThemeMode = next;
-                    });
-                    AppThemeController.setMode(next);
-                  },
-                  style: ButtonStyle(
-                    backgroundColor:
-                        MaterialStateProperty.all(Colors.transparent),
-                    foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                      (Set<MaterialState> states) {
-                        if (states.contains(MaterialState.selected)) {
-                          return Colors.white;
-                        }
-                        return Colors.white70;
-                      },
-                    ),
-                    textStyle: MaterialStateProperty.all(
-                      const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w500),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 40),
-                // 언어 설정
-                const Text(
-                  '언어',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: 300,
-                  child: DropdownButtonFormField<String>(
-                    value: 'ko',
-                    decoration: InputDecoration(
-                      enabledBorder: OutlineInputBorder(
-                        borderSide:
-                            BorderSide(color: Colors.white.withOpacity(0.3)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: _kSignatureGreen),
-                      ),
-                    ),
-                    dropdownColor: const Color(0xFF1F1F1F),
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                    items: const [
-                      DropdownMenuItem(value: 'ko', child: Text('한국어')),
-                      DropdownMenuItem(value: 'en', child: Text('English')),
-                      DropdownMenuItem(value: 'ja', child: Text('日本語')),
-                    ],
-                    onChanged: (String? value) {
-                      // TODO: 언어 변경 기능 구현
-                    },
-                  ),
-                ),
-                const SizedBox(height: 40),
-                // 알림 설정
-                const Text(
-                  '알림',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SwitchListTile(
-                  title: const Text(
-                    '수업 시작 알림',
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                  ),
-                  subtitle: const Text(
-                    '수업 시작 10분 전에 알림을 받습니다',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  value: true,
-                  onChanged: (bool value) {
-                    // TODO: 알림 설정 기능 구현
-                  },
-                  activeColor: _kSignatureGreen,
-                ),
-                SwitchListTile(
-                  title: const Text(
-                    '휴식 시간 알림',
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                  ),
-                  subtitle: const Text(
-                    '휴식 시간 시작과 종료 시 알림을 받습니다',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  value: true,
-                  onChanged: (bool value) {
-                    // TODO: 알림 설정 기능 구현
-                  },
-                  activeColor: _kSignatureGreen,
-                ),
-                const SizedBox(height: 40),
-                // 자동 백업
-                const Text(
-                  '자동 백업',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SwitchListTile(
-                  title: const Text(
-                    '클라우드 백업',
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                  ),
-                  subtitle: const Text(
-                    '매일 자정에 데이터를 자동으로 백업합니다',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  value: true,
-                  onChanged: (bool value) {
-                    // TODO: 백업 설정 기능 구현
-                  },
-                  activeColor: _kSignatureGreen,
-                ),
-                // [추가] 실행/전체화면 설정
-                const SizedBox(height: 40),
-                const Text(
-                  '실행',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SwitchListTile(
-                  title: const Text(
-                    '전체 화면',
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                  ),
-                  subtitle: const Text(
-                    '프로그램 시작시 전체화면으로 시작합니다.',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  value: _fullscreenEnabled,
-                  onChanged: (bool value) async {
-                    setState(() {
-                      _fullscreenEnabled = value;
-                      if (value) _maximizeEnabled = false; // 상호 배타
-                    });
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setBool('fullscreen_enabled', value);
-                    if (value) await prefs.setBool('maximize_enabled', false);
-                  },
-                  activeColor: _kSignatureGreen,
-                ),
-                SwitchListTile(
-                  title: const Text(
-                    '최대창으로 시작',
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                  ),
-                  subtitle: const Text(
-                    '프로그램 시작시 최대화된 창으로 시작합니다.',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  value: _maximizeEnabled,
-                  onChanged: (bool value) async {
-                    setState(() {
-                      _maximizeEnabled = value;
-                      if (value) _fullscreenEnabled = false; // 상호 배타
-                    });
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setBool('maximize_enabled', value);
-                    if (value) await prefs.setBool('fullscreen_enabled', false);
-                  },
-                  activeColor: _kSignatureGreen,
-                ),
-                const SizedBox(height: 40),
-                const Text(
-                  '데이터',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1F1F1F),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          '모든 학생의 "순수 예정 수업"(is_planned=true, 출석/등원 기록 없는 것)만 전부 삭제한 뒤,\n'
-                          '현재 시간표(student_time_blocks)를 기준으로 예정 수업을 다시 생성합니다.\n'
-                          '※ 시간이 오래 걸릴 수 있습니다.',
-                          style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                              height: 1.35),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton.icon(
-                        onPressed: _resettingPlannedAll
-                            ? null
-                            : () async {
-                                if (!(_isOwner || _isSuperAdmin)) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text('원장/관리자만 실행할 수 있습니다.')),
-                                  );
-                                  return;
-                                }
-                                final ok = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    backgroundColor: kDlgBg,
-                                    title: const Text('예정 수업 전체 재생성',
-                                        style: TextStyle(
-                                            color: Color(0xFFEAF2F2),
-                                            fontWeight: FontWeight.w900)),
-                                    content: const Text(
-                                      '모든 학생의 순수 예정 수업을 삭제하고 앞으로 15일치만 다시 생성합니다.\n'
-                                      '출석/등원/하원 기록이 있는 행은 삭제하지 않습니다.\n\n'
-                                      '진행할까요?',
-                                      style: TextStyle(
-                                          color: Colors.white70,
-                                          fontWeight: FontWeight.w600,
-                                          height: 1.35),
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(false),
-                                        child: const Text('취소',
-                                            style: TextStyle(
-                                                color: Colors.white70,
-                                                fontWeight: FontWeight.w700)),
-                                      ),
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(true),
-                                        child: const Text('재생성',
-                                            style: TextStyle(
-                                                color: Color(0xFF33A373),
-                                                fontWeight: FontWeight.w900)),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (ok != true) return;
-                                setState(() => _resettingPlannedAll = true);
-                                try {
-                                  await DataManager.instance
-                                      .resetPlannedAttendanceForAllStudents(
-                                          days: 15);
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text('예정 수업이 재생성되었습니다.')),
-                                    );
-                                  }
-                                } catch (e) {
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('재생성 실패: $e')),
-                                    );
-                                  }
-                                } finally {
-                                  if (mounted)
-                                    setState(
-                                        () => _resettingPlannedAll = false);
-                                }
-                              },
-                        style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFB74C4C)),
-                        icon: _resettingPlannedAll
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Icon(Icons.refresh, size: 18),
-                        label: const Text('예정 전체 재생성'),
-                      ),
-                    ],
-                  ),
-                ),
-                const Padding(padding: EdgeInsets.only(bottom: 24)),
-              ],
-            ),
+  Future<bool> _generalAiApiKeyConfigured() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('platform_config')
+          .select('config_value')
+          .eq('config_key', 'openai_api_key')
+          .maybeSingle();
+      return res != null &&
+          (res['config_value'] as String? ?? '').isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _generalAiSummaryEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('ai_summary_enabled') ?? false;
+  }
+
+  String _previewThemeModeLabel(ThemeMode mode) {
+    return mode == ThemeMode.dark ? '다크' : '기본';
+  }
+
+  _GeneralLaunchMode _currentLaunchMode() {
+    if (_fullscreenEnabled) return _GeneralLaunchMode.fullscreen;
+    if (_maximizeEnabled) return _GeneralLaunchMode.maximize;
+    return _GeneralLaunchMode.defaultMode;
+  }
+
+  String _launchModeLabel(_GeneralLaunchMode mode) {
+    switch (mode) {
+      case _GeneralLaunchMode.defaultMode:
+        return '기본';
+      case _GeneralLaunchMode.fullscreen:
+        return '전체화면';
+      case _GeneralLaunchMode.maximize:
+        return '최대창';
+    }
+  }
+
+  Future<void> _applyLaunchMode(_GeneralLaunchMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    switch (mode) {
+      case _GeneralLaunchMode.defaultMode:
+        setState(() {
+          _fullscreenEnabled = false;
+          _maximizeEnabled = false;
+        });
+        await prefs.setBool('fullscreen_enabled', false);
+        await prefs.setBool('maximize_enabled', false);
+        break;
+      case _GeneralLaunchMode.fullscreen:
+        setState(() {
+          _fullscreenEnabled = true;
+          _maximizeEnabled = false;
+        });
+        await prefs.setBool('fullscreen_enabled', true);
+        await prefs.setBool('maximize_enabled', false);
+        break;
+      case _GeneralLaunchMode.maximize:
+        setState(() {
+          _fullscreenEnabled = false;
+          _maximizeEnabled = true;
+        });
+        await prefs.setBool('fullscreen_enabled', false);
+        await prefs.setBool('maximize_enabled', true);
+        break;
+    }
+  }
+
+  Future<void> _openPreviewThemeMenu(PreviewAcademyPanelStyle style) async {
+    final box = _previewThemeMenuAnchorKey.currentContext?.findRenderObject()
+        as RenderBox?;
+    if (box == null) return;
+
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: box,
+      style: style,
+      selectedId: _selectedThemeMode.name,
+      options: const [
+        PreviewAcademyMenuOption(id: 'light', label: '기본'),
+        PreviewAcademyMenuOption(id: 'dark', label: '다크'),
+      ],
+    );
+
+    if (pickedId == null || !mounted) return;
+    final next =
+        pickedId == 'dark' ? ThemeMode.dark : ThemeMode.light;
+    setState(() => _selectedThemeMode = next);
+    AppThemeController.setMode(next);
+  }
+
+  Future<void> _openPreviewLaunchModeMenu(
+    PreviewAcademyPanelStyle style,
+  ) async {
+    final box =
+        _previewLaunchModeMenuAnchorKey.currentContext?.findRenderObject()
+            as RenderBox?;
+    if (box == null) return;
+
+    final current = _currentLaunchMode();
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: box,
+      style: style,
+      selectedId: current.name,
+      options: const [
+        PreviewAcademyMenuOption(id: 'defaultMode', label: '기본'),
+        PreviewAcademyMenuOption(id: 'fullscreen', label: '전체화면'),
+        PreviewAcademyMenuOption(id: 'maximize', label: '최대창'),
+      ],
+    );
+
+    if (pickedId == null || !mounted) return;
+    final next = _GeneralLaunchMode.values.firstWhere(
+      (mode) => mode.name == pickedId,
+    );
+    await _applyLaunchMode(next);
+  }
+
+  Future<void> _openPreviewPrinterMenu(
+    PreviewAcademyPanelStyle style, {
+    required GlobalKey anchorKey,
+    required String selectedValue,
+    required void Function(String value) onSelected,
+  }) async {
+    if (_printerSettingsLoading) return;
+    if (_installedPrinters.isEmpty) {
+      await _loadPrinterRoutingSettings(refreshList: true);
+      if (!mounted) return;
+    }
+
+    final box = anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+
+    final options = _printerValuesForDropdown(selectedValue);
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: box,
+      style: style,
+      selectedId: selectedValue,
+      options: [
+        for (final value in options)
+          PreviewAcademyMenuOption(
+            id: value,
+            label: _printerLabel(value),
           ),
-        ),
+      ],
+    );
+
+    if (pickedId == null || !mounted) return;
+    onSelected(pickedId);
+  }
+
+  Widget _buildGeneralPrinterSection(PreviewAcademyPanelStyle style) {
+    return PreviewAcademyLabeledCardSection(
+      style: style,
+      title: '프린터',
+      card: PreviewAcademyGroupedFieldsCard(
+        style: style,
+        rows: [
+          PreviewAcademyInfoRow(
+            label: '일반 인쇄',
+            value: _printerLabel(_generalPrinterValue),
+            showChevron: false,
+            valueUsesHintStyle: true,
+            trailingAlignsWithChevron: true,
+            trailing: PreviewAcademyPaymentMenuAnchor(
+              key: _previewGeneralPrinterMenuAnchorKey,
+              style: style,
+            ),
+            onTap: _printerSettingsLoading
+                ? null
+                : () => _openPreviewPrinterMenu(
+                      style,
+                      anchorKey: _previewGeneralPrinterMenuAnchorKey,
+                      selectedValue: _generalPrinterValue,
+                      onSelected: (value) async {
+                        setState(() => _generalPrinterValue = value);
+                        await _savePrinterRoutingSettings(
+                          channel: PrintRoutingChannel.general,
+                          uiValue: value,
+                        );
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('일반 인쇄 프린터가 저장되었습니다.'),
+                            backgroundColor: _kSignatureGreen,
+                          ),
+                        );
+                      },
+                    ),
+          ),
+          PreviewAcademyInfoRow(
+            label: '알림장 인쇄',
+            value: _printerLabel(_todoPrinterValue),
+            showChevron: false,
+            valueUsesHintStyle: true,
+            trailingAlignsWithChevron: true,
+            trailing: PreviewAcademyPaymentMenuAnchor(
+              key: _previewTodoPrinterMenuAnchorKey,
+              style: style,
+            ),
+            onTap: _printerSettingsLoading
+                ? null
+                : () => _openPreviewPrinterMenu(
+                      style,
+                      anchorKey: _previewTodoPrinterMenuAnchorKey,
+                      selectedValue: _todoPrinterValue,
+                      onSelected: (value) async {
+                        setState(() => _todoPrinterValue = value);
+                        await _savePrinterRoutingSettings(
+                          channel: PrintRoutingChannel.todoSheet,
+                          uiValue: value,
+                        );
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('알림장 인쇄 프린터가 저장되었습니다.'),
+                            backgroundColor: _kSignatureGreen,
+                          ),
+                        );
+                      },
+                    ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGeneralAppSection(PreviewAcademyPanelStyle style) {
+    final switchInactive = Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF3A3A3C)
+        : const Color(0xFFE5E5EA);
+
+    return FutureBuilder<bool>(
+      future: _generalAiApiKeyConfigured(),
+      builder: (context, apiSnapshot) {
+        final hasApiKey = apiSnapshot.data ?? false;
+        return FutureBuilder<bool>(
+          future: _generalAiSummaryEnabled(),
+          builder: (context, enabledSnapshot) {
+            final isEnabled = enabledSnapshot.data ?? false;
+            return FutureBuilder<PackageInfo>(
+              future: PackageInfo.fromPlatform(),
+              builder: (context, packageSnapshot) {
+                final ver = packageSnapshot.data?.version ?? '';
+                final build = packageSnapshot.data?.buildNumber ?? '';
+                final versionText = (ver.isEmpty && build.isEmpty)
+                    ? '버전 확인 중...'
+                    : '$ver+$build';
+
+                return PreviewAcademyLabeledCardSection(
+                  style: style,
+                  title: '앱',
+                  card: PreviewAcademyGroupedFieldsCard(
+                    style: style,
+                    rows: [
+                      PreviewAcademyInfoRow(
+                        label: '업데이트',
+                        value: versionText,
+                        onTap: () async {
+                          await UpdateService.oneClickUpdate(context);
+                        },
+                      ),
+                      PreviewAcademyInfoRow(
+                        label: 'AI 요약',
+                        value: '',
+                        showChevron: false,
+                        valueWidget: const SizedBox.shrink(),
+                        trailing: PreviewAcademyIosSwitch(
+                          value: hasApiKey && isEnabled,
+                          onChanged: hasApiKey
+                              ? (value) async {
+                                  final prefs =
+                                      await SharedPreferences.getInstance();
+                                  await prefs.setBool(
+                                    'ai_summary_enabled',
+                                    value,
+                                  );
+                                  if (mounted) setState(() {});
+                                }
+                              : null,
+                          inactiveColor: switchInactive,
+                        ),
+                      ),
+                      PreviewAcademyInfoRow(
+                        label: '테마',
+                        value: _previewThemeModeLabel(_selectedThemeMode),
+                        showChevron: false,
+                        valueUsesHintStyle: true,
+                        trailingAlignsWithChevron: true,
+                        trailing: PreviewAcademyPaymentMenuAnchor(
+                          key: _previewThemeMenuAnchorKey,
+                          style: style,
+                        ),
+                        onTap: () => _openPreviewThemeMenu(style),
+                      ),
+                      PreviewAcademyInfoRow(
+                        label: '실행',
+                        value: _launchModeLabel(_currentLaunchMode()),
+                        showChevron: false,
+                        valueUsesHintStyle: true,
+                        trailingAlignsWithChevron: true,
+                        trailing: PreviewAcademyPaymentMenuAnchor(
+                          key: _previewLaunchModeMenuAnchorKey,
+                          style: style,
+                        ),
+                        onTap: () => _openPreviewLaunchModeMenu(style),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildGeneralSettings() {
+    final style = _previewAcademyPanelStyle(context)!;
+
+    return _buildPreviewAcademySectionScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
+          Text(
+            '일반',
+            textAlign: TextAlign.center,
+            style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
+          ),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
+          ),
+          _buildGeneralAppSection(style),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademySectionListSpacing,
+          ),
+          _buildGeneralPrinterSection(style),
+        ],
       ),
     );
   }
@@ -2198,38 +1119,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? const Color(0xFF3A3A3C)
         : const Color(0xFFE5E5EA);
 
-    final horizontalInset =
-        FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: horizontalInset),
-          child: Text(
-            '운영 시간',
-            style: FabTabBarTokens.previewSectionTitleStyle(previewStyle)
-                .copyWith(color: previewStyle.hint),
-          ),
+    return PreviewAcademyLabeledCardSection(
+      style: previewStyle,
+      title: '운영 시간',
+      card: Container(
+        width: double.infinity,
+        decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
+          previewStyle,
         ),
-        const SizedBox(
-          height: FabTabBarTokens.previewAcademySectionHeaderToCardSpacing,
-        ),
-        Container(
-          width: double.infinity,
-          decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: _buildPreviewOperatingHoursCardChildren(
             previewStyle,
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _buildPreviewOperatingHoursCardChildren(
-              previewStyle,
-              switchInactive,
-            ),
+            switchInactive,
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -2465,39 +1371,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     PreviewAcademyPanelStyle previewStyle,
     DayOfWeek day,
   ) {
-    return SizedBox(
-      height: FabTabBarTokens.previewAcademyOperatingRowHeight,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => _addPreviewBreakTime(day),
-          behavior: HitTestBehavior.opaque,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal:
-                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.add,
-                  size: 18,
-                  color: FabTabBarTokens.previewConfirmActionColor,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '휴식 추가',
-                  style: FabTabBarTokens.previewBodyTextStyle(
-                    previewStyle,
-                    color: FabTabBarTokens.previewConfirmActionColor,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return PreviewAcademyCardAddActionRow(
+      style: previewStyle,
+      label: '휴식 추가',
+      onTap: () => _addPreviewBreakTime(day),
     );
   }
 
@@ -4397,273 +3274,243 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showAddTeacherDialog() async {
-    await showDialog(
+    await TeacherRegistrationDialog.show(
       context: context,
-      builder: (context) => TeacherRegistrationDialog(
-        onSave: (teacher) {
-          DataManager.instance.addTeacher(teacher);
-        },
-      ),
+      onSave: (teacher) {
+        DataManager.instance.addTeacher(teacher);
+      },
     );
   }
 
   Widget _buildTeacherSettings() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 48),
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: SizedBox(
-          width: 650,
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF18181A),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      '선생님 관리',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: _isOwner ? _showAddTeacherDialog : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _kSignatureGreen,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 24, vertical: 10),
-                      ),
-                      child: const Text('선생님 등록',
-                          style: TextStyle(fontSize: 16, color: Colors.white)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 32),
-                ValueListenableBuilder<List<Teacher>>(
-                  valueListenable: DataManager.instance.teachersNotifier,
-                  builder: (context, teachers, _) {
-                    if (teachers.isEmpty) {
-                      return Center(
-                        child: Text(
-                          '등록된 선생님이 없습니다.',
-                          style: TextStyle(color: Colors.white70, fontSize: 18),
-                        ),
-                      );
-                    }
-                    return SizedBox(
-                      height: (teachers.length * 64.0) +
-                          ((teachers.length - 1) * 16.0),
-                      child: ReorderableListView(
-                        buildDefaultDragHandles: false,
-                        proxyDecorator: (child, index, animation) {
-                          // 드래그 피드백 크기 과대 표시 이슈 해결: 외부 Padding 제거
-                          Widget feedback = child;
-                          if (feedback is Padding) {
-                            final inner = feedback.child;
-                            if (inner != null) {
-                              feedback = inner;
-                            }
-                          }
-                          return Material(
-                            color: Colors.transparent,
-                            child: feedback,
-                          );
-                        },
-                        onReorder: (oldIndex, newIndex) {
-                          if (!_isOwner) return; // 원장만 순서 변경 가능
-                          if (newIndex > oldIndex) newIndex--;
-                          final newList = List<Teacher>.from(teachers);
-                          final item = newList.removeAt(oldIndex);
-                          newList.insert(newIndex, item);
-                          DataManager.instance.setTeachersOrder(newList);
-                        },
-                        children: [
-                          for (int i = 0; i < teachers.length; i++)
-                            Padding(
-                              key: ValueKey(teachers[i]),
-                              padding: EdgeInsets.only(
-                                  bottom: i == teachers.length - 1 ? 0 : 16),
-                              child: _buildTeacherCard(teachers[i],
-                                  key: ValueKey(teachers[i])),
+    final teacherStyle = _previewAcademyPanelStyle(context)!;
+
+    return _buildPreviewAcademySectionScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
+          Text(
+            '선생님',
+            textAlign: TextAlign.center,
+            style: FabTabBarTokens.previewAcademyMainTitleStyle(teacherStyle),
+          ),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
+          ),
+          ValueListenableBuilder<List<Teacher>>(
+            valueListenable: DataManager.instance.teachersNotifier,
+            builder: (context, teachers, _) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildTeacherAvatarStack(teachers),
+                  const SizedBox(
+                    height: FabTabBarTokens.previewAcademySectionListSpacing,
+                  ),
+                  PreviewAcademyGroupedRowsCard(
+                    style: teacherStyle,
+                    rows: [
+                      if (teachers.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: FabTabBarTokens
+                                .previewAcademyGroupedRowPaddingHorizontal,
+                            vertical: FabTabBarTokens
+                                .previewAcademyGroupedRowPaddingVertical,
+                          ),
+                          child: Center(
+                            child: Text(
+                              '등록된 선생님이 없습니다.',
+                              style: FabTabBarTokens
+                                  .previewAcademyTwoLineSubtitleStyle(
+                                      teacherStyle),
                             ),
-                        ],
-                      ),
-                    );
-                  },
+                          ),
+                        )
+                      else
+                        for (final t in teachers)
+                          _buildTeacherRow(t, teacherStyle),
+                      _buildTeacherAddInlineRow(teacherStyle),
+                    ],
+                  ),
+                  const SizedBox(
+                    height: FabTabBarTokens.previewAcademySectionListSpacing,
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 학원 탭 「휴식 추가」와 동일한 인라인 행 스타일.
+  Widget _buildTeacherAddInlineRow(PreviewAcademyPanelStyle style) {
+    return Opacity(
+      opacity: _isOwner ? 1.0 : 0.45,
+      child: PreviewAcademyCardAddActionRow(
+        style: style,
+        label: '선생님 추가',
+        onTap: _isOwner ? _showAddTeacherDialog : null,
+      ),
+    );
+  }
+
+  /// 선생님 프로필 사진을 겹쳐 쌓아 보여준다. (로고 대비 15% 작은 원)
+  Widget _buildTeacherAvatarStack(List<Teacher> teachers) {
+    final Color borderColor = context.yggSurfaceBase;
+    const double radius = FabTabBarTokens.previewTeacherAvatarRadius;
+    const double diameter = radius * 2;
+    const double overlap =
+        diameter * FabTabBarTokens.previewTeacherAvatarOverlapFraction;
+    const double step = diameter - overlap;
+
+    if (teachers.isEmpty) {
+      return Center(
+        child: _buildTeacherAvatar(
+          null,
+          radius: radius,
+          borderColor: borderColor,
+        ),
+      );
+    }
+
+    final double totalWidth = diameter + step * (teachers.length - 1);
+    return SizedBox(
+      height: diameter,
+      child: Center(
+        child: SizedBox(
+          width: totalWidth,
+          height: diameter,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // 뒤에서부터 그려 맨 앞(리스트 첫 번째) 프로필이 z-order 최상단에 오게 한다.
+              for (int i = teachers.length - 1; i >= 0; i--)
+                Positioned(
+                  left: step * i,
+                  top: 0,
+                  child: _buildTeacherAvatar(
+                    teachers[i],
+                    radius: radius,
+                    borderColor: borderColor,
+                  ),
                 ),
-                const SizedBox(height: 24), // 하단 여백
-              ],
-            ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildTeacherCard(Teacher t, {Key? key}) {
-    return Container(
-      key: key,
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1F1F1F), // 배경색을 0xFF1F1F1F로 변경
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 80,
-            child: Text(
-              t.name,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          SizedBox(width: 16),
-          SizedBox(
-            width: 60,
-            child: Text(
-              getTeacherRoleLabel(t.role),
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          SizedBox(width: 16),
-          SizedBox(
-            width: 320,
-            child: Text(
-              t.description,
-              style: const TextStyle(color: Colors.white60, fontSize: 13),
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-            ),
-          ),
-          Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              mainAxisSize: MainAxisSize.max,
-              children: [
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, color: Colors.white54),
-                  color: const Color(0xFF2A2A2A),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  onSelected: (value) async {
-                    if (!_isOwner) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('원장만 수정/삭제할 수 있습니다.')));
-                      return;
-                    }
-                    if (value == 'edit') {
-                      await showDialog(
-                        context: context,
-                        builder: (context) => TeacherRegistrationDialog(
-                          teacher: t,
-                          onSave: (updatedTeacher) {
-                            final idx = DataManager
-                                .instance.teachersNotifier.value
-                                .indexOf(t);
-                            if (idx != -1) {
-                              DataManager.instance
-                                  .updateTeacher(idx, updatedTeacher);
-                            }
-                          },
-                        ),
-                      );
-                    } else if (value == 'delete') {
-                      final confirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          backgroundColor: const Color(0xFF2A2A2A),
-                          title: const Text('선생님 삭제',
-                              style: TextStyle(color: Colors.white)),
-                          content: const Text('정말로 이 선생님을 삭제하시겠습니까?',
-                              style: TextStyle(color: Colors.white)),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              child: const Text('취소'),
-                            ),
-                            FilledButton(
-                              style: FilledButton.styleFrom(
-                                  backgroundColor: Colors.red),
-                              onPressed: () => Navigator.of(context).pop(true),
-                              child: const Text('삭제'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirmed == true) {
-                        final idx = DataManager.instance.teachersNotifier.value
-                            .indexOf(t);
-                        if (idx != -1) {
-                          DataManager.instance.deleteTeacher(idx);
-                        }
-                      }
-                    } else if (value == 'details') {
-                      await showDialog(
-                        context: context,
-                        builder: (context) => TeacherDetailsDialog(teacher: t),
-                      );
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    PopupMenuItem(
-                      value: 'edit',
-                      child: ListTile(
-                        leading: const Icon(Icons.edit_outlined,
-                            color: Colors.white70),
-                        title: const Text('수정',
-                            style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'delete',
-                      child: ListTile(
-                        leading:
-                            const Icon(Icons.delete_outline, color: Colors.red),
-                        title: const Text('삭제',
-                            style: TextStyle(color: Colors.red)),
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'details',
-                      child: ListTile(
-                        leading: const Icon(Icons.info_outline,
-                            color: Colors.white70),
-                        title: const Text('상세보기',
-                            style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 2),
-                ReorderableDragStartListener(
-                  index: DataManager.instance.teachersNotifier.value.indexOf(t),
-                  child: Icon(Icons.drag_handle,
-                      color: _isOwner ? Colors.white38 : Colors.white10),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+  /// 단일 선생님 아바타. [borderColor]가 있으면 배경색 테두리로 겹침을 구분한다.
+  Widget _buildTeacherAvatar(
+    Teacher? t, {
+    required double radius,
+    Color? borderColor,
+  }) {
+    const double borderWidth = FabTabBarTokens.previewTeacherAvatarBorderWidth;
+    ImageProvider? img;
+    if ((t?.avatarUrl ?? '').toString().isNotEmpty) {
+      img = NetworkImage(t!.avatarUrl!);
+    }
+    final Color bg = _parseAvatarColor(t?.avatarPresetColor);
+    final String label = (t?.avatarPresetInitial != null &&
+            t!.avatarPresetInitial!.isNotEmpty)
+        ? t.avatarPresetInitial!
+        : _avatarInitials(t?.name ?? '');
+    final double labelFontSize =
+        ((radius - 8).clamp(10.0, radius)).toDouble();
+
+    Widget avatar = CircleAvatar(
+      radius: radius,
+      backgroundColor: img == null ? bg : null,
+      backgroundImage: img,
+      child: (img == null && (t?.avatarUseIcon ?? false))
+          ? Icon(Icons.person, color: Colors.white, size: radius)
+          : (img == null
+              ? Text(
+                  label,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: labelFontSize,
+                    fontWeight: FontWeight.w900,
+                  ),
+                )
+              : null),
+    );
+
+    if (borderColor != null && borderWidth > 0) {
+      avatar = Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: borderColor, width: borderWidth),
+        ),
+        child: avatar,
+      );
+    }
+    return avatar;
+  }
+
+  Color _parseAvatarColor(String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return const Color(0xFF2A2A2A);
+    var hex = value.replaceAll('#', '');
+    if (hex.length == 6) hex = 'FF$hex';
+    final parsed = int.tryParse(hex, radix: 16);
+    if (parsed == null) return const Color(0xFF2A2A2A);
+    return Color(parsed);
+  }
+
+  String _avatarInitials(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '?';
+    return trimmed.characters.first.toString();
+  }
+
+  /// 그룹 카드 안 선생님 한 줄(2줄: 이름 + 역할/설명).
+  Widget _buildTeacherRow(Teacher t, PreviewAcademyPanelStyle style) {
+    final role = getTeacherRoleLabel(t.role);
+    final desc = t.description.trim();
+    final subtitle = desc.isEmpty ? role : '$role · $desc';
+    return PreviewAcademyTwoLineRow(
+      key: ValueKey(t),
+      style: style,
+      leading: _buildTeacherAvatar(t, radius: 22),
+      title: t.name,
+      subtitle: subtitle,
+      onTap: () => _openTeacherEditor(t),
+    );
+  }
+
+  Future<void> _openTeacherEditor(Teacher t) async {
+    if (!_isOwner) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('원장만 수정/삭제할 수 있습니다.')),
+      );
+      return;
+    }
+
+    final isOwnerTeacher = TeacherRegistrationDialog.isOwnerTeacher(t);
+    await TeacherRegistrationDialog.show(
+      context: context,
+      teacher: t,
+      onSave: (updatedTeacher) {
+        final idx = DataManager.instance.teachersNotifier.value.indexOf(t);
+        if (idx != -1) {
+          DataManager.instance.updateTeacher(idx, updatedTeacher);
+        }
+      },
+      onDelete: isOwnerTeacher
+          ? null
+          : () async {
+              final idx = DataManager.instance.teachersNotifier.value.indexOf(t);
+              if (idx != -1) {
+                await DataManager.instance.deleteTeacher(idx);
+              }
+            },
     );
   }
 

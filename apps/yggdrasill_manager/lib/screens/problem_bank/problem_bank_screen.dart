@@ -1211,7 +1211,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           if (g.length >= 2) List<String>.from(g),
       ];
     } else {
-    final nextPairKeys = horizontalPairKeys ?? _figureHorizontalPairKeysOf(q);
+      final nextPairKeys = horizontalPairKeys ?? _figureHorizontalPairKeysOf(q);
       resolvedGroups = <List<String>>[
         for (final pk in nextPairKeys)
           if (_figurePairParts(pk).length == 2) _figurePairParts(pk),
@@ -1221,9 +1221,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final groups = <Map<String, dynamic>>[
       for (final members in resolvedGroups)
         <String, dynamic>{
-        'type': 'horizontal',
+          'type': 'horizontal',
           'members': members,
-        'gap': 0.5,
+          'gap': 0.5,
         },
     ];
 
@@ -1383,13 +1383,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         questions.where((q) => q.id.trim().isNotEmpty).toList(growable: false);
     if (ordered.isEmpty) {
       if (mounted) {
-      setState(() {
-        _questionPreviewUrls.clear();
+        setState(() {
+          _questionPreviewUrls.clear();
           _questionPreviewPdfUrls.clear();
           _questionPreviewStatus.clear();
           _questionPreviewErrors.clear();
           _pendingPreviewQuestionIds.clear();
-      });
+        });
       }
       return;
     }
@@ -1417,13 +1417,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
     try {
       final urlMap = await _service.batchRenderThumbnails(
-      academyId: academyId,
+        academyId: academyId,
         questionIds: questionIds,
         documentId: documentId,
         templateProfile: profile,
         paperSize: paperSize,
-    );
-    if (!mounted) return;
+      );
+      if (!mounted) return;
 
       final uidToId = <String, String>{};
       for (final q in ordered) {
@@ -1434,7 +1434,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       }
 
       final missingNumbers = <String>[];
-    setState(() {
+      setState(() {
         for (final entry in urlMap.entries) {
           final qid = uidToId[entry.key.trim()] ?? entry.key.trim();
           if (qid.isEmpty) continue;
@@ -1500,14 +1500,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           mergedMeta.remove('score_point');
         }
       } else {
-      final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
-      if (parsedScore == null) {
-        mergedMeta.remove('score_point');
-      } else {
-        final rounded = parsedScore.roundToDouble();
-        mergedMeta['score_point'] =
-            rounded == parsedScore ? rounded.toInt() : parsedScore;
-      }
+        final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
+        if (parsedScore == null) {
+          mergedMeta.remove('score_point');
+        } else {
+          final rounded = parsedScore.roundToDouble();
+          mergedMeta['score_point'] =
+              rounded == parsedScore ? rounded.toInt() : parsedScore;
+        }
       }
       // allow_objective 가 false 이면 "이 문항은 객관식으로 출제하지 않는다"는 명시적 결정이므로,
       // DB에 남아 있던 객관식 보기/정답/플래그를 모두 0/빈 값으로 강제 동기화한다.
@@ -3229,8 +3229,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         // 변경 여부(_dirtyDocumentMeta) 와 무관하게 항상 함께 저장해야
         // pb_documents.status='ready' 트리거 가드를 통과할 수 있다.
         final mergedDocMeta = <String, dynamic>{
-                ...doc.meta,
-                'source_classification': _buildSourceClassificationMeta(),
+          ...doc.meta,
+          'source_classification': _buildSourceClassificationMeta(),
         };
         await _service.updateDocumentMeta(
           documentId: doc.id,
@@ -3251,27 +3251,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           materialName: materialName,
           classificationDetail: classificationDetail,
         );
-          if (academyId == null || academyId.isEmpty) {
-            throw Exception('academy_id를 찾을 수 없습니다.');
-          }
-          await _service.updateQuestionsClassificationForDocument(
-            academyId: academyId,
-            documentId: doc.id,
-            curriculumCode: curriculumCode,
-            sourceTypeCode: sourceTypeCode,
+        if (academyId == null || academyId.isEmpty) {
+          throw Exception('academy_id를 찾을 수 없습니다.');
+        }
+        await _service.updateQuestionsClassificationForDocument(
+          academyId: academyId,
+          documentId: doc.id,
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
           schoolLevel: schoolLevel,
           gradeKey: gradeKey,
           courseKey: courseKey,
-            courseLabel: courseLabel,
-            gradeLabel: gradeLabel,
-            examYear: examYear,
-            semesterLabel: semesterLabel,
-            examTermLabel: examTermLabel,
-            schoolName: schoolName,
-            publisherName: publisherName,
-            materialName: materialName,
-            classificationDetail: classificationDetail,
-          );
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
+        );
       }
       if (!mounted) return;
       setState(() {
@@ -3571,10 +3571,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         final willDropSubjectiveAssets = e.allowSubjective && !nextSubjective;
 
         final nextMeta = <String, dynamic>{
-                      ...e.meta,
-                      'allow_objective': nextObjective,
-                      'allow_subjective': nextSubjective,
-                      'allow_essay': nextEssay,
+          ...e.meta,
+          'allow_objective': nextObjective,
+          'allow_subjective': nextSubjective,
+          'allow_essay': nextEssay,
         };
         if (willDropObjectiveAssets) {
           nextMeta['objective_answer_key'] = '';
@@ -3882,8 +3882,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       setState(() {
         _questions = _questions
             .map((e0) => e0.id == q.id ? prev : e0)
-          .toList(growable: false);
-    });
+            .toList(growable: false);
+      });
       _showSnack('객관식 보기 저장 실패: $e', error: true);
     }
   }
@@ -4052,7 +4052,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final blankChoiceLabelCtrls = _blankChoiceLabelsOf(question)
         .map((label) => TextEditingController(text: label))
         .toList(growable: false);
-    await showDialog<bool>(
+    final updatedQuestion = await showDialog<ProblemBankQuestion>(
       context: context,
       builder: (context) {
         return AlertDialog(
@@ -4467,7 +4467,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
+              onPressed: () => Navigator.of(context).pop(),
               child: const Text('취소'),
             ),
             FilledButton(
@@ -4544,22 +4544,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     meta: updatedMeta,
                     equations: updatedEquations,
                   );
-                  setState(() {
-                    _questions = _questions
-                        .map((q) => q.id == question.id ? updatedQ : q)
-                        .toList(growable: false);
-                  });
-                  if (context.mounted) Navigator.of(context).pop(true);
-                  if (!mounted) return;
-                  final previewUrl = await _saveAndRefreshPreview(updatedQ);
-                  if (!mounted) return;
-                  if (previewUrl != null && previewUrl.isNotEmpty) {
-                    _showSnack('저장했고 문제 미리보기를 갱신했습니다.');
-                  } else {
-                    _showSnack(
-                      '검수 내용은 저장했습니다. 미리보기가 아직 없으면 잠시 후 다시 시도하거나 상단 `업로드`를 이용하세요.',
-                    );
-                  }
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  if (context.mounted) Navigator.of(context).pop(updatedQ);
                 } catch (e) {
                   _showSnack('검수 편집 실패: $e', error: true);
                 }
@@ -4572,6 +4558,31 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
     for (final ctrl in blankChoiceLabelCtrls) {
       ctrl.dispose();
+    }
+    for (final ctrl in equationCtrls) {
+      ctrl.dispose();
+    }
+    stemCtrl.dispose();
+    noteCtrl.dispose();
+    if (updatedQuestion == null || !mounted) return;
+    setState(() {
+      _questions = _questions
+          .map((q) => q.id == question.id ? updatedQuestion : q)
+          .toList(growable: false);
+    });
+    try {
+      final previewUrl = await _saveAndRefreshPreview(updatedQuestion);
+      if (!mounted) return;
+      if (previewUrl != null && previewUrl.isNotEmpty) {
+        _showSnack('저장했고 문제 미리보기를 갱신했습니다.');
+      } else {
+        _showSnack(
+          '검수 내용은 저장했습니다. 미리보기가 아직 없으면 잠시 후 다시 시도하거나 상단 `업로드`를 이용하세요.',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('검수 편집 실패: $e', error: true);
     }
   }
 
@@ -4935,7 +4946,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ? 'HWPX 업로드 중...'
             : _isUploadingPdf
                 ? 'PDF 업로드 중...'
-            : (_isExtracting ? '한글/수식 추출 및 정규화 중...' : _statusText);
+                : (_isExtracting ? '한글/수식 추출 및 정규화 중...' : _statusText);
     final doc = _activeDocument;
     final hasHwpx = doc != null && doc.hasHwpxSource;
     final hasPdf = doc != null && doc.hasPdfSource;
@@ -5010,19 +5021,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             children: [
               Expanded(
                 flex: 3,
-            child: OutlinedButton.icon(
+                child: OutlinedButton.icon(
                   onPressed: commonBlockers
-                  ? null
-                  : () => unawaited(_openPasteImportDialog()),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _textSub,
-                side: const BorderSide(color: _border),
+                      ? null
+                      : () => unawaited(_openPasteImportDialog()),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _textSub,
+                    side: const BorderSide(color: _border),
                     padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.content_paste_outlined, size: 17),
+                  label: const Text('복사/붙여넣기 수동 추출'),
+                ),
               ),
-              icon: const Icon(Icons.content_paste_outlined, size: 17),
-              label: const Text('복사/붙여넣기 수동 추출'),
-            ),
-          ),
               const SizedBox(width: 8),
               Expanded(
                 flex: 2,
@@ -6384,7 +6395,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       ]);
     }
 
-    await showDialog<bool>(
+    final updatedQuestion = await showDialog<ProblemBankQuestion>(
       context: context,
       builder: (context) {
         return StatefulBuilder(
@@ -6452,7 +6463,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
+                  onPressed: () => Navigator.of(context).pop(),
                   child: const Text('취소'),
                 ),
                 FilledButton(
@@ -6491,20 +6502,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       updatedMeta.remove('score_point');
                     }
 
-                    if (!mounted) return;
                     final updatedQ = question.copyWith(meta: updatedMeta);
-                    setState(() {
-                      _questions = _questions
-                          .map((q) => q.id == question.id ? updatedQ : q)
-                          .toList(growable: false);
-                      // score draft 도 총점으로 동기화(일반 인풋 표시 일관성용).
-                      _scoreDrafts[question.id] =
-                          total > 0 ? _scorePointInputText(total) : '';
-                      _dirtyQuestionIds.add(question.id);
-                    });
-                    if (context.mounted) Navigator.of(context).pop(true);
-                    if (!mounted) return;
-                    await _saveAndRefreshPreview(updatedQ);
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    if (context.mounted) Navigator.of(context).pop(updatedQ);
                   },
                   child: const Text('저장'),
                 ),
@@ -6517,6 +6517,25 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
     for (final e in entries) {
       e.controller.dispose();
+    }
+    if (updatedQuestion == null || !mounted) return;
+    final scoreParts = updatedQuestion.scoreParts;
+    final total = scoreParts != null && scoreParts.isNotEmpty
+        ? sumScoreParts(scoreParts)
+        : (_scorePointOf(updatedQuestion) ?? 0);
+    setState(() {
+      _questions = _questions
+          .map((q) => q.id == question.id ? updatedQuestion : q)
+          .toList(growable: false);
+      // score draft 도 총점으로 동기화(일반 인풋 표시 일관성용).
+      _scoreDrafts[question.id] = total > 0 ? _scorePointInputText(total) : '';
+      _dirtyQuestionIds.add(question.id);
+    });
+    try {
+      await _saveAndRefreshPreview(updatedQuestion);
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('배점 저장·미리보기 갱신 실패: $e', error: true);
     }
   }
 
@@ -6570,7 +6589,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       : () {
                           setLocalState(() {
                             final removed = entries.removeAt(i);
-                            removed.controller.dispose();
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              removed.controller.dispose();
+                            });
                           });
                         },
                 ),
@@ -6774,6 +6795,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     const fallback = <String>['(가)', '(나)', '(다)'];
     final raw = q.meta['blank_choice_labels'];
     final values = raw is List ? raw : const <dynamic>[];
+    final configured = values
+        .map((value) => '$value'.trim())
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+    if (configured.length >= 2 && configured.length <= 4) {
+      return configured;
+    }
     return List<String>.generate(fallback.length, (idx) {
       if (idx >= values.length) return fallback[idx];
       final value = '${values[idx]}'.trim();
@@ -8593,7 +8621,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   List<String> _splitBlankChoiceCells(String text, int columnCount) {
-    final parts = text.split(RegExp(r'\s*,\s*')).map((e) => e.trim()).toList();
+    final raw = text.trim();
+    var parts = raw.split(RegExp(r'\s*,\s*')).map((e) => e.trim()).toList();
+    // 추출 시 쉼표 구분자가 누락된 표형 보기 처리:
+    //   "(ㄴ)(ㄱ)(ㄷ)" 처럼 괄호 그룹이 열 개수만큼 연속하면 괄호 그룹 단위로 분리한다.
+    if (parts.where((e) => e.isNotEmpty).length < columnCount) {
+      final groups = RegExp(r'[(（][^()（）]*[)）]')
+          .allMatches(raw)
+          .map((m) => m.group(0)!.trim())
+          .toList();
+      if (groups.length >= columnCount) {
+        parts = groups;
+      }
+    }
     while (parts.length < columnCount) {
       parts.add('');
     }
@@ -8609,11 +8649,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final widthScale = _blankChoiceWidthScaleOf(q);
     final columnScales = _blankChoiceColumnScalesOf(q, labels.length);
     final fontSize = expanded ? 13.6 : 13.4;
-    const baseColumnWidths = <double>[58, 58, 122];
+    // 번호열은 고정하고, 데이터 열은 기본적으로 같은 폭으로 키운다.
+    // 개별 열 폭 차이는 columnScales 로만 반영한다.
+    const baseDataColumnWidth = 74.0;
     final labelWidth = expanded ? 32.0 : 28.0;
     final columnWidths = List<double>.generate(labels.length, (idx) {
-      final base = idx < baseColumnWidths.length ? baseColumnWidths[idx] : 72.0;
-      return base * widthScale * columnScales[idx];
+      return baseDataColumnWidth * widthScale * columnScales[idx];
     }, growable: false);
     final headerStyle = TextStyle(
       color: const Color(0xFF232323),
@@ -9096,8 +9137,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           fit: fillCompact ? BoxFit.cover : BoxFit.fitWidth,
           alignment: Alignment.topCenter,
           errorBuilder: (_, __, ___) => _buildLocalPdfPreviewFallback(
-              q,
-              expanded: expanded,
+            q,
+            expanded: expanded,
             fixedHeight: fixedHeight,
             compact: compact,
             message: '서버 PDF 썸네일 로드 실패 · 임시 로컬 미리보기',
@@ -9522,9 +9563,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final groups = <Map<String, dynamic>>[
       for (final members in resolvedGroups)
         <String, dynamic>{
-        'type': 'horizontal',
+          'type': 'horizontal',
           'members': members,
-        'gap': 0.5,
+          'gap': 0.5,
         },
     ];
     if (items.isNotEmpty) {
@@ -9596,12 +9637,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final hasTables = tableEntries.isNotEmpty;
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);
     final hasAnswerFigures = answerFigureAssets.isNotEmpty;
-    final hasSidebar =
-        hasFigures ||
-            hasTables ||
-            hasAnswerFigures ||
-            isImageChoice ||
-            hasFigureMarker;
+    final hasSidebar = hasFigures ||
+        hasTables ||
+        hasAnswerFigures ||
+        isImageChoice ||
+        hasFigureMarker;
 
     // 다이얼로그 사이즈:
     // - 세로는 화면 높이의 최대 92% 까지 확보하되, 문항 세로 높이 필요에 따라 유연.
@@ -9839,16 +9879,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                             '마커보다 그림이 적으면 추가하고, 이미 있으면 마지막 그림을 교체합니다.',
                         onUpload: (bytes, fileName) async {
                           setLocalState(() => refreshing = true);
-                          final updated =
-                              await _uploadManualFigureForQuestion(
+                          final updated = await _uploadManualFigureForQuestion(
                             q: dialogQ,
                             bytes: bytes,
                             fileName: fileName,
                           );
                           if (updated != null) {
                             dialogQ = updated;
-                            final url =
-                                await _saveAndRefreshPreview(updated);
+                            final url = await _saveAndRefreshPreview(updated);
                             if (url != null) {
                               serverPreviewUrl = url;
                             }
@@ -9858,7 +9896,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           }
                         },
                       ),
-                      if (hasFigures || hasTables || hasAnswerFigures || isImageChoice)
+                      if (hasFigures ||
+                          hasTables ||
+                          hasAnswerFigures ||
+                          isImageChoice)
                         const SizedBox(height: 12),
                     ],
                     if (hasFigures)
@@ -10004,8 +10045,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   String _commonStemGroupKeyOf(ProblemBankQuestion q) {
-    final setKey = '${q.setModel['set_key'] ?? q.setModel['setKey'] ?? ''}'
-        .trim();
+    final setKey =
+        '${q.setModel['set_key'] ?? q.setModel['setKey'] ?? ''}'.trim();
     if (setKey.isNotEmpty) return 'key:$setKey';
     return 'stem:${q.setCommonStem.replaceAll(RegExp(r'\s+'), ' ').trim()}';
   }
@@ -10036,6 +10077,58 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         .where((questionNumber) => questionNumber.isNotEmpty)
         .toList(growable: false);
     return nums.isEmpty ? '공통발문' : '공통발문 · 묶인 문항: ${nums.join(', ')}';
+  }
+
+  /// 독립형 세트의 PDF 배치 방식.
+  ///   'auto'  : 슬롯(단)을 넘치면 [공통발문+첫문항] 머리조각 + 나머지 평문항으로 자동 분할 (기본)
+  ///   'split' : 항상 분할
+  ///   'join'  : 항상 한 슬롯에 통째로 (절대 분할 안 함)
+  String _independentSetRenderModeOf(ProblemBankQuestion q) {
+    for (final item in _commonStemGroupQuestions(q)) {
+      final raw =
+          (item.meta['set_render_mode'] ?? '').toString().trim().toLowerCase();
+      if (raw == 'split' || raw == 'join' || raw == 'auto') return raw;
+    }
+    final self =
+        (q.meta['set_render_mode'] ?? '').toString().trim().toLowerCase();
+    if (self == 'split' || self == 'join') return self;
+    return 'auto';
+  }
+
+  String _independentSetRenderModeLabel(String mode) {
+    switch (mode) {
+      case 'split':
+        return '분할';
+      case 'join':
+        return '통짜';
+      default:
+        return '자동';
+    }
+  }
+
+  void _setIndependentSetRenderMode(ProblemBankQuestion q, String mode) {
+    final normalized = (mode == 'split' || mode == 'join') ? mode : 'auto';
+    final group = _commonStemGroupQuestions(q);
+    final groupIds =
+        group.isEmpty ? <String>{q.id} : group.map((item) => item.id).toSet();
+    setState(() {
+      _questions = _questions.map((item) {
+        if (!groupIds.contains(item.id)) return item;
+        final meta = Map<String, dynamic>.from(item.meta);
+        if (normalized == 'auto') {
+          meta.remove('set_render_mode');
+        } else {
+          meta['set_render_mode'] = normalized;
+        }
+        final next = item.copyWith(meta: meta);
+        _dirtyQuestionIds.add(next.id);
+        return next;
+      }).toList(growable: false);
+    });
+    _showSnack(
+      '세트 배치 방식을 "${_independentSetRenderModeLabel(normalized)}"(으)로 변경했습니다. '
+      '저장 후 서버 PDF에 반영됩니다.',
+    );
   }
 
   ProblemBankQuestion _commonStemPreviewQuestion(ProblemBankQuestion q) {
@@ -10288,7 +10381,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     try {
       final group = _commonStemGroupQuestions(q);
       if (group.isEmpty) return null;
-      final markerCount = _figureMarkerCountRegex.allMatches(q.setCommonStem).length;
+      final markerCount =
+          _figureMarkerCountRegex.allMatches(q.setCommonStem).length;
       final groupLabel = group
           .map((item) => item.questionNumber.trim())
           .where((number) => number.isNotEmpty)
@@ -10393,9 +10487,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (mounted && signedByPath.isNotEmpty) {
         final latest = _latestFigureAssetOf(commonQ);
         final latestPath = '${latest?['path'] ?? ''}'.trim();
-        final fallbackLatestPath = latestPath.isNotEmpty
-            ? latestPath
-            : signedByPath.keys.first;
+        final fallbackLatestPath =
+            latestPath.isNotEmpty ? latestPath : signedByPath.keys.first;
         final latestSigned = signedByPath[fallbackLatestPath] ?? '';
         setState(() {
           if (latestSigned.isNotEmpty) {
@@ -10527,27 +10620,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
             final leftScroll = SingleChildScrollView(
               padding: const EdgeInsets.only(right: 6),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
-                            children: [
+                children: [
                   if (commonServerPreviewUrl != null &&
                       commonServerPreviewUrl!.isNotEmpty)
-                                _buildServerPdfPreviewThumbnail(
-                                  previewQ,
+                    _buildServerPdfPreviewThumbnail(
+                      previewQ,
                       previewUrl: commonServerPreviewUrl!,
-                                  expanded: true,
-                                )
-                              else
+                      expanded: true,
+                    )
+                  else
                     _buildPdfPreviewPaperContent(
                       previewQ,
-                                  expanded: true,
+                      expanded: true,
                       scrollable: false,
                       showQuestionNumberPrefix: false,
                     ),
                   if (hasFigures ||
                       _orderedFigureAssetsOf(previewQ).isNotEmpty) ...[
-                              const SizedBox(height: 10),
+                    const SizedBox(height: 10),
                     _buildFigurePreviewThumbnail(
                       previewQ,
                       expanded: true,
@@ -10594,7 +10687,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                                   for (final item in updatedGroup) {
                                     await _saveAndRefreshPreview(item);
                                   }
-                                  await refreshCommonServerPreview(commonQ, null);
+                                  await refreshCommonServerPreview(
+                                      commonQ, null);
                                 }
                                 if (dialogContext.mounted) {
                                   setLocalState(() => refreshing = false);
@@ -10822,61 +10916,61 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     bool allowGrouping = true,
   }) {
     return Container(
-                                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                                  decoration: BoxDecoration(
-                                    color: _field,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: _border),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          const Icon(Icons.tune, color: _textSub, size: 15),
-                                          const SizedBox(width: 6),
-                                          const Text(
-                                            '그림 크기 / 배치',
-                                            style: TextStyle(
-                                              color: _text,
-                                              fontSize: 12.6,
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                          ),
-                                          const Spacer(),
-                                          TextButton(
-                                            onPressed: () {
-                                              setLocalState(() {
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.tune, color: _textSub, size: 15),
+              const SizedBox(width: 6),
+              const Text(
+                '그림 크기 / 배치',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 12.6,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () {
+                  setLocalState(() {
                     for (final key in draftMap.keys) {
-                                                  draftMap[key] = _figureWidthEmDefault;
-                                                }
-                                                  for (final key in positionMap.keys) {
+                      draftMap[key] = _figureWidthEmDefault;
+                    }
+                    for (final key in positionMap.keys) {
                       positionMap[key] = 'center';
-                                                  }
+                    }
                     for (final key in offsetXMap.keys) {
                       offsetXMap[key] = 0.0;
-                                                }
+                    }
                     selectedPairKeys.clear();
                     selectedGroups.clear();
-                                              });
+                  });
                   onSettingChanged();
-                                            },
-                                            child: const Text(
-                                              '기본값',
-                                              style: TextStyle(fontSize: 11.4),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      ..._buildFigureScaleSliders(
+                },
+                child: const Text(
+                  '기본값',
+                  style: TextStyle(fontSize: 11.4),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ..._buildFigureScaleSliders(
             draftMap: draftMap,
             positionMap: positionMap,
             offsetXMap: offsetXMap,
             labels: figureData.labels,
-                                        previewUrls: figureData.previewUrls,
-                                        setLocalState: setLocalState,
-                                        showPreviewImages: false,
+            previewUrls: figureData.previewUrls,
+            setLocalState: setLocalState,
+            showPreviewImages: false,
             onSettingChanged: onSettingChanged,
             sizeOnlyKeys: sizeOnlyKeys,
           ),
@@ -10885,7 +10979,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               availableKeys: figureData.availableFigureKeys,
               labels: figureData.labels,
               selectedGroups: selectedGroups,
-                                        setLocalState: setLocalState,
+              setLocalState: setLocalState,
               onSettingChanged: onSettingChanged,
             ),
         ],
@@ -10938,9 +11032,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 child: const Text(
                   '기본값',
                   style: TextStyle(fontSize: 11.4),
-                                  ),
-                                ),
-                              ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 6),
           for (final key in drafts.keys.toList()..sort()) ...[
@@ -11013,9 +11107,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           height: 54,
           fit: BoxFit.contain,
           alignment: Alignment.centerLeft,
-                ),
-              ),
-            );
+        ),
+      ),
+    );
   }
 
   /// 확대 미리보기 다이얼로그용 "표 크기 조절" 인라인 편집 섹션.
@@ -11537,7 +11631,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           label = stemFigCount > 1 ? '본문 그림 ${i + 1}' : '본문 그림';
         } else {
           final ci = i - stemFigCount;
-          label = '선지 ${ci < circledChoiceLabels.length ? circledChoiceLabels[ci] : '${ci + 1}'}';
+          label =
+              '선지 ${ci < circledChoiceLabels.length ? circledChoiceLabels[ci] : '${ci + 1}'}';
         }
       }
       final path = '${asset['path'] ?? ''}'.trim();
@@ -11545,8 +11640,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
       if (existingLayout != null) {
         final layoutItem = (existingLayout['items'] as List?)
-            ?.cast<Map<String, dynamic>>()
-            .where((it) => it['assetKey'] == key)
+                ?.cast<Map<String, dynamic>>()
+                .where((it) => it['assetKey'] == key)
                 .firstOrNull ??
             existingItemsByKey['idx:${i + 1}'] ??
             existingItemsByKey['ord:${i + 1}'];
@@ -11597,7 +11692,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (existingLayout != null) {
       final groups =
           (existingLayout['groups'] as List?)?.cast<Map<String, dynamic>>() ??
-          const <Map<String, dynamic>>[];
+              const <Map<String, dynamic>>[];
       selectedPairKeys = <String>{};
       for (final g in groups) {
         if (g['type'] != 'horizontal') continue;
@@ -11611,7 +11706,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         // 2명 그룹은 레거시 pair 호환을 위해 selectedPairKeys 에도 기록.
         if (members.length == 2) {
           final pk = _figurePairKey(members[0], members[1]);
-            if (pk.isNotEmpty) selectedPairKeys.add(pk);
+          if (pk.isNotEmpty) selectedPairKeys.add(pk);
         }
       }
     } else {
@@ -11727,92 +11822,92 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   onChangeEnd: (_) => onSettingChanged?.call(),
                 ),
                 if (!sizeOnly) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Text(
-                      '좌우',
-                      style: TextStyle(
-                        color: _textSub,
-                        fontSize: 11.4,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Slider(
-                        value: offsetX.clamp(-4.0, 4.0).toDouble(),
-                        min: -4.0,
-                        max: 4.0,
-                        divisions: 32,
-                        activeColor: _accent,
-                        inactiveColor: _border,
-                        onChanged: (v) {
-                          setLocalState(() {
-                            offsetXMap[key] = (v * 10).roundToDouble() / 10.0;
-                          });
-                        },
-                        onChangeEnd: (_) => onSettingChanged?.call(),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 48,
-                      child: Text(
-                        '${offsetX.toStringAsFixed(1)}em',
-                        textAlign: TextAlign.right,
-                        style: const TextStyle(
-                          color: _text,
-                          fontSize: 11.2,
-                          fontFeatures: [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    const Text(
-                      '배치',
-                      style: TextStyle(
-                        color: _textSub,
-                        fontSize: 11.4,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: DropdownButton<String>(
-                        value: _figurePositionOptions.contains(position)
-                            ? position
-                            : 'center',
-                        isExpanded: true,
-                        isDense: true,
-                        style: const TextStyle(
-                          color: _text,
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Text(
+                        '좌우',
+                        style: TextStyle(
+                          color: _textSub,
                           fontSize: 11.4,
+                          fontWeight: FontWeight.w600,
                         ),
-                        underline: const SizedBox.shrink(),
-                        items: _figurePositionOptions
-                            .map((pos) => DropdownMenuItem<String>(
-                                  value: pos,
-                                  child: Text(
-                                    _figurePositionLabels[pos] ?? pos,
-                                  ),
-                                ))
-                            .toList(growable: false),
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setLocalState(() {
-                            positionMap[key] = v;
-                            offsetXMap[key] = 0.0;
-                          });
-                          onSettingChanged?.call();
-                        },
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Slider(
+                          value: offsetX.clamp(-4.0, 4.0).toDouble(),
+                          min: -4.0,
+                          max: 4.0,
+                          divisions: 32,
+                          activeColor: _accent,
+                          inactiveColor: _border,
+                          onChanged: (v) {
+                            setLocalState(() {
+                              offsetXMap[key] = (v * 10).roundToDouble() / 10.0;
+                            });
+                          },
+                          onChangeEnd: (_) => onSettingChanged?.call(),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 48,
+                        child: Text(
+                          '${offsetX.toStringAsFixed(1)}em',
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 11.2,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      const Text(
+                        '배치',
+                        style: TextStyle(
+                          color: _textSub,
+                          fontSize: 11.4,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: DropdownButton<String>(
+                          value: _figurePositionOptions.contains(position)
+                              ? position
+                              : 'center',
+                          isExpanded: true,
+                          isDense: true,
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 11.4,
+                          ),
+                          underline: const SizedBox.shrink(),
+                          items: _figurePositionOptions
+                              .map((pos) => DropdownMenuItem<String>(
+                                    value: pos,
+                                    child: Text(
+                                      _figurePositionLabels[pos] ?? pos,
+                                    ),
+                                  ))
+                              .toList(growable: false),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setLocalState(() {
+                              positionMap[key] = v;
+                              offsetXMap[key] = 0.0;
+                            });
+                            onSettingChanged?.call();
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ],
             ),
@@ -12018,11 +12113,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           maxCols: entries[i].maxCols,
         ),
       if (_isBlankChoiceQuestion(q) && _previewChoicesOf(q).length == 5)
-        const TableScaleEntry(
+        TableScaleEntry(
           key: 'blank_choice:1',
           label: '빈칸형 보기',
           type: 'blank_choice',
-          maxCols: 3,
+          maxCols: _blankChoiceLabelsOf(q).length,
         ),
     ];
   }
@@ -12115,7 +12210,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     });
     if (scalesPayload.isEmpty) {
       updatedMeta.remove('table_scales');
-                    } else {
+    } else {
       updatedMeta['table_scales'] = scalesPayload;
     }
     if (defaultScale.isDefault) {
@@ -12216,7 +12311,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
     seedPartEntries(initialParts);
 
-    await showDialog<bool>(
+    final updatedQuestion = await showDialog<ProblemBankQuestion>(
       context: context,
       builder: (context) {
         return StatefulBuilder(
@@ -12228,7 +12323,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 side: const BorderSide(color: _border),
               ),
               title: Row(
-                      children: [
+                children: [
                   Expanded(
                     child: Text(
                       '${question.questionNumber}번 정답 검수',
@@ -12253,7 +12348,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       ),
                     ),
                     onSelected: (v) {
-                    setLocalState(() {
+                      setLocalState(() {
                         isSetMode = v;
                         if (v && partEntries.isEmpty) {
                           seedPartEntries(const <AnswerPart>[]);
@@ -12264,43 +12359,43 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                             seedPartEntries(parsed);
                           }
                         }
-                    });
-                  },
+                      });
+                    },
                   ),
                 ],
-          ),
-          content: SizedBox(
+              ),
+              content: SizedBox(
                 width: 560,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     // allow_objective=false 인 문항은 객관식 정답 개념 자체가 없으므로
                     // 이 입력란을 숨긴다. 카드 토글에서 다시 객관식을 허용하면 노출된다.
                     if (question.allowObjective) ...[
-                const Text(
-                  '객관식 정답',
-                  style: TextStyle(color: _textSub, fontSize: 12),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: objectiveCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: _text, fontSize: 14),
+                      const Text(
+                        '객관식 정답',
+                        style: TextStyle(color: _textSub, fontSize: 12),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: objectiveCtrl,
+                        maxLines: 2,
+                        style: const TextStyle(color: _text, fontSize: 14),
                         decoration: _answerInputDecoration(hint: '예: ③ 또는 2'),
-                ),
-                const SizedBox(height: 10),
+                      ),
+                      const SizedBox(height: 10),
                     ],
                     Text(
                       isSetMode ? '주관식 정답 (하위문항별)' : '주관식 정답',
                       style: const TextStyle(color: _textSub, fontSize: 12),
-                ),
-                const SizedBox(height: 6),
+                    ),
+                    const SizedBox(height: 6),
                     if (!isSetMode)
-                TextField(
-                  controller: subjectiveCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: _text, fontSize: 14),
+                      TextField(
+                        controller: subjectiveCtrl,
+                        maxLines: 2,
+                        style: const TextStyle(color: _text, fontSize: 14),
                         decoration: _answerInputDecoration(hint: '예: 2 또는 x=3'),
                       )
                     else
@@ -12347,18 +12442,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         },
                       ),
                     ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: _accent),
-              onPressed: () async {
-                try {
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: () async {
+                    try {
                       // 객관식 비허용 문항은 입력란이 숨겨져 있지만, 혹시 이전 값이
                       // 컨트롤러에 남아있어도 저장 경로로 흘러가지 않도록 여기서 차단.
                       final objectiveAnswer = question.allowObjective
@@ -12382,29 +12477,29 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       } else {
                         nextParts = null;
                         subjectiveAnswer =
-                      _sanitizeAnswerText(subjectiveCtrl.text);
+                            _sanitizeAnswerText(subjectiveCtrl.text);
                       }
 
                       final updatedMeta =
                           Map<String, dynamic>.from(question.meta);
-                  if (objectiveAnswer.isEmpty) {
-                    updatedMeta.remove('objective_answer_key');
-                  } else {
-                    updatedMeta['objective_answer_key'] = objectiveAnswer;
-                  }
-                  if (subjectiveAnswer.isEmpty) {
-                    updatedMeta.remove('subjective_answer');
-                  } else {
-                    updatedMeta['subjective_answer'] = subjectiveAnswer;
-                  }
-                  final legacyAnswer = objectiveAnswer.isNotEmpty
-                      ? objectiveAnswer
-                      : subjectiveAnswer;
-                  if (legacyAnswer.isEmpty) {
-                    updatedMeta.remove('answer_key');
-                  } else {
-                    updatedMeta['answer_key'] = legacyAnswer;
-                  }
+                      if (objectiveAnswer.isEmpty) {
+                        updatedMeta.remove('objective_answer_key');
+                      } else {
+                        updatedMeta['objective_answer_key'] = objectiveAnswer;
+                      }
+                      if (subjectiveAnswer.isEmpty) {
+                        updatedMeta.remove('subjective_answer');
+                      } else {
+                        updatedMeta['subjective_answer'] = subjectiveAnswer;
+                      }
+                      final legacyAnswer = objectiveAnswer.isNotEmpty
+                          ? objectiveAnswer
+                          : subjectiveAnswer;
+                      if (legacyAnswer.isEmpty) {
+                        updatedMeta.remove('answer_key');
+                      } else {
+                        updatedMeta['answer_key'] = legacyAnswer;
+                      }
                       if (nextParts != null && nextParts.isNotEmpty) {
                         _removeAutoTypeBadgeSuppression(
                           updatedMeta,
@@ -12436,41 +12531,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         };
                       }
 
-                  if (!mounted) return;
-                  final updatedQ = question.copyWith(
-                    meta: updatedMeta,
-                    objectiveAnswerKey: objectiveAnswer,
-                    subjectiveAnswer: subjectiveAnswer,
-                  );
-                  setState(() {
-                    _questions = _questions
-                        .map(
-                          (q) => q.id == question.id ? updatedQ : q,
-                        )
-                        .toList(growable: false);
-                  });
+                      final updatedQ = question.copyWith(
+                        meta: updatedMeta,
+                        objectiveAnswerKey: objectiveAnswer,
+                        subjectiveAnswer: subjectiveAnswer,
+                      );
+                      FocusManager.instance.primaryFocus?.unfocus();
                       if (context.mounted) {
-                        Navigator.of(context).pop(true);
+                        Navigator.of(context).pop(updatedQ);
                       }
-                  if (!mounted) return;
-                  final previewUrl = await _saveAndRefreshPreview(updatedQ);
-                  if (!mounted) return;
-                  if (previewUrl != null && previewUrl.isNotEmpty) {
-                    _showSnack('저장했고 정답 미리보기를 갱신했습니다.');
-                  } else {
-                    _showSnack(
-                      '정답은 저장했습니다. 미리보기가 아직 없으면 잠시 후 다시 시도하거나 상단 `업로드`를 이용하세요.',
-                    );
-                  }
-                } catch (e) {
-                  _showSnack('정답 편집 실패: $e', error: true);
-                }
-              },
-              child: const Text('저장'),
-            ),
-          ],
-        );
-      },
+                    } catch (e) {
+                      _showSnack('정답 편집 실패: $e', error: true);
+                    }
+                  },
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -12479,6 +12557,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
     objectiveCtrl.dispose();
     subjectiveCtrl.dispose();
+    if (updatedQuestion == null || !mounted) return;
+    setState(() {
+      _questions = _questions
+          .map(
+            (q) => q.id == question.id ? updatedQuestion : q,
+          )
+          .toList(growable: false);
+    });
+    try {
+      final previewUrl = await _saveAndRefreshPreview(updatedQuestion);
+      if (!mounted) return;
+      if (previewUrl != null && previewUrl.isNotEmpty) {
+        _showSnack('저장했고 정답 미리보기를 갱신했습니다.');
+      } else {
+        _showSnack(
+          '정답은 저장했습니다. 미리보기가 아직 없으면 잠시 후 다시 시도하거나 상단 `업로드`를 이용하세요.',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('정답 편집 실패: $e', error: true);
+    }
   }
 
   InputDecoration _answerInputDecoration({required String hint}) {
@@ -12552,7 +12652,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       : () {
                           setLocalState(() {
                             final removed = partEntries.removeAt(i);
-                            removed.controller.dispose();
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              removed.controller.dispose();
+                            });
                           });
                         },
                 ),
@@ -13093,6 +13195,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ),
                   ),
                 ),
+                const SizedBox(width: 2),
+                _buildSetRenderModeButton(q),
               ],
               const Spacer(),
               IconButton(
@@ -13107,6 +13211,62 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// 독립형 세트 카드의 "PDF 배치 방식" 선택 버튼.
+  ///   자동(기본) / 분할 / 통짜 중 선택해 세트 전체 meta(set_render_mode)에 반영한다.
+  Widget _buildSetRenderModeButton(ProblemBankQuestion q) {
+    final mode = _independentSetRenderModeOf(q);
+    final isOverridden = mode != 'auto';
+    final color = isOverridden ? const Color(0xFF6FA8DC) : _textSub;
+    return Tooltip(
+      message: '세트 PDF 배치 방식\n'
+          '· 자동: 단(슬롯)을 넘치면 공통발문+첫문항만 남기고 나머지를 다음 단으로 분할\n'
+          '· 분할: 항상 분할\n'
+          '· 통짜: 항상 한 단에 통째로',
+      child: PopupMenuButton<String>(
+        tooltip: '',
+        initialValue: mode,
+        onSelected: (value) => _setIndependentSetRenderMode(q, value),
+        padding: EdgeInsets.zero,
+        itemBuilder: (context) => const <PopupMenuEntry<String>>[
+          PopupMenuItem<String>(
+            value: 'auto',
+            child: Text('자동 (슬롯 넘치면 분할)'),
+          ),
+          PopupMenuItem<String>(
+            value: 'split',
+            child: Text('항상 분할'),
+          ),
+          PopupMenuItem<String>(
+            value: 'join',
+            child: Text('항상 한 단(통짜)'),
+          ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            border: Border.all(color: color.withValues(alpha: 0.55)),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.view_agenda_outlined, size: 14, color: color),
+              const SizedBox(width: 3),
+              Text(
+                '배치:${_independentSetRenderModeLabel(mode)}',
+                style: TextStyle(
+                  fontSize: 11.0,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

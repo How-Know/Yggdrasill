@@ -527,6 +527,10 @@ class LearningProblemExportSettings {
       'questionNumberFormat': isAssignment ? 'two_digit' : 'source',
       'renumberQuestions': true,
       'questionMode': questionModeValue,
+      // 독립형 세트(independent_set) 문항은 서버 PDF에서도 공통발문을 각 문항에
+      //   붙여 렌더해야 한다. 이 플래그가 없으면 비-assignment 프로필에서 공통발문이
+      //   누락된다(매니저앱 공통발문 미리보기와 동일 로직).
+      'previewIndependentSetCommonStem': true,
       'layoutTuning': layoutTuning.toJson(),
       'figureQuality': figureQuality.toJson(),
       'questionModeByQuestionUid': modeMap,

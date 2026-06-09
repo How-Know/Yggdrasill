@@ -20,6 +20,7 @@ import 'package:mneme_flutter/widgets/app_snackbar.dart';
 import 'package:mneme_flutter/widgets/class_student_card.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/widgets/schedule_locked_by_makeup_dialog.dart';
+import 'package:mneme_flutter/widgets/dialog_tokens.dart';
 import 'package:mneme_flutter/services/consult_inquiry_demand_service.dart';
 import '../../components/timetable_content_view.dart';
 import '../../../../models/operating_hours.dart';
@@ -169,7 +170,7 @@ Future<_BlockRange?> _pickEffectiveRange(
       return StatefulBuilder(
         builder: (ctx, setState) {
           return AlertDialog(
-            backgroundColor: const Color(0xFF0B1112),
+            backgroundColor: kDlgBg,
             title: const Text('효력 기간 선택',
                 style: TextStyle(
                     color: Colors.white, fontWeight: FontWeight.w700)),

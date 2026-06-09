@@ -6,8 +6,8 @@ import 'app_bar_title.dart'; // for AccountButton
 import '../theme/ygg_semantic_colors.dart';
 
 const double _navIconSize = 26.0;
-const Color _navBackgroundColor = Color(0xFF0B1112);
-const Color _navIconColor = Color(0xFFEAF2F2);
+const Color _navIconColorDark = Color(0xFFEAF2F2);
+const Color _navIconColorLight = Color(0xFF1F2933);
 
 class CustomNavigationRail extends StatelessWidget {
   final int selectedIndex;
@@ -27,6 +27,14 @@ class CustomNavigationRail extends StatelessWidget {
   Widget build(BuildContext context) {
     final navBackground =
         context.yggSurfaceBase;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color navIconColor =
+        isDark ? _navIconColorDark : _navIconColorLight;
+    // 선택 인디케이터/구분선도 모드에 맞춰 대비를 확보한다.
+    final Color indicatorColor =
+        isDark ? const Color(0xFF223131) : const Color(0xFFE2E8E8);
+    final Color dividerColor =
+        isDark ? Colors.white24 : Colors.black26;
     // Row 안에서는 가로 제약이 무한대(Infinity)로 들어올 수 있어서,
     // 하단 영역에서 width: double.infinity 를 쓰면 레이아웃이 깨질 수 있다.
     // (navigationRailTheme.minWidth와 동일한 폭으로 고정)
@@ -37,10 +45,10 @@ class CustomNavigationRail extends StatelessWidget {
           child: NavigationRail(
             backgroundColor: navBackground,
             unselectedIconTheme:
-                const IconThemeData(color: _navIconColor, size: _navIconSize),
+                IconThemeData(color: navIconColor, size: _navIconSize),
             selectedIconTheme:
-                const IconThemeData(color: _navIconColor, size: _navIconSize),
-            indicatorColor: const Color(0xFF223131),
+                IconThemeData(color: navIconColor, size: _navIconSize),
+            indicatorColor: indicatorColor,
             selectedIndex: selectedIndex.clamp(0, 5),
             onDestinationSelected: onDestinationSelected,
             leading: Padding(
@@ -54,9 +62,9 @@ class CustomNavigationRail extends StatelessWidget {
                       builder: (context, child) {
                         return Transform.rotate(
                           angle: rotationAnimation.value * (math.pi / 2),
-                          child: const Icon(
+                          child: Icon(
                             Symbols.package_2,
-                            color: Colors.white,
+                            color: navIconColor,
                             size: 36,
                           ),
                         );
@@ -65,7 +73,7 @@ class CustomNavigationRail extends StatelessWidget {
                     onPressed: onMenuPressed,
                   ),
                   const SizedBox(height: 12),
-                  Container(width: 32, height: 1, color: Colors.white24),
+                  Container(width: 32, height: 1, color: dividerColor),
                 ],
               ),
             ),

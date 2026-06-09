@@ -19,6 +19,7 @@ import '../../services/tag_preset_service.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
@@ -43,7 +44,7 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
   Widget build(BuildContext context) {
     // ClassStatusScreen과 동일한 구조 적용
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -59,7 +60,7 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                   padding: const EdgeInsets.only(
                       left: 34, right: 24, top: 24, bottom: 24),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0B1112),
+                    color: context.yggSurfaceBase,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
@@ -78,7 +79,7 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                       Expanded(
                         child: Container(
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B1112),
+                            color: context.yggSurfaceBase,
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: _StudentProfileContent(
@@ -1206,7 +1207,7 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                                     colorScheme: const ColorScheme.dark(
                                         primary: Color(0xFF1B6B63)),
                                     dialogBackgroundColor:
-                                        const Color(0xFF0B1112),
+                                        context.yggSurfaceBase,
                                   ),
                                   child: child!,
                                 );
@@ -2751,8 +2752,8 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
         ? const Color(0xFF223131).withOpacity(0.6)
         : const Color(0xFF223131);
     final Color bgColor = isCompleted
-        ? const Color(0xFF0B1112).withOpacity(0.6)
-        : const Color(0xFF0B1112);
+        ? context.yggSurfaceBase.withOpacity(0.6)
+        : context.yggSurfaceBase;
     return Opacity(
       opacity: isCompleted ? 0.55 : 1.0,
       child: InkWell(

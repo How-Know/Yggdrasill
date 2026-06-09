@@ -15,10 +15,8 @@ import '../../services/data_manager.dart';
 import '../../services/print_routing_service.dart';
 import '../../services/tag_preset_service.dart';
 import '../latex_text_renderer.dart';
+import '../../theme/ygg_semantic_colors.dart';
 
-// NOTE: RightSideSheet의 private 색상 상수(_rsBg 등)에는 접근할 수 없어서,
-// 동일 톤의 색상을 여기에서 다시 정의합니다. (디자인을 유지하기 위한 중복)
-const Color _rsBg = Color(0xFF0B1112);
 const Color _rsPanelBg = Color(0xFF10171A);
 const Color _rsFieldBg = Color(0xFF15171C);
 const Color _rsBorder = Color(0xFF223131);
@@ -664,7 +662,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
       useRootNavigator: true,
       barrierDismissible: true,
       builder: (_) => AlertDialog(
-        backgroundColor: _rsBg,
+        backgroundColor: context.yggSurfaceBase,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: Text(title,
             style:
@@ -1595,7 +1593,7 @@ class _FileCardState extends State<_FileCard> {
           return PopScope(
             canPop: false,
             child: AlertDialog(
-              backgroundColor: _rsBg,
+              backgroundColor: context.yggSurfaceBase,
               contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
@@ -2085,7 +2083,7 @@ class _CategoryPickDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: const Text('폴더 선택',
           style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -2153,7 +2151,7 @@ class _PaperSizePickDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: const Text('용지 크기',
           style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -2243,7 +2241,7 @@ class _SimpleTextInputDialogState extends State<_SimpleTextInputDialog> {
   Widget build(BuildContext context) {
     final canOk = _ctrl.text.trim().isNotEmpty;
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: Text(widget.title,
           style: const TextStyle(color: _rsText, fontWeight: FontWeight.w900)),

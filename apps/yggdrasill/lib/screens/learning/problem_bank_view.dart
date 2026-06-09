@@ -11,6 +11,7 @@ import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
 import '../../utils/naesin_exam_context.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
@@ -28,7 +29,6 @@ class ProblemBankView extends StatefulWidget {
 }
 
 class _ProblemBankViewState extends State<ProblemBankView> {
-  static const _rsBg = Color(0xFF0B1112);
   static const _rsBorder = Color(0xFF223131);
   static const _rsTextPrimary = Color(0xFFEAF2F2);
   static const _rsTextMuted = Color(0xFF9FB3B3);
@@ -2906,7 +2906,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: context.yggSurfaceBase,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           title: Text(
@@ -3684,7 +3684,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     selectedSchool = schoolOptions.first;
                   }
                   return AlertDialog(
-                    backgroundColor: _rsBg,
+                    backgroundColor: context.yggSurfaceBase,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                       side: const BorderSide(color: _rsBorder),
@@ -4014,7 +4014,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     ? 2
                     : 1;
             return Dialog(
-              backgroundColor: _rsBg,
+              backgroundColor: context.yggSurfaceBase,
               insetPadding: const EdgeInsets.symmetric(
                 horizontal: 24,
                 vertical: 32,
@@ -4198,7 +4198,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     final busy = _isInitializing || _isLoadingQuestions || _isLoadingSchools;
     final exportBusy = _isExporting || _isSavingExportLocally;
     return Container(
-      color: _rsBg,
+      color: context.yggSurfaceBase,
       child: Column(
         children: [
           Padding(

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../theme/ygg_semantic_colors.dart';
+
 class DarkPanelRoute<T> extends PageRouteBuilder<T> {
   DarkPanelRoute({required Widget child})
       : super(
           opaque: false,
           barrierDismissible: false,
           barrierLabel: 'dark_panel',
-          barrierColor: const Color(0xFF0B1112),
+          barrierColor: Colors.transparent,
           pageBuilder: (context, animation, secondaryAnimation) => child,
           transitionDuration: const Duration(milliseconds: 280),
           reverseTransitionDuration: const Duration(milliseconds: 220),
@@ -24,7 +26,7 @@ class DarkPanelRoute<T> extends PageRouteBuilder<T> {
               child: ScaleTransition(
                 scale: scale,
                 child: DecoratedBox(
-                  decoration: const BoxDecoration(color: Color(0xFF0B1112)),
+                  decoration: BoxDecoration(color: context.yggSurfaceBase),
                   child: child,
                 ),
               ),

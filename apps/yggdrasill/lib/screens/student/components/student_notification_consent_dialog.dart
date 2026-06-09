@@ -6,6 +6,7 @@ import '../../../models/education_level.dart';
 import '../../../models/student_payment_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../services/tenant_service.dart';
+import '../../../widgets/dialog_tokens.dart';
 
 /// 학생 알림 동의 다이얼로그. 전체 학생 리스트를 학년별로 표시하고,
 /// 연락처 여부(본인/부모) + 알림 동의 체크박스를 노출한다.
@@ -117,7 +118,7 @@ class _StudentNotificationConsentDialogState
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF1B6B63),
-              surface: Color(0xFF0B1112),
+              surface: kDlgBg,
             ),
           ),
           child: child!,
@@ -376,7 +377,7 @@ class _StudentNotificationConsentDialogState
         highlightColor: Colors.transparent,
       ),
       child: Dialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640),

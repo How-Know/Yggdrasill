@@ -23,6 +23,7 @@ import '../../widgets/pill_tab_selector.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
 import 'components/tendency_webview.dart';
 import 'components/student_registration_status_dialog.dart';
 // removed student_details_dialog
@@ -1304,7 +1305,7 @@ class StudentScreenState extends State<StudentScreen> {
                     if (_selectedStudent == null)
                       Positioned.fill(
                         child: Container(
-                          color: const Color(0xFF1F1F1F),
+                          color: context.yggSurfaceBase,
                           padding: const EdgeInsets.only(top: 16),
                           child: _buildInitialDashboard(),
                         ),
@@ -2758,7 +2759,7 @@ class StudentScreenState extends State<StudentScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: kDlgBg,
           contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 14),
           title: const Text('수강료 납부', style: TextStyle(color: Colors.white)),
           content: SizedBox(
@@ -3103,7 +3104,7 @@ class StudentScreenState extends State<StudentScreen> {
     final String? reason = await showDialog<String?>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: kDlgBg,
         title: const Text('연기 사유 입력', style: TextStyle(color: Colors.white)),
         content: SizedBox(
           width: 380,
@@ -3430,7 +3431,7 @@ class StudentScreenState extends State<StudentScreen> {
             return Dialog(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
-              backgroundColor: const Color(0xFF1F1F1F),
+              backgroundColor: kDlgBg,
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final double dialogWidth = (constraints.maxWidth * 0.64)
@@ -3672,7 +3673,7 @@ class StudentScreenState extends State<StudentScreen> {
             return Dialog(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
-              backgroundColor: const Color(0xFF1F1F1F),
+              backgroundColor: kDlgBg,
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final double dialogWidth = (constraints.maxWidth * 0.64)
@@ -3988,7 +3989,7 @@ class _StudentPaymentSettingsDialogState
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 500,
@@ -4405,7 +4406,7 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       child: Container(
         width: 600,
         constraints: const BoxConstraints(

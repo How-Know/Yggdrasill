@@ -29,6 +29,7 @@ import '../../services/print_routing_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_viewer_preference.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -43,7 +44,6 @@ class _ResColors {
   static const Color blue5 = Color(0xFF0C3A69);
 }
 
-const Color _rsBg = Color(0xFF0B1112);
 const Color _rsPanelBg = Color(0xFF10171A);
 const Color _rsFieldBg = Color(0xFF15171C);
 const Color _rsBorder = Color(0xFF223131);
@@ -345,7 +345,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: _rsBg,
+          backgroundColor: context.yggSurfaceBase,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           title: const Text('과정 선택',
@@ -420,7 +420,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: _rsBg,
+          backgroundColor: context.yggSurfaceBase,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           title: Text(title,
@@ -478,7 +478,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         final editing = List<_CourseOption>.from(items);
         return StatefulBuilder(builder: (ctx, setState) {
           return AlertDialog(
-            backgroundColor: _rsBg,
+            backgroundColor: context.yggSurfaceBase,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             title: const Text('과정 편집',
@@ -613,7 +613,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                     final ok = await showDialog<bool>(
                                       context: ctx,
                                       builder: (c) => AlertDialog(
-                                        backgroundColor: _rsBg,
+                                        backgroundColor: context.yggSurfaceBase,
                                         shape: RoundedRectangleBorder(
                                             borderRadius:
                                                 BorderRadius.circular(12)),
@@ -863,7 +863,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           return PopScope(
             canPop: false,
             child: AlertDialog(
-              backgroundColor: _rsBg,
+              backgroundColor: context.yggSurfaceBase,
               contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
@@ -1335,7 +1335,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                   ];
                                   int selectedIconIndex = 0;
                                   return AlertDialog(
-                                    backgroundColor: const Color(0xFF1F1F1F),
+                                    backgroundColor: kDlgBg,
                                     shape: RoundedRectangleBorder(
                                         borderRadius:
                                             BorderRadius.circular(12)),
@@ -2834,7 +2834,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: _rsBg,
+        backgroundColor: context.yggSurfaceBase,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: const Text('삭제 확인',
             style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -3657,7 +3657,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: const Text('링크 등록',
           style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -4220,7 +4220,7 @@ class _OtherFileLinksDialogState extends State<_OtherFileLinksDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: const Text('링크 등록',
           style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -5625,7 +5625,7 @@ class _FolderEditDialogState extends State<_FolderEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: _rsBorder),
@@ -7639,7 +7639,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
     final hasUnitFeature =
         _unitLoading || _unitErrorText != null || _units.isNotEmpty;
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
       contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
@@ -7957,7 +7957,7 @@ class _MoreMenuButton extends StatelessWidget {
           final ok = await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: _rsBg,
+              backgroundColor: context.yggSurfaceBase,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
               title: const Text('삭제',
@@ -8090,7 +8090,7 @@ class _FileMetaDialogState extends State<_FileMetaDialog> {
   Widget build(BuildContext context) {
     final dialogWidth = widget.isTextbook ? 420.0 : 560.0;
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: Text(widget.title,
           style: const TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -8355,7 +8355,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
     final isBookDialog = widget.nameLabel.contains('책');
     final dialogWidth = isBookDialog ? 420.0 : 392.0;
     return AlertDialog(
-      backgroundColor: _rsBg,
+      backgroundColor: context.yggSurfaceBase,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: Text(widget.title,
           style: const TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
@@ -8575,7 +8575,7 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('폴더 추가', style: TextStyle(color: Colors.white)),
       content: SizedBox(
@@ -9270,7 +9270,7 @@ class _BookmarkCreateDialogState extends State<_BookmarkCreateDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('북마크 추가', style: TextStyle(color: Colors.white)),
       content: SizedBox(
@@ -9444,7 +9444,7 @@ class _BookmarkEditDialogState extends State<_BookmarkEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('북마크 수정', style: TextStyle(color: Colors.white)),
       content: SizedBox(
@@ -9615,7 +9615,7 @@ class _BookmarkManageDialogState extends State<_BookmarkManageDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('북마크 관리', style: TextStyle(color: Colors.white)),
       content: SizedBox(
@@ -9767,7 +9767,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog>
     final double dialogWidth = isPreviewTab ? 1520 : 760;
     final double dialogHeight = isPreviewTab ? 1248 : 624;
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('PDF 편집기',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),

@@ -1631,7 +1631,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         }
 
         return Dialog(
-          backgroundColor: const Color(0xFF0B1112),
+          backgroundColor: kDlgBg,
           insetPadding: const EdgeInsets.all(24),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -1642,7 +1642,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(26, 26, 26, 22),
               decoration: BoxDecoration(
-                color: const Color(0xFF0B1112),
+                color: kDlgBg,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: StatefulBuilder(
@@ -1997,7 +1997,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       barrierColor: Colors.black54,
       builder: (context) {
         return Dialog(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: context.yggSurfaceBase,
           insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
@@ -4199,7 +4199,7 @@ extension on _MainScreenState {
                   builder: (ctx, setLocal) {
                     return Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0B1112),
+                        color: ctx.yggSurfaceBase,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: const Color(0xFF223131)),
                         boxShadow: const [
@@ -4313,7 +4313,7 @@ extension on _MainScreenState {
                               return ActionChip(
                                 onPressed: () =>
                                     _handleTagPressed(ctx, setLocal, tag),
-                                backgroundColor: const Color(0xFF0B1112),
+                                backgroundColor: ctx.yggSurfaceBase,
                                 label: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -4484,7 +4484,7 @@ extension on _MainScreenState {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import '../../services/exam_mode.dart';
 import '../../widgets/pill_tab_selector.dart';
 import 'problem_bank_view.dart';
@@ -37,7 +38,7 @@ class _LearningScreenState extends State<LearningScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Column(
         children: [
           const SizedBox(height: 8),

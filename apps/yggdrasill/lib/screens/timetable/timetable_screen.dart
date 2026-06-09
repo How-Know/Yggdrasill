@@ -21,6 +21,7 @@ import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/dialog_tokens.dart';
 import 'package:flutter/services.dart';
 import 'components/self_study_registration_view.dart';
 import '../../models/self_study_time_block.dart';
@@ -469,10 +470,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
               colorScheme: ColorScheme.dark(
                 primary: green,
                 onPrimary: Colors.white,
-                surface: Color(0xFF0B1112),
+                surface: kDlgBg,
                 onSurface: Colors.white,
               ),
-              dialogBackgroundColor: const Color(0xFF0B1112),
+              dialogBackgroundColor: kDlgBg,
             ),
             child: child ?? const SizedBox.shrink(),
           );
@@ -598,7 +599,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+              backgroundColor: kDlgBg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: const BorderSide(color: Color(0xFF223131)),
@@ -3603,7 +3604,7 @@ class _MemoInputDialogState extends State<_MemoInputDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       title: const Text('메모 추가', style: TextStyle(color: Colors.white)),
       content: SizedBox(
         width: 380,
@@ -3680,7 +3681,7 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       title: const Text('메모 보기/수정', style: TextStyle(color: Colors.white)),
       content: SizedBox(
         width: 420,
@@ -3767,7 +3768,7 @@ class _SelfStudyRegistrationDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
       title: const Text('자습 등록',
           style: TextStyle(
               color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
@@ -4116,7 +4117,7 @@ class _SeasonRoadmapDialogState extends State<_SeasonRoadmapDialog> {
   Widget build(BuildContext context) {
     final yearLabel = (widget.seasonYear % 100).toString().padLeft(2, '0');
     return Dialog(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: kDlgBg,
       insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 36),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ConstrainedBox(

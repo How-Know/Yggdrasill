@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../screens/timetable/views/makeup_view.dart';
 import '../services/data_manager.dart';
+import 'dialog_tokens.dart';
 
 String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -56,7 +57,7 @@ Future<void> showScheduleLockedByMakeupDialog(
     barrierDismissible: true,
     builder: (dialogContext) {
       return AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
+        backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: Color(0xFF223131)),

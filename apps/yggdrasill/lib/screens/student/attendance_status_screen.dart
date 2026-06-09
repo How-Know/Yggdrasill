@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../theme/ygg_semantic_colors.dart';
 import 'components/attendance_status_dashboard.dart';
 
 class AttendanceStatusScreen extends StatelessWidget {
@@ -9,7 +10,7 @@ class AttendanceStatusScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1112),
+      backgroundColor: context.yggSurfaceBase,
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -22,7 +23,7 @@ class AttendanceStatusScreen extends StatelessWidget {
                   constraints: const BoxConstraints(minWidth: 624),
                   padding: const EdgeInsets.only(left: 34, right: 24, top: 24, bottom: 24),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0B1112),
+                    color: context.yggSurfaceBase,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
@@ -34,7 +35,7 @@ class AttendanceStatusScreen extends StatelessWidget {
                       Expanded(
                         child: Container(
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B1112),
+                            color: context.yggSurfaceBase,
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: AttendanceStatusDashboard(isFullPage: true),
