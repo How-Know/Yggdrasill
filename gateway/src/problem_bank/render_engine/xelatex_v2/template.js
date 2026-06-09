@@ -955,6 +955,12 @@ function normalizeMathSegment(mathContent) {
   });
   out = padSqrtFractionContent(out);
 
+  // 물결표(범위 표시) "(가)~(마)": math mode 에서 ~ 는 비표시 공백(nbsp)이 되어
+  //   렌더 시 사라진다. box{~~} 등 ~~ 를 쓰는 패턴은 위에서 이미 소비되었으므로,
+  //   남아있는 리터럴 ~ 는 보이는 물결 기호로 치환한다. relation 간격이 붙지 않도록
+  //   \mathord 로 감싼다.
+  out = out.replace(/~/g, '\\mathord{\\sim}');
+
   return out;
 }
 
@@ -4291,9 +4297,12 @@ function renderIndependentSetGroupLatex(group, {
     if (itemIdx > 0) lines.push('\\vspace{\\baselineskip}');
     // 하위 독립 문항도 표/그림/보기 마커를 가질 수 있으므로 일반 문항 렌더 경로를 탄다.
     // 단순 smartTexLine 으로 처리하면 raw tabular preamble 이 수식 정규화되어 깨진다.
+    // 문항번호 배치(inline/above)는 호출부에서 전달된 실제 값을 그대로 사용한다.
+    //   - 과거 'inline' 하드코딩 때문에, 과제형(above)에서 분할된 머리조각의 Q1 번호만
+    //     다른 슬롯(평문항, above)보다 작게 렌더되는 문제가 있었음.
     lines.push(renderOneQuestion(item, {
       showQuestionNumber,
-      questionNumberPlacement: 'inline',
+      questionNumberPlacement,
       questionNumberFormat,
       stemSizePt,
       aboveNumberFontPtOverride,

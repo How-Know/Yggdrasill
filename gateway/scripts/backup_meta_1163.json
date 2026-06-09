@@ -1,0 +1,340 @@
+{
+  "vlm": {
+    "flags": [
+      "contains_figure"
+    ],
+    "model": "gemini-3.1-pro-preview",
+    "confidence": "medium",
+    "source_page": 170,
+    "answer_sidecar": {
+      "kind": "objective",
+      "source": "vlm",
+      "raw_page": 6,
+      "updated_at": "2026-06-03T18:53:17.174032+00:00",
+      "display_page": null,
+      "has_image_asset": false
+    },
+    "overwritten_at": "2026-06-03T18:57:08.127Z",
+    "tables_described": [],
+    "uncertain_fields": [
+      "answer"
+    ],
+    "figures_described": [
+      {
+        "order": 1,
+        "bbox_1k": [
+          102,
+          372,
+          182,
+          492
+        ],
+        "description": "그래프"
+      },
+      {
+        "order": 2,
+        "bbox_1k": [
+          204,
+          114,
+          284,
+          222
+        ],
+        "description": "선택지 1 그래프"
+      },
+      {
+        "order": 3,
+        "bbox_1k": [
+          204,
+          316,
+          284,
+          424
+        ],
+        "description": "선택지 2 그래프"
+      },
+      {
+        "order": 4,
+        "bbox_1k": [
+          290,
+          114,
+          370,
+          222
+        ],
+        "description": "선택지 3 그래프"
+      },
+      {
+        "order": 5,
+        "bbox_1k": [
+          290,
+          316,
+          370,
+          424
+        ],
+        "description": "선택지 4 그래프"
+      },
+      {
+        "order": 6,
+        "bbox_1k": [
+          376,
+          114,
+          370,
+          222
+        ],
+        "description": "선택지 5 그래프"
+      }
+    ]
+  },
+  "answer_key": "[그림]",
+  "allow_essay": false,
+  "answer_parts": [],
+  "figure_count": 5,
+  "answer_source": "vlm",
+  "choice_layout": "image_table",
+  "figure_assets": [
+    {
+      "id": "705857e4-c860-4ff6-999e-415aaf4556b3",
+      "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/4e9b93fa-a6c6-4b6b-9ae6-af203fe9dd4f/pdf-figures/4d8b55e1-b8de-44b3-b4bb-ea6c84b2c544/1163_1_03df3c2b-b15c-41f3-8dda-62c2aad6d66a.png",
+      "bucket": "problem-previews",
+      "source": "textbook_pdf_crop",
+      "status": "cropped_from_pdf",
+      "bbox_1k": [
+        102,
+        372,
+        182,
+        492
+      ],
+      "approved": true,
+      "width_px": 239,
+      "height_px": 223,
+      "mime_type": "image/png",
+      "confidence": 0.86,
+      "created_at": "2026-06-03T18:57:06.975Z",
+      "size_bytes": 17999,
+      "source_page": 170,
+      "content_hash": "f7d115a80cb1e364b6b19abd7e734deecba5531fa80a31a9688c3fc27badf3f6",
+      "crop_rect_px": {
+        "top": 243,
+        "left": 658,
+        "width": 239,
+        "height": 223
+      },
+      "figure_index": 1,
+      "review_required": false
+    },
+    {
+      "id": "f645f4c5-688e-46a6-a5c3-e3a43f355b1e",
+      "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/4e9b93fa-a6c6-4b6b-9ae6-af203fe9dd4f/pdf-figures/4d8b55e1-b8de-44b3-b4bb-ea6c84b2c544/1163_2_baa03f4f-57db-40d4-b469-70c25b80b405.png",
+      "bucket": "problem-previews",
+      "source": "textbook_pdf_crop",
+      "status": "cropped_from_pdf",
+      "bbox_1k": [
+        204,
+        114,
+        284,
+        222
+      ],
+      "approved": true,
+      "width_px": 217,
+      "height_px": 223,
+      "mime_type": "image/png",
+      "confidence": 0.86,
+      "created_at": "2026-06-03T18:57:06.975Z",
+      "size_bytes": 17394,
+      "source_page": 170,
+      "content_hash": "0ebbe5bb7b49cb6e042604f004ef79263d38a19eae1584f5cb9f0dae61e402b4",
+      "crop_rect_px": {
+        "top": 497,
+        "left": 194,
+        "width": 217,
+        "height": 223
+      },
+      "figure_index": 2,
+      "review_required": false
+    },
+    {
+      "id": "6e01a23c-ec56-412c-a40a-66e1edc9d06d",
+      "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/4e9b93fa-a6c6-4b6b-9ae6-af203fe9dd4f/pdf-figures/4d8b55e1-b8de-44b3-b4bb-ea6c84b2c544/1163_3_87393363-d632-4099-b657-483932b6d3b4.png",
+      "bucket": "problem-previews",
+      "source": "textbook_pdf_crop",
+      "status": "cropped_from_pdf",
+      "bbox_1k": [
+        204,
+        316,
+        284,
+        424
+      ],
+      "approved": true,
+      "width_px": 218,
+      "height_px": 223,
+      "mime_type": "image/png",
+      "confidence": 0.86,
+      "created_at": "2026-06-03T18:57:06.975Z",
+      "size_bytes": 15101,
+      "source_page": 170,
+      "content_hash": "9225cb9bf6f72c8807ad2c222fa03cb1cc66962c8eabda7c6414f6ee5440cec9",
+      "crop_rect_px": {
+        "top": 497,
+        "left": 557,
+        "width": 218,
+        "height": 223
+      },
+      "figure_index": 3,
+      "review_required": false
+    },
+    {
+      "id": "af9255ff-85ed-41bb-9698-bcbe3b1d0305",
+      "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/4e9b93fa-a6c6-4b6b-9ae6-af203fe9dd4f/pdf-figures/4d8b55e1-b8de-44b3-b4bb-ea6c84b2c544/1163_4_71fa6820-3938-4127-b360-7129d293b67a.png",
+      "bucket": "problem-previews",
+      "source": "textbook_pdf_crop",
+      "status": "cropped_from_pdf",
+      "bbox_1k": [
+        290,
+        114,
+        370,
+        222
+      ],
+      "approved": true,
+      "width_px": 217,
+      "height_px": 223,
+      "mime_type": "image/png",
+      "confidence": 0.86,
+      "created_at": "2026-06-03T18:57:06.975Z",
+      "size_bytes": 16341,
+      "source_page": 170,
+      "content_hash": "bb27141f51a6497a2d68de4ccec7c6aaf58ab62da1e947216a4302a7ab9ccf6e",
+      "crop_rect_px": {
+        "top": 712,
+        "left": 194,
+        "width": 217,
+        "height": 223
+      },
+      "figure_index": 4,
+      "review_required": false
+    },
+    {
+      "id": "5e6d7d07-bc8e-4b8d-919d-07bb39d51344",
+      "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/4e9b93fa-a6c6-4b6b-9ae6-af203fe9dd4f/pdf-figures/4d8b55e1-b8de-44b3-b4bb-ea6c84b2c544/1163_5_2c7d7fb0-fc25-4044-9fc4-673892b31dda.png",
+      "bucket": "problem-previews",
+      "source": "textbook_pdf_crop",
+      "status": "cropped_from_pdf",
+      "bbox_1k": [
+        290,
+        316,
+        370,
+        424
+      ],
+      "approved": true,
+      "width_px": 218,
+      "height_px": 223,
+      "mime_type": "image/png",
+      "confidence": 0.86,
+      "created_at": "2026-06-03T18:57:06.975Z",
+      "size_bytes": 14721,
+      "source_page": 170,
+      "content_hash": "83218939c54a23cd7b8429128cb8388b9b33029ae82bc66efd8ca2e0868790a8",
+      "crop_rect_px": {
+        "top": 712,
+        "left": 557,
+        "width": 218,
+        "height": 223
+      },
+      "figure_index": 5,
+      "review_required": false
+    }
+  ],
+  "figure_layout": {
+    "items": [
+      {
+        "anchor": "right",
+        "widthEm": 9.8,
+        "assetKey": "idx:1",
+        "position": "inline-right",
+        "offsetXEm": 0,
+        "offsetYEm": 0
+      },
+      {
+        "anchor": "center",
+        "widthEm": 15.4,
+        "assetKey": "idx:2",
+        "position": "below-stem",
+        "offsetXEm": 0,
+        "offsetYEm": 0
+      },
+      {
+        "anchor": "center",
+        "widthEm": 15.4,
+        "assetKey": "idx:3",
+        "position": "below-stem",
+        "offsetXEm": 0,
+        "offsetYEm": 0
+      },
+      {
+        "anchor": "center",
+        "widthEm": 15.4,
+        "assetKey": "idx:4",
+        "position": "below-stem",
+        "offsetXEm": 0,
+        "offsetYEm": 0
+      },
+      {
+        "anchor": "center",
+        "widthEm": 15.4,
+        "assetKey": "idx:5",
+        "position": "below-stem",
+        "offsetXEm": 0,
+        "offsetYEm": 0
+      }
+    ],
+    "groups": [],
+    "version": 1
+  },
+  "textbook_scope": {
+    "mode": "textbook_pdf_only",
+    "book_id": "c3ae29ad-4d99-4078-8381-00357074d151",
+    "sub_key": "B",
+    "big_name": "그래프와 비례",
+    "mid_name": "정비례와 반비례",
+    "sub_name": "B 유형뽀개기",
+    "big_order": 3,
+    "book_name": "쎈",
+    "grade_key": "M1",
+    "mid_order": 1,
+    "course_key": "M1-1",
+    "grade_label": "1-1",
+    "raw_page_to": 173,
+    "course_label": "1-1",
+    "raw_page_from": 160,
+    "display_page_to": 173,
+    "display_page_from": 160
+  },
+  "allow_objective": true,
+  "is_set_question": false,
+  "allow_subjective": true,
+  "subjective_answer": "[그림]",
+  "figure_crop_source": "textbook_pdf_crop",
+  "image_choice_count": 5,
+  "textbook_crop_page": {
+    "label": "중",
+    "source": "textbook_problem_crops",
+    "raw_page": 170,
+    "display_page": 170,
+    "content_group": {
+      "kind": "type",
+      "label": "유형 14",
+      "order": 14,
+      "title": "반비례 관계 $y=\\frac{a}{x} (a \\neq 0)$의 그래프가 지나는 점"
+    },
+    "difficulty_label": "중"
+  },
+  "figure_render_scale": 0.92,
+  "image_choice_layout": {
+    "rows": "2",
+    "version": 1
+  },
+  "figure_render_scales": {
+    "idx:1": 0.63
+  },
+  "objective_answer_key": "③",
+  "figure_review_required": false,
+  "figure_last_generated_at": "2026-06-03T18:57:08.127Z",
+  "is_image_choice_question": true,
+  "textbook_difficulty_label": "중"
+}

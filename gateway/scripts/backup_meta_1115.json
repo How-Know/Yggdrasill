@@ -1,0 +1,125 @@
+{
+  "vlm": {
+    "flags": [
+      "contains_figure"
+    ],
+    "model": "gemini-3.1-pro-preview",
+    "confidence": "high",
+    "source_page": 161,
+    "answer_sidecar": {
+      "kind": "subjective",
+      "source": "vlm",
+      "raw_page": 6,
+      "updated_at": "2026-06-03T18:53:17.174032+00:00",
+      "display_page": null,
+      "has_image_asset": false
+    },
+    "overwritten_at": "2026-06-03T18:56:45.059Z",
+    "tables_described": [],
+    "uncertain_fields": [],
+    "figures_described": [
+      {
+        "order": 1,
+        "bbox_1k": [
+          688,
+          348,
+          800,
+          460
+        ],
+        "description": "용수철에 매달린 추 그림"
+      }
+    ]
+  },
+  "answer_key": "y=\\frac{1}{5}x, 55g",
+  "allow_essay": false,
+  "answer_parts": [],
+  "figure_count": 1,
+  "answer_source": "vlm",
+  "figure_assets": [
+    {
+      "id": "dab3f180-9096-4f97-96d8-4becb7d410f0",
+      "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/4e9b93fa-a6c6-4b6b-9ae6-af203fe9dd4f/pdf-figures/4d8b55e1-b8de-44b3-b4bb-ea6c84b2c544/1115_1_1354c889-52fe-4e8a-a292-aaa0958c1625.png",
+      "bucket": "problem-previews",
+      "source": "textbook_pdf_crop",
+      "status": "cropped_from_pdf",
+      "bbox_1k": [
+        688,
+        348,
+        800,
+        460
+      ],
+      "approved": true,
+      "width_px": 225,
+      "height_px": 302,
+      "mime_type": "image/png",
+      "confidence": 0.86,
+      "created_at": "2026-06-03T18:56:44.858Z",
+      "size_bytes": 49149,
+      "source_page": 161,
+      "content_hash": "46a4922dcd852990fc71d59dae20b6d4172a0709b0353783d24b718df55c3108",
+      "crop_rect_px": {
+        "top": 1705,
+        "left": 614,
+        "width": 225,
+        "height": 302
+      },
+      "figure_index": 1,
+      "review_required": false
+    }
+  ],
+  "figure_layout": {
+    "items": [
+      {
+        "anchor": "center",
+        "widthEm": 20,
+        "assetKey": "idx:1",
+        "position": "below-stem",
+        "offsetXEm": 0,
+        "offsetYEm": 0
+      }
+    ],
+    "groups": [],
+    "version": 1
+  },
+  "textbook_scope": {
+    "mode": "textbook_pdf_only",
+    "book_id": "c3ae29ad-4d99-4078-8381-00357074d151",
+    "sub_key": "B",
+    "big_name": "그래프와 비례",
+    "mid_name": "정비례와 반비례",
+    "sub_name": "B 유형뽀개기",
+    "big_order": 3,
+    "book_name": "쎈",
+    "grade_key": "M1",
+    "mid_order": 1,
+    "course_key": "M1-1",
+    "grade_label": "1-1",
+    "raw_page_to": 173,
+    "course_label": "1-1",
+    "raw_page_from": 160,
+    "display_page_to": 173,
+    "display_page_from": 160
+  },
+  "allow_objective": false,
+  "is_set_question": false,
+  "allow_subjective": true,
+  "subjective_answer": "y=\\frac{1}{5}x, 55g",
+  "figure_crop_source": "textbook_pdf_crop",
+  "textbook_crop_page": {
+    "label": "중",
+    "source": "textbook_problem_crops",
+    "raw_page": 161,
+    "display_page": 161,
+    "content_group": {
+      "kind": "type",
+      "label": "유형 02",
+      "order": 2,
+      "title": "정비례 관계의 식 구하기"
+    },
+    "difficulty_label": "중"
+  },
+  "objective_answer_key": "",
+  "figure_review_required": false,
+  "figure_last_generated_at": "2026-06-03T18:56:45.059Z",
+  "textbook_difficulty_label": "중"
+}
