@@ -397,6 +397,24 @@ class FabTabBarTokens {
   /// + 버튼 ↔ 펼침 pill·pill 간 세로 간격 (등간격)
   static const double fabMenuItemSpacing = 12;
 
+  /// 사이드시트 등원예정 학생 카드 — FAB 탭 하이라이트 알약
+  static const double fabWaitingCardRadius = 25;
+  static const EdgeInsets fabWaitingCardPadding =
+      EdgeInsets.symmetric(horizontal: 22, vertical: 11);
+
+  /// 라이트 모드 글래스·알약 주변 블러·그림자 완화
+  static double fabRelatedBlurSigmaFor(Brightness brightness) {
+    return brightness == Brightness.light ? 10.0 : fabBarBlurSigma;
+  }
+
+  /// 하이라이트 알약 배경 — 라이트는 불투명 톤으로 뿌연 합성 방지
+  static Color fabHighlightPillFill(Brightness brightness) {
+    if (brightness == Brightness.light) {
+      return const Color(0xFFDCDCE0);
+    }
+    return paletteFor(brightness).highlight;
+  }
+
   /// 플로팅 메모 배너 내부 패딩
   static const double fabMemoBannerPaddingLeft = 18;
   static const double fabMemoBannerPaddingRight = 14;
@@ -436,14 +454,8 @@ class FabTabBarTokens {
         labelUnselected: fabBarLightLabelUnselected,
         boxShadows: [
           BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 24,
-            offset: Offset(0, 8),
-            spreadRadius: 0,
-          ),
-          BoxShadow(
-            color: Color(0x1F000000),
-            blurRadius: 10,
+            color: Color(0x14000000),
+            blurRadius: 6,
             offset: Offset(0, 2),
             spreadRadius: 0,
           ),
@@ -638,9 +650,9 @@ class PreviewAcademyTimePill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette =
-        FabTabBarTokens.paletteFor(Theme.of(context).brightness);
-    final background = palette.highlight;
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final background = FabTabBarTokens.fabHighlightPillFill(brightness);
     final textColor =
         isPlaceholder ? style.hint : palette.labelSelected;
 
@@ -2966,8 +2978,12 @@ class FabStyleTabBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         child: BackdropFilter(
           filter: ImageFilter.blur(
-            sigmaX: FabTabBarTokens.fabBarBlurSigma,
-            sigmaY: FabTabBarTokens.fabBarBlurSigma,
+            sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(
+              Theme.of(context).brightness,
+            ),
+            sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(
+              Theme.of(context).brightness,
+            ),
           ),
           child: Container(
             height: height,
@@ -3061,8 +3077,12 @@ class FabStyleActionButton extends StatelessWidget {
         child: ClipOval(
           child: BackdropFilter(
             filter: ImageFilter.blur(
-              sigmaX: FabTabBarTokens.fabBarBlurSigma,
-              sigmaY: FabTabBarTokens.fabBarBlurSigma,
+              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(
+                Theme.of(context).brightness,
+              ),
+              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(
+                Theme.of(context).brightness,
+              ),
             ),
             child: Container(
               width: size,
@@ -3118,8 +3138,8 @@ class FabStyleGlassPanel extends StatelessWidget {
             BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
         child: BackdropFilter(
           filter: ImageFilter.blur(
-            sigmaX: FabTabBarTokens.fabBarBlurSigma,
-            sigmaY: FabTabBarTokens.fabBarBlurSigma,
+            sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
           ),
           child: Container(
             decoration: BoxDecoration(
@@ -3133,6 +3153,198 @@ class FabStyleGlassPanel extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// FAB 탭 **선택 하이라이트**와 동일한 알약 배경 (등원예정 카드 등).
+class FabStyleHighlightPill extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final Border? border;
+  final double borderRadius;
+
+  const FabStyleHighlightPill({
+    super.key,
+    required this.child,
+    this.padding = FabTabBarTokens.fabWaitingCardPadding,
+    this.border,
+    this.borderRadius = FabTabBarTokens.fabWaitingCardRadius,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final resolvedBorder =
+        border ?? FabTabBarTokens.fabRelatedBorderFor(brightness);
+    final radius = BorderRadius.circular(borderRadius);
+
+    return ClipRRect(
+      borderRadius: radius,
+      child: Container(
+        padding: padding,
+        decoration: BoxDecoration(
+          color: FabTabBarTokens.fabHighlightPillFill(brightness),
+          borderRadius: radius,
+          border: resolvedBorder,
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// 탭 시 카드 중심으로 빨려 들어가는 스케일·페이드 애니메이션 후 [onPressed] 실행.
+class FabStyleSuckTap extends StatefulWidget {
+  final Widget child;
+  final Future<void> Function() onPressed;
+
+  const FabStyleSuckTap({
+    super.key,
+    required this.child,
+    required this.onPressed,
+  });
+
+  @override
+  State<FabStyleSuckTap> createState() => _FabStyleSuckTapState();
+}
+
+class _FabStyleSuckTapState extends State<FabStyleSuckTap>
+    with SingleTickerProviderStateMixin {
+  static const double _pressScale = 0.96;
+
+  late final AnimationController _suckController;
+  bool _pressed = false;
+  bool _running = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _suckController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+  }
+
+  @override
+  void dispose() {
+    _suckController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleTap() async {
+    if (_running) return;
+    _running = true;
+    if (mounted) setState(() => _pressed = false);
+    try {
+      await _suckController.forward();
+      await widget.onPressed();
+    } finally {
+      if (mounted) {
+        _suckController.reset();
+        _running = false;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) {
+        if (_running) return;
+        setState(() => _pressed = true);
+      },
+      onTapUp: (_) {
+        if (!_running) setState(() => _pressed = false);
+      },
+      onTapCancel: () {
+        if (!_running) setState(() => _pressed = false);
+      },
+      onTap: _handleTap,
+      child: AnimatedBuilder(
+        animation: _suckController,
+        builder: (context, child) {
+          final suck = Curves.easeInCubic.transform(_suckController.value);
+          final pressing = _pressed && suck == 0;
+          final scale = (pressing ? _pressScale : 1.0) * (1.0 - suck * 0.94);
+          final opacity = 1.0 - suck * 0.92;
+          return Opacity(
+            opacity: opacity.clamp(0.0, 1.0),
+            child: Transform.scale(
+              scale: scale.clamp(0.0, 1.0),
+              alignment: Alignment.center,
+              child: child,
+            ),
+          );
+        },
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// [FabStyleSuckTap]의 반대 — 중심에서 펼쳐지며 나타남 (등원학생 리스트 진입).
+class FabStyleExpandIn extends StatefulWidget {
+  final Widget child;
+  final bool animate;
+  final VoidCallback? onComplete;
+
+  const FabStyleExpandIn({
+    super.key,
+    required this.child,
+    this.animate = true,
+    this.onComplete,
+  });
+
+  @override
+  State<FabStyleExpandIn> createState() => _FabStyleExpandInState();
+}
+
+class _FabStyleExpandInState extends State<FabStyleExpandIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _expandController;
+
+  @override
+  void initState() {
+    super.initState();
+    _expandController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+    if (widget.animate) {
+      _expandController.forward().then((_) {
+        if (mounted) widget.onComplete?.call();
+      });
+    } else {
+      _expandController.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _expandController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _expandController,
+      builder: (context, child) {
+        final expand = Curves.easeOutCubic.transform(_expandController.value);
+        final scale = 0.06 + expand * 0.94;
+        final opacity = 0.08 + expand * 0.92;
+        return Opacity(
+          opacity: opacity.clamp(0.0, 1.0),
+          child: Transform.scale(
+            scale: scale.clamp(0.0, 1.0),
+            alignment: Alignment.center,
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
     );
   }
 }

@@ -45,6 +45,7 @@ import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../widgets/left_side_sheet/favorite_templates_panel.dart';
+import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/textbook_flow_link_action.dart';
 import 'student/student_profile_page.dart';
 import '../models/behavior_card_drag_payload.dart';
@@ -140,6 +141,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 출석/하원 상태 관리
   final Set<String> _attendedSetIds = {}; // 출석한 setId
   final Set<String> _leavedSetIds = {}; // 하원한 setId
+  /// 등원예정→등원 전환 시 펼쳐지기 애니메이션 대상
+  final Set<String> _attendedExpandAnimateIds = {};
   double _sideSheetWidth = 0.0;
   final GlobalKey _sideSheetKey = GlobalKey();
   Offset? _lastTagTapPosition;
@@ -2488,13 +2491,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 24.0,
                                       ),
-                                      child: Container(
-                                        // 헤더(날짜+버튼)와의 간격을 절반으로 축소
-                                        margin: const EdgeInsets.only(
-                                          top: 0,
-                                          bottom: 0,
-                                        ),
-                                        width: double.infinity,
+                                      child: ConstrainedBox(
                                         constraints: BoxConstraints(
                                           minHeight: _cardActualHeight *
                                               ((containerWidth / 420.0).clamp(
@@ -2510,36 +2507,39 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                       .clamp(0.78, 1.0)) *
                                                   (_attendedMaxLines - 1),
                                         ),
-                                        // 내부 여백: 등원 리스트 가독성을 위해 왼쪽 여백을 소폭(+5px) 준다.
-                                        padding: EdgeInsets.fromLTRB(
-                                          5 * sideSheetScale,
-                                          22.0,
-                                          16.0,
-                                          24.0,
-                                        ),
-                                        child: Scrollbar(
-                                          controller: _attendedScrollCtrl,
-                                          thumbVisibility: true,
-                                          child: SingleChildScrollView(
+                                        child: FabStyleGlassPanel(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            24.0,
+                                            22.0,
+                                            16.0,
+                                            24.0,
+                                          ),
+                                          child: Scrollbar(
                                             controller: _attendedScrollCtrl,
-                                            child: Column(
+                                            thumbVisibility: true,
+                                            child: SingleChildScrollView(
+                                              controller: _attendedScrollCtrl,
+                                              child: Column(
                                               mainAxisSize: MainAxisSize.min,
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 if (attended.isEmpty &&
                                                     trialAttended.isEmpty)
-                                                  const Center(
+                                                  Center(
                                                     child: Padding(
-                                                      padding: EdgeInsets.only(
+                                                      padding:
+                                                          const EdgeInsets.only(
                                                         left: 14.0,
                                                       ),
                                                       child: Text(
                                                         '출석',
                                                         style: TextStyle(
-                                                          color: Color(
-                                                            0xFF9FB3B3,
-                                                          ),
+                                                          color: FabTabBarTokens
+                                                              .paletteFor(
+                                                            Theme.of(context)
+                                                                .brightness,
+                                                          ).labelUnselected,
                                                           fontSize: 22,
                                                           fontWeight:
                                                               FontWeight.bold,
@@ -2626,6 +2626,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   ],
                                                 ],
                                               ],
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -2659,7 +2660,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   Padding(
                                                     padding:
                                                         const EdgeInsets.only(
-                                                      bottom: 4.0,
+                                                      bottom: 12.0,
                                                     ),
                                                     child: Center(
                                                       child: Text(
@@ -2737,7 +2738,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                       ],
                                                     ),
                                                   ),
-                                                  const SizedBox(height: 8),
+                                                  const SizedBox(height: 12),
                                                 ],
                                               ],
                                             ),
@@ -2799,6 +2800,31 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  Future<void> _recordWaitingArrival(_AttendanceTarget t) async {
+    final now = DateTime.now();
+    _attendedExpandAnimateIds.add(t.setId);
+    setState(() {
+      _attendedSetIds.add(t.setId);
+      _attendTimes[t.setId] = now;
+      _sideSheetDataDirty = true;
+    });
+    try {
+      final classDateTime = t.classDateTime;
+      await DataManager.instance.saveOrUpdateAttendance(
+        studentId: t.student.id,
+        classDateTime: classDateTime,
+        classEndTime: classDateTime.add(t.duration),
+        className: t.classInfo?.name ?? '수업',
+        isPresent: true,
+        arrivalTime: now,
+        setId: t.setId,
+        sessionTypeId: t.classInfo?.id,
+      );
+    } catch (e) {
+      print('[ERROR] 출석 기록 동기화 실패: $e');
+    }
+  }
+
   // 출석/하원 카드 위젯 (툴팁은 외부에서 처리)
   Widget _buildAttendanceCard(
     _AttendanceTarget t, {
@@ -2808,8 +2834,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     DateTime? arrival,
     DateTime? departure,
   }) {
+    final fabPalette =
+        FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     Color borderColor;
-    Color textColor = Colors.white70;
+    Color textColor = fabPalette.labelUnselected;
     Widget nameWidget;
     // 밑줄 색상 결정 (보강=파란색, 추가수업=초록색)
     final Color? underlineColor = t.overrideType == OverrideType.replace
@@ -2820,7 +2848,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     switch (status) {
       case 'attended':
         borderColor = const Color(0xFF33A373);
-        textColor = const Color(0xFFEAF2F2);
+        textColor = fabPalette.labelSelected;
         final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
         final String timeText =
             attendTime != null ? _formatTime(attendTime) : '--:--';
@@ -2841,8 +2869,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               ),
               TextSpan(
                 text: '  $timeText',
-                style: const TextStyle(
-                  color: Colors.white54,
+                style: TextStyle(
+                  color: fabPalette.labelUnselected,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2889,42 +2917,39 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
         break;
       default:
-        // waiting(등원 예정)
-        // - 기본: 테두리=회색(통일)
-        // - 수업이 있으면: 이름 + 테두리 수업 색상
-        // - 보강/추가수업: 테두리만 해당 색상(보강=파랑, 추가=초록)
-        final Color? classColor = t.classInfo?.color;
-        borderColor = isSpecialOverride
-            ? (t.overrideType == OverrideType.replace
-                ? const Color(0xFF1976D2)
-                : const Color(0xFF4CAF50))
-            : (classColor ?? Colors.grey);
-        textColor = (!isSpecialOverride && classColor != null)
-            ? classColor
-            : Colors.white70;
-        const double waitingNameSize = 16;
+        // waiting(등원 예정) — FAB 하이라이트 알약 스타일
+        borderColor = Colors.transparent;
+        final waitingPalette =
+            FabTabBarTokens.paletteFor(Theme.of(context).brightness);
         nameWidget = Text(
           t.student.name,
-          style: TextStyle(
-            color: textColor,
-            fontSize: waitingNameSize,
+          style: FabTabBarTokens.fabMenuLabelStyle(waitingPalette).copyWith(
             fontWeight: FontWeight.w500,
-            // waiting에서는 underline을 쓰지 않고(이질감/중복) 테두리/이름색 규칙으로만 표현한다.
           ),
+          overflow: TextOverflow.ellipsis,
         );
     }
     // 텍스트 자체의 underline을 사용하여 높이 증가 없이 이름 전체에 밑줄 적용
     final Widget attendedChild = nameWidget;
     final Widget cardChild = nameWidget; // 기본은 이름만 사용 (waiting/leaved)
     if (status == 'attended') {
+      final expandId = t.setId;
+      final shouldExpand = _attendedExpandAnimateIds.contains(expandId);
       // 출석(파란 네모) 카드: 가로 스크롤로 과제칩 표시(줄바꿈 없음)
       return Row(
         key: key,
         mainAxisSize: MainAxisSize.max,
         children: [
-          _wrapTextbookDropTargetForStudent(
-            studentId: t.student.id,
-            child: Dismissible(
+          FabStyleExpandIn(
+            animate: shouldExpand,
+            onComplete: () {
+              if (_attendedExpandAnimateIds.remove(expandId) && mounted) {
+                setState(() {});
+              }
+            },
+            child: _wrapTextbookDropTargetForStudent(
+              studentId: t.student.id,
+              child: Dismissible(
               key: ValueKey('attended_swipe_${t.setId}'),
               direction: DismissDirection.startToEnd,
               confirmDismiss: (_) async {
@@ -3032,9 +3057,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               background: Container(
                 alignment: Alignment.centerLeft,
                 padding: const EdgeInsets.only(left: 16),
-                child: const Icon(
+                child: Icon(
                   Icons.arrow_forward_rounded,
-                  color: Colors.white54,
+                  color: fabPalette.labelUnselected,
                   size: 18,
                 ),
               ),
@@ -3099,79 +3124,32 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               ),
             ),
           ),
+          ),
           const SizedBox(width: 10),
           Expanded(child: _buildHomeworkChipsReactive(t)),
         ],
       );
-    } else {
-      return GestureDetector(
-        key: key,
-        onTap: () async {
-          final now = DateTime.now();
-          setState(() {
-            if (status == 'waiting') {
-              _attendedSetIds.add(t.setId);
-              _attendTimes[t.setId] = now;
-              _sideSheetDataDirty = true;
-            } else if (status == 'attended') {
-              _leavedSetIds.add(t.setId);
-              _leaveTimes[t.setId] = now;
-              _sideSheetDataDirty = true;
-            }
-          });
-          try {
-            final classDateTime = t.classDateTime;
-            if (status == 'waiting') {
-              await DataManager.instance.saveOrUpdateAttendance(
-                studentId: t.student.id,
-                classDateTime: classDateTime,
-                classEndTime: classDateTime.add(t.duration),
-                className: t.classInfo?.name ?? '수업',
-                isPresent: true,
-                arrivalTime: now,
-                setId: t.setId,
-                sessionTypeId: t.classInfo?.id,
-              );
-            } else if (status == 'attended') {
-              final existing = DataManager.instance.getAttendanceRecord(
-                t.student.id,
-                classDateTime,
-              );
-              if (existing != null) {
-                // departureTime이 기록되면 출석으로 간주(isPresent=true)하여
-                // arrival/departure는 있는데 isPresent=false로 남는 비정합을 방지한다.
-                final updated = existing.copyWith(
-                  departureTime: now,
-                  isPresent: true,
-                );
-                try {
-                  await DataManager.instance.updateAttendanceRecord(updated);
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('다른 기기에서 먼저 수정되었습니다. 새로고침 후 다시 시도하세요.'),
-                    ),
-                  );
-                }
-              }
-            }
-          } catch (e) {
-            print('[ERROR] 출석 기록 동기화 실패: $e');
-          }
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: EdgeInsets.zero,
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            border: Border.all(color: borderColor, width: 1.5),
-            borderRadius: BorderRadius.circular(25),
-          ),
-          child: cardChild,
-        ),
+    }
+
+    // waiting(등원 예정)
+    Border? waitingAccentBorder;
+    if (isSpecialOverride) {
+      waitingAccentBorder = Border.all(
+        color: t.overrideType == OverrideType.replace
+            ? const Color(0xFF1976D2)
+            : const Color(0xFF4CAF50),
+        width: 1.5,
+        strokeAlign: BorderSide.strokeAlignInside,
       );
     }
+    return FabStyleSuckTap(
+      key: key,
+      onPressed: () => _recordWaitingArrival(t),
+      child: FabStyleHighlightPill(
+        border: waitingAccentBorder,
+        child: cardChild,
+      ),
+    );
   }
 
   Widget _buildTrialLessonAttendanceCard(
@@ -3185,56 +3163,71 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     // - attended: 테두리는 시범 색상, 내부 배경 없음 (배지 없음)
     const trialGreen = Color(0xFF4CAF50);
 
+    final trialPalette =
+        FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final nameStyle = TextStyle(
-      color: status == 'attended' ? const Color(0xFFEAF2F2) : Colors.white70,
+      color: status == 'attended'
+          ? trialPalette.labelSelected
+          : trialPalette.labelUnselected,
       // 기존 출석카드와 크기 통일
       fontSize: status == 'attended' ? 19 : 16,
       fontWeight: FontWeight.w500,
     );
 
     if (status == 'attended') {
+      final expandId = 'trial_${s.id}';
+      final shouldExpand = _attendedExpandAnimateIds.contains(expandId);
       // 기존 출석 카드(왼쪽 컨테이너 + 오른쪽 칩 영역) 레이아웃을 그대로 맞춘다.
       return Row(
         key: key,
         mainAxisSize: MainAxisSize.max,
         children: [
-          GestureDetector(
-            onTap: () {
-              // 하원 처리
-              unawaited(
-                ConsultTrialLessonService.instance.setLeaved(
-                  slotId: s.id,
-                  leaved: true,
-                ),
-              );
+          FabStyleExpandIn(
+            animate: shouldExpand,
+            onComplete: () {
+              if (_attendedExpandAnimateIds.remove(expandId) && mounted) {
+                setState(() {});
+              }
             },
-            onSecondaryTap: () {
-              // 실수 취소: 등원/하원 기록 제거
-              unawaited(
-                ConsultTrialLessonService.instance.setArrived(
-                  slotId: s.id,
-                  arrived: false,
-                ),
-              );
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              margin: EdgeInsets.zero,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.transparent,
-                border: Border.all(color: trialGreen, width: 2),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    s.title,
-                    style: nameStyle,
-                    overflow: TextOverflow.ellipsis,
+            child: GestureDetector(
+              onTap: () {
+                // 하원 처리
+                unawaited(
+                  ConsultTrialLessonService.instance.setLeaved(
+                    slotId: s.id,
+                    leaved: true,
                   ),
-                ],
+                );
+              },
+              onSecondaryTap: () {
+                // 실수 취소: 등원/하원 기록 제거
+                unawaited(
+                  ConsultTrialLessonService.instance.setArrived(
+                    slotId: s.id,
+                    arrived: false,
+                  ),
+                );
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: EdgeInsets.zero,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.transparent,
+                  border: Border.all(color: trialGreen, width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      s.title,
+                      style: nameStyle,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -3244,27 +3237,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       );
     }
 
-    // waiting(등원 예정) 카드: 기존 waiting 카드(캡슐) 디자인을 그대로 사용
-    return GestureDetector(
+    return FabStyleSuckTap(
       key: key,
-      onTap: () {
-        unawaited(
-          ConsultTrialLessonService.instance.setArrived(
-            slotId: s.id,
-            arrived: true,
-          ),
+      onPressed: () async {
+        _attendedExpandAnimateIds.add('trial_${s.id}');
+        await ConsultTrialLessonService.instance.setArrived(
+          slotId: s.id,
+          arrived: true,
         );
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: EdgeInsets.zero,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          border: Border.all(color: trialGreen, width: 2),
-          borderRadius: BorderRadius.circular(25),
+      child: FabStyleHighlightPill(
+        border: Border.all(
+          color: trialGreen,
+          width: 1.5,
+          strokeAlign: BorderSide.strokeAlignInside,
         ),
-        child: Text(s.title, style: nameStyle, overflow: TextOverflow.ellipsis),
+        child: Text(
+          s.title,
+          style: FabTabBarTokens.fabMenuLabelStyle(trialPalette).copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
     );
   }

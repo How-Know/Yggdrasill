@@ -348,6 +348,73 @@ function wrapHangulRunsForMath(input) {
   return String(input || '').replace(KOREAN_SEG_RE, (match) => `\\text{${escapeLatexText(match)}}`);
 }
 
+/**
+ * 수식 명령(\xrightarrow, \overset 등) 인자 안의 한글을 \text{}로 감싼다.
+ * `\xrightarrow{(가)}` 라벨의 한글이 KOREAN_SEG_RE 분할로 떨어져 나가
+ * `\xrightarrow{($가$...)}` 같은 깨진 LaTeX 가 생성되는 것을 방지한다.
+ */
+const MATH_LABEL_COMMAND_RE =
+  /^\\(xrightarrow|xleftarrow|xRightarrow|xLeftarrow|xrightleftharpoons|xleftrightarrow|overset|underset|stackrel)(?![A-Za-z])/;
+const HANGUL_RUN_RE = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]+/g;
+
+function wrapKoreanRunsInLabelArg(content) {
+  if (!/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(content)) return content;
+  return content.replace(HANGUL_RUN_RE, (run) => `\\text{${escapeLatexText(run)}}`);
+}
+
+function wrapKoreanInMathLabelArgs(input) {
+  const source = String(input || '');
+  if (!/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(source)) return source;
+  if (!source.includes('\\')) return source;
+
+  let out = '';
+  let i = 0;
+  while (i < source.length) {
+    const m = source.slice(i).match(MATH_LABEL_COMMAND_RE);
+    if (!m) {
+      out += source[i];
+      i += 1;
+      continue;
+    }
+    out += m[0];
+    i += m[0].length;
+
+    let argsConsumed = 0;
+    while (argsConsumed < 2 && i < source.length) {
+      let j = i;
+      while (j < source.length && /\s/.test(source[j])) j += 1;
+      const open = source[j];
+      if (open !== '{' && open !== '[') break;
+      const close = open === '{' ? '}' : ']';
+      let depth = 0;
+      let k = j;
+      let end = -1;
+      while (k < source.length) {
+        const ch = source[k];
+        if (ch === '\\') {
+          k += 2;
+          continue;
+        }
+        if (ch === open) depth += 1;
+        else if (ch === close) {
+          depth -= 1;
+          if (depth === 0) {
+            end = k;
+            break;
+          }
+        }
+        k += 1;
+      }
+      if (end < 0) break;
+      out += source.slice(i, j);
+      out += open + wrapKoreanRunsInLabelArg(source.slice(j + 1, end)) + close;
+      i = end + 1;
+      argsConsumed += 1;
+    }
+  }
+  return out;
+}
+
 function firstUnmatchedRightParenDelimiter(source) {
   const src = String(source || '');
   const re = /\\(left|right)\s*([()])/g;
@@ -1081,6 +1148,7 @@ function smartTexLineCore(text, equations, options = {}) {
     prefix = `\\text{(${subQMatch[1]})}\\;`;
     body = clean.substring(subQMatch[0].length);
   }
+  body = wrapKoreanInMathLabelArgs(body);
   const protectedText = protectLatexTextBlocks(body);
   body = protectedText.text;
   const protectedBoxes = protectLatexBoxBlocks(body);

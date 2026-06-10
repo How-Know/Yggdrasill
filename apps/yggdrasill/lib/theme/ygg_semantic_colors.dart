@@ -10,8 +10,8 @@ class YggSemanticColors extends ThemeExtension<YggSemanticColors> {
     required this.surfaceBase,
   });
 
-  /// 화면 전체 배경 — Light mode (목업 확정)
-  static const Color surfaceBaseLight = Color(0xFFFFFFFF);
+  /// 화면 전체 배경 — Light mode (순백보다 부드러운 오프화이트)
+  static const Color surfaceBaseLight = Color(0xFFF8F8F8);
 
   /// 화면 전체 배경 — Dark mode 후보 (Preview에서 Enter로 순환)
   static const List<Color> surfaceBaseDarkCandidates = [
