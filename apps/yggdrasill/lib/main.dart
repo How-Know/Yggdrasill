@@ -41,6 +41,7 @@ import 'widgets/right_side_sheet/right_side_sheet.dart';
 import 'widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'widgets/memo_dialogs.dart';
 import 'app_overlays.dart';
+import 'screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'screens/learning/past_exam_papers_dialog.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
@@ -7039,70 +7040,87 @@ class _MemoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final double screenW = MediaQuery.of(context).size.width;
     final bool isHwDone =
         (memo.summary.isNotEmpty ? memo.summary : memo.original).contains('완료');
-    // 최소창(≈1430)에서 14, 넓을수록 18까지 선형 증가
+    // 최소창(≈1430)에서 14, 넓을수록 17까지 선형 증가
     const double minW = 1430;
     const double maxW = 2200;
     const double fsMin = 14;
-    const double fsMax = 17; // 최대창 기준 1pt 감소
+    const double fsMax = 17;
     final double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
     final double bannerFontSize = fsMin + (fsMax - fsMin) * t;
     final when = memo.scheduledAt != null
         ? '${memo.scheduledAt!.month}/${memo.scheduledAt!.day} ${memo.scheduledAt!.hour.toString().padLeft(2, '0')}:${memo.scheduledAt!.minute.toString().padLeft(2, '0')}'
         : '';
+    final Border? bannerBorder = isHwDone
+        ? Border.all(
+            color: FabTabBarTokens.previewConfirmActionColor,
+            width: 1,
+            strokeAlign: BorderSide.strokeAlignInside,
+          )
+        : null;
+
     return Material(
       color: Colors.transparent,
       child: Container(
-        margin: const EdgeInsets.only(top: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        margin: const EdgeInsets.only(top: FabTabBarTokens.fabMenuItemSpacing),
         constraints: const BoxConstraints(maxWidth: 360),
-        decoration: BoxDecoration(
-          color: const Color(0xFF232326),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: isHwDone ? const Color(0xFF1976D2) : Colors.white24),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withOpacity(0.18),
-                blurRadius: 12,
-                offset: const Offset(0, 6)),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (when.isNotEmpty)
-                    Text(when,
-                        style: const TextStyle(
-                            color: Colors.white54, fontSize: 12)),
-                  const SizedBox(height: 4),
-                  Text(
-                    memo.summary.isNotEmpty ? memo.summary : memo.original,
-                    style: TextStyle(
-                        color: Colors.white,
+        child: FabStyleGlassPanel(
+          padding: const EdgeInsets.fromLTRB(
+            FabTabBarTokens.fabMemoBannerPaddingLeft,
+            FabTabBarTokens.fabMemoBannerPaddingVertical,
+            FabTabBarTokens.fabMemoBannerPaddingRight,
+            FabTabBarTokens.fabMemoBannerPaddingVertical,
+          ),
+          border: bannerBorder,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (when.isNotEmpty)
+                      Text(
+                        when,
+                        style: TextStyle(
+                          fontFamily:
+                              FabTabBarTokens.previewAcademyLabelFontFamily,
+                          color: palette.labelUnselected,
+                          fontSize: 12,
+                        ),
+                      ),
+                    if (when.isNotEmpty) const SizedBox(height: 4),
+                    Text(
+                      memo.summary.isNotEmpty ? memo.summary : memo.original,
+                      style: FabTabBarTokens.fabMenuLabelStyle(palette)
+                          .copyWith(
                         fontSize: bannerFontSize,
-                        height: 1.3),
+                        fontWeight: FontWeight.w500,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: onClose,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.close,
+                    color: palette.labelUnselected,
+                    size: 18,
                   ),
-                ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            InkWell(
-              onTap: onClose,
-              child: const Padding(
-                padding: EdgeInsets.all(4.0),
-                child: Icon(Icons.close, color: Colors.white54, size: 18),
-              ),
-            )
-          ],
+            ],
+          ),
         ),
       ),
     );

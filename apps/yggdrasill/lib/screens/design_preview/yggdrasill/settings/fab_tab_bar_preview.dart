@@ -164,9 +164,9 @@ class FabTabBarTokens {
   static const Color previewAcademyInputSheetFieldSurfaceDark =
       Color(0xFF2C2C2E);
 
-  /// Preview — 다이얼로그 위험 동작 문구 (삭제 등, iOS형 코랄 레드)
+  /// Preview — 다이얼로그 위험 동작 문구 (삭제 등)
   static const Color previewAcademyDialogDestructiveTextColor =
-      Color(0xFFEC7367);
+      Color(0xFFFF554F);
 
   /// Preview — 공통 입력 시트 그룹 카드 배경.
   static Color previewAcademyDialogGroupedFillColor(Brightness brightness) {
@@ -199,11 +199,8 @@ class FabTabBarTokens {
   /// 운영시간 알약 배지 — 시작·종료 사이 간격
   static const double previewAcademyTimePillGap = 6;
 
-  /// 운영시간 알약 배지 — 배경·글자 (다크/라이트)
-  static const Color previewAcademyTimePillBackgroundDark = Color(0xFF3A3A3C);
-  static const Color previewAcademyTimePillBackgroundLight = Color(0xFFE5E5EA);
-  static const Color previewAcademyTimePillTextDark = Color(0xFFFFFFFF);
-  static const Color previewAcademyTimePillTextLight = Color(0xFF1C1C1E);
+  /// 운영시간 알약 배지 — 배경은 [FabTabBarPalette.highlight] (FAB 탭 선택 하이라이트와 동일).
+  /// 글자는 선택 탭 라벨([FabTabBarPalette.labelSelected])과 동일.
 
   /// 학원 탭 카드 라벨 왼쪽 = scope(16) + 카드 행(24). 시트 inner(16) + 필드(24)와 동일.
   static const double previewAcademyInputSheetFieldInsetFromSheet =
@@ -393,6 +390,42 @@ class FabTabBarTokens {
   static const Color fabBarLightHighlight = Color(0xB8CFCFCF);
   static const Color fabBarLightLabelSelected = Color(0xFF000000);
   static const Color fabBarLightLabelUnselected = Color(0xFF6B6B6B);
+
+  /// FAB + 버튼·펼침 메뉴 pill 공통 라운드
+  static const double fabMenuPillRadius = 16;
+
+  /// + 버튼 ↔ 펼침 pill·pill 간 세로 간격 (등간격)
+  static const double fabMenuItemSpacing = 12;
+
+  /// 플로팅 메모 배너 내부 패딩
+  static const double fabMemoBannerPaddingLeft = 18;
+  static const double fabMemoBannerPaddingRight = 14;
+  static const double fabMemoBannerPaddingVertical = 16;
+
+  /// 펼침 메뉴 아이콘 기준 크기 (메모)
+  static const double fabMenuIconSize = 28;
+
+  /// 펼침 메뉴 아이콘 — 메모 외 10% 축소
+  static const double fabMenuIconSizeCompact = fabMenuIconSize * 0.9;
+
+  /// FAB + 버튼·펼침 메뉴 — 다크 모드 최소 윤곽선
+  static Border? fabRelatedBorderFor(Brightness brightness) {
+    if (brightness == Brightness.light) return null;
+    return Border.all(
+      color: const Color(0x1AFFFFFF),
+      width: 0.5,
+      strokeAlign: BorderSide.strokeAlignInside,
+    );
+  }
+
+  static TextStyle fabMenuLabelStyle(FabTabBarPalette palette) {
+    return TextStyle(
+      fontFamily: previewAcademyLabelFontFamily,
+      color: palette.labelSelected,
+      fontSize: fabBarLabelFontSize,
+      fontWeight: FontWeight.w600,
+    );
+  }
 
   static FabTabBarPalette paletteFor(Brightness brightness) {
     if (brightness == Brightness.light) {
@@ -605,15 +638,11 @@ class PreviewAcademyTimePill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final background = isDark
-        ? FabTabBarTokens.previewAcademyTimePillBackgroundDark
-        : FabTabBarTokens.previewAcademyTimePillBackgroundLight;
-    final textColor = isPlaceholder
-        ? style.hint
-        : isDark
-            ? FabTabBarTokens.previewAcademyTimePillTextDark
-            : FabTabBarTokens.previewAcademyTimePillTextLight;
+    final palette =
+        FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final background = palette.highlight;
+    final textColor =
+        isPlaceholder ? style.hint : palette.labelSelected;
 
     final pillBody = Padding(
       padding: const EdgeInsets.symmetric(
@@ -3041,6 +3070,9 @@ class FabStyleActionButton extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: palette.surface,
+                border: FabTabBarTokens.fabRelatedBorderFor(
+                  Theme.of(context).brightness,
+                ),
               ),
               child: Icon(
                 icon,
@@ -3049,6 +3081,105 @@ class FabStyleActionButton extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// FAB 계열 공통 글래스 패널 (메모 배너·펼침 pill 등).
+class FabStyleGlassPanel extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final Border? border;
+
+  const FabStyleGlassPanel({
+    super.key,
+    required this.child,
+    this.padding = EdgeInsets.zero,
+    this.border,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final brightness = Theme.of(context).brightness;
+    final resolvedBorder =
+        border ?? FabTabBarTokens.fabRelatedBorderFor(brightness);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius:
+            BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
+        boxShadow: palette.boxShadows,
+      ),
+      child: ClipRRect(
+        borderRadius:
+            BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: FabTabBarTokens.fabBarBlurSigma,
+            sigmaY: FabTabBarTokens.fabBarBlurSigma,
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              color: palette.surface,
+              borderRadius:
+                  BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
+              border: resolvedBorder,
+            ),
+            padding: padding,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// + 버튼 펼침 메뉴 pill — [FabStyleActionButton]·[FabStyleTabBar]와 동일 글래스 팔레트.
+class FabStyleMenuPill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  /// `true`면 [FabTabBarTokens.fabMenuIconSize], 아니면 10% 축소 아이콘.
+  final bool useFullIconSize;
+
+  const FabStyleMenuPill({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.useFullIconSize = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final iconSize = useFullIconSize
+        ? FabTabBarTokens.fabMenuIconSize
+        : FabTabBarTokens.fabMenuIconSizeCompact;
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: FabStyleGlassPanel(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              color: palette.labelSelected,
+              size: iconSize,
+            ),
+            const SizedBox(width: 14),
+            Text(
+              label,
+              style: FabTabBarTokens.fabMenuLabelStyle(palette),
+            ),
+          ],
         ),
       ),
     );

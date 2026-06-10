@@ -158,8 +158,10 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
     }
     _menuOverlay = OverlayEntry(
       builder: (ctx) {
-        // FAB 위치 기준: 목업 FAB 토큰과 동일한 오른쪽/하단 여백.
-        final double bottomOffset = FabTabBarTokens.fabBarBottomInset + 56 + 12;
+        // + 버튼 상단 ↔ 수강 pill 하단 = [fabMenuItemSpacing] (pill 간격과 동일)
+        final double bottomOffset = FabTabBarTokens.fabBarBottomInset +
+            FabTabBarTokens.fabBarHeight +
+            FabTabBarTokens.fabMenuItemSpacing;
         return Positioned(
           right: FabTabBarTokens.fabBarRightInset,
           bottom: bottomOffset,
@@ -176,10 +178,12 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     label: '메모',
                     icon: Icons.edit_note,
                     slideAnimation: _slideAnimation3,
+                    useFullIconSize: true,
                     onTap: () {
                       _openMemoAddDialog(context);
                     },
                   ),
+                  const SizedBox(height: FabTabBarTokens.fabMenuItemSpacing),
                   _buildMenuButton(
                     label: '보강',
                     icon: Icons.event_repeat_rounded,
@@ -194,6 +198,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                       );
                     },
                   ),
+                  const SizedBox(height: FabTabBarTokens.fabMenuItemSpacing),
                   _buildMenuButton(
                     label: '수강',
                     icon: Icons.credit_card,
@@ -262,46 +267,17 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
     required IconData icon,
     required VoidCallback onTap,
     required Animation<Offset> slideAnimation,
+    bool useFullIconSize = false,
   }) {
     return SlideTransition(
       position: slideAnimation,
       child: FadeTransition(
         opacity: _fadeAnimation,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: GestureDetector(
-            onTap: onTap,
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1B6B63),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    spreadRadius: 1,
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, color: Colors.white, size: 28),
-                  const SizedBox(width: 14),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        child: FabStyleMenuPill(
+          label: label,
+          icon: icon,
+          onTap: onTap,
+          useFullIconSize: useFullIconSize,
         ),
       ),
     );

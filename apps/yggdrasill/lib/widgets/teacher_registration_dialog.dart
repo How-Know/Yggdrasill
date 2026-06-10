@@ -32,9 +32,13 @@ class TeacherRegistrationDialog extends StatefulWidget {
     return isOwnerTeacher(teacher) ? '원장' : '선생님';
   }
 
+  static String quotedTeacherName(String name) => "'${name.trim()}'";
+
   static String titleFor(Teacher? teacher) {
     if (teacher == null) return '선생님 추가';
-    return '${teacher.name} ${teacherPositionLabel(teacher)}';
+    final name = quotedTeacherName(teacher.name);
+    final position = teacherPositionLabel(teacher);
+    return '$name $position';
   }
 
   static Future<void> show({
@@ -171,7 +175,7 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
       builder: (ctx) => AlertDialog(
         backgroundColor: kDlgBg,
         title: Text(
-          '$teacherName선생님 삭제',
+          "${TeacherRegistrationDialog.quotedTeacherName(teacherName)} 선생님 삭제",
           style: const TextStyle(
             color: Color(0xFFEAF2F2),
             fontWeight: FontWeight.w700,
@@ -234,7 +238,7 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
     final existing = widget.teacher;
     final deleteLabel = existing == null
         ? null
-        : '${existing.name.trim()}선생님 삭제';
+        : "${TeacherRegistrationDialog.quotedTeacherName(existing.name)} 선생님 삭제";
 
     return PreviewAcademyDialogSheet(
       style: style,
