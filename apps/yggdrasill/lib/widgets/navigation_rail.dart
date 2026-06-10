@@ -10,7 +10,24 @@ const double _navIconStrokeWidth = 2.64;
 const double _navDestinationVerticalPadding = 12.1;
 const double _navHighlightWidth = 67.8;
 const double _navHighlightHeight = 38.7;
-const double _navLeadingPaddingTop = 7.7;
+/// Material [NavigationRail] leading 위 고정 [SizedBox] (소스 `_verticalSpacer`).
+const double navRailTopSpacer = 8.0;
+
+/// 사이드시트 날짜 헤더와 수평 정렬 — leading [IconButton] 상단 inset.
+const double navLeadingPaddingTop = 7.7;
+
+/// leading 슬라이드시트 [IconButton] 탭 영역 (Material 기본 48).
+const double navLeadingIconTapSize = 48.0;
+
+/// 네비 패키지 버튼 행 **중심선** — Scaffold body 상단부터의 Y.
+const double navPackageButtonRowCenterY = navRailTopSpacer +
+    navLeadingPaddingTop +
+    navLeadingIconTapSize / 2;
+
+/// 사이드시트 날짜 헤더 행 상단 inset (행 중심 = [navPackageButtonRowCenterY]).
+const double navSideSheetDateHeaderTopInset =
+    navPackageButtonRowCenterY - navLeadingIconTapSize / 2;
+
 const double _navLeadingPaddingBottom = 9.9;
 const double _navDividerTopSpacing = 14.5;
 const double _navDividerWidth = 38.7;
@@ -142,7 +159,7 @@ class CustomNavigationRail extends StatelessWidget {
             onDestinationSelected: onDestinationSelected,
             leading: Padding(
               padding: const EdgeInsets.only(
-                top: _navLeadingPaddingTop,
+                top: navLeadingPaddingTop,
                 bottom: _navLeadingPaddingBottom,
               ),
               child: Column(

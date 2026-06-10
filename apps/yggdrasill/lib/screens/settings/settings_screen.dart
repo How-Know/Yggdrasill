@@ -1126,6 +1126,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         width: double.infinity,
         decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
           previewStyle,
+          brightness: Theme.of(context).brightness,
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(

@@ -32,8 +32,9 @@ class FabTabBarTokens {
   /// Preview — 학원정보 패널 배경 Dark (스크린샷 기준)
   static const Color previewAcademyInfoPanelDark = Color(0xFF121212);
 
-  /// Preview — 학원정보 패널 배경 Light (스크린샷 기준)
-  static const Color previewAcademyInfoPanelLight = Color(0xFFF2F2F6);
+  /// Preview — 학원정보 패널 배경 Light
+  /// [YggSemanticColors.surfaceBaseLight] (#F8F8F8) 대비 7단계 어두운 톤.
+  static const Color previewAcademyInfoPanelLight = Color(0xFFF1F1F1);
 
   static Color previewAcademyInfoPanelFor(Brightness brightness) {
     return brightness == Brightness.light
@@ -429,6 +430,22 @@ class FabTabBarTokens {
   /// FAB + 버튼·펼침 메뉴 — 다크 모드 최소 윤곽선
   static Border? fabRelatedBorderFor(Brightness brightness) {
     if (brightness == Brightness.light) return null;
+    return Border.all(
+      color: const Color(0x1AFFFFFF),
+      width: 0.5,
+      strokeAlign: BorderSide.strokeAlignInside,
+    );
+  }
+
+  /// 학원·선생님 탭 공용 그룹 카드 — 라이트/다크 최소 윤곽선
+  static Border groupedCardBorderFor(Brightness brightness) {
+    if (brightness == Brightness.light) {
+      return Border.all(
+        color: const Color(0x12000000),
+        width: 0.5,
+        strokeAlign: BorderSide.strokeAlignInside,
+      );
+    }
     return Border.all(
       color: const Color(0x1AFFFFFF),
       width: 0.5,
@@ -1050,12 +1067,16 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
     required this.rows,
   });
 
-  static BoxDecoration cardDecoration(PreviewAcademyPanelStyle style) {
+  static BoxDecoration cardDecoration(
+    PreviewAcademyPanelStyle style, {
+    required Brightness brightness,
+  }) {
     return BoxDecoration(
       color: style.groupedCardBackground,
       borderRadius: BorderRadius.circular(
         FabTabBarTokens.previewAcademyGroupedCardRadius,
       ),
+      border: FabTabBarTokens.groupedCardBorderFor(brightness),
     );
   }
 
@@ -1063,7 +1084,10 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      decoration: cardDecoration(style),
+      decoration: cardDecoration(
+        style,
+        brightness: Theme.of(context).brightness,
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1264,7 +1288,10 @@ class PreviewAcademyGroupedRowsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(style),
+      decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
+        style,
+        brightness: Theme.of(context).brightness,
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,

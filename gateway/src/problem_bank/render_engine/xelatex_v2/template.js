@@ -1494,6 +1494,55 @@ function splitAtSubQuestionMarkers(sub) {
   return pieces;
 }
 
+// 자동 줄바꿈 대상이 되는 긴 수식의 최소 길이(소스 문자 기준). 이보다 짧으면
+//   `a_1+\cdots+a_n` 같은 짧은 수식이 불필요하게 두 줄로 나뉘지 않게 한다.
+const ELLIPSIS_AUTO_BREAK_MIN_LEN = 50;
+
+// 중괄호 깊이 0(최상위)에서 처음 등장하는 생략기호(…/⋯/\cdots/\ldots/\dots/...) 위치.
+function findTopLevelEllipsisIndex(math) {
+  const src = String(math || '');
+  let depth = 0;
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '{') { depth += 1; continue; }
+    if (ch === '}') { depth = Math.max(0, depth - 1); continue; }
+    if (depth !== 0) continue;
+    if (ch === '⋯' || ch === '…') return i;
+    if (ch === '.' && /^\.{3,}/.test(src.slice(i))) return i;
+    if (ch === '\\' && /^\\(?:cdots|ldots|dotsb|dotsc|dotsi|dotsm|dots)\b/.test(src.slice(i))) return i;
+  }
+  return -1;
+}
+
+// 긴 순수 수식 줄에 생략기호(...)가 있으면, 그 앞(직전 이항연산자 포함)에서
+//   `[수식줄바ꈈ:오른쪽]` 마커를 자동 주입한다. 한글/표/그림/cases 등이 섞인 줄과
+//   이미 수동 마커가 있는 줄은 제외한다. 기존 수동 마커 렌더 경로를 그대로 재사용한다.
+function maybeInjectEllipsisBreak(rawLine) {
+  const src = String(rawLine || '');
+  if (!src.trim()) return src;
+  if (src.includes('[수식줄바꿈')) return src;            // 수동 마커 우선
+  if (/[가-힣ㄱ-ㅎ]/.test(src)) return src;               // 문장(한글) 보호
+  if (/\\begin\{/.test(src)) return src;                  // cases/array 등 자체 레이아웃
+  if (/\[(?:그림|표|도형|도표)\]|\\includegraphics/.test(src)) return src;
+  const content = src.trim();
+  if (content.length < ELLIPSIS_AUTO_BREAK_MIN_LEN) return src;
+  const idx = findTopLevelEllipsisIndex(content);
+  if (idx <= 0 || idx > content.length - 3) return src;
+  let j = idx - 1;
+  while (j >= 0 && /\s/.test(content[j])) j -= 1;
+  let cut;
+  if (j >= 0 && (content[j] === '+' || content[j] === '-')) {
+    cut = j;
+    while (cut > 0 && /\s/.test(content[cut - 1])) cut -= 1;
+  } else {
+    cut = j + 1;
+  }
+  if (cut <= 0) return src;
+  const lead = src.length - src.trimStart().length;
+  const at = lead + cut;
+  return `${src.slice(0, at)}[수식줄바꿈:오른쪽]${src.slice(at)}`;
+}
+
 function normalizeMathLineBreakAlign(value) {
   const raw = String(value || '오른쪽').trim().toLowerCase();
   if (raw === '가운데' || raw === '중앙' || raw === 'center' || raw === 'middle') return 'center';
@@ -2196,7 +2245,8 @@ function flattenBoxParagraphLines(lines, { stripBogi = false } = {}) {
 }
 
 function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
-  const cleaned = flattenBoxParagraphLines(lines, { stripBogi: true });
+  const cleaned = flattenBoxParagraphLines(lines, { stripBogi: true })
+    .map((line) => (line === BOX_PARAGRAPH_BREAK ? line : maybeInjectEllipsisBreak(line)));
   const items = [];
   for (const line of cleaned) {
     if (line === BOX_PARAGRAPH_BREAK) {
@@ -2539,7 +2589,7 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
     if (!marker) return true;
     forcedAlign = normalizeLineAlignValue(marker[1]);
     return false;
-  });
+  }).map((line) => (line === BOX_PARAGRAPH_BREAK ? line : maybeInjectEllipsisBreak(line)));
 
   // 2) \bullet / (가) / ㄱ. 라벨은 구역 시작 신호다.
   //    이후 새 라벨이 나오기 전까지의 라인은 같은 구역의 후속 줄로 보고,
@@ -3157,6 +3207,11 @@ function isImageChoiceQuestion(question) {
       choices.length === 5
       && choices.every((choice) => /^\s*\[(?:그림|도형|도표)\]\s*$/.test(String(choice?.text || '')))
     );
+}
+
+function isMixedImageChoiceQuestion(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  return meta.choice_layout === 'image_text_table' || meta.is_mixed_image_choice === true;
 }
 
 function stripImageChoiceFigureMarkers(stem) {
@@ -4448,7 +4503,13 @@ function renderOneQuestion(question, {
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
-  const isImageChoice = isImageChoiceQuestion(question);
+  const isMixedImageChoice = isMixedImageChoiceQuestion(question);
+  // 혼합 선지(텍스트+그림)는 일반 이미지 선지 분기보다 우선한다. is_image_choice_question
+  //   플래그가 함께 켜져 있어도 혼합으로 판정되면 텍스트를 보존하는 혼합 렌더를 사용한다.
+  const isImageChoice = !isMixedImageChoice && isImageChoiceQuestion(question);
+  const mixedChoiceStemFigureCount = isMixedImageChoice
+    ? ((String(question?.stem || '').match(FIGURE_MARKER_RE) || []).length)
+    : 0;
   // 본문 그림 + 이미지 선지(그림 선지)가 공존하는 경우: stem 의 그림 마커 개수를 세어
   //   앞쪽 N개 그림은 본문 그림으로 그대로 렌더링하고, 그 이후 5개를 선지 ①~⑤ 로 매핑한다.
   //   본문 그림이 없는 일반 이미지 선지(N=0)는 기존처럼 마커를 제거하고 figurePaths[0..4] 사용.
@@ -5017,6 +5078,47 @@ function renderOneQuestion(question, {
         lines.push(`\\noindent\\hbox to \\linewidth{${cells.join('\\hfill')}\\hfill\\null}\\par`);
         lines.push('\\vspace{0.25\\baselineskip}');
       }
+    }
+    lines.push('}');
+    return lines.join('\n');
+  }
+
+  // 텍스트(식)+그림이 섞인 선지(예: "2-x \leq x-2 ⇒ [수직선그림]") 렌더.
+  //   각 선지를 한 줄로 세로 나열한다: ① <식> ⇒ <그림>.
+  //   - 식은 smartTexLine 으로 렌더, 말미의 `\Rightarrow [그림]`/`[그림]` 마커는 제거.
+  //   - 그림은 figurePaths[i+offset] 를 \vcenter 로 수식축에 맞춰 인라인 배치.
+  //   - 그림 높이(em)는 meta.image_choice_layout.heightEm(없으면 2.6em)로 결정.
+  function renderMixedImageChoicesLatex(figureOffset = 0) {
+    const offset = Number.isInteger(figureOffset) && figureOffset > 0 ? figureOffset : 0;
+    if (!Array.isArray(choices) || choices.length === 0) return '';
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    const rawHeightEm = Number(meta.image_choice_layout?.heightEm);
+    const heightEm = Number.isFinite(rawHeightEm)
+      ? Math.max(1.6, Math.min(5.0, rawHeightEm))
+      : 2.6;
+    const lines = ['{\\setstretch{1.0}\\parskip=0pt\\lineskip=2pt\\parindent=0pt'];
+    for (let i = 0; i < choices.length; i += 1) {
+      const c = choices[i];
+      const rawText = typeof c === 'string' ? c : (c?.text || '');
+      const label = typeof c === 'string'
+        ? (CIRCLED_DIGITS[i] || String(i + 1))
+        : (String(c?.label || '').trim() || CIRCLED_DIGITS[i] || String(i + 1));
+      const eqText = String(rawText)
+        .replace(/\\Rightarrow\s*\[(?:그림|도형|도표)\]\s*$/u, '')
+        .replace(FIGURE_MARKER_RE, '')
+        .trim();
+      const content = smartTexLine(eqText, equations);
+      const p = figurePaths[i + offset];
+      let imgPart = '';
+      if (p) {
+        const normalized = String(p).replace(/\\/g, '/');
+        const include = `\\includegraphics[height=${heightEm.toFixed(2)}em,keepaspectratio]{${normalized}}`;
+        imgPart = `\\enspace$\\Rightarrow\\;\\vcenter{\\hbox{${include}}}$`;
+      }
+      lines.push(
+        `\\hangindent=1.9em\\hangafter=1\\noindent\\makebox[1.7em][l]{${escapeLatexText(label)}}${content}${imgPart}\\par`,
+      );
+      if (i < choices.length - 1) lines.push('\\vspace{0.5em}');
     }
     lines.push('}');
     return lines.join('\n');
@@ -5703,7 +5805,7 @@ function renderOneQuestion(question, {
   //   기존 로직은 figIdx(마커 카운터) 부터 순차 방출이었으나, token 경로에서 같은 itemId 를
   //   반복 참조하거나 stem 마커가 순서를 뒤집는 케이스에서는 이 기준이 맞지 않는다.
   //   따라서 실제로 "한 번도 방출되지 않은" local idx 만 순서대로 보충한다.
-  if (!isImageChoice && emittedFigIdxs.size < figurePaths.length) {
+  if (!isImageChoice && !isMixedImageChoice && emittedFigIdxs.size < figurePaths.length) {
     for (let i = 0; i < figurePaths.length; i += 1) {
       if (emittedFigIdxs.has(i)) continue;
       if (figIdxConsumedByGroup.has(i)) continue;
@@ -5793,11 +5895,13 @@ function renderOneQuestion(question, {
       ? renderBlankChoicesLatex(question, choices, equations, {
         fontSizePt: questionFontSizePt,
       })
-      : (isImageChoice
-        ? renderImageChoicesLatex(imageChoiceStemFigureCount)
-        : renderChoicesLatex(choices, equations, layoutColumns, {
-          fontSizePt: questionFontSizePt,
-        })));
+      : (isMixedImageChoice
+        ? renderMixedImageChoicesLatex(mixedChoiceStemFigureCount)
+        : (isImageChoice
+          ? renderImageChoicesLatex(imageChoiceStemFigureCount)
+          : renderChoicesLatex(choices, equations, layoutColumns, {
+            fontSizePt: questionFontSizePt,
+          }))));
   }
 
   parts.push('\\par');

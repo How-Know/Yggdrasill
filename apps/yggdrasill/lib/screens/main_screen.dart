@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../widgets/navigation_rail.dart';
 import '../services/data_manager.dart';
 import '../models/attendance_record.dart';
@@ -49,6 +50,7 @@ import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/textbook_flow_link_action.dart';
 import 'student/student_profile_page.dart';
 import '../models/behavior_card_drag_payload.dart';
+import '../widgets/top_glass_snack_bar.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -111,8 +113,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   String _searchQuery = '';
   final Set<GroupInfo> _expandedGroups = {};
   double _fabBottomPadding = 16.0;
-  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
-      _snackBarController;
   int? _prevIndex;
   // UI 전용: 과제 칩 상태(학생ID->아이템ID->상태) & 활성 항목
   final Map<String, Map<String, _UiPhase>> _uiPhases = {};
@@ -1139,12 +1139,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _markSideSheetDirty,
     );
     _rotationAnimation = AnimationController(
-      duration: const Duration(milliseconds: 240),
+      duration: const Duration(milliseconds: 320),
+      reverseDuration: const Duration(milliseconds: 300),
       vsync: this,
     );
     // 진단 로그 제거됨
     _sideSheetAnimation = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _rotationAnimation, curve: Curves.easeInOutCubic),
+      CurvedAnimation(
+        parent: _rotationAnimation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      ),
     );
     _fabController = AnimationController(
       duration: const Duration(milliseconds: 300),
@@ -2116,7 +2121,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       }
     }
 
-    return Scaffold(
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _handleRootKeyEvent,
+      child: Scaffold(
       backgroundColor: context.yggSurfaceBase,
       body: Row(
         children: [
@@ -2178,37 +2186,48 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               // 최대창 기준 450px이던 시트 폭을 화면 너비 비율(대략 26%)로 환산
               final baseRatio = 0.21; // 450 / 1728 ≈ 0.26
               final maxWidth = screenWidth * baseRatio;
-              // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
-              final containerWidth = progress == 0
-                  ? 0.0
-                  : (maxWidth * progress).clamp(0.0, maxWidth);
-              _sideSheetWidth = containerWidth;
+              // 바깥에서 보이는 실제 너비(애니메이션). 콘텐츠는 항상 maxWidth로
+              // 레이아웃하고, 이 clipWidth로 잘라내며 펼치고/접는다.
+              final double clipWidth = (maxWidth * progress).clamp(0.0, maxWidth);
+              // 콘텐츠 내부 스케일 계산은 최종 너비(maxWidth) 기준으로 고정해
+              // 슬라이드 중 카드가 리플로우/스케일되지 않도록 한다.
+              final double containerWidth = maxWidth;
+              _sideSheetWidth = clipWidth;
 
-              // 파생 리스트 로그는 ValueListenableBuilder 내부에서 출력합니다.
+              // 콘텐츠 페이드: 닫힐 때 너무 빨리 사라지지 않도록 raw 값에 여유를
+              // 주어 시트가 충분히 좁아질 때까지 내용이 보이게 한다.
+              final double rawValue = _rotationAnimation.value;
+              final double contentOpacity =
+                  Curves.easeOut.transform((rawValue * 1.35).clamp(0.0, 1.0));
 
-              // 애니메이션 진행 중에는 내용 위젯을 전혀 생성하지 않고, 빈 컨테이너만 렌더링
-              if (isComplete != _sideSheetWasComplete) {
-                if (_sideSheetDebug) {
-                  debugPrint(
-                    '[SIDE][sheet] complete=$isComplete progress=${progress.toStringAsFixed(3)} status=${_rotationAnimation.status} width=${containerWidth.toStringAsFixed(1)}',
-                  );
-                }
-                _sideSheetWasComplete = isComplete;
+              if (_sideSheetDebug && isComplete != _sideSheetWasComplete) {
+                debugPrint(
+                  '[SIDE][sheet] complete=$isComplete progress=${progress.toStringAsFixed(3)} status=${_rotationAnimation.status} clip=${clipWidth.toStringAsFixed(1)}',
+                );
               }
-              if (!isComplete) {
+              _sideSheetWasComplete = isComplete;
+
+              if (clipWidth <= 0.5) {
                 return _wrapSideSheetDragHoverTarget(
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    curve: Curves.easeInOut,
-                    width: containerWidth,
-                    key: _sideSheetKey,
-                    color: context.yggSurfaceBase,
-                  ),
+                  child: SizedBox(width: 0, key: _sideSheetKey),
                 );
               }
 
               return _wrapSideSheetDragHoverTarget(
-                child: ValueListenableBuilder<List<AttendanceRecord>>(
+                child: SizedBox(
+                  key: _sideSheetKey,
+                  width: clipWidth,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      minWidth: maxWidth,
+                      maxWidth: maxWidth,
+                      child: SizedBox(
+                        width: maxWidth,
+                        child: Opacity(
+                          opacity: contentOpacity,
+                          child:
+                              ValueListenableBuilder<List<AttendanceRecord>>(
                   valueListenable:
                       DataManager.instance.attendanceRecordsNotifier,
                   builder: (context, _records, _) {
@@ -2286,16 +2305,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         final double sideSheetScale =
                             ((containerWidth / 420.0).clamp(0.78, 1.0))
                                 .toDouble();
+                        final sideSheetPalette = FabTabBarTokens.paletteFor(
+                          Theme.of(context).brightness,
+                        );
                         final double actionIconSize =
                             22.0 * 1.1 * sideSheetScale;
                         final double actionButtonMinSize =
                             44.0 * sideSheetScale;
 
-                        return AnimatedContainer(
-                          duration: const Duration(milliseconds: 160),
-                          curve: Curves.easeInOut,
+                        return Container(
                           width: containerWidth,
-                          key: _sideSheetKey,
                           color: context.yggSurfaceBase,
                           child: Stack(
                             fit: StackFit.expand,
@@ -2303,27 +2322,31 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                               Column(
                                 children: [
                                   Padding(
-                                    padding: EdgeInsets.fromLTRB(
+                                    padding: const EdgeInsets.fromLTRB(
                                       24,
-                                      10 * sideSheetScale,
+                                      navSideSheetDateHeaderTopInset,
                                       24,
                                       12,
                                     ),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Row(
-                                          children: [
-                                            _SideSheetDateHeader(
-                                              date: _sideSheetAnchorDate,
-                                              scale: sideSheetScale,
-                                              onMoveToYesterday:
-                                                  _moveSideSheetToYesterday,
-                                              onMoveToToday:
-                                                  _moveSideSheetToToday,
-                                            ),
-                                            const Spacer(),
-                                          ],
+                                        SizedBox(
+                                          height: navLeadingIconTapSize,
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.center,
+                                            children: [
+                                              _SideSheetDateHeader(
+                                                date: _sideSheetAnchorDate,
+                                                onMoveToYesterday:
+                                                    _moveSideSheetToYesterday,
+                                                onMoveToToday:
+                                                    _moveSideSheetToToday,
+                                              ),
+                                              const Spacer(),
+                                            ],
+                                          ),
                                         ),
                                         SizedBox(height: 14 * sideSheetScale),
                                         Padding(
@@ -2355,7 +2378,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                           ? const Color(
                                                               0xFF33A373,
                                                             )
-                                                          : Colors.white70,
+                                                          : sideSheetPalette
+                                                              .labelUnselected,
                                                       size: actionIconSize,
                                                     ),
                                                     padding: EdgeInsets.zero,
@@ -2377,7 +2401,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   child: IconButton(
                                                     icon: Icon(
                                                       Icons.event_repeat,
-                                                      color: Colors.white70,
+                                                      color: sideSheetPalette
+                                                          .labelUnselected,
                                                       size: actionIconSize,
                                                     ),
                                                     padding: EdgeInsets.zero,
@@ -2399,7 +2424,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   child: IconButton(
                                                     icon: Icon(
                                                       Icons.timeline,
-                                                      color: Colors.white70,
+                                                      color: sideSheetPalette
+                                                          .labelUnselected,
                                                       size: actionIconSize,
                                                     ),
                                                     padding: EdgeInsets.zero,
@@ -2426,7 +2452,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   child: IconButton(
                                                     icon: Icon(
                                                       Icons.featured_play_list,
-                                                      color: Colors.white70,
+                                                      color: sideSheetPalette
+                                                          .labelUnselected,
                                                       size: actionIconSize,
                                                     ),
                                                     padding: EdgeInsets.zero,
@@ -2462,7 +2489,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                                   .favoriteTemplates
                                                           ? const Color(
                                                               0xFF33A373)
-                                                          : Colors.white70,
+                                                          : sideSheetPalette
+                                                              .labelUnselected,
                                                       size: actionIconSize,
                                                     ),
                                                     padding: EdgeInsets.zero,
@@ -2665,8 +2693,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     child: Center(
                                                       child: Text(
                                                         _formatTime(t),
-                                                        style: const TextStyle(
-                                                          color: Colors.white54,
+                                                        style: TextStyle(
+                                                          color: sideSheetPalette
+                                                              .labelUnselected,
                                                           fontSize: 14,
                                                           fontWeight:
                                                               FontWeight.bold,
@@ -2766,6 +2795,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                       },
                     );
                   },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               );
             },
@@ -2786,18 +2820,40 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       floatingActionButton: MainFabAlternative(
         showHomeBatchConfirmFab: _selectedIndex == 0,
       ),
+      ),
+    );
+  }
+
+  KeyEventResult _handleRootKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.space) {
+      return KeyEventResult.ignored;
+    }
+    if (_isTextInputFocused) return KeyEventResult.ignored;
+    _showTestSnackBar();
+    return KeyEventResult.handled;
+  }
+
+  bool get _isTextInputFocused {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  void _showTestSnackBar() {
+    final now = DateTime.now();
+    final time =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    TopGlassSnackBar.show(
+      context,
+      title: '테스트 알림',
+      message: '상단 글래스 스낵바 미리보기 — $time',
+      icon: Icons.notifications_none_rounded,
     );
   }
 
   void _showFloatingSnackBar(BuildContext context, String message) {
-    _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: const Color(0xFF2A2A2A),
-        behavior: SnackBarBehavior.fixed,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    TopGlassSnackBar.show(context, message: message);
   }
 
   Future<void> _recordWaitingArrival(_AttendanceTarget t) async {
@@ -3497,26 +3553,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
 class _SideSheetDateHeader extends StatelessWidget {
   final DateTime date;
-  final double scale;
   final VoidCallback onMoveToYesterday;
   final VoidCallback onMoveToToday;
 
   const _SideSheetDateHeader({
     required this.date,
-    required this.scale,
     required this.onMoveToYesterday,
     required this.onMoveToToday,
   });
 
   @override
   Widget build(BuildContext context) {
-    final s = scale.clamp(0.78, 1.0);
-    final dateFontSize = 30.0 * s;
-    // 아이콘이 시각적으로 작아 보이므로 날짜 폰트 대비 소폭 확대하고 아래로 보정한다.
-    final arrowSize = dateFontSize * 1.12;
-    final arrowVerticalOffset = 1.5 * s;
-    // 기존 13pt에서 +2pt 반영 (반응형 축소 포함).
-    final todayFontSize = 15.0 * s;
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final panelStyle = PreviewAcademyPanelStyle.forBrightness(brightness);
+    final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle);
+    const arrowSize = FabTabBarTokens.previewAcademyMainTitleFontSize * 1.12;
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
     final isToday = date.year == todayDate.year &&
@@ -3529,60 +3581,58 @@ class _SideSheetDateHeader extends StatelessWidget {
 
     return Row(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Tooltip(
           message: isYesterday ? '이미 어제 날짜를 보고 있어요' : '어제로 이동',
           child: IconButton(
             onPressed: isYesterday ? null : onMoveToYesterday,
-            icon: Transform.translate(
-              offset: Offset(0, arrowVerticalOffset),
-              child: Icon(
-                Icons.chevron_left_rounded,
-                color: isYesterday ? Colors.white24 : Colors.white70,
-                size: arrowSize,
-              ),
+            icon: Icon(
+              Icons.chevron_left_rounded,
+              color: isYesterday
+                  ? palette.labelUnselected.withValues(alpha: 0.35)
+                  : palette.labelUnselected,
+              size: arrowSize,
             ),
-            visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
-            constraints: BoxConstraints(
-              minWidth: 44 * s,
-              minHeight: 44 * s,
+            constraints: const BoxConstraints(
+              minWidth: navLeadingIconTapSize,
+              minHeight: navLeadingIconTapSize,
             ),
           ),
         ),
-        SizedBox(width: 6 * s),
+        const SizedBox(width: 6),
         Text(
           _getTodayDateString(date),
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: dateFontSize,
-            fontWeight: FontWeight.w800,
-            height: 1.0,
+          style: dateStyle,
+          textHeightBehavior: const TextHeightBehavior(
+            applyHeightToFirstAscent: false,
+            applyHeightToLastDescent: false,
           ),
         ),
-        if (!isToday) ...[
-          SizedBox(width: 10 * s),
-          TextButton(
-            onPressed: onMoveToToday,
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white70,
-              padding: EdgeInsets.symmetric(
-                horizontal: 10 * s,
-                vertical: 4 * s,
+          if (!isToday) ...[
+            const SizedBox(width: 10),
+            TextButton(
+              onPressed: onMoveToToday,
+              style: TextButton.styleFrom(
+                foregroundColor: palette.labelUnselected,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: Text(
-              '오늘',
-              style: TextStyle(
-                fontSize: todayFontSize,
-                fontWeight: FontWeight.w700,
+              child: const Text(
+                '오늘',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          ),
+          ],
         ],
-      ],
     );
   }
 }
