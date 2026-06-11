@@ -153,6 +153,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final Set<DayOfWeek> _previewBreakTimesExpanded = {};
 
   int _customTabIndex = 0;
+  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
+      FabStyleScreenTabBarOverlay();
   int _prevTabIndex = 0;
 
   // 운영시간 카드 hover 상태 관리
@@ -312,7 +314,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncFabTabBarOverlay();
+    });
+  }
+
+  void _syncFabTabBarOverlay() {
+    _fabTabBarOverlay.sync(
+      context,
+      selectedIndex: _customTabIndex,
+      tabs: const ['학원', '선생님', '일반'],
+      onTabSelected: _selectSettingsTab,
+    );
+  }
+
+  void _selectSettingsTab(int index) {
+    setState(() {
+      _prevTabIndex = _customTabIndex;
+      _customTabIndex = index;
+      _selectedType = index == 0
+          ? SettingType.academy
+          : (index == 1 ? SettingType.teachers : SettingType.general);
+    });
+    _fabTabBarOverlay.sync(
+      context,
+      selectedIndex: _customTabIndex,
+      tabs: const ['학원', '선생님', '일반'],
+      onTabSelected: _selectSettingsTab,
+    );
+  }
+
+  @override
   void dispose() {
+    _fabTabBarOverlay.dispose();
     _academyNameController.dispose();
     _academyAddressController.dispose();
     _sloganController.dispose();
@@ -723,15 +759,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
-          Text(
-            '일반',
-            textAlign: TextAlign.center,
-            style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
-          ),
-          const SizedBox(
-            height: FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
-          ),
+          const FabStyleScreenMainTitle(title: '일반'),
           _buildGeneralAppSection(style),
           const SizedBox(
             height: FabTabBarTokens.previewAcademySectionListSpacing,
@@ -2556,15 +2584,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
-          Text(
-            '학원정보',
-            textAlign: TextAlign.center,
-            style: FabTabBarTokens.previewAcademyMainTitleStyle(academyStyle),
-          ),
-          const SizedBox(
-            height: FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
-          ),
+          const FabStyleScreenMainTitle(title: '학원정보'),
           Center(
             child: GestureDetector(
               onTap: _pickLogoImage,
@@ -3177,16 +3197,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    void selectTab(int i) {
-      setState(() {
-        _prevTabIndex = _customTabIndex;
-        _customTabIndex = i;
-        _selectedType = i == 0
-            ? SettingType.academy
-            : (i == 1 ? SettingType.teachers : SettingType.general);
-      });
-    }
-
     final content = Column(
       children: [
         Expanded(
@@ -3230,23 +3240,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       backgroundColor: context.yggSurfaceBase,
-      body: Stack(
-        children: [
-          Positioned.fill(child: content),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: FabTabBarTokens.fabBarBottomInset,
-            child: Center(
-              child: FabStyleTabBar(
-                selectedIndex: _customTabIndex,
-                tabs: const ['학원', '선생님', '일반'],
-                onTabSelected: selectTab,
-              ),
-            ),
-          ),
-        ],
-      ),
+      body: content,
     );
   }
 
@@ -3290,15 +3284,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
-          Text(
-            '선생님',
-            textAlign: TextAlign.center,
-            style: FabTabBarTokens.previewAcademyMainTitleStyle(teacherStyle),
-          ),
-          const SizedBox(
-            height: FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
-          ),
+          const FabStyleScreenMainTitle(title: '선생님'),
           ValueListenableBuilder<List<Teacher>>(
             valueListenable: DataManager.instance.teachersNotifier,
             builder: (context, teachers, _) {
@@ -3542,7 +3528,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: SingleChildScrollView(
             controller: _academyScrollController,
             padding: EdgeInsets.only(
-              bottom: widget.previewUseFabStyleTabBar ? 120 : 24,
+              bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
             ),
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(
@@ -3572,7 +3558,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: SingleChildScrollView(
             controller: _teacherScrollController,
             padding: EdgeInsets.only(
-              bottom: widget.previewUseFabStyleTabBar ? 120 : 24,
+              bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
             ),
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(
@@ -3602,7 +3588,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: SingleChildScrollView(
             controller: _generalScrollController,
             padding: EdgeInsets.only(
-              bottom: widget.previewUseFabStyleTabBar ? 120 : 24,
+              bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
             ),
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(

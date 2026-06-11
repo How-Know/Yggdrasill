@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/gestures.dart';
-import '../../widgets/pill_tab_selector.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import '../../services/data_manager.dart';
 import '../../services/tenant_service.dart';
@@ -148,7 +148,11 @@ class ResourcesScreen extends StatefulWidget {
 }
 
 class _ResourcesScreenState extends State<ResourcesScreen> {
+  static const List<String> _resourceTabLabels = ['교재', '시험', '기타'];
+
   int _customTabIndex = 0;
+  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
+      FabStyleScreenTabBarOverlay();
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _isDropdownOpen = false;
@@ -2181,7 +2185,44 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncFabTabBarOverlay();
+    });
+  }
+
+  void _syncFabTabBarOverlay() {
+    _fabTabBarOverlay.sync(
+      context,
+      selectedIndex: _customTabIndex,
+      tabs: _resourceTabLabels,
+      onTabSelected: _selectResourcesTab,
+    );
+  }
+
+  void _selectResourcesTab(int index) {
+    setState(() {
+      _customTabIndex = index;
+      _expandedFolderIds.clear();
+      _selectedFolderIdForTree =
+          _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
+      _printPickMode = false;
+      _folders.clear();
+      _files.clear();
+    });
+    _fabTabBarOverlay.sync(
+      context,
+      selectedIndex: _customTabIndex,
+      tabs: _resourceTabLabels,
+      onTabSelected: _selectResourcesTab,
+    );
+    _loadLayout();
+  }
+
+  @override
   void dispose() {
+    _fabTabBarOverlay.dispose();
     for (final c in _gridScrollCtrls) {
       c.dispose();
     }
@@ -2381,30 +2422,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         children: [
           Column(
             children: [
-              const SizedBox(height: 0),
-              const SizedBox(height: 8),
-              Center(
-                child: PillTabSelector(
-                  selectedIndex: _customTabIndex,
-                  tabs: const ['교재', '시험', '기타'],
-                  onTabSelected: (i) {
-                    setState(() {
-                      _customTabIndex = i;
-                      // 탭 변경 시 데이터 재로딩 및 트리 초기화
-                      _expandedFolderIds.clear();
-                      _selectedFolderIdForTree =
-                          _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
-                      _printPickMode = false;
-                      // 이전 탭 데이터가 잠깐 보이는 플리커 방지: 즉시 클리어
-                      _folders.clear();
-                      _files.clear();
-                    });
-                    // 카테고리별 데이터 로드
-                    _loadLayout();
-                  },
-                ),
+              FabStyleScreenMainTitle(
+                title: _resourceTabLabels[_customTabIndex],
+                bottomSpacing: 12,
               ),
-              const SizedBox(height: 1),
               Align(
                 alignment: Alignment.centerLeft,
                 child: Padding(
@@ -2630,13 +2651,18 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
               ),
               const Divider(height: 1, color: Colors.white12),
               Expanded(
-                child: IndexedStack(
-                  index: _customTabIndex,
-                  children: [
-                    _buildTextbooksTreeLayout(0),
-                    _buildTextbooksTreeLayout(1),
-                    _buildTextbooksTreeLayout(2),
-                  ],
+                child: Padding(
+                  padding: const EdgeInsets.only(
+                    bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+                  ),
+                  child: IndexedStack(
+                    index: _customTabIndex,
+                    children: [
+                      _buildTextbooksTreeLayout(0),
+                      _buildTextbooksTreeLayout(1),
+                      _buildTextbooksTreeLayout(2),
+                    ],
+                  ),
                 ),
               ),
               // 하단 플로팅 영역 확보 제거: 버튼을 컨테이너 내부로 재배치

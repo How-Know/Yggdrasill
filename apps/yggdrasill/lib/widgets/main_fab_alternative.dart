@@ -80,7 +80,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   late Animation<double> _shapeAnimation; // 직사각형 -> 원형 애니메이션
 
   bool _isFabExpanded = false;
-  double _fabBottomPadding = 16.0;
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
       _snackBarController;
   OverlayEntry? _menuOverlay; // FAB 확장 시 드롭다운 버튼을 오버레이로 표시
@@ -296,13 +295,10 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
             final canRunBatchConfirm = shouldShowBatchConfirmFab &&
                 pendingConfirmCount > 0 &&
                 homeBatchConfirmAction != null;
-            return AnimatedPadding(
-              duration: const Duration(milliseconds: 200),
-              padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
                   if (shouldShowBatchConfirmFab) ...[
                     Opacity(
                       opacity: canRunBatchConfirm ? 1.0 : 0.45,
@@ -366,8 +362,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                       ),
                     ],
                   ),
-                ],
-              ),
+              ],
             );
           },
         );

@@ -15,13 +15,24 @@ class FabTabBarTokens {
 
   static const double fabBarHeight = 56;
 
-  /// [MainFabAlternative] + 버튼과 동일한 하단 여백
-  /// (Scaffold FAB margin 16 + FAB 내부 `bottom` padding 16)
-  static const double fabBarBottomInset = 32;
+  /// [MainFabAlternative] + 버튼·[FabStyleScreenTabBarOverlay] 공통 하단 여백
+  static const double fabBarBottomInset = 24;
 
-  /// [MainFabAlternative] + 버튼과 동일한 오른쪽 여백
-  /// (Scaffold FAB margin 16 + FAB 내부 `right` padding 16)
-  static const double fabBarRightInset = 32;
+  /// [MainFabAlternative] + 버튼·펼침 pill 공통 오른쪽 여백
+  static const double fabBarRightInset = 24;
+
+  /// 전역 메모 플로팅 배너 하단 — + 버튼·펼침 pill과 동일 기준선
+  static double get fabMemoFloatingBottomInset =>
+      fabBarBottomInset + fabBarHeight + fabMenuItemSpacing;
+
+  /// 설정 화면 하단 [FabStyleTabBar] — 네비게이션 레일과의 좌측 여백
+  static const double fabBarLeftInsetFromNavRail = 24;
+
+  /// [NavigationRail] 기본 폭 — 오버레이 고정 배치용 ([navigation_rail.navRailMinWidth]와 동일)
+  static const double fabBarNavRailDefaultWidth = 84.0;
+
+  /// 하단 [FabStyleScreenTabBarOverlay]에 가려지지 않도록 본문 하단 여백
+  static const double fabStyleScreenTabBarBottomPadding = 120.0;
 
   /// 글래스 블러 강도 (값↑ 뒤 화면 전체가 더 흐려져 비침)
   static const double fabBarBlurSigma = 28.0;
@@ -403,6 +414,17 @@ class FabTabBarTokens {
   static const EdgeInsets fabWaitingCardPadding =
       EdgeInsets.symmetric(horizontal: 22, vertical: 11);
 
+  /// 라이트 모드 FAB·글래스 패널(등원 리스트 데코 포함) 공통 그림자
+  /// (blur를 키우면 흰 글래스 주변에 회색 헤일로가 생겨 배경이 뿌연 것처럼 보임)
+  static const List<BoxShadow> fabBarLightBoxShadows = [
+    BoxShadow(
+      color: Color(0x24000000),
+      blurRadius: 4,
+      offset: Offset(0, 2),
+      spreadRadius: 0,
+    ),
+  ];
+
   /// 라이트 모드 글래스·알약 주변 블러·그림자 완화
   static double fabRelatedBlurSigmaFor(Brightness brightness) {
     return brightness == Brightness.light ? 10.0 : fabBarBlurSigma;
@@ -469,14 +491,7 @@ class FabTabBarTokens {
         highlight: fabBarLightHighlight,
         labelSelected: fabBarLightLabelSelected,
         labelUnselected: fabBarLightLabelUnselected,
-        boxShadows: [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 6,
-            offset: Offset(0, 2),
-            spreadRadius: 0,
-          ),
-        ],
+        boxShadows: fabBarLightBoxShadows,
       );
     }
     return const FabTabBarPalette(
@@ -3190,6 +3205,7 @@ class FabStyleHighlightPill extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final Border? border;
   final double borderRadius;
+  final Color? backgroundColor;
 
   const FabStyleHighlightPill({
     super.key,
@@ -3197,6 +3213,7 @@ class FabStyleHighlightPill extends StatelessWidget {
     this.padding = FabTabBarTokens.fabWaitingCardPadding,
     this.border,
     this.borderRadius = FabTabBarTokens.fabWaitingCardRadius,
+    this.backgroundColor,
   });
 
   @override
@@ -3211,7 +3228,8 @@ class FabStyleHighlightPill extends StatelessWidget {
       child: Container(
         padding: padding,
         decoration: BoxDecoration(
-          color: FabTabBarTokens.fabHighlightPillFill(brightness),
+          color: backgroundColor ??
+              FabTabBarTokens.fabHighlightPillFill(brightness),
           borderRadius: radius,
           border: resolvedBorder,
         ),
@@ -3420,6 +3438,106 @@ class FabStyleMenuPill extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 설정·자료 등 화면 최상단 공용 페이지 타이틀 (학원정보·교재 등).
+class FabStyleScreenMainTitle extends StatelessWidget {
+  final String title;
+  final double bottomSpacing;
+
+  const FabStyleScreenMainTitle({
+    super.key,
+    required this.title,
+    this.bottomSpacing = FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: FabTabBarTokens.previewAcademyTopInset),
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
+        ),
+        SizedBox(height: bottomSpacing),
+      ],
+    );
+  }
+}
+
+/// [MainFabAlternative] + 버튼 — 탭바 오버레이와 동일한 24px 여백 (Scaffold 기본 16px 대신).
+class FabStyleFloatingActionButtonLocation extends FloatingActionButtonLocation {
+  const FabStyleFloatingActionButtonLocation();
+
+  @override
+  Offset getOffset(ScaffoldPrelayoutGeometry scaffoldGeometry) {
+    final fabSize = scaffoldGeometry.floatingActionButtonSize;
+    return Offset(
+      scaffoldGeometry.scaffoldSize.width -
+          fabSize.width -
+          FabTabBarTokens.fabBarRightInset,
+      scaffoldGeometry.scaffoldSize.height -
+          fabSize.height -
+          FabTabBarTokens.fabBarBottomInset,
+    );
+  }
+}
+
+/// 하단 FAB 스타일 탭바를 루트 오버레이에 고정 (슬라이드시트에 밀리지 않음).
+class FabStyleScreenTabBarOverlay {
+  OverlayEntry? _entry;
+  int _selectedIndex = 0;
+  List<String> _tabs = const [];
+  ValueChanged<int>? _onTabSelected;
+
+  void sync(
+    BuildContext context, {
+    required int selectedIndex,
+    required List<String> tabs,
+    required ValueChanged<int> onTabSelected,
+  }) {
+    _selectedIndex = selectedIndex;
+    _tabs = tabs;
+    _onTabSelected = onTabSelected;
+
+    final overlay = Overlay.maybeOf(context, rootOverlay: true);
+    if (overlay == null) return;
+
+    if (_entry == null) {
+      _entry = OverlayEntry(builder: _buildOverlay);
+      overlay.insert(_entry!);
+    } else {
+      _entry!.markNeedsBuild();
+    }
+  }
+
+  void markNeedsBuild() => _entry?.markNeedsBuild();
+
+  void dispose() {
+    _entry?.remove();
+    _entry = null;
+  }
+
+  Widget _buildOverlay(BuildContext overlayContext) {
+    final railWidth = NavigationRailTheme.of(overlayContext).minWidth ??
+        FabTabBarTokens.fabBarNavRailDefaultWidth;
+    return Positioned(
+      left: railWidth + FabTabBarTokens.fabBarLeftInsetFromNavRail,
+      bottom: FabTabBarTokens.fabBarBottomInset,
+      child: FabStyleTabBar(
+        selectedIndex: _selectedIndex,
+        tabs: _tabs,
+        onTabSelected: _onTabSelected ?? (_) {},
       ),
     );
   }

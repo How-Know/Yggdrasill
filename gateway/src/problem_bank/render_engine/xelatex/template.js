@@ -238,9 +238,12 @@ function autoWrapTabularCells(rawTexBlock) {
         if (/^\s*\\text\{[\s\S]*\}\s*$/.test(inner)) return leading + hlinePrefix + inner + trailing;
 
         const hasLatexCmd = /\\[a-zA-Z]+/.test(inner);
-        const hasHangul = /[\uAC00-\uD7A3]/.test(inner);
-        if (hasLatexCmd) return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
+        // 한글 음절(가-힣)뿐 아니라 호환 자모(ㄱ,ㄴ,...)·옛한글 자모 영역까지 포함해
+        //   "(ㄱ)~(ㅂ)" 같은 셀이 수식 모드($...$)로 감싸져 글리프가 사라지는 것을 막는다.
+        const hasHangul = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(inner);
+        // 한글이 섞여 있으면 LaTeX 명령이 같이 있어도 텍스트 모드로 처리해야 한글이 보인다.
         if (hasHangul) return leading + hlinePrefix + `\\text{${inner.trim()}}` + trailing;
+        if (hasLatexCmd) return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
         // 나머지(숫자/영문 알파벳/+,- 등 단순 기호) 도 수식 모드로 감싼다 → 서체 일관성.
         return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
       });

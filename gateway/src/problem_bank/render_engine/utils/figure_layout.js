@@ -131,7 +131,7 @@ function convertLegacyToFigureLayout(question, stemSizePt) {
     const aExists = items.some((it) => it.assetKey === a);
     const bExists = items.some((it) => it.assetKey === b);
     if (aExists && bExists) {
-      groups.push({ type: 'horizontal', members: [a, b], gap: 0.5 });
+      groups.push({ type: 'horizontal', members: [a, b], gap: clampFinite(pair.gap, 0, 5, 0.5) });
     }
   }
 

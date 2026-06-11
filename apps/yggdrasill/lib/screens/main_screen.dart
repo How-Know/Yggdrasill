@@ -70,6 +70,36 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     'YG_SIDE_SHEET_DEBUG',
     defaultValue: false,
   );
+
+  /// 왼쪽 슬라이드시트 — 27" 4K 기준 비율, 카드 레이아웃 기준폭(420) 이하로는 축소하지 않음
+  static const double _sideSheetDesignScreenWidth = 3840.0;
+  static const double _sideSheetWidthRatio = 0.21;
+  static const double _sideSheetMinWidth = 420.0;
+  /// 최소 폭(420)에서의 UI 스케일 — 4K 풀 시트(~806)에서는 1.0
+  static const double _sideSheetScaleAtMin = 0.88;
+  static const double _sideSheetScaleAtFull = 1.0;
+  /// 등원학생(출석) 컨테이너 ↔ 등원예정 리스트 사이 간격 — 최대 스케일 기준 36
+  static const double _sideSheetAttendedToWaitingGap = 36.0;
+  /// 사이드시트 출석·등원예정 카드 학생명 글자 크기 (최대 스케일 기준)
+  static const double _sideSheetStudentNameFontSize = 18.0;
+  /// 등원예정 알약 칩 추가 높이 (상·하 패딩에 각각 절반)
+  static const double _sideSheetWaitingCardExtraHeight = 4.0;
+  /// 등원학생 리스트 카드 간 세로 간격
+  static const double _sideSheetAttendedCardSpacing = 16.0;
+  /// 등원예정 리스트 — 같은 시간대 내 카드 간격 (_cardSpacing + 4)
+  static const double _sideSheetWaitingCardSpacing = 12.0;
+  /// 등원학생 행 — 수업명(왼쪽 블록) ↔ 과제칩 사이 여백
+  static const double _sideSheetAttendedToHomeworkGap = 22.0;
+  /// 27" 4K 기준 화면 너비가 이 비율 이하로 줄면 등원학생 2줄 표시
+  static const double _sideSheetAttendedTwoLineWidthRatio = 0.75;
+  /// 사이드시트 상단 액션 버튼 크기 추가 배율
+  static const double _sideSheetActionButtonExtraScale = 1.1;
+  /// 사이드시트 날짜 헤더 왼쪽 추가 여백
+  static const double _sideSheetDateHeaderLeftInset = 4.0;
+  /// 사이드시트 액션 버튼 ↔ 등원학생(글래스 패널) 사이 간격 — 최대 스케일 기준 32
+  /// (헤더 Padding bottom 12 + 아래 SizedBox remainder)
+  static const double _sideSheetActionToAttendedGap = 32.0;
+
   int _selectedIndex = 0; // 0~5 (5는 설정)
   bool _isSideSheetOpen = false;
   late AnimationController _rotationAnimation;
@@ -178,14 +208,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     setAttendanceAnchorDate(normalized);
   }
 
-  void _moveSideSheetToYesterday() {
+  Future<void> _pickSideSheetAnchorDate() async {
     final today = _dateOnly(DateTime.now());
-    final yesterday = today.subtract(const Duration(days: 1));
-    _applySideSheetAnchorDate(yesterday);
-  }
-
-  void _moveSideSheetToToday() {
-    _applySideSheetAnchorDate(_dateOnly(DateTime.now()));
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _sideSheetAnchorDate,
+      firstDate: DateTime(today.year - 2, 1, 1),
+      lastDate: DateTime(today.year + 2, 12, 31),
+      builder: (context, child) {
+        final brightness = Theme.of(context).brightness;
+        return Theme(
+          data: Theme.of(context).copyWith(
+            dialogTheme: DialogThemeData(
+              backgroundColor: context.yggSurfaceBase,
+            ),
+            colorScheme: Theme.of(context).colorScheme.copyWith(
+                  primary: brightness == Brightness.dark
+                      ? const Color(0xFF33A373)
+                      : const Color(0xFF1976D2),
+                ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      _applySideSheetAnchorDate(picked);
+    }
   }
 
   // 기준 날짜의 등원 대상 학생(setId별) 리스트 추출
@@ -894,10 +943,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildAllStudentsBottomPanel({required double containerWidth}) {
-    final scale = ((containerWidth / 420.0).clamp(0.78, 1.0));
+    final scale = _resolveSideSheetScale(containerWidth);
     return Expanded(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 12.0),
+        padding: EdgeInsets.fromLTRB(
+          24.0 * scale,
+          0.0,
+          24.0 * scale,
+          12.0 * scale,
+        ),
         child: ValueListenableBuilder<List<StudentWithInfo>>(
           valueListenable: DataManager.instance.studentsNotifier,
           builder: (context, students, _) {
@@ -1121,6 +1175,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleDebugSpaceSnackBarKey);
     setAttendanceAnchorDate(_sideSheetAnchorDate);
     // 과제 데이터 DB에서 1회 로드
     HomeworkStore.instance.loadAll();
@@ -1280,6 +1335,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleDebugSpaceSnackBarKey);
     // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
     _removeTooltip();
     if (identical(homeBatchConfirmAction, _globalBatchConfirmAction)) {
@@ -1315,6 +1371,114 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _animLogTimer?.cancel();
     unawaited(M5QuestionRequestStore.instance.stop());
     super.dispose();
+  }
+
+  double _resolveSideSheetMaxWidth(double screenWidth) {
+    final ratioWidth = screenWidth * _sideSheetWidthRatio;
+    final available =
+        (screenWidth - navRailMinWidth).clamp(0.0, double.infinity);
+    return math.max(ratioWidth, _sideSheetMinWidth).clamp(0.0, available);
+  }
+
+  double _resolveSideSheetScale(double containerWidth) {
+    final fullWidth = _sideSheetDesignScreenWidth * _sideSheetWidthRatio;
+    final span = fullWidth - _sideSheetMinWidth;
+    if (span <= 0) return _sideSheetScaleAtFull;
+    final t =
+        ((containerWidth - _sideSheetMinWidth) / span).clamp(0.0, 1.0);
+    return _sideSheetScaleAtMin +
+        (_sideSheetScaleAtFull - _sideSheetScaleAtMin) * t;
+  }
+
+  bool _shouldUseAttendedTwoLineLayout(double screenWidth) {
+    return screenWidth <=
+        _sideSheetDesignScreenWidth * _sideSheetAttendedTwoLineWidthRatio;
+  }
+
+  TextStyle _sideSheetStudentNameStyle(
+    Color color,
+    double scale, {
+    double? fontSize,
+    FontWeight? fontWeight,
+    TextDecoration? decoration,
+    Color? decorationColor,
+    double? decorationThickness,
+  }) {
+    return TextStyle(
+      color: color,
+      // 출석·등원예정 이름은 동일한 절대 px — sideSheetScale로 글자만 줄이지 않음
+      fontSize: fontSize ?? _sideSheetStudentNameFontSize,
+      fontWeight: fontWeight ?? FontWeight.w500,
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      height: 1.0,
+      leadingDistribution: TextLeadingDistribution.even,
+      decoration: decoration,
+      decorationColor: decorationColor,
+      decorationThickness: decorationThickness,
+    );
+  }
+
+  /// 등원예정 알약 칩 패딩 — 등원학생 행 세로 패딩과 동일 기준
+  EdgeInsets _sideSheetWaitingCardPadding(double scale) {
+    final base = FabTabBarTokens.fabWaitingCardPadding;
+    final extraVertical = _sideSheetWaitingCardExtraHeight / 2;
+    return EdgeInsets.fromLTRB(
+      base.left * scale,
+      base.top * scale + extraVertical,
+      base.right * scale,
+      base.bottom * scale + extraVertical,
+    );
+  }
+
+  EdgeInsets _sideSheetAttendedNameRowPadding(double scale) {
+    final base = FabTabBarTokens.fabWaitingCardPadding;
+    return EdgeInsets.fromLTRB(
+      0,
+      base.top * scale,
+      base.right * scale,
+      base.bottom * scale,
+    );
+  }
+
+  TextStyle _sideSheetHomeworkChipTextStyle() {
+    return TextStyle(
+      color: const Color(0xFFEAF2F2),
+      fontSize: _sideSheetStudentNameFontSize,
+      fontWeight: FontWeight.w500,
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      height: 1.0,
+      leadingDistribution: TextLeadingDistribution.even,
+    );
+  }
+
+  double get _sideSheetHomeworkChipHeight =>
+      _sideSheetStudentNameFontSize + 10.0;
+
+  Widget _sideSheetStudentNameText(
+    String name,
+    TextStyle style, {
+    TextAlign textAlign = TextAlign.start,
+  }) {
+    final resolvedSize = style.fontSize ?? _sideSheetStudentNameFontSize;
+    return Text(
+      name,
+      style: style,
+      textAlign: textAlign,
+      textScaler: TextScaler.noScaling,
+      strutStyle: StrutStyle(
+        fontSize: resolvedSize,
+        height: 1.0,
+        fontWeight: style.fontWeight,
+        fontFamily: style.fontFamily,
+        leadingDistribution: TextLeadingDistribution.even,
+        forceStrutHeight: true,
+      ),
+      textHeightBehavior: const TextHeightBehavior(
+        applyHeightToFirstAscent: false,
+        applyHeightToLastDescent: false,
+      ),
+      overflow: TextOverflow.ellipsis,
+    );
   }
 
   void _toggleSideSheet() {
@@ -2121,10 +2285,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       }
     }
 
-    return Focus(
-      autofocus: true,
-      onKeyEvent: _handleRootKeyEvent,
-      child: Scaffold(
+    return Scaffold(
       backgroundColor: context.yggSurfaceBase,
       body: Row(
         children: [
@@ -2183,9 +2344,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               }
 
               final screenWidth = MediaQuery.of(context).size.width;
-              // 최대창 기준 450px이던 시트 폭을 화면 너비 비율(대략 26%)로 환산
-              final baseRatio = 0.21; // 450 / 1728 ≈ 0.26
-              final maxWidth = screenWidth * baseRatio;
+              final maxWidth = _resolveSideSheetMaxWidth(screenWidth);
               // 바깥에서 보이는 실제 너비(애니메이션). 콘텐츠는 항상 maxWidth로
               // 레이아웃하고, 이 clipWidth로 잘라내며 펼치고/접는다.
               final double clipWidth = (maxWidth * progress).clamp(0.0, maxWidth);
@@ -2303,15 +2462,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                               .add(s);
                         }
                         final double sideSheetScale =
-                            ((containerWidth / 420.0).clamp(0.78, 1.0))
-                                .toDouble();
+                            _resolveSideSheetScale(containerWidth);
+                        final bool attendedTwoLine =
+                            _shouldUseAttendedTwoLineLayout(screenWidth);
+                        final double sideSheetPad = 24.0 * sideSheetScale;
                         final sideSheetPalette = FabTabBarTokens.paletteFor(
                           Theme.of(context).brightness,
                         );
-                        final double actionIconSize =
-                            22.0 * 1.1 * sideSheetScale;
-                        final double actionButtonMinSize =
-                            44.0 * sideSheetScale;
+                        final double actionIconSize = 22.0 *
+                            1.1 *
+                            sideSheetScale *
+                            _sideSheetActionButtonExtraScale;
+                        final double actionButtonMinSize = 44.0 *
+                            sideSheetScale *
+                            _sideSheetActionButtonExtraScale;
 
                         return Container(
                           width: containerWidth,
@@ -2322,11 +2486,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                               Column(
                                 children: [
                                   Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      24,
+                                    padding: EdgeInsets.fromLTRB(
+                                      sideSheetPad,
                                       navSideSheetDateHeaderTopInset,
-                                      24,
-                                      12,
+                                      sideSheetPad,
+                                      12 * sideSheetScale,
                                     ),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
@@ -2337,27 +2501,27 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.center,
                                             children: [
-                                              _SideSheetDateHeader(
-                                                date: _sideSheetAnchorDate,
-                                                onMoveToYesterday:
-                                                    _moveSideSheetToYesterday,
-                                                onMoveToToday:
-                                                    _moveSideSheetToToday,
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left:
+                                                      _sideSheetDateHeaderLeftInset,
+                                                ),
+                                                child: _SideSheetDateHeader(
+                                                  date: _sideSheetAnchorDate,
+                                                  scale: sideSheetScale,
+                                                  onDateTap:
+                                                      _pickSideSheetAnchorDate,
+                                                ),
                                               ),
                                               const Spacer(),
                                             ],
                                           ),
                                         ),
-                                        SizedBox(height: 14 * sideSheetScale),
-                                        Padding(
-                                          padding: EdgeInsets.only(
-                                            top: 5 * sideSheetScale,
-                                          ),
-                                          child: Align(
-                                            alignment: Alignment.center,
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
+                                        SizedBox(height: 12 * sideSheetScale),
+                                        Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.start,
+                                            children: [
                                                 Tooltip(
                                                   message: _sideSheetBottomView ==
                                                           _SideSheetBottomView
@@ -2505,42 +2669,39 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   ),
                                                 ),
                                               ],
-                                            ),
-                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
                                   if (_sideSheetBottomView ==
                                       _SideSheetBottomView.waiting) ...[
-                                    SizedBox(height: 5 * sideSheetScale),
+                                    SizedBox(
+                                      height: (_sideSheetActionToAttendedGap -
+                                              12) *
+                                          sideSheetScale,
+                                    ),
                                     // 출석 박스
                                     Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 24.0,
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: sideSheetPad,
                                       ),
                                       child: ConstrainedBox(
                                         constraints: BoxConstraints(
-                                          minHeight: _cardActualHeight *
-                                              ((containerWidth / 420.0).clamp(
-                                                0.78,
-                                                1.0,
-                                              )),
+                                          minHeight:
+                                              _cardActualHeight * sideSheetScale,
                                           maxHeight: _cardActualHeight *
-                                                  ((containerWidth / 420.0)
-                                                      .clamp(0.78, 1.0)) *
+                                                  sideSheetScale *
                                                   _attendedMaxLines +
                                               _attendedRunSpacing *
-                                                  ((containerWidth / 420.0)
-                                                      .clamp(0.78, 1.0)) *
+                                                  sideSheetScale *
                                                   (_attendedMaxLines - 1),
                                         ),
                                         child: FabStyleGlassPanel(
-                                          padding: const EdgeInsets.fromLTRB(
-                                            24.0,
-                                            22.0,
-                                            16.0,
-                                            24.0,
+                                          padding: EdgeInsets.fromLTRB(
+                                            sideSheetPad,
+                                            sideSheetPad,
+                                            12.0 * sideSheetScale,
+                                            sideSheetPad,
                                           ),
                                           child: Scrollbar(
                                             controller: _attendedScrollCtrl,
@@ -2568,7 +2729,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             Theme.of(context)
                                                                 .brightness,
                                                           ).labelUnselected,
-                                                          fontSize: 22,
+                                                          fontSize:
+                                                              22 * sideSheetScale,
                                                           fontWeight:
                                                               FontWeight.bold,
                                                         ),
@@ -2590,13 +2752,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                           key: ValueKey(
                                                             'attended_${attended[i].setId}',
                                                           ),
-                                                          scale:
-                                                              ((containerWidth /
-                                                                      420.0)
-                                                                  .clamp(
-                                                            0.78,
-                                                            1.0,
-                                                          )),
+                                                          scale: sideSheetScale,
+                                                          attendedTwoLine:
+                                                              attendedTwoLine,
                                                           arrival: arrivalBySet[
                                                               attended[i]
                                                                   .setId],
@@ -2608,13 +2766,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                         if (i !=
                                                             attended.length - 1)
                                                           SizedBox(
-                                                            height: 8 *
-                                                                ((containerWidth /
-                                                                        420.0)
-                                                                    .clamp(
-                                                                  0.78,
-                                                                  1.0,
-                                                                )),
+                                                            height:
+                                                                _sideSheetAttendedCardSpacing *
+                                                                    sideSheetScale,
                                                           ),
                                                       ],
                                                     ],
@@ -2622,7 +2776,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 if (trialAttended
                                                     .isNotEmpty) ...[
                                                   if (attended.isNotEmpty)
-                                                    const SizedBox(height: 8),
+                                                    SizedBox(
+                                                      height:
+                                                          _sideSheetAttendedCardSpacing *
+                                                              sideSheetScale,
+                                                    ),
                                                   for (int i = 0;
                                                       i < trialAttended.length;
                                                       i++) ...[
@@ -2632,24 +2790,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                       key: ValueKey(
                                                         'trial_attended_${trialAttended[i].id}',
                                                       ),
-                                                      scale: ((containerWidth /
-                                                              420.0)
-                                                          .clamp(
-                                                        0.78,
-                                                        1.0,
-                                                      )),
+                                                      scale: sideSheetScale,
                                                     ),
                                                     if (i !=
                                                         trialAttended.length -
                                                             1)
                                                       SizedBox(
-                                                        height: 8 *
-                                                            ((containerWidth /
-                                                                    420.0)
-                                                                .clamp(
-                                                              0.78,
-                                                              1.0,
-                                                            )),
+                                                        height:
+                                                            _sideSheetAttendedCardSpacing *
+                                                                sideSheetScale,
                                                       ),
                                                   ],
                                                 ],
@@ -2666,19 +2815,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       Expanded(
                                         child: Padding(
                                           padding: EdgeInsets.only(
-                                            top: 13 * sideSheetScale,
-                                            left: 24.0,
-                                            right: 24.0,
-                                            bottom: 24.0,
+                                            top: _sideSheetAttendedToWaitingGap *
+                                                sideSheetScale,
+                                            left: sideSheetPad,
+                                            right: sideSheetPad,
+                                            bottom: sideSheetPad,
                                           ),
-                                          child: Scrollbar(
+                                          child: ListView(
                                             controller: _waitingScrollCtrl,
-                                            thumbVisibility: true,
-                                            child: ListView(
-                                              controller: _waitingScrollCtrl,
-                                              padding: EdgeInsets.zero,
-                                              children: [
-                                                for (final t in (<DateTime>{
+                                            padding: EdgeInsets.zero,
+                                            children: [
+                                              for (final t in (<DateTime>{
                                                   ...waitingByTime.keys,
                                                   ...trialWaitingByTime.keys,
                                                 }.toList()
@@ -2696,7 +2843,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                         style: TextStyle(
                                                           color: sideSheetPalette
                                                               .labelUnselected,
-                                                          fontSize: 14,
+                                                          fontSize:
+                                                              14 * sideSheetScale,
                                                           fontWeight:
                                                               FontWeight.bold,
                                                         ),
@@ -2707,20 +2855,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     child: Wrap(
                                                       alignment:
                                                           WrapAlignment.center,
-                                                      spacing: _cardSpacing *
-                                                          ((containerWidth /
-                                                                  420.0)
-                                                              .clamp(
-                                                            0.78,
-                                                            1.0,
-                                                          )),
-                                                      runSpacing: _cardSpacing *
-                                                          ((containerWidth /
-                                                                  420.0)
-                                                              .clamp(
-                                                            0.78,
-                                                            1.0,
-                                                          )),
+                                                      spacing:
+                                                          _sideSheetWaitingCardSpacing *
+                                                              sideSheetScale,
+                                                      runSpacing:
+                                                          _sideSheetWaitingCardSpacing *
+                                                              sideSheetScale,
                                                       children: [
                                                         for (final w
                                                             in (waitingByTime[
@@ -2733,12 +2873,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                               'waiting_${w.setId}',
                                                             ),
                                                             scale:
-                                                                ((containerWidth /
-                                                                        420.0)
-                                                                    .clamp(
-                                                              0.78,
-                                                              1.0,
-                                                            )),
+                                                                sideSheetScale,
                                                             arrival:
                                                                 arrivalBySet[
                                                                     w.setId],
@@ -2757,23 +2892,19 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                               'trial_waiting_${s.id}',
                                                             ),
                                                             scale:
-                                                                ((containerWidth /
-                                                                        420.0)
-                                                                    .clamp(
-                                                              0.78,
-                                                              1.0,
-                                                            )),
+                                                                sideSheetScale,
                                                           ),
                                                       ],
                                                     ),
                                                   ),
-                                                  const SizedBox(height: 12),
+                                                  SizedBox(
+                                                    height: 12 * sideSheetScale,
+                                                  ),
                                                 ],
                                               ],
                                             ),
                                           ),
                                         ),
-                                      ),
                                   ],
                                   if (_sideSheetBottomView ==
                                       _SideSheetBottomView.allStudents)
@@ -2817,21 +2948,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           Expanded(child: _buildContent()),
         ],
       ),
+      floatingActionButtonLocation:
+          const FabStyleFloatingActionButtonLocation(),
       floatingActionButton: MainFabAlternative(
         showHomeBatchConfirmFab: _selectedIndex == 0,
-      ),
       ),
     );
   }
 
-  KeyEventResult _handleRootKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey != LogicalKeyboardKey.space) {
-      return KeyEventResult.ignored;
-    }
-    if (_isTextInputFocused) return KeyEventResult.ignored;
+  /// 스페이스바 테스트 스낵바 — [Focus]는 상위 [RawKeyboardListener]에 포커스가
+  /// 가져가면 동작하지 않아 전역 키보드 핸들러로 처리한다.
+  bool _handleDebugSpaceSnackBarKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (event.logicalKey != LogicalKeyboardKey.space) return false;
+    if (_isTextInputFocused) return false;
+    if (!mounted) return false;
     _showTestSnackBar();
-    return KeyEventResult.handled;
+    return true;
   }
 
   bool get _isTextInputFocused {
@@ -2887,6 +3020,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     required String status,
     Key? key,
     double scale = 1.0,
+    bool attendedTwoLine = false,
     DateTime? arrival,
     DateTime? departure,
   }) {
@@ -2905,36 +3039,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 'attended':
         borderColor = const Color(0xFF33A373);
         textColor = fabPalette.labelSelected;
-        final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
-        final String timeText =
-            attendTime != null ? _formatTime(attendTime) : '--:--';
-        nameWidget = Text.rich(
-          TextSpan(
-            children: [
-              TextSpan(
-                text: t.student.name,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 19,
-                  fontWeight: FontWeight.w500,
-                  decoration:
-                      underlineColor != null ? TextDecoration.underline : null,
-                  decorationColor: underlineColor,
-                  decorationThickness: underlineColor != null ? 2 : null,
-                ),
-              ),
-              TextSpan(
-                text: '  $timeText',
-                style: TextStyle(
-                  color: fabPalette.labelUnselected,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          overflow: TextOverflow.ellipsis,
-        );
+        nameWidget = const SizedBox.shrink();
         break;
       case 'leaved':
         borderColor = t.classInfo?.color ?? Colors.grey.shade700;
@@ -2958,12 +3063,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             _showTooltip(offset, tooltip);
           },
           onExit: (_) => _removeTooltip(),
-          child: Text(
+          child: _sideSheetStudentNameText(
             t.student.name,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 19,
-              fontWeight: FontWeight.w500,
+            _sideSheetStudentNameStyle(
+              textColor,
+              scale,
               decoration:
                   underlineColor != null ? TextDecoration.underline : null,
               decorationColor: underlineColor,
@@ -2977,26 +3081,112 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         borderColor = Colors.transparent;
         final waitingPalette =
             FabTabBarTokens.paletteFor(Theme.of(context).brightness);
-        nameWidget = Text(
+        nameWidget = _sideSheetStudentNameText(
           t.student.name,
-          style: FabTabBarTokens.fabMenuLabelStyle(waitingPalette).copyWith(
-            fontWeight: FontWeight.w500,
+          _sideSheetStudentNameStyle(
+            waitingPalette.labelSelected,
+            scale,
           ),
-          overflow: TextOverflow.ellipsis,
         );
     }
-    // 텍스트 자체의 underline을 사용하여 높이 증가 없이 이름 전체에 밑줄 적용
-    final Widget attendedChild = nameWidget;
     final Widget cardChild = nameWidget; // 기본은 이름만 사용 (waiting/leaved)
     if (status == 'attended') {
       final expandId = t.setId;
       final shouldExpand = _attendedExpandAnimateIds.contains(expandId);
+      final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
+      final String arrivalText =
+          attendTime != null ? _formatTime(attendTime) : '--:--';
+      final String className = t.classInfo?.name ?? '수업';
+      final TextStyle timeLabelStyle = TextStyle(
+        color: fabPalette.labelUnselected,
+        fontSize: 14 * scale,
+        fontWeight: FontWeight.bold,
+      );
+      final TextStyle nameStyle = _sideSheetStudentNameStyle(
+        textColor,
+        scale,
+        decoration:
+            underlineColor != null ? TextDecoration.underline : null,
+        decorationColor: underlineColor,
+        decorationThickness: underlineColor != null ? 2 : null,
+      );
+      final Widget name = _sideSheetStudentNameText(
+        t.student.name,
+        nameStyle,
+        textAlign: TextAlign.left,
+      );
+      final Widget metaRow = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            arrivalText,
+            style: timeLabelStyle,
+            textScaler: TextScaler.noScaling,
+          ),
+          SizedBox(width: 8 * scale),
+          Text(
+            className,
+            style: timeLabelStyle,
+            textScaler: TextScaler.noScaling,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      );
+      final rowPad = _sideSheetAttendedNameRowPadding(scale);
+      final Widget attendedLeftBody = attendedTwoLine
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(0, rowPad.top, rowPad.right, 0),
+                  child: name,
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    0,
+                    2 * scale,
+                    rowPad.right,
+                    rowPad.bottom,
+                  ),
+                  child: metaRow,
+                ),
+              ],
+            )
+          : Padding(
+              padding: rowPad,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  name,
+                  SizedBox(width: 14 * scale),
+                  Text(
+                    arrivalText,
+                    style: timeLabelStyle,
+                    textScaler: TextScaler.noScaling,
+                  ),
+                  SizedBox(width: 8 * scale),
+                  Text(
+                    className,
+                    style: timeLabelStyle,
+                    textScaler: TextScaler.noScaling,
+                  ),
+                ],
+              ),
+            );
+      final Widget homeworkChips = _buildHomeworkChipsReactive(t);
       // 출석(파란 네모) 카드: 가로 스크롤로 과제칩 표시(줄바꿈 없음)
       return Row(
         key: key,
         mainAxisSize: MainAxisSize.max,
+        crossAxisAlignment: attendedTwoLine
+            ? CrossAxisAlignment.start
+            : CrossAxisAlignment.center,
         children: [
-          FabStyleExpandIn(
+          Flexible(
+            fit: FlexFit.loose,
+            child: FabStyleExpandIn(
             animate: shouldExpand,
             onComplete: () {
               if (_attendedExpandAnimateIds.remove(expandId) && mounted) {
@@ -3169,20 +3359,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   margin: EdgeInsets.zero,
-                  padding: const EdgeInsets.fromLTRB(0, 9.5, 18, 9.5),
                   decoration: BoxDecoration(
                     // 등원 완료(출석) 카드: 테두리 제거
                     color: Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: attendedChild,
+                  child: attendedLeftBody,
                 ),
               ),
             ),
           ),
           ),
-          const SizedBox(width: 10),
-          Expanded(child: _buildHomeworkChipsReactive(t)),
+          ),
+          const SizedBox(width: _sideSheetAttendedToHomeworkGap),
+          Expanded(
+            child: attendedTwoLine
+                ? Padding(
+                    padding: EdgeInsets.only(top: rowPad.top),
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: homeworkChips,
+                    ),
+                  )
+                : Align(
+                    alignment: Alignment.centerLeft,
+                    child: homeworkChips,
+                  ),
+          ),
         ],
       );
     }
@@ -3203,6 +3406,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       onPressed: () => _recordWaitingArrival(t),
       child: FabStyleHighlightPill(
         border: waitingAccentBorder,
+        padding: _sideSheetWaitingCardPadding(scale),
         child: cardChild,
       ),
     );
@@ -3221,13 +3425,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
     final trialPalette =
         FabTabBarTokens.paletteFor(Theme.of(context).brightness);
-    final nameStyle = TextStyle(
-      color: status == 'attended'
-          ? trialPalette.labelSelected
-          : trialPalette.labelUnselected,
-      // 기존 출석카드와 크기 통일
-      fontSize: status == 'attended' ? 19 : 16,
-      fontWeight: FontWeight.w500,
+    final nameStyle = _sideSheetStudentNameStyle(
+      trialPalette.labelSelected,
+      scale,
     );
 
     if (status == 'attended') {
@@ -3277,10 +3477,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
+                    _sideSheetStudentNameText(
                       s.title,
-                      style: nameStyle,
-                      overflow: TextOverflow.ellipsis,
+                      nameStyle,
                     ),
                   ],
                 ),
@@ -3308,12 +3507,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           width: 1.5,
           strokeAlign: BorderSide.strokeAlignInside,
         ),
-        child: Text(
+        padding: _sideSheetWaitingCardPadding(scale),
+        child: _sideSheetStudentNameText(
           s.title,
-          style: FabTabBarTokens.fabMenuLabelStyle(trialPalette).copyWith(
-            fontWeight: FontWeight.w500,
-          ),
-          overflow: TextOverflow.ellipsis,
+          nameStyle,
         ),
       ),
     );
@@ -3348,7 +3545,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             final waiting = snapshot.connectionState == ConnectionState.waiting;
             // 첫 로드: 배정 응답이 오기 전에는 과제 칩을 그리지 않음(예약 과제가 한 프레임 현행으로 비침 방지).
             if (!loadedOnce && waiting && cachePeek == null) {
-              return const SizedBox(height: 32);
+              return SizedBox(height: _sideSheetHomeworkChipHeight);
             }
             final assignments = snapshot.connectionState == ConnectionState.done
                 ? (snapshot.data ?? const <HomeworkAssignmentDetail>[])
@@ -3408,9 +3605,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       physics: const BouncingScrollPhysics(),
-      child: Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Row(children: chips),
+      clipBehavior: Clip.none,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: chips,
       ),
     );
   }
@@ -3453,21 +3651,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           builder: (context) {
             final tick = _uiAnimController.value;
             final phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
-            const style = TextStyle(
-              color: Color(0xFFEAF2F2),
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              height: 1.1,
-            );
-            final painter = TextPainter(
-              text: TextSpan(text: chipTitle, style: style),
-              maxLines: 1,
-              textDirection: TextDirection.ltr,
-              textScaleFactor: MediaQuery.of(context).textScaleFactor,
-            )..layout(minWidth: 0, maxWidth: double.infinity);
-            const double leftPad = 14;
-            const double rightPad = 16;
-            final double width = painter.width + leftPad + rightPad + 2 + 6.0;
+            final style = _sideSheetHomeworkChipTextStyle();
+            const double leftPad = 12;
+            const double rightPad = 12;
             final Border border = switch (visualPhase) {
               2 => Border.all(color: statusAccent.withOpacity(0.9), width: 2),
               3 => Border.all(color: Colors.transparent, width: 2),
@@ -3483,7 +3669,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               _ => Border.all(color: Colors.white24, width: 1),
             };
             Widget chipInner = Container(
-              height: 40,
+              constraints: BoxConstraints(
+                minWidth: 70,
+                minHeight: _sideSheetHomeworkChipHeight,
+              ),
               padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
               alignment: Alignment.center,
               decoration: BoxDecoration(
@@ -3497,7 +3686,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 textAlign: TextAlign.center,
                 maxLines: 1,
                 softWrap: false,
-                overflow: TextOverflow.ellipsis,
+                textScaler: TextScaler.noScaling,
               ),
             );
             if (visualPhase == 3) {
@@ -3516,8 +3705,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
             return Tooltip(
               message: chipTitle,
-              child:
-                  SizedBox(width: width.clamp(70.0, 560.0), child: chipInner),
+              child: chipInner,
             );
           },
         ),
@@ -3553,86 +3741,42 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
 class _SideSheetDateHeader extends StatelessWidget {
   final DateTime date;
-  final VoidCallback onMoveToYesterday;
-  final VoidCallback onMoveToToday;
+  final double scale;
+  final VoidCallback onDateTap;
 
   const _SideSheetDateHeader({
     required this.date,
-    required this.onMoveToYesterday,
-    required this.onMoveToToday,
+    this.scale = 1.0,
+    required this.onDateTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
-    final palette = FabTabBarTokens.paletteFor(brightness);
     final panelStyle = PreviewAcademyPanelStyle.forBrightness(brightness);
-    final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle);
-    const arrowSize = FabTabBarTokens.previewAcademyMainTitleFontSize * 1.12;
-    final today = DateTime.now();
-    final todayDate = DateTime(today.year, today.month, today.day);
-    final isToday = date.year == todayDate.year &&
-        date.month == todayDate.month &&
-        date.day == todayDate.day;
-    final yesterday = todayDate.subtract(const Duration(days: 1));
-    final isYesterday = date.year == yesterday.year &&
-        date.month == yesterday.month &&
-        date.day == yesterday.day;
+    final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle)
+        .copyWith(
+      fontSize:
+          FabTabBarTokens.previewAcademyMainTitleFontSize * scale,
+    );
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Tooltip(
-          message: isYesterday ? '이미 어제 날짜를 보고 있어요' : '어제로 이동',
-          child: IconButton(
-            onPressed: isYesterday ? null : onMoveToYesterday,
-            icon: Icon(
-              Icons.chevron_left_rounded,
-              color: isYesterday
-                  ? palette.labelUnselected.withValues(alpha: 0.35)
-                  : palette.labelUnselected,
-              size: arrowSize,
-            ),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(
-              minWidth: navLeadingIconTapSize,
-              minHeight: navLeadingIconTapSize,
+    return Tooltip(
+      message: '날짜 선택',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onDateTap,
+          behavior: HitTestBehavior.opaque,
+          child: Text(
+            _getTodayDateString(date),
+            style: dateStyle,
+            textHeightBehavior: const TextHeightBehavior(
+              applyHeightToFirstAscent: false,
+              applyHeightToLastDescent: false,
             ),
           ),
         ),
-        const SizedBox(width: 6),
-        Text(
-          _getTodayDateString(date),
-          style: dateStyle,
-          textHeightBehavior: const TextHeightBehavior(
-            applyHeightToFirstAscent: false,
-            applyHeightToLastDescent: false,
-          ),
-        ),
-          if (!isToday) ...[
-            const SizedBox(width: 10),
-            TextButton(
-              onPressed: onMoveToToday,
-              style: TextButton.styleFrom(
-                foregroundColor: palette.labelUnselected,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text(
-                '오늘',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ],
+      ),
     );
   }
 }

@@ -972,6 +972,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   static const double _figureWidthEmDefault = 15.5;
   static const double _defaultStemSizePt = 11.0;
   static const double _defaultMaxHeightPt = 170.0;
+  // 그림 가로묶음(좌우 배치) 사이 간격(em) 기본값/범위. 서버 figure_layout.js 의 group.gap
+  // 클램프(0~5)와 일치. 0.5 는 기존 하드코딩 기본값.
+  static const double _figureGroupGapDefault = 0.5;
+  static const double _figureGroupGapMax = 4.0;
 
   static const List<String> _figurePositionOptions = <String>[
     'align-left',
@@ -1135,6 +1139,38 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return out;
   }
 
+  // 기존에 저장된 가로묶음 간격(em)을 읽는다. figure_layout.groups 의 첫 가로 그룹 gap 을
+  // 우선 보고, 없으면 figure_horizontal_pairs 의 gap, 그것도 없으면 기본값.
+  double _figureGroupGapOf(ProblemBankQuestion q) {
+    final layout = q.meta['figure_layout'];
+    if (layout is Map) {
+      final groups = layout['groups'];
+      if (groups is List) {
+        for (final g in groups) {
+          if (g is! Map) continue;
+          if ('${g['type'] ?? 'horizontal'}' != 'horizontal') continue;
+          final gap = g['gap'];
+          final parsed = gap is num ? gap.toDouble() : double.tryParse('$gap');
+          if (parsed != null && parsed.isFinite) {
+            return parsed.clamp(0.0, 5.0).toDouble();
+          }
+        }
+      }
+    }
+    final pairs = q.meta['figure_horizontal_pairs'];
+    if (pairs is List) {
+      for (final p in pairs) {
+        if (p is! Map) continue;
+        final gap = p['gap'];
+        final parsed = gap is num ? gap.toDouble() : double.tryParse('$gap');
+        if (parsed != null && parsed.isFinite) {
+          return parsed.clamp(0.0, 5.0).toDouble();
+        }
+      }
+    }
+    return _figureGroupGapDefault;
+  }
+
   double _figureRenderScaleOf(ProblemBankQuestion q) {
     final raw = q.meta['figure_render_scale'];
     final parsed = raw is num ? raw.toDouble() : double.tryParse('$raw');
@@ -1177,8 +1213,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     Map<String, double>? offsetXMap,
     Set<String>? horizontalPairKeys,
     List<List<String>>? horizontalGroups,
+    double? horizontalGap,
   }) {
     final updatedMeta = Map<String, dynamic>.from(q.meta);
+    final groupGap =
+        ((horizontalGap ?? _figureGroupGapDefault).clamp(0.0, 5.0) * 10)
+                .roundToDouble() /
+            10.0;
 
     final items = <Map<String, dynamic>>[];
     for (final e in widthEmMap.entries) {
@@ -1223,7 +1264,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         <String, dynamic>{
         'type': 'horizontal',
           'members': members,
-        'gap': 0.5,
+        'gap': groupGap,
         },
     ];
 
@@ -1254,8 +1295,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 3명 이상 그룹이 하나라도 있으면 필드를 지워 이전 버전 파이프라인의 오해석을 막는다.
     final allPairs = resolvedGroups.every((g) => g.length == 2);
     if (allPairs && resolvedGroups.isNotEmpty) {
-      updatedMeta['figure_horizontal_pairs'] = <Map<String, String>>[
-        for (final g in resolvedGroups) <String, String>{'a': g[0], 'b': g[1]},
+      updatedMeta['figure_horizontal_pairs'] = <Map<String, dynamic>>[
+        for (final g in resolvedGroups)
+          <String, dynamic>{'a': g[0], 'b': g[1], 'gap': groupGap},
       ];
     } else {
       updatedMeta.remove('figure_horizontal_pairs');
@@ -9464,12 +9506,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     Map<String, String>? positionMap,
     Map<String, double>? offsetXMap,
     List<List<String>>? horizontalGroups,
+    double? horizontalGap,
     Map<String, TableScaleValue>? tableScales,
     TableScaleValue? tableScaleDefault,
     Map<String, String>? tablePositionMap,
     Map<String, double>? tableOffsetXMap,
   }) {
     final updatedMeta = Map<String, dynamic>.from(q.meta);
+    final groupGap =
+        ((horizontalGap ?? _figureGroupGapDefault).clamp(0.0, 5.0) * 10)
+                .roundToDouble() /
+            10.0;
     // 표 스케일: draft 값이 명시적으로 제공됐으면 그 값을, 아니면 기존 meta 값 유지.
     if (tableScales != null) {
       final payload = <String, Map<String, dynamic>>{};
@@ -9565,7 +9612,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         <String, dynamic>{
         'type': 'horizontal',
           'members': members,
-        'gap': 0.5,
+        'gap': groupGap,
         },
     ];
     if (items.isNotEmpty) {
@@ -9594,8 +9641,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 레거시 pairs 는 "모든 그룹이 2명" 일 때만 같이 저장.
     final allPairs = resolvedGroups.every((g) => g.length == 2);
     if (allPairs && resolvedGroups.isNotEmpty) {
-      updatedMeta['figure_horizontal_pairs'] = <Map<String, String>>[
-        for (final g in resolvedGroups) <String, String>{'a': g[0], 'b': g[1]},
+      updatedMeta['figure_horizontal_pairs'] = <Map<String, dynamic>>[
+        for (final g in resolvedGroups)
+          <String, dynamic>{'a': g[0], 'b': g[1], 'gap': groupGap},
       ];
     } else {
       updatedMeta.remove('figure_horizontal_pairs');
@@ -9692,6 +9740,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         'idx:${i + 1}': _answerFigureWidthEm(q, i),
     };
     var imageChoiceRowsDraft = _imageChoiceRowsOf(q);
+    var figureGroupGap = _figureGroupGapOf(q);
     var refreshing = false;
     var dialogQ = q;
     final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
@@ -9712,6 +9761,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       positionMap: positionMap,
                       offsetXMap: offsetXMap,
                       horizontalGroups: selectedGroups,
+                      horizontalGap: figureGroupGap,
                       tableScales: hasTables ? tableScaleDrafts : null,
                       tableScaleDefault:
                           hasTables ? const TableScaleValue() : null,
@@ -9749,6 +9799,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 offsetXMap: Map<String, double>.from(offsetXMap),
                 horizontalGroups:
                     selectedGroups.map((g) => List<String>.from(g)).toList(),
+                horizontalGap: figureGroupGap,
               );
             }
 
@@ -9914,6 +9965,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         onSettingChanged: applyAndRefresh,
                         sizeOnlyKeys: figureSizeOnlyKeys,
                         allowGrouping: !isImageChoice,
+                        horizontalGap: figureGroupGap,
+                        onHorizontalGapChanged: (v) => figureGroupGap = v,
                       ),
                     if (hasFigures &&
                         (hasTables || hasAnswerFigures || isImageChoice))
@@ -10523,6 +10576,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       for (final group in figureData?.initialGroups ?? const <List<String>>[])
         List<String>.from(group),
     ];
+    var figureGroupGap = _figureGroupGapOf(commonQ);
     final initialTableScales = _readTableScaleMap(commonQ);
     final tableScaleDrafts = <String, TableScaleValue>{
       for (final t in tableEntries)
@@ -10590,6 +10644,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       positionMap: positionMap,
                       offsetXMap: offsetXMap,
                       horizontalGroups: selectedGroups,
+                      horizontalGap: figureGroupGap,
                       tableScales: hasTables ? tableScaleDrafts : null,
                       tableScaleDefault:
                           hasTables ? const TableScaleValue() : null,
@@ -10708,6 +10763,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                               figureData: figureData!,
                               setLocalState: setLocalState,
                               onSettingChanged: applyAndSave,
+                              horizontalGap: figureGroupGap,
+                              onHorizontalGapChanged: (v) => figureGroupGap = v,
                             ),
                           if (hasFigures && hasTables)
                             const SizedBox(height: 12),
@@ -10914,6 +10971,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required VoidCallback onSettingChanged,
     Set<String> sizeOnlyKeys = const <String>{},
     bool allowGrouping = true,
+    double horizontalGap = _figureGroupGapDefault,
+    ValueChanged<double>? onHorizontalGapChanged,
   }) {
     return Container(
                                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
@@ -10982,6 +11041,67 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                                         setLocalState: setLocalState,
               onSettingChanged: onSettingChanged,
             ),
+          if (allowGrouping &&
+              onHorizontalGapChanged != null &&
+              selectedGroups.any((g) => g.length >= 2)) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+              decoration: BoxDecoration(
+                color: _field,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.swap_horiz,
+                          color: _textSub, size: 14),
+                      const SizedBox(width: 6),
+                      const Text(
+                        '가로묶음 사이 간격',
+                        style: TextStyle(
+                          color: _textSub,
+                          fontSize: 12.1,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${horizontalGap.toStringAsFixed(1)}em',
+                        style: const TextStyle(
+                          color: _text,
+                          fontSize: 12.1,
+                          fontWeight: FontWeight.w700,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: horizontalGap.clamp(0.0, _figureGroupGapMax),
+                    min: 0.0,
+                    max: _figureGroupGapMax,
+                    divisions: 40,
+                    activeColor: _accent,
+                    inactiveColor: _border,
+                    onChanged: (v) {
+                      final next = (v * 10).roundToDouble() / 10.0;
+                      setLocalState(() => onHorizontalGapChanged(next));
+                    },
+                    onChangeEnd: (_) => onSettingChanged(),
+                  ),
+                  const Text(
+                    '좌우로 묶인 두 그림 사이의 간격을 조절합니다.',
+                    style: TextStyle(
+                        color: _textSub, fontSize: 10.8, height: 1.35),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -8589,11 +8589,42 @@ Future<void> _openHomeworkEditDialogForHome(
   HomeworkStore.instance.edit(studentId, updated);
 }
 
+const List<String> _homeworkTypeValues = <String>[
+  '프린트',
+  '교재',
+  '학습',
+  '테스트',
+];
+
+String _normalizeHomeworkTypeLabel(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed == '문제집') return '교재';
+  if (_homeworkTypeValues.contains(trimmed)) return trimmed;
+  return '프린트';
+}
+
+Color _colorForHomeworkTypeLabel(String type) {
+  switch (_normalizeHomeworkTypeLabel(type)) {
+    case '프린트':
+      return Colors.blue;
+    case '교재':
+      return Colors.green;
+    case '학습':
+      return Colors.purple;
+    case '테스트':
+      return Colors.red;
+    default:
+      return Colors.blue;
+  }
+}
+
 HomeworkItem _copyHomeworkItemForInlineEdit(
   HomeworkItem source, {
   String? page,
   String? memo,
   String? content,
+  String? type,
+  Color? color,
 }) {
   return HomeworkItem(
     id: source.id,
@@ -8601,10 +8632,10 @@ HomeworkItem _copyHomeworkItemForInlineEdit(
     learningTrackCode: source.learningTrackCode,
     title: source.title,
     body: source.body,
-    color: source.color,
+    color: color ?? source.color,
     flowId: source.flowId,
     testOriginFlowId: source.testOriginFlowId,
-    type: source.type,
+    type: type ?? source.type,
     page: page ?? source.page,
     count: source.count,
     timeLimitMinutes: source.timeLimitMinutes,
@@ -8758,6 +8789,116 @@ Future<void> _showGroupChildMemoEditDialog({
   HomeworkStore.instance.edit(studentId, updated);
   if (!context.mounted) return;
   _showHomeworkChipSnackBar(context, '메모를 수정했어요.');
+}
+
+Future<void> _showHomeworkTypeEditDialog({
+  required BuildContext context,
+  required String studentId,
+  required List<HomeworkItem> targets,
+}) async {
+  final liveTargets = targets
+      .map((item) => HomeworkStore.instance.getById(studentId, item.id) ?? item)
+      .where((item) => item.status != HomeworkStatus.completed)
+      .toList(growable: false);
+  if (liveTargets.isEmpty) return;
+
+  final normalizedTypes = liveTargets
+      .map((item) => _normalizeHomeworkTypeLabel(item.type ?? ''))
+      .toSet();
+  String selectedType = normalizedTypes.length == 1
+      ? normalizedTypes.first
+      : _normalizeHomeworkTypeLabel(liveTargets.first.type ?? '');
+
+  final saved = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) {
+      return StatefulBuilder(
+        builder: (ctx, setState) {
+          return AlertDialog(
+            backgroundColor: kDlgBg,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            title: const Text(
+              '과제 양식 수정',
+              style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+            ),
+            content: SizedBox(
+              width: 360,
+              child: DropdownButtonFormField<String>(
+                value: _homeworkTypeValues.contains(selectedType)
+                    ? selectedType
+                    : '프린트',
+                items: [
+                  for (final type in _homeworkTypeValues)
+                    DropdownMenuItem<String>(
+                      value: type,
+                      child: Text(type),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => selectedType = value);
+                },
+                decoration: InputDecoration(
+                  labelText: '과제 양식',
+                  labelStyle: const TextStyle(color: kDlgTextSub),
+                  filled: true,
+                  fillColor: kDlgFieldBg,
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: kDlgBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                  ),
+                ),
+                dropdownColor: kDlgPanelBg,
+                style: const TextStyle(
+                  color: kDlgText,
+                  fontWeight: FontWeight.w600,
+                ),
+                iconEnabledColor: kDlgTextSub,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                child: const Text('저장'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+  if (saved != true || !context.mounted) return;
+
+  final nextType = _normalizeHomeworkTypeLabel(selectedType);
+  final nextColor = _colorForHomeworkTypeLabel(nextType);
+  for (final item in liveTargets) {
+    HomeworkStore.instance.edit(
+      studentId,
+      _copyHomeworkItemForInlineEdit(
+        item,
+        type: nextType,
+        color: nextColor,
+      ),
+    );
+  }
+  if (!context.mounted) return;
+  _showHomeworkChipSnackBar(
+    context,
+    liveTargets.length > 1
+        ? '하위 ${liveTargets.length}개 과제의 양식을 수정했어요.'
+        : '과제 양식을 수정했어요.',
+  );
 }
 
 Future<void> _showAddChildHomeworkDialog({
@@ -10703,6 +10844,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                       );
                     }
                   : null,
+          onTypeTap: printPickMode
+              ? null
+              : () {
+                  final targets = children.isEmpty ? [summary] : children;
+                  unawaited(
+                    _showHomeworkTypeEditDialog(
+                      context: context,
+                      studentId: studentId,
+                      targets: targets,
+                    ),
+                  );
+                },
           onGroupChildDropBefore: (dragged, target) async {
             await _moveGroupChildByDrag(
               context: context,
@@ -13904,6 +14057,7 @@ Widget _buildHomeworkChipVisual(
   bool isPendingConfirm = false,
   bool isCompleteCheckbox = false,
   VoidCallback? onInfoTap,
+  VoidCallback? onTypeTap,
   VoidCallback? onGroupTitleTap,
   void Function(HomeworkItem child)? onGroupChildPageTap,
   void Function(HomeworkItem child)? onGroupChildMemoTap,
@@ -14306,18 +14460,34 @@ Widget _buildHomeworkChipVisual(
     ),
   );
 
+  Widget buildTypeLabelCell() {
+    final style = line4Style.copyWith(
+      decoration: onTypeTap != null ? TextDecoration.underline : null,
+      decorationColor: onTypeTap != null ? line4Style.color : null,
+    );
+    final label = Text(
+      typeText,
+      style: style,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+    if (onTypeTap == null) {
+      return Expanded(child: label);
+    }
+    return Expanded(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTypeTap,
+        child: label,
+      ),
+    );
+  }
+
   Widget collapsedRow4 = ConstrainedBox(
     constraints: BoxConstraints(maxWidth: maxRowW),
     child: Row(
       children: [
-        Expanded(
-          child: Text(
-            typeText,
-            style: line4Style,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
+        buildTypeLabelCell(),
         const SizedBox(width: 10),
         Text(
           assignmentCodeText,
@@ -14616,14 +14786,7 @@ Widget _buildHomeworkChipVisual(
         constraints: BoxConstraints(maxWidth: maxRowW),
         child: Row(
           children: [
-            Expanded(
-              child: Text(
-                typeText,
-                style: line4Style,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+            buildTypeLabelCell(),
             const SizedBox(width: 10),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 220),

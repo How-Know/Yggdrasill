@@ -10,6 +10,9 @@ const double _navIconStrokeWidth = 2.64;
 const double _navDestinationVerticalPadding = 12.1;
 const double _navHighlightWidth = 67.8;
 const double _navHighlightHeight = 38.7;
+/// Material [NavigationRail] 기본 폭 — 오버레이·고정 배치 계산용.
+const double navRailMinWidth = 84.0;
+
 /// Material [NavigationRail] leading 위 고정 [SizedBox] (소스 `_verticalSpacer`).
 const double navRailTopSpacer = 8.0;
 
@@ -145,7 +148,8 @@ class CustomNavigationRail extends StatelessWidget {
     final Color highlightColor = palette.highlight;
     final Color dividerColor =
         isDark ? Colors.white24 : Colors.black26;
-    final double railWidth = NavigationRailTheme.of(context).minWidth ?? 84.0;
+    final double railWidth =
+        NavigationRailTheme.of(context).minWidth ?? navRailMinWidth;
     return Column(
       children: [
         Expanded(

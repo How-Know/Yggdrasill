@@ -2274,8 +2274,8 @@ class _GlobalMemoFloatingBannersState
       builder: (context, hidden, _) {
         if (hidden) return const SizedBox.shrink();
         return Positioned(
-          right: 30,
-          bottom: 100,
+          right: FabTabBarTokens.fabBarRightInset,
+          bottom: FabTabBarTokens.fabMemoFloatingBottomInset,
           child: ValueListenableBuilder<List<Memo>>(
             valueListenable: DataManager.instance.memosNotifier,
             builder: (context, memos, _) {
