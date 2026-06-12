@@ -2420,23 +2420,33 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       backgroundColor: context.yggSurfaceBase,
       body: Stack(
         children: [
-          Column(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              FabStyleScreenMainTitle(
-                title: _resourceTabLabels[_customTabIndex],
-                bottomSpacing: 12,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 12, 12, 12),
+                child: SizedBox(
+                  width: 260,
+                  child: _buildFolderTreeDecoratedPanel(),
+                ),
               ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Builder(
-                          builder: (context) {
+              Expanded(
+                child: Column(
+                  children: [
+                    FabStyleScreenMainTitle(
+                      title: _resourceTabLabels[_customTabIndex],
+                      bottomSpacing: 12,
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Builder(
+                                builder: (context) {
                             String desc = '';
-                            String folderName = '';
                             final addLabel = _currentCategory == 'textbook'
                                 ? '책 추가'
                                 : '파일 추가';
@@ -2445,13 +2455,11 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                 : '파일 이름';
                             final isPrintMode = _printPickMode;
                             if (_selectedFolderIdForTree == '__FAVORITES__') {
-                              folderName = '즐겨찾기';
                               desc = '';
                             } else {
                               final idx = _folders.indexWhere(
                                   (x) => x.id == _selectedFolderIdForTree);
                               if (idx != -1) {
-                                folderName = _folders[idx].name;
                                 desc = _folders[idx].description;
                               }
                             }
@@ -2459,14 +2467,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                               padding: const EdgeInsets.only(left: 4),
                               child: Row(
                                 children: [
-                                  Text(
-                                    folderName,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 26,
-                                        fontWeight: FontWeight.w800),
-                                  ),
-                                  const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
                                       desc,
@@ -2642,30 +2642,33 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                 ],
                               ),
                             );
-                          },
+                                },
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    const Divider(height: 1, color: Colors.white12),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(
+                          bottom:
+                              FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+                        ),
+                        child: IndexedStack(
+                          index: _customTabIndex,
+                          children: [
+                            _buildTextbooksTreeLayout(0),
+                            _buildTextbooksTreeLayout(1),
+                            _buildTextbooksTreeLayout(2),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Divider(height: 1, color: Colors.white12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(
-                    bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
-                  ),
-                  child: IndexedStack(
-                    index: _customTabIndex,
-                    children: [
-                      _buildTextbooksTreeLayout(0),
-                      _buildTextbooksTreeLayout(1),
-                      _buildTextbooksTreeLayout(2),
-                    ],
-                  ),
-                ),
-              ),
-              // 하단 플로팅 영역 확보 제거: 버튼을 컨테이너 내부로 재배치
             ],
           ),
           if (_printPickMode)
@@ -2889,36 +2892,39 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     }
   }
 
-  Widget _buildTextbooksTreeLayout(int tabSlot) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          width: 260,
+  Widget _buildFolderTreeDecoratedPanel() {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final radius = FabTabBarTokens.previewAcademyGroupedCardRadius;
+
+    return SizedBox.expand(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: palette.boxShadows,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
           child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF232323),
-              border: Border(
-                  right: BorderSide(
-                      color: Colors.white.withOpacity(0.06), width: 1)),
+            decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
+              panelStyle,
+              brightness: brightness,
             ),
-            child: Column(children: [
-              Expanded(child: _buildFolderTreePanel()),
-              // 하단 버튼 영역이 겹치지 않도록 추가 여백 없이 스크롤 영역만 확장
-            ]),
+            child: _buildFolderTreePanel(),
           ),
         ),
-        Expanded(
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 15, left: 0),
-                  child: _buildFolderContentGrid(tabSlot),
-                ),
-              ),
-              // [RES] bottom +파일 버튼 제거 (헤더 우측 버튼으로 대체)
-            ],
+      ),
+    );
+  }
+
+  Widget _buildTextbooksTreeLayout(int tabSlot) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 15, left: 0),
+            child: _buildFolderContentGrid(tabSlot),
           ),
         ),
       ],

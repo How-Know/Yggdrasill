@@ -5149,9 +5149,15 @@ function renderOneQuestion(question, {
     if (seg.type === 'text') {
       // 세트형 [소문항N] 마커가 stem 에 이미 경계를 잡아놓은 경우에는
       // 문장 중간 "(N)" splitAtSubQuestionMarkers 중복 분할을 스킵 → 본문 인용 오분할 방지.
-      const hasSubQMarker = seg.lines.some((l) => SUBQ_MARKER_LINE_RE.test(String(l)));
+      const subQMarkerLines = seg.lines.filter((l) => SUBQ_MARKER_LINE_RE.test(String(l)));
+      const hasSubQMarker = subQMarkerLines.length > 0;
       const nextSeg = segments[sIdx + 1];
-      if (!hasSubQMarker && nextSeg?.type === 'figure') {
+      // inline-left/right 그림 어울림(wrap):
+      //   세트형 [소문항N] 마커가 들어 있어도, 이 세그먼트가 "단일 소문항"이면
+      //   (앞 소문항/표가 별도 세그먼트로 끊겨 있는 경우) 그 소문항 본문과 그림을
+      //   wrap 하도록 허용한다. (예: 마지막 하위문항 + 오른쪽 좌표평면 어울림)
+      const figureWrapAllowed = subQMarkerLines.length <= 1;
+      if (figureWrapAllowed && nextSeg?.type === 'figure') {
         const nextFigText = nextSeg.lines?.[0] || '[그림]';
         const nextFigIdx = figMarkerCountUpTo(sIdx + 1);
         const nextLayout = layoutForIndex(nextFigIdx) || {};
@@ -5160,6 +5166,13 @@ function renderOneQuestion(question, {
           (nextPosition === 'inline-left' || nextPosition === 'inline-right')
           && figureSegWillEmit(sIdx + 1)
         ) {
+          // 단일 [소문항N] 세그먼트면, 앞 하위문항과의 세로 간격을 확보하고
+          //   소문항 컨텍스트(currentSubQ)를 갱신한 뒤 wrap 한다.
+          if (hasSubQMarker) {
+            if (currentSubQ > 0) parts.push('\\par\\vspace{0.50\\baselineskip}');
+            const subqM = String(subQMarkerLines[0]).match(/\[\s*소문항\s*(\d+)\s*\]/);
+            if (subqM) currentSubQ = Number(subqM[1]);
+          }
           // 본문(seg)을 먼저 렌더해 그 안의 inline-text 그림 마커가 wrap 그림보다
           // 먼저 figIdx 슬롯을 소비하도록 한다. (읽는 순서: 본문 마커 → wrap 그림)
           const wrapText = renderTextSegmentInlineLatex(seg);

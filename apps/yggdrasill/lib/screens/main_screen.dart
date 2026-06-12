@@ -88,8 +88,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   static const double _sideSheetAttendedCardSpacing = 16.0;
   /// 등원예정 리스트 — 같은 시간대 내 카드 간격 (_cardSpacing + 4)
   static const double _sideSheetWaitingCardSpacing = 12.0;
-  /// 등원학생 행 — 수업명(왼쪽 블록) ↔ 과제칩 사이 여백
+  /// 등원학생 행 — 왼쪽 블록 ↔ 과제칩 사이 여백 (1줄 모드, 절대 px)
   static const double _sideSheetAttendedToHomeworkGap = 22.0;
+  /// 2줄 모드 — 이름 텍스트 끝 ↔ 과제칩 (절대 px, scale 미적용)
+  static const double _sideSheetAttendedTwoLineNameToHomeworkGap = 56.0;
+  /// 사이드시트 과제칩 내부 좌·우 여백 (최대 스케일 기준)
+  static const double _sideSheetHomeworkChipHorizontalPad = 12.0;
+  /// 사이드시트 과제칩·등원예정 이름 글자 크기 하한 (등원학생 이름 18px은 고정)
+  static const double _sideSheetHomeworkChipMinFontSize = 16.0;
+  static const double _sideSheetHomeworkChipMinWidth = 70.0;
+  static const double _sideSheetHomeworkChipRadius = 6.0;
   /// 27" 4K 기준 화면 너비가 이 비율 이하로 줄면 등원학생 2줄 표시
   static const double _sideSheetAttendedTwoLineWidthRatio = 0.75;
   /// 사이드시트 상단 액션 버튼 크기 추가 배율
@@ -1440,19 +1448,62 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
-  TextStyle _sideSheetHomeworkChipTextStyle() {
+  /// 등원예정 이름·과제칩 공용 — sideSheetScale에 따라 18→16까지 축소
+  double _sideSheetScalableNameFontSize(double scale) {
+    return (_sideSheetStudentNameFontSize * scale).clamp(
+      _sideSheetHomeworkChipMinFontSize,
+      _sideSheetStudentNameFontSize,
+    );
+  }
+
+  double _sideSheetHomeworkChipFontSize(double scale) =>
+      _sideSheetScalableNameFontSize(scale);
+
+  TextStyle _sideSheetHomeworkChipTextStyle(double scale) {
     return TextStyle(
       color: const Color(0xFFEAF2F2),
-      fontSize: _sideSheetStudentNameFontSize,
+      fontSize: _sideSheetHomeworkChipFontSize(scale),
       fontWeight: FontWeight.w500,
-      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      fontFamily: FabTabBarTokens.previewAcademyValueFontFamily,
       height: 1.0,
       leadingDistribution: TextLeadingDistribution.even,
     );
   }
 
-  double get _sideSheetHomeworkChipHeight =>
-      _sideSheetStudentNameFontSize + 10.0;
+  /// 2줄: 칩 전용 축소 글자 기준 블록 높이 — 1줄: 행 높이
+  double _sideSheetHomeworkChipHeight(
+    double scale, {
+    required bool attendedTwoLine,
+  }) {
+    final rowPad = _sideSheetAttendedNameRowPadding(scale);
+    final chipFontSize = _sideSheetHomeworkChipFontSize(scale);
+    const metaFontSize = 14.0;
+    if (attendedTwoLine) {
+      return rowPad.top +
+          chipFontSize +
+          2 * scale +
+          metaFontSize * scale +
+          rowPad.bottom;
+    }
+    return rowPad.top + chipFontSize + rowPad.bottom;
+  }
+
+  EdgeInsets _sideSheetHomeworkChipPadding(
+    double scale, {
+    required bool attendedTwoLine,
+  }) {
+    final rowPad = _sideSheetAttendedNameRowPadding(scale);
+    final horizontalPad = _sideSheetHomeworkChipHorizontalPad * scale;
+    if (attendedTwoLine) {
+      return EdgeInsets.symmetric(horizontal: horizontalPad);
+    }
+    return EdgeInsets.fromLTRB(
+      horizontalPad,
+      rowPad.top,
+      horizontalPad,
+      rowPad.bottom,
+    );
+  }
 
   Widget _sideSheetStudentNameText(
     String name,
@@ -2935,16 +2986,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               );
             },
           ),
-          AnimatedBuilder(
-            animation: _sideSheetAnimation,
-            child: Container(width: 1, color: const Color(0xFF4A4A4A)),
-            builder: (context, child) {
-              if (_sideSheetAnimation.value == 0) {
-                return const SizedBox.shrink();
-              }
-              return child!;
-            },
-          ),
           Expanded(child: _buildContent()),
         ],
       ),
@@ -3086,6 +3127,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           _sideSheetStudentNameStyle(
             waitingPalette.labelSelected,
             scale,
+            fontSize: _sideSheetScalableNameFontSize(scale),
           ),
         );
     }
@@ -3133,23 +3175,45 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ],
       );
       final rowPad = _sideSheetAttendedNameRowPadding(scale);
-      final Widget attendedLeftBody = attendedTwoLine
-          ? Column(
+      final Widget homeworkChips = _buildHomeworkChipsReactive(
+        t,
+        scale: scale,
+        attendedTwoLine: attendedTwoLine,
+      );
+      final Widget attendedCardContent = attendedTwoLine
+          ? Row(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
-                Padding(
-                  padding: EdgeInsets.fromLTRB(0, rowPad.top, rowPad.right, 0),
-                  child: name,
-                ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    0,
-                    2 * scale,
-                    rowPad.right,
-                    rowPad.bottom,
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.only(
+                          top: rowPad.top,
+                          right: _sideSheetAttendedTwoLineNameToHomeworkGap,
+                        ),
+                        child: name,
+                      ),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          0,
+                          2 * scale,
+                          rowPad.right,
+                          rowPad.bottom,
+                        ),
+                        child: metaRow,
+                      ),
+                    ],
                   ),
-                  child: metaRow,
+                ),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: homeworkChips,
+                  ),
                 ),
               ],
             )
@@ -3175,18 +3239,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 ],
               ),
             );
-      final Widget homeworkChips = _buildHomeworkChipsReactive(t);
-      // 출석(파란 네모) 카드: 가로 스크롤로 과제칩 표시(줄바꿈 없음)
-      return Row(
-        key: key,
-        mainAxisSize: MainAxisSize.max,
-        crossAxisAlignment: attendedTwoLine
-            ? CrossAxisAlignment.start
-            : CrossAxisAlignment.center,
-        children: [
-          Flexible(
-            fit: FlexFit.loose,
-            child: FabStyleExpandIn(
+      final Widget attendedDismissible = FabStyleExpandIn(
             animate: shouldExpand,
             onComplete: () {
               if (_attendedExpandAnimateIds.remove(expandId) && mounted) {
@@ -3364,27 +3417,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     color: Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: attendedLeftBody,
+                  child: attendedCardContent,
                 ),
               ),
             ),
           ),
-          ),
+      );
+
+      if (attendedTwoLine) {
+        return KeyedSubtree(key: key, child: attendedDismissible);
+      }
+
+      // 출석(파란 네모) 카드: 가로 스크롤로 과제칩 표시(줄바꿈 없음)
+      return Row(
+        key: key,
+        mainAxisSize: MainAxisSize.max,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Flexible(
+            fit: FlexFit.loose,
+            child: attendedDismissible,
           ),
           const SizedBox(width: _sideSheetAttendedToHomeworkGap),
           Expanded(
-            child: attendedTwoLine
-                ? Padding(
-                    padding: EdgeInsets.only(top: rowPad.top),
-                    child: Align(
-                      alignment: Alignment.topLeft,
-                      child: homeworkChips,
-                    ),
-                  )
-                : Align(
-                    alignment: Alignment.centerLeft,
-                    child: homeworkChips,
-                  ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: homeworkChips,
+            ),
           ),
         ],
       );
@@ -3428,6 +3487,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final nameStyle = _sideSheetStudentNameStyle(
       trialPalette.labelSelected,
       scale,
+      fontSize: status == 'waiting'
+          ? _sideSheetScalableNameFontSize(scale)
+          : null,
     );
 
     if (status == 'attended') {
@@ -3516,7 +3578,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildHomeworkChipsReactive(_AttendanceTarget t) {
+  Widget _buildHomeworkChipsReactive(
+    _AttendanceTarget t, {
+    required double scale,
+    required bool attendedTwoLine,
+  }) {
     return ValueListenableBuilder<int>(
       valueListenable: HomeworkAssignmentStore.instance.revision,
       builder: (context, assignRev, _) {
@@ -3545,7 +3611,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             final waiting = snapshot.connectionState == ConnectionState.waiting;
             // 첫 로드: 배정 응답이 오기 전에는 과제 칩을 그리지 않음(예약 과제가 한 프레임 현행으로 비침 방지).
             if (!loadedOnce && waiting && cachePeek == null) {
-              return SizedBox(height: _sideSheetHomeworkChipHeight);
+              return SizedBox(
+                height: _sideSheetHomeworkChipHeight(
+                  scale,
+                  attendedTwoLine: attendedTwoLine,
+                ),
+              );
             }
             final assignments = snapshot.connectionState == ConnectionState.done
                 ? (snapshot.data ?? const <HomeworkAssignmentDetail>[])
@@ -3573,6 +3644,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   builder: (context, _) {
                     return _buildHomeworkChipsScroller(
                       t,
+                      scale: scale,
+                      attendedTwoLine: attendedTwoLine,
                       hiddenItemIds: hiddenAssignedItemIds,
                       groupTitleById: groupTitleById,
                     );
@@ -3594,11 +3667,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 가로 스크롤러: 칩이 넘치면 스크롤, 줄바꿈 금지
   Widget _buildHomeworkChipsScroller(
     _AttendanceTarget t, {
+    required double scale,
+    required bool attendedTwoLine,
     Set<String> hiddenItemIds = const <String>{},
     Map<String, String> groupTitleById = const <String, String>{},
   }) {
     final chips = _buildHomeworkChipsOnce(
       t,
+      scale: scale,
+      attendedTwoLine: attendedTwoLine,
       hiddenItemIds: hiddenItemIds,
       groupTitleById: groupTitleById,
     );
@@ -3631,6 +3708,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   List<Widget> _buildHomeworkChipsOnce(
     _AttendanceTarget t, {
+    required double scale,
+    required bool attendedTwoLine,
     Set<String> hiddenItemIds = const <String>{},
     Map<String, String> groupTitleById = const <String, String>{},
   }) {
@@ -3651,12 +3730,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           builder: (context) {
             final tick = _uiAnimController.value;
             final phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
-            final style = _sideSheetHomeworkChipTextStyle();
-            const double leftPad = 12;
-            const double rightPad = 12;
+            final chipFontSize = _sideSheetHomeworkChipFontSize(scale);
+            final chipRadius = _sideSheetHomeworkChipRadius * scale;
+            final style = _sideSheetHomeworkChipTextStyle(scale);
+            final chipPad = _sideSheetHomeworkChipPadding(
+              scale,
+              attendedTwoLine: attendedTwoLine,
+            );
+            final chipHeight = _sideSheetHomeworkChipHeight(
+              scale,
+              attendedTwoLine: attendedTwoLine,
+            );
+            final double borderWidth = visualPhase == 1 ? 1.0 * scale : 2.0 * scale;
             final Border border = switch (visualPhase) {
-              2 => Border.all(color: statusAccent.withOpacity(0.9), width: 2),
-              3 => Border.all(color: Colors.transparent, width: 2),
+              2 => Border.all(
+                  color: statusAccent.withOpacity(0.9),
+                  width: borderWidth,
+                ),
+              3 => Border.all(color: Colors.transparent, width: borderWidth),
               4 => Border.all(
                   color: Color.lerp(
                         Colors.white24,
@@ -3664,20 +3755,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         phase4Pulse,
                       ) ??
                       Colors.white24,
-                  width: 2,
+                  width: borderWidth,
                 ),
-              _ => Border.all(color: Colors.white24, width: 1),
+              _ => Border.all(color: Colors.white24, width: borderWidth),
             };
             Widget chipInner = Container(
               constraints: BoxConstraints(
-                minWidth: 70,
-                minHeight: _sideSheetHomeworkChipHeight,
+                minWidth: _sideSheetHomeworkChipMinWidth * scale,
+                minHeight: chipHeight,
               ),
-              padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
-              alignment: Alignment.center,
+              padding: chipPad,
+              alignment: attendedTwoLine
+                  ? Alignment.center
+                  : Alignment.centerLeft,
               decoration: BoxDecoration(
                 color: Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(chipRadius),
                 border: border,
               ),
               child: Text(
@@ -3687,6 +3780,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 maxLines: 1,
                 softWrap: false,
                 textScaler: TextScaler.noScaling,
+                strutStyle: StrutStyle(
+                  fontSize: chipFontSize,
+                  height: 1.0,
+                  fontWeight: style.fontWeight,
+                  fontFamily: style.fontFamily,
+                  leadingDistribution: TextLeadingDistribution.even,
+                  forceStrutHeight: true,
+                ),
+                textHeightBehavior: const TextHeightBehavior(
+                  applyHeightToFirstAscent: false,
+                  applyHeightToLastDescent: false,
+                ),
               ),
             );
             if (visualPhase == 3) {
@@ -3695,8 +3800,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   foregroundPainter: _RotatingBorderPainter(
                     baseColor: statusAccent,
                     tick: tick,
-                    strokeWidth: 2.0,
-                    cornerRadius: 6.0,
+                    strokeWidth: 2.0 * scale,
+                    cornerRadius: chipRadius,
                   ),
                   child: chipInner,
                 ),

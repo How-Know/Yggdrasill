@@ -4915,6 +4915,26 @@ function renderOneQuestion(question, {
     return `\\par\\noindent${figBox}\\hspace{${gap}}${textBox}\\par\n`;
   }
 
+  // 소문항 본문 + 좌/우 그림 어울림 전용 렌더.
+  //   wrapfigure 는 parshape 를 써서 소문항의 \hangindent(번호 정렬·둘째 줄 들여쓰기)
+  //   와 충돌하므로, 소문항 wrap 은 좌우 minipage 로 배치한다. 두 박스 폭 합을
+  //   \linewidth 보다 작게 잡고 \hfill 로 그림을 바깥쪽 끝에 붙여, 정확히 \linewidth
+  //   일 때 둘째 박스가 다음 줄로 밀리는 현상을 막는다.
+  function renderSubQuestionInlineFigureLatex(i, preRenderedText, position) {
+    const expr = figureIncludeExpr(i);
+    if (!expr) return '';
+    const text = String(preRenderedText || '').trim();
+    if (!text) return renderFigureLatex(i);
+    const figWidth = expr.widthExpr;
+    const textWidth = `\\dimexpr\\linewidth-${figWidth}-1.20em\\relax`;
+    const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
+    const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${expr.include}\\end{minipage}`;
+    if (position === 'inline-left') {
+      return `\\par\\noindent ${figBox}\\hfill ${textBox}\\par\n`;
+    }
+    return `\\par\\noindent ${textBox}\\hfill ${figBox}\\par\n`;
+  }
+
   function renderInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
     if (useLegacyInlineWrapMode()) {
       return renderLegacyInlineFigureWithTextLatex(i, textSeg, position, preRenderedText);
@@ -5428,9 +5448,17 @@ function renderOneQuestion(question, {
     if (seg.type === 'text') {
       // 세트형 [소문항N] 마커가 stem 에 이미 경계를 잡아놓은 경우에는
       // 문장 중간 "(N)" splitAtSubQuestionMarkers 중복 분할을 스킵 → 본문 인용 오분할 방지.
-      const hasSubQMarker = seg.lines.some((l) => SUBQ_MARKER_LINE_RE.test(String(l)));
+      const subQMarkerLines = seg.lines.filter((l) => SUBQ_MARKER_LINE_RE.test(String(l)));
+      const hasSubQMarker = subQMarkerLines.length > 0;
       const nextSeg = segments[sIdx + 1];
-      if (!hasSubQMarker && nextSeg?.type === 'figure') {
+      // inline-left/right 그림 어울림(wrap):
+      //   본문 다음에 오는 그림을 본문과 좌우로 어울리게 배치한다.
+      //   세트형 [소문항N] 마커가 들어 있어도, 이 세그먼트가 "단일 소문항"이면
+      //   (앞 소문항/표가 별도 세그먼트로 끊겨 있는 경우) 그 소문항 본문과 그림을
+      //   wrap 하도록 허용한다. (예: 마지막 하위문항 + 오른쪽 좌표평면 어울림)
+      //   소문항이 2개 이상 섞인 세그먼트는 줄간격 처리가 달라 wrap 대상에서 제외한다.
+      const figureWrapAllowed = subQMarkerLines.length <= 1;
+      if (figureWrapAllowed && nextSeg?.type === 'figure') {
         const nextFigText = nextSeg.lines?.[0] || '[그림]';
         const nextFigIdx = figMarkerCountUpTo(sIdx + 1);
         const nextLayout = layoutForIndex(nextFigIdx) || {};
@@ -5439,18 +5467,28 @@ function renderOneQuestion(question, {
           (nextPosition === 'inline-left' || nextPosition === 'inline-right')
           && figureSegWillEmit(sIdx + 1)
         ) {
+          // 단일 [소문항N] 세그먼트면, 앞 하위문항과의 세로 간격을 먼저 확보하고
+          //   소문항 컨텍스트(currentSubQ/subQEmittedAny)를 갱신한 뒤 wrap 한다.
+          if (hasSubQMarker) {
+            if (subQEmittedAny) {
+              parts.push('\\par\\vspace{3.00\\baselineskip}');
+            }
+            const subqM = String(subQMarkerLines[0]).match(/\[\s*소문항\s*(\d+)\s*\]/);
+            if (subqM) currentSubQ = Number(subqM[1]);
+            subQEmittedAny = true;
+          }
           // 본문(seg)을 먼저 렌더해 그 안의 inline-text 그림 마커가 wrap 그림보다
           // 먼저 figIdx 슬롯을 소비하도록 한다. (읽는 순서: 본문 마커 → wrap 그림)
           const wrapText = renderTextSegmentInlineLatex(seg);
           const i = resolveFigureIndexForSegment(sIdx + 1, nextFigText);
           if (!figIdxConsumedByGroup.has(i)) {
             emittedFigIdxs.add(i);
-            const renderedInline = renderInlineFigureWithTextLatex(
-              i,
-              seg,
-              nextPosition,
-              wrapText,
-            );
+            // 소문항 본문은 `\hangindent`(번호 좌측 정렬 + 둘째 줄 들여쓰기) 기반인데
+            //   wrapfigure 의 parshape 와 충돌해 둘째 줄 들여쓰기가 깨진다.
+            //   소문항 wrap 은 좌우 minipage 배치(legacy)로 렌더해 들여쓰기 규칙을 보존한다.
+            const renderedInline = hasSubQMarker
+              ? renderSubQuestionInlineFigureLatex(i, wrapText, nextPosition)
+              : renderInlineFigureWithTextLatex(i, seg, nextPosition, wrapText);
             if (renderedInline && renderedInline.trim()) {
               parts.push(renderedInline);
               emittedStemTextLineAny = true;
