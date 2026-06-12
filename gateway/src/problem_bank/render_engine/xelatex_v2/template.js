@@ -1083,6 +1083,13 @@ function normalizeBlankParenthesisSpaceMarkers(input) {
 
 function normalizeBlankBoxNotation(input) {
   return String(input || '')
+    // 증명형 문항의 빈칸 박스가 추출 단계에서 `\text{box{(가)}}` 처럼 `\text{}` 로
+    //   덧싸여 들어오는 경우가 있다. 이대로 두면 protectLatexTextBlocks 가 `\text{}`
+    //   블록을 통째로 보호→원복하여 내부 box{} 마커가 \boxed 로 치환될 기회를 잃고,
+    //   결국 math mode 에서 "box(가)" 리터럴로 렌더된다. box{} 변환부(normalizeMathSegment)
+    //   가 이미 한글 라벨을 \text{} 로 감싸므로, 군더더기 \text{} 래퍼만 벗겨 box{} 를
+    //   노출시킨다. (\text{} 내용 전체가 box{} 마커 하나일 때만 안전하게 적용.)
+    .replace(/\\text\s*\{\s*(box\s*\{[^{}]*\})\s*\}/gi, '$1')
     .replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ')
     .replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, 'box{~~}')
     .replace(/\bBOX\b/g, 'box{~~}')
@@ -3537,6 +3544,34 @@ function buildPreamble({
   const topLabelFontDirective = '\\newfontfamily\\YggTopLabel{Malgun Gothic}[\n'
     + '  BoldFont = {Malgun Gothic Bold},\n'
     + ']';
+  // 과제형 제목페이지 타이틀("수학 영역") 전용 Pretendard 폰트.
+  //   레포의 폰트 루트(apps/yggdrasill/assets/fonts/...)는 fontRegularPath 가 가리키는
+  //   디렉터리와 동일한 뿌리를 공유하므로, fontRegularPath 의 `.../fonts/` 세그먼트를
+  //   `.../fonts/pretendard/Pretendard-Bold.otf` 로 치환해 안전하게 경로를 파생한다.
+  //   파생 실패(빈 fontRegularPath 등) 시에는 기존 \YggSubjectDisplay 로 폴백 → 폰트
+  //   변경이 적용되지 않을 뿐 레이아웃/렌더는 종전과 동일(롤백 안전).
+  //   주의: kotex(xetexko) 에서 `\newfontfamily` 는 Latin 글리프 전용이라 한글 타이틀에는
+  //   영향이 없다(한글은 main hangul 폰트로 라우팅). 따라서 한글까지 Pretendard 로 바꾸려면
+  //   `\newhangulfontfamily` 로 한글 폰트 패밀리도 함께 등록해야 한다.
+  const pretendardFontDirective = (() => {
+    const base = String(fontRegularPath || '').replace(/\\/g, '/');
+    const m = base.match(/^(.*\/fonts)\//);
+    if (!m) {
+      return '\\newcommand{\\YggPretendard}{\\YggSubjectDisplay}\n'
+        + '\\newcommand{\\YggPretendardHangul}{}';
+    }
+    const dir = `${m[1]}/pretendard/`;
+    return `\\newfontfamily\\YggPretendard{Pretendard-Bold.otf}[\n`
+      + `  Path = ${dir},\n`
+      + `  UprightFont = Pretendard-Bold.otf,\n`
+      + `  BoldFont = Pretendard-Bold.otf,\n`
+      + `]\n`
+      + `\\newhangulfontfamily\\YggPretendardHangul{Pretendard-Bold.otf}[\n`
+      + `  Path = ${dir},\n`
+      + `  UprightFont = Pretendard-Bold.otf,\n`
+      + `  BoldFont = Pretendard-Bold.otf,\n`
+      + `]`;
+  })();
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
   const isAssignmentProfile = profile === 'assignment';
   const isMock = isMockExamProfile || isAssignmentProfile;
@@ -3632,6 +3667,7 @@ function buildPreamble({
   lines.push(subjectFontDirective);
   lines.push(subjectDisplayFontDirective);
   lines.push(topLabelFontDirective);
+  lines.push(pretendardFontDirective);
   // ── 숫자를 한글(HG) charclass 로 국지 편입하는 래퍼 ──────────────────────
   //   배경: xetexko 는 유니코드 charclass (HG/CJ/Latin 등) 에 따라 font instance 를
   //     자동 분기한다. `\newfontfamily\YggTopLabel{Malgun Gothic}` 같은 선언이 있어도
@@ -3878,8 +3914,20 @@ function buildPreamble({
     //   은 0pt 가 아닐 때 interword-glue 를 덮어쓰므로 그룹 내에서만 적용되도록 스코프 유지.
     // 사용자 요청 25차: 0.5em 은 과도 → 80% 수준인 0.4em 로 축소. 한글 사이 공간이
     //   시각적으로 "1글자" 정도로 자연스러워지도록.
-    lines.push(`      \\YggWithUnifiedDigits{{\\YggSubjectDisplay\\fontsize{\\the\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleMainScale}\\mockTitleLead\\relax}`
-      + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em\\mockTitlePageMain}}%');
+    // 제목페이지 타이틀("수학 영역")을 Pretendard 로 교체 (과제형·모의고사형 공통).
+    //   한글 라우팅: kotex(xetexko) 에서 `\newfontfamily`(\YggPretendard) 는 Latin 전용이라
+    //   한글에는 영향이 없다. 한글까지 바꾸려면 `\newhangulfontfamily`(\YggPretendardHangul)
+    //   가 필요하므로 둘을 함께 적용한다.
+    //   레이아웃 불변 보장: \vphantom 의 본문은 원본 폰트 렌더(\YggSubjectDisplay 는 한글에
+    //   무영향 → 한글은 기존 main hangul 폰트로 렌더)와 동일 = "교체 전 타이틀" 의 정확한
+    //   height/depth. Pretendard 글리프는 \smash(높이/깊이 0)로 같은 baseline 위에 올린다.
+    //   → parbox[b] 마지막줄 baseline·박스 높이가 종전과 동일 → 부제 위치/가로선(절대좌표)/
+    //   본문 슬롯 시작이 1pt 도 움직이지 않는다(검증: 차이 픽셀이 타이틀 글자에만 국한).
+    //   (Pretendard 가 더 커도 시각적으로만 확장될 뿐 레이아웃 영향 없음 — 크기 축소 허용)
+    lines.push(`      \\YggWithUnifiedDigits{{\\fontsize{\\the\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleMainScale}\\mockTitleLead\\relax}`
+      + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em'
+      + '\\vphantom{{\\YggSubjectDisplay\\mockTitlePageMain}}'
+      + '\\smash{{\\YggPretendard\\YggPretendardHangul\\mockTitlePageMain}}}}%');
     lines.push(isAssignmentProfile ? '      }%' : '    }%');
     if (isAssignmentProfile) {
       if (logoEnabled) {

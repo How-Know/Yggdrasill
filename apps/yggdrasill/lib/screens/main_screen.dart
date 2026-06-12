@@ -104,6 +104,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   static const double _sideSheetActionButtonExtraScale = 1.1;
   /// 사이드시트 날짜 헤더 왼쪽 추가 여백
   static const double _sideSheetDateHeaderLeftInset = 4.0;
+  /// 사이드시트 콘텐츠 공통 왼쪽 inset
+  static const double _sideSheetContentLeftInset = 12.0;
   /// 사이드시트 액션 버튼 ↔ 등원학생(글래스 패널) 사이 간격 — 최대 스케일 기준 32
   /// (헤더 Padding bottom 12 + 아래 SizedBox remainder)
   static const double _sideSheetActionToAttendedGap = 32.0;
@@ -955,7 +957,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return Expanded(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          24.0 * scale,
+          _sideSheetContentLeftInset,
           0.0,
           24.0 * scale,
           12.0 * scale,
@@ -1010,7 +1012,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Widget _buildFavoriteTemplatesBottomPanel({required double containerWidth}) {
     return Expanded(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 14),
+        padding: const EdgeInsets.fromLTRB(
+          _sideSheetContentLeftInset,
+          8,
+          24,
+          14,
+        ),
         child: FavoriteTemplatesPanel(
           containerWidth: containerWidth,
         ),
@@ -2517,6 +2524,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         final bool attendedTwoLine =
                             _shouldUseAttendedTwoLineLayout(screenWidth);
                         final double sideSheetPad = 24.0 * sideSheetScale;
+                        const double sideSheetPadLeft =
+                            _sideSheetContentLeftInset;
                         final sideSheetPalette = FabTabBarTokens.paletteFor(
                           Theme.of(context).brightness,
                         );
@@ -2538,7 +2547,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 children: [
                                   Padding(
                                     padding: EdgeInsets.fromLTRB(
-                                      sideSheetPad,
+                                      sideSheetPadLeft,
                                       navSideSheetDateHeaderTopInset,
                                       sideSheetPad,
                                       12 * sideSheetScale,
@@ -2733,8 +2742,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     ),
                                     // 출석 박스
                                     Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: sideSheetPad,
+                                      padding: EdgeInsets.only(
+                                        left: sideSheetPadLeft,
+                                        right: sideSheetPad,
                                       ),
                                       child: ConstrainedBox(
                                         constraints: BoxConstraints(
@@ -2868,7 +2878,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                           padding: EdgeInsets.only(
                                             top: _sideSheetAttendedToWaitingGap *
                                                 sideSheetScale,
-                                            left: sideSheetPad,
+                                            left: sideSheetPadLeft,
                                             right: sideSheetPad,
                                             bottom: sideSheetPad,
                                           ),
@@ -3030,6 +3040,97 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     TopGlassSnackBar.show(context, message: message);
   }
 
+  Future<bool> _confirmRevertAttendedToWaiting(_AttendanceTarget t) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          title: const Text(
+            '등원 기록 취소',
+            style: TextStyle(
+              color: kDlgText,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Text(
+            '${t.student.name} 학생의 등원 기록을 지우고\n등원예정 목록으로 되돌릴까요?',
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontSize: 15,
+              height: 1.45,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text(
+                '취소',
+                style: TextStyle(color: kDlgTextSub),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text(
+                '되돌리기',
+                style: TextStyle(
+                  color: kDlgAccent,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    return confirmed ?? false;
+  }
+
+  Future<void> _revertAttendedToWaiting(_AttendanceTarget t) async {
+    _removeClassTagOverlay();
+    setState(() {
+      _attendedSetIds.remove(t.setId);
+      _leavedSetIds.remove(t.setId);
+      _attendTimes.remove(t.setId);
+      _leaveTimes.remove(t.setId);
+      _sideSheetDataDirty = true;
+    });
+    try {
+      final classDateTime = t.classDateTime;
+      final existing = DataManager.instance.getAttendanceRecord(
+        t.student.id,
+        classDateTime,
+      );
+      if (existing?.id != null) {
+        await DataManager.instance.deleteAttendanceRecord(existing!.id!);
+      }
+      await DataManager.instance.saveOrUpdateAttendance(
+        studentId: t.student.id,
+        classDateTime: classDateTime,
+        classEndTime:
+            existing?.classEndTime ?? classDateTime.add(t.duration),
+        className: existing?.className ?? t.classInfo?.name ?? '수업',
+        isPresent: false,
+        arrivalTime: null,
+        departureTime: null,
+        setId: t.setId,
+        sessionTypeId: existing?.sessionTypeId ?? t.classInfo?.id,
+        cycle: existing?.cycle,
+        sessionOrder: existing?.sessionOrder,
+        isPlanned: true,
+        snapshotId: existing?.snapshotId,
+        batchSessionId: existing?.batchSessionId,
+      );
+    } catch (e) {
+      print('[ERROR] 출석 기록 원복 실패: $e');
+    }
+  }
+
   Future<void> _recordWaitingArrival(_AttendanceTarget t) async {
     final now = DateTime.now();
     _attendedExpandAnimateIds.add(t.setId);
@@ -3180,78 +3281,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         scale: scale,
         attendedTwoLine: attendedTwoLine,
       );
-      final Widget attendedCardContent = attendedTwoLine
-          ? Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Flexible(
-                  fit: FlexFit.loose,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top: rowPad.top,
-                          right: _sideSheetAttendedTwoLineNameToHomeworkGap,
-                        ),
-                        child: name,
-                      ),
-                      Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          0,
-                          2 * scale,
-                          rowPad.right,
-                          rowPad.bottom,
-                        ),
-                        child: metaRow,
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    child: homeworkChips,
-                  ),
-                ),
-              ],
-            )
-          : Padding(
-              padding: rowPad,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  name,
-                  SizedBox(width: 14 * scale),
-                  Text(
-                    arrivalText,
-                    style: timeLabelStyle,
-                    textScaler: TextScaler.noScaling,
-                  ),
-                  SizedBox(width: 8 * scale),
-                  Text(
-                    className,
-                    style: timeLabelStyle,
-                    textScaler: TextScaler.noScaling,
-                  ),
-                ],
-              ),
-            );
-      final Widget attendedDismissible = FabStyleExpandIn(
-            animate: shouldExpand,
-            onComplete: () {
-              if (_attendedExpandAnimateIds.remove(expandId) && mounted) {
-                setState(() {});
-              }
-            },
-            child: _wrapTextbookDropTargetForStudent(
-              studentId: t.student.id,
-              child: Dismissible(
+      final homeworkSlotHeight = _sideSheetHomeworkChipHeight(
+        scale,
+        attendedTwoLine: attendedTwoLine,
+      );
+      final attendedRowMinHeight = homeworkSlotHeight + 4 * scale;
+      Widget buildAttendedNameSwipe({
+        required Widget swipeChild,
+        required double dragAxisExtent,
+      }) {
+        return FabStyleExpandIn(
+          animate: shouldExpand,
+          onComplete: () {
+            if (_attendedExpandAnimateIds.remove(expandId) && mounted) {
+              setState(() {});
+            }
+          },
+          child: _wrapTextbookDropTargetForStudent(
+            studentId: t.student.id,
+            child: _SideSheetAttendedSwipe(
               key: ValueKey('attended_swipe_${t.setId}'),
-              direction: DismissDirection.startToEnd,
-              confirmDismiss: (_) async {
+              dragAxisExtent: dragAxisExtent,
+              onConfirmDismiss: () async {
                 final now = DateTime.now();
                 final hasHomeworkItems =
                     HomeworkStore.instance.items(t.student.id).isNotEmpty;
@@ -3362,90 +3413,136 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   size: 18,
                 ),
               ),
-              child: GestureDetector(
-                onTapDown: (details) {
-                  _lastTagTapPosition = details.globalPosition;
-                },
-                onTap: () => _handleAttendedCardTap(t),
-                onLongPress: () async {
-                  _removeClassTagOverlay();
-                  setState(() {
-                    _attendedSetIds.remove(t.setId);
-                    _leavedSetIds.remove(t.setId);
-                    _attendTimes.remove(t.setId);
-                    _leaveTimes.remove(t.setId);
-                    _sideSheetDataDirty = true;
-                  });
-                  try {
-                    final classDateTime = t.classDateTime;
-                    final existing = DataManager.instance.getAttendanceRecord(
-                      t.student.id,
-                      classDateTime,
-                    );
-                    if (existing?.id != null) {
-                      await DataManager.instance.deleteAttendanceRecord(
-                        existing!.id!,
-                      );
-                    }
-                    await DataManager.instance.saveOrUpdateAttendance(
-                      studentId: t.student.id,
-                      classDateTime: classDateTime,
-                      classEndTime: existing?.classEndTime ??
-                          classDateTime.add(t.duration),
-                      className:
-                          existing?.className ?? t.classInfo?.name ?? '수업',
-                      isPresent: false,
-                      arrivalTime: null,
-                      departureTime: null,
-                      setId: t.setId,
-                      sessionTypeId: existing?.sessionTypeId ?? t.classInfo?.id,
-                      cycle: existing?.cycle,
-                      sessionOrder: existing?.sessionOrder,
-                      isPlanned: true,
-                      snapshotId: existing?.snapshotId,
-                      batchSessionId: existing?.batchSessionId,
-                    );
-                  } catch (e) {
-                    print('[ERROR] 출석 기록 원복 실패: $e');
-                  }
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: EdgeInsets.zero,
-                  decoration: BoxDecoration(
-                    // 등원 완료(출석) 카드: 테두리 제거
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: attendedCardContent,
-                ),
-              ),
+              child: swipeChild,
             ),
           ),
-      );
-
-      if (attendedTwoLine) {
-        return KeyedSubtree(key: key, child: attendedDismissible);
+        );
       }
 
-      // 출석(파란 네모) 카드: 가로 스크롤로 과제칩 표시(줄바꿈 없음)
-      return Row(
+      // 출석 카드: 이름만 스와이프, 등원시간·수업명·과제칩은 고정
+      return ConstrainedBox(
         key: key,
-        mainAxisSize: MainAxisSize.max,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Flexible(
-            fit: FlexFit.loose,
-            child: attendedDismissible,
-          ),
-          const SizedBox(width: _sideSheetAttendedToHomeworkGap),
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: homeworkChips,
+        constraints: BoxConstraints(minHeight: attendedRowMinHeight),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: attendedTwoLine
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
+          children: [
+            Flexible(
+              fit: FlexFit.loose,
+              child: LayoutBuilder(
+              builder: (context, leftConstraints) {
+                final dragAxis = leftConstraints.maxWidth.isFinite
+                    ? leftConstraints.maxWidth
+                    : leftConstraints.minWidth;
+                return ClipRect(
+                  child: GestureDetector(
+                    onTapDown: (details) {
+                      _lastTagTapPosition = details.globalPosition;
+                    },
+                    onTap: () => _handleAttendedCardTap(t),
+                    onLongPress: () async {
+                      if (!await _confirmRevertAttendedToWaiting(t)) {
+                        return;
+                      }
+                      await _revertAttendedToWaiting(t);
+                    },
+                    child: attendedTwoLine
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              buildAttendedNameSwipe(
+                                dragAxisExtent: dragAxis,
+                                swipeChild: Padding(
+                                  padding: EdgeInsets.only(
+                                    top: rowPad.top,
+                                    right:
+                                        _sideSheetAttendedTwoLineNameToHomeworkGap,
+                                  ),
+                                  child: name,
+                                ),
+                              ),
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  0,
+                                  2 * scale,
+                                  rowPad.right,
+                                  rowPad.bottom,
+                                ),
+                                child: metaRow,
+                              ),
+                            ],
+                          )
+                        : Padding(
+                            padding: rowPad,
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              alignment: Alignment.centerLeft,
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.center,
+                                  children: [
+                                    Opacity(
+                                      opacity: 0,
+                                      child: name,
+                                    ),
+                                    SizedBox(width: 14 * scale),
+                                    Text(
+                                      arrivalText,
+                                      style: timeLabelStyle,
+                                      textScaler: TextScaler.noScaling,
+                                    ),
+                                    SizedBox(width: 8 * scale),
+                                    Text(
+                                      className,
+                                      style: timeLabelStyle,
+                                      textScaler: TextScaler.noScaling,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                                Positioned.fill(
+                                  child: buildAttendedNameSwipe(
+                                    dragAxisExtent: dragAxis,
+                                    swipeChild: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: name,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
+                );
+              },
+              ),
             ),
-          ),
-        ],
+            if (!attendedTwoLine)
+              const SizedBox(width: _sideSheetAttendedToHomeworkGap),
+            Expanded(
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: attendedTwoLine
+                    ? Alignment.topLeft
+                    : Alignment.centerLeft,
+                children: [
+                  SizedBox(height: homeworkSlotHeight),
+                  Align(
+                    alignment: attendedTwoLine
+                        ? Alignment.topLeft
+                        : Alignment.centerLeft,
+                    child: homeworkChips,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       );
     }
 
@@ -3841,6 +3938,137 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       addGroupTitleChip(rawTitle, visualPhase: groupPhase);
     }
     return chips;
+  }
+}
+
+/// 등원학생 카드 좌→우 스와이프(하원). [Dismissible] 대신 최대 드래그 거리를
+/// 직접 제한해 시각적 이동량을 줄인다.
+class _SideSheetAttendedSwipe extends StatefulWidget {
+  static const double dismissThreshold = 0.48;
+  static const double maxDragFraction = 0.48;
+
+  const _SideSheetAttendedSwipe({
+    super.key,
+    required this.child,
+    required this.background,
+    required this.onConfirmDismiss,
+    this.dragAxisExtent,
+  });
+
+  final Widget child;
+  final Widget background;
+  final Future<bool> Function() onConfirmDismiss;
+  /// 스와이프 거리·임계값 계산용 기준 너비(왼쪽 열 전체). 미지정 시 자식 너비.
+  final double? dragAxisExtent;
+
+  @override
+  State<_SideSheetAttendedSwipe> createState() =>
+      _SideSheetAttendedSwipeState();
+}
+
+class _SideSheetAttendedSwipeState extends State<_SideSheetAttendedSwipe>
+    with SingleTickerProviderStateMixin {
+  double _dragExtent = 0;
+  AnimationController? _snapController;
+  Animation<double>? _snapAnimation;
+  bool _confirming = false;
+
+  @override
+  void dispose() {
+    _snapController?.dispose();
+    super.dispose();
+  }
+
+  AnimationController get _snap => _snapController ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 200),
+      );
+
+  Future<void> _animateBack() async {
+    final start = _dragExtent;
+    if (start <= 0) return;
+    _snapAnimation = Tween<double>(begin: start, end: 0).animate(
+      CurvedAnimation(parent: _snap, curve: Curves.easeOut),
+    );
+    void listener() {
+      if (mounted) setState(() => _dragExtent = _snapAnimation!.value);
+    }
+
+    _snap.addListener(listener);
+    await _snap.forward(from: 0);
+    _snap.removeListener(listener);
+    if (mounted) setState(() => _dragExtent = 0);
+    _snap.reset();
+  }
+
+  Future<void> _handleDragEnd(double thresholdPx) async {
+    if (_confirming) return;
+    final shouldDismiss = _dragExtent >= thresholdPx;
+    if (!shouldDismiss) {
+      await _animateBack();
+      return;
+    }
+    _confirming = true;
+    try {
+      await widget.onConfirmDismiss();
+    } finally {
+      _confirming = false;
+      if (mounted) await _animateBack();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final layoutWidth = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : null;
+        final referenceExtent = widget.dragAxisExtent != null &&
+                widget.dragAxisExtent! > 0
+            ? widget.dragAxisExtent!
+            : layoutWidth;
+        if (referenceExtent == null || referenceExtent <= 0) {
+          return widget.child;
+        }
+        final maxDrag =
+            referenceExtent * _SideSheetAttendedSwipe.maxDragFraction;
+        final thresholdPx =
+            referenceExtent * _SideSheetAttendedSwipe.dismissThreshold;
+        final bgOpacity =
+            maxDrag > 0 ? (_dragExtent / maxDrag).clamp(0.0, 1.0) : 0.0;
+
+        return ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned.fill(
+                child: Opacity(
+                  opacity: bgOpacity,
+                  child: widget.background,
+                ),
+              ),
+              Transform.translate(
+                offset: Offset(_dragExtent, 0),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onHorizontalDragUpdate: (details) {
+                    if (_confirming) return;
+                    setState(() {
+                      _dragExtent = (_dragExtent + details.delta.dx)
+                          .clamp(0.0, maxDrag);
+                    });
+                  },
+                  onHorizontalDragEnd: (_) => _handleDragEnd(thresholdPx),
+                  onHorizontalDragCancel: _animateBack,
+                  child: widget.child,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 
