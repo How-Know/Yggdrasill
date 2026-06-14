@@ -713,24 +713,29 @@ void screensaver_attach_activity(lv_obj_t* root) {
     lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_SCROLL_END, NULL);
     lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
 
-    // 상위 레이어에도 부착
-    lv_obj_t* top = lv_layer_top();
-    if (top) {
-        lv_obj_add_flag(top, LV_OBJ_FLAG_EVENT_BUBBLE);
-        lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
-        lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_KEY, NULL);
-        lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
-    }
-    lv_obj_t* sys = lv_layer_sys();
-    if (sys) {
-        lv_obj_add_flag(sys, LV_OBJ_FLAG_EVENT_BUBBLE);
-        lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
-        lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_KEY, NULL);
-        lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
+    // 상위 레이어(top/sys)는 전역 persistent 객체이므로 단 한 번만 부착한다.
+    // (매 화면 생성마다 부착하면 콜백이 무한 누적되어 입력 이벤트 처리가 폭주 → loop hang)
+    static bool s_layers_hooked = false;
+    if (!s_layers_hooked) {
+        s_layers_hooked = true;
+        lv_obj_t* top = lv_layer_top();
+        if (top) {
+            lv_obj_add_flag(top, LV_OBJ_FLAG_EVENT_BUBBLE);
+            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
+            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
+            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_KEY, NULL);
+            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
+        }
+        lv_obj_t* sys = lv_layer_sys();
+        if (sys) {
+            lv_obj_add_flag(sys, LV_OBJ_FLAG_EVENT_BUBBLE);
+            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
+            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
+            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_KEY, NULL);
+            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
+        }
     }
     Serial.printf("[SCREENSAVER] activity hooks attached to root=%p/top/sys\n", root);
 }

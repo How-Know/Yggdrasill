@@ -15905,87 +15905,83 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
       height: 1.1,
     );
 
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Positioned.fill(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              color: const Color(0xFF15171C),
-              child: Stack(
-                children: [
-                  if (widget.downLabel.isNotEmpty && widget.canSlideDown)
-                    Align(
-                      alignment: const Alignment(-0.9, 0),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          Positioned.fill(
+            child: Stack(
+              children: [
+                if (widget.downLabel.isNotEmpty && widget.canSlideDown)
+                  Align(
+                    alignment: const Alignment(-0.9, 0),
+                    child: Opacity(
+                      opacity: isRight
+                          ? (0.2 + 0.8 * progress).clamp(0.0, 1.0)
+                          : 0.0,
+                      child: Text(
+                        '→ ${widget.downLabel}',
+                        style: labelStyle.copyWith(
+                          color: widget.downColor,
+                        ),
+                        maxLines: 1,
+                        softWrap: false,
+                      ),
+                    ),
+                  ),
+                if (widget.canSlideUp &&
+                    (widget.upLabel.isNotEmpty ||
+                        widget.showUpArrowWhenLabelEmpty))
+                  Align(
+                    alignment: const Alignment(0.9, 0),
+                    child: Transform.translate(
+                      offset: const Offset(-5, 0),
                       child: Opacity(
-                        opacity: isRight
+                        opacity: isLeft
                             ? (0.2 + 0.8 * progress).clamp(0.0, 1.0)
                             : 0.0,
-                        child: Text(
-                          '→ ${widget.downLabel}',
-                          style: labelStyle.copyWith(
-                            color: widget.downColor,
-                          ),
-                          maxLines: 1,
-                          softWrap: false,
-                        ),
-                      ),
-                    ),
-                  if (widget.canSlideUp &&
-                      (widget.upLabel.isNotEmpty ||
-                          widget.showUpArrowWhenLabelEmpty))
-                    Align(
-                      alignment: const Alignment(0.9, 0),
-                      child: Transform.translate(
-                        offset: const Offset(-5, 0),
-                        child: Opacity(
-                          opacity: isLeft
-                              ? (0.2 + 0.8 * progress).clamp(0.0, 1.0)
-                              : 0.0,
-                          child: widget.upLabel.trim().isEmpty
-                              ? Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.arrow_back_rounded,
-                                      size: 34,
-                                      color: widget.upColor,
-                                    ),
-                                    if (widget.upSubLabel
-                                        .trim()
-                                        .isNotEmpty) ...[
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        widget.upSubLabel.trim(),
-                                        style: labelStyle.copyWith(
-                                          color: widget.upColor,
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                        maxLines: 1,
-                                        softWrap: false,
-                                      ),
-                                    ],
-                                  ],
-                                )
-                              : Text(
-                                  '← ${widget.upLabel}',
-                                  style: labelStyle.copyWith(
+                        child: widget.upLabel.trim().isEmpty
+                            ? Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.arrow_back_rounded,
+                                    size: 34,
                                     color: widget.upColor,
                                   ),
-                                  maxLines: 1,
-                                  softWrap: false,
+                                  if (widget.upSubLabel
+                                      .trim()
+                                      .isNotEmpty) ...[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      widget.upSubLabel.trim(),
+                                      style: labelStyle.copyWith(
+                                        color: widget.upColor,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                      maxLines: 1,
+                                      softWrap: false,
+                                    ),
+                                  ],
+                                ],
+                              )
+                            : Text(
+                                '← ${widget.upLabel}',
+                                style: labelStyle.copyWith(
+                                  color: widget.upColor,
                                 ),
-                        ),
+                                maxLines: 1,
+                                softWrap: false,
+                              ),
                       ),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
           ),
-        ),
-        AnimatedContainer(
+          AnimatedContainer(
           duration:
               _dragging ? Duration.zero : const Duration(milliseconds: 160),
           curve: Curves.easeOut,
@@ -16014,6 +16010,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
           ),
         ),
       ],
+      ),
     );
   }
 }

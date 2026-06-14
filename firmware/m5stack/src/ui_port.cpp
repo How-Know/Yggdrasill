@@ -8,7 +8,6 @@
 #include <ctime>
 #include "ota_update.h"
 #include "version.h"
-#include <esp_task_wdt.h>
 
 // main.cpp에 정의된 전역 변수 (바인딩 추적용)
 extern String studentId;
@@ -635,7 +634,6 @@ static void show_homework_check_first_popup(void);
 static void close_homework_check_first_popup(void);
 static void show_pin_page(const char* student_id, const char* student_name, bool pin_set);
 static void close_pin_page(void);
-static void show_login_overlay(const char* student_name);
 static void close_login_overlay(void);
 static void begin_bind_request(const char* student_id, const char* student_name, const char* pin);
 static void show_center_toast(const char* msg, uint32_t ms);
@@ -2488,19 +2486,21 @@ static void show_pin_page(const char* student_id, const char* student_name, bool
   const lv_coord_t xo[3] = { -72, 0, 72 };
   const lv_coord_t y0 = 90;
   const lv_coord_t dy = 37;
+  // 숫자 버튼은 PRESSED로 트리거: 작은 버튼에서 터치 미세 떨림으로 CLICKED(press+release 동일 위치)가
+  // 간헐적으로 취소되어 입력이 "안 먹는" 현상을 방지한다.
   for (int n = 1; n <= 9; n++) {
     int row = (n - 1) / 3, col = (n - 1) % 3;
     char t[2] = { (char)('0' + n), 0 };
     lv_obj_t* b = pin_make_btn(s_pin_page, t, xo[col], y0 + row * dy, bw, 0x1C1C1C);
-    lv_obj_add_event_cb(b, pin_digit_cb, LV_EVENT_CLICKED, (void*)(intptr_t)n);
+    lv_obj_add_event_cb(b, pin_digit_cb, LV_EVENT_PRESSED, (void*)(intptr_t)n);
   }
   {
     lv_obj_t* b0 = pin_make_btn(s_pin_page, "0", xo[1], y0 + 3 * dy, bw, 0x1C1C1C);
-    lv_obj_add_event_cb(b0, pin_digit_cb, LV_EVENT_CLICKED, (void*)(intptr_t)0);
+    lv_obj_add_event_cb(b0, pin_digit_cb, LV_EVENT_PRESSED, (void*)(intptr_t)0);
     lv_obj_t* bc = pin_make_btn(s_pin_page, u8"취소", xo[0], y0 + 3 * dy, bw, 0x323232);
-    lv_obj_add_event_cb(bc, pin_cancel_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(bc, pin_cancel_cb, LV_EVENT_PRESSED, nullptr);
     lv_obj_t* bd = pin_make_btn(s_pin_page, u8"지우기", xo[2], y0 + 3 * dy, bw, 0x323232);
-    lv_obj_add_event_cb(bd, pin_del_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(bd, pin_del_cb, LV_EVENT_PRESSED, nullptr);
   }
   screensaver_attach_activity(s_pin_page);
 }
@@ -2509,38 +2509,6 @@ static void close_login_overlay(void) {
   if (s_login_overlay && lv_obj_is_valid(s_login_overlay)) lv_obj_del(s_login_overlay);
   s_login_overlay = nullptr;
   s_bind_in_flight = false;
-}
-
-static void show_login_overlay(const char* student_name) {
-  close_login_overlay();
-  s_login_overlay = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(s_login_overlay, 320, 240);
-  lv_obj_set_pos(s_login_overlay, 0, 0);
-  lv_obj_set_style_bg_color(s_login_overlay, lv_color_hex(0x000000), 0);
-  lv_obj_set_style_bg_opa(s_login_overlay, LV_OPA_70, 0);
-  lv_obj_set_style_border_width(s_login_overlay, 0, 0);
-  lv_obj_set_style_radius(s_login_overlay, 0, 0);
-  lv_obj_clear_flag(s_login_overlay, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t* card = lv_obj_create(s_login_overlay);
-  lv_obj_set_size(card, 220, 110);
-  lv_obj_center(card);
-  lv_obj_set_style_bg_color(card, lv_color_hex(0x1C1C1C), 0);
-  lv_obj_set_style_radius(card, 14, 0);
-  lv_obj_set_style_border_width(card, 1, 0);
-  lv_obj_set_style_border_color(card, lv_color_hex(0x3A3A3A), 0);
-  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t* l = lv_label_create(card);
-  lv_obj_set_style_text_font(l, &kakao_kr_16, 0);
-  lv_obj_set_style_text_color(l, lv_color_hex(0xE6E6E6), 0);
-  lv_obj_set_width(l, 190);
-  lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-  String m = String((student_name && *student_name) ? student_name : u8"학생") + u8"\n로그인 중...";
-  lv_label_set_text(l, m.c_str());
-  lv_obj_center(l);
-  screensaver_attach_activity(s_login_overlay);
 }
 
 static void show_center_toast(const char* msg, uint32_t ms) {
@@ -2589,8 +2557,12 @@ static void begin_bind_request(const char* student_id, const char* student_name,
   if (!student_id || !*student_id) return;
   s_pending_bind_student_id = student_id;
   s_pending_bind_student_name = (student_name && *student_name) ? String(student_name) : u8"학생";
-  show_login_overlay(s_pending_bind_student_name.c_str());
-  s_bind_in_flight = true;   // show_login_overlay() 내부에서 false로 리셋되므로 그 이후에 설정
+  // 별도 전체화면 오버레이 대신 PIN 페이지 힌트로 "로그인 중" 피드백을 준다.
+  // (전체화면 오버레이 객체의 렌더링이 학생 수가 많은 날 워치독을 초과해 먹통을 유발했음)
+  if (s_pin_page && lv_obj_is_valid(s_pin_page)) {
+    set_pin_hint(u8"로그인 중...", 0x33A373);
+  }
+  s_bind_in_flight = true;
   fw_request_bind(student_id, pin ? pin : "");
   if (s_bind_timeout_timer) { lv_timer_del(s_bind_timeout_timer); s_bind_timeout_timer = nullptr; }
   s_bind_timeout_timer = lv_timer_create(bind_timeout_timer_cb, 7000, nullptr);
@@ -4438,10 +4410,8 @@ void ui_port_update_homeworks(const JsonArray& groups) {
 
   lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(s_waiting_list, LV_OBJ_FLAG_HIDDEN);
-  esp_task_wdt_reset();
   lv_obj_clean(s_list);
   lv_obj_clean(s_waiting_list);
-  esp_task_wdt_reset();
   uint8_t main_cnt = 0;
   uint8_t waiting_cnt = 0;
   for (uint8_t i = 0; i < s_group_cnt; i++) {
@@ -4452,7 +4422,6 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       create_hw_card(s_waiting_list, i);
       waiting_cnt++;
     }
-    if (i % 2 == 1) esp_task_wdt_reset();
   }
   if (main_cnt == 0) append_homework_empty_message(s_list, u8"진행할 과제가 없습니다.");
   if (waiting_cnt == 0) append_homework_empty_message(s_waiting_list, u8"대기 과제가 없습니다.");

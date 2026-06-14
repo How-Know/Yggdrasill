@@ -372,6 +372,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     required double width,
     required double sheetScale,
     VoidCallback? onTitleTap,
+    VoidCallback? onFlowTap,
   }) {
     final title =
         template.title.trim().isEmpty ? '(제목 없음)' : template.title.trim();
@@ -379,11 +380,24 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final bookText = _templateBookLabel(template);
     final gradeText = grade.isEmpty ? '학년 미지정' : grade;
     final preferredFlowName = template.primaryPreferredFlowName.trim();
-    final subtitleParts = <String>[
-      template.isGroup ? '그룹 과제 · 하위 ${template.partCount}개' : '단일 과제',
-      if (preferredFlowName.isNotEmpty) '$preferredFlowName 플로우',
-    ];
-    final subtitle = subtitleParts.join(' · ');
+    final kindLabel = template.isGroup
+        ? '그룹 과제 · 하위 ${template.partCount}개'
+        : '단일 과제';
+    final flowLabel = preferredFlowName.isNotEmpty
+        ? '$preferredFlowName 플로우'
+        : '플로우 미지정';
+    final subtitleMetaStyle = TextStyle(
+      color: const Color(0xFF8FA3A3),
+      fontSize: 14.5 * sheetScale,
+      fontWeight: FontWeight.w700,
+    );
+    final subtitleFlowStyle = TextStyle(
+      color: const Color(0xFF9FE3C6),
+      fontSize: 14.5 * sheetScale,
+      fontWeight: FontWeight.w800,
+      decoration: onFlowTap == null ? TextDecoration.none : TextDecoration.underline,
+      decorationColor: const Color(0xFF617777),
+    );
     final titleFontSize = (template.isGroup ? 20.0 : 16.0) * sheetScale;
     final titleToMetaGap = (template.isGroup ? 7.5 : 5.0) * sheetScale;
     final previewParts = template.parts.take(3).toList(growable: false);
@@ -445,15 +459,41 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             ),
           ),
           SizedBox(height: 5 * sheetScale),
-          Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: const Color(0xFF8FA3A3),
-              fontSize: 14.5 * sheetScale,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              Flexible(
+                child: Text(
+                  onFlowTap == null && preferredFlowName.isNotEmpty
+                      ? '$kindLabel · $flowLabel'
+                      : kindLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: subtitleMetaStyle,
+                ),
+              ),
+              if (onFlowTap != null) ...[
+                Text(' · ', style: subtitleMetaStyle),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: onFlowTap,
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 2 * sheetScale,
+                        vertical: 1 * sheetScale,
+                      ),
+                      child: Text(
+                        flowLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: subtitleFlowStyle,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
           SizedBox(height: 8 * sheetScale),
           for (int i = 0; i < previewParts.length; i++) ...[
@@ -510,12 +550,14 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     required double width,
     required double sheetScale,
     VoidCallback? onTitleTap,
+    VoidCallback? onFlowTap,
   }) {
     final card = _buildTemplateCardSurface(
       template,
       width: width,
       sheetScale: sheetScale,
       onTitleTap: onTitleTap,
+      onFlowTap: onFlowTap,
     );
     return Draggable<HomeworkRecentTemplate>(
       data: template,
@@ -530,6 +572,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             width: width,
             sheetScale: sheetScale,
             onTitleTap: onTitleTap,
+            onFlowTap: onFlowTap,
           ),
         ),
       ),
@@ -1301,6 +1344,172 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     }
   }
 
+  Future<String?> _pickAssignmentFlowName({
+    required String currentFlowName,
+  }) async {
+    final flowNames = StudentFlow.defaultNames
+        .map(
+          (e) => StudentFlow.normalizeName(
+            e.replaceAll(RegExp(r'\s+'), ' ').trim(),
+          ),
+        )
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    var selectedFlowName = StudentFlow.normalizeName(
+      currentFlowName.replaceAll(RegExp(r'\s+'), ' ').trim(),
+    );
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setPromptState) {
+            void submit() => Navigator.of(ctx).pop(selectedFlowName);
+            return AlertDialog(
+              backgroundColor: kDlgBg,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: kDlgBorder),
+              ),
+              title: const Text(
+                '플로우 선택',
+                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+              ),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '학생에게 드롭할 때 사용할 플로우를 선택하세요.',
+                      style: TextStyle(color: kDlgTextSub, height: 1.35),
+                    ),
+                    if (flowNames.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('지정 안 함'),
+                            selected: selectedFlowName.isEmpty,
+                            onSelected: (_) {
+                              setPromptState(() => selectedFlowName = '');
+                            },
+                          ),
+                          for (final flowName in flowNames)
+                            ChoiceChip(
+                              label: Text(flowName),
+                              selected: selectedFlowName == flowName,
+                              onSelected: (_) {
+                                setPromptState(
+                                  () => selectedFlowName = flowName,
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: submit,
+                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (result == null) return null;
+    return StudentFlow.normalizeName(
+      result.replaceAll(RegExp(r'\s+'), ' ').trim(),
+    );
+  }
+
+  Future<void> _updateAssignmentPresetFlow(
+    LearningProblemDocumentExportPreset preset,
+    String flowName,
+  ) async {
+    final presetId = preset.id.trim();
+    if (presetId.isEmpty) return;
+    final normalized =
+        StudentFlow.normalizeName(flowName.replaceAll(RegExp(r'\s+'), ' ').trim());
+    final current = StudentFlow.normalizeName(
+      '${preset.renderConfig['assignmentFlowName'] ?? preset.renderConfig['preferredFlowName'] ?? preset.renderConfig['assignmentFlow'] ?? ''}'
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim(),
+    );
+    if (normalized == current) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      final safeAcademyId = (academyId ?? '').trim();
+      if (safeAcademyId.isEmpty) {
+        throw Exception('학원 정보를 찾지 못했습니다.');
+      }
+      final nextRenderConfig = <String, dynamic>{...preset.renderConfig};
+      if (normalized.isEmpty) {
+        nextRenderConfig
+          ..remove('assignmentFlowName')
+          ..remove('assignmentFlow')
+          ..remove('preferredFlowName')
+          ..remove('assignmentFlowId')
+          ..remove('flowName')
+          ..remove('flowId');
+      } else {
+        nextRenderConfig['assignmentFlowName'] = normalized;
+        nextRenderConfig
+          ..remove('assignmentFlowId')
+          ..remove('flowId');
+      }
+      await _problemBankService.overwriteExportPresetRenderConfig(
+        academyId: safeAcademyId,
+        presetId: presetId,
+        renderConfig: nextRenderConfig,
+      );
+      LearningProblemBankService.generatedAssignmentChanged.add(null);
+      await _refreshTemplates();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            normalized.isEmpty
+                ? '플로우 지정을 해제했습니다.'
+                : '플로우를 "$normalized"(으)로 변경했습니다.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('플로우 변경 실패: $e')),
+      );
+    }
+  }
+
+  Future<void> _editGeneratedAssignmentPresetFlow(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    final current =
+        '${preset.renderConfig['assignmentFlowName'] ?? preset.renderConfig['preferredFlowName'] ?? preset.renderConfig['assignmentFlow'] ?? ''}'
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+    final nextFlowName =
+        await _pickAssignmentFlowName(currentFlowName: current);
+    if (nextFlowName == null) return;
+    await _updateAssignmentPresetFlow(preset, nextFlowName);
+  }
+
   Future<void> _renameGeneratedAssignmentPreset(
     LearningProblemDocumentExportPreset preset,
   ) async {
@@ -1396,6 +1605,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           onTitleTap: preset == null || isBusy
               ? null
               : () => unawaited(_renameGeneratedAssignmentPreset(preset)),
+          onFlowTap: preset == null || isBusy
+              ? null
+              : () => unawaited(_editGeneratedAssignmentPresetFlow(preset)),
         ),
         SizedBox(height: 6 * sheetScale),
         Row(

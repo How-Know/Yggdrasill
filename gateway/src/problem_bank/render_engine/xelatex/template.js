@@ -232,6 +232,11 @@ function autoWrapTabularCells(rawTexBlock) {
         }
 
         if (!inner.trim()) return leading + hlinePrefix + inner + trailing;
+        // \multicolumn must remain a top-level tabular command. Wrapping it in
+        // $...$ or \text{...} turns the underlying \omit into invalid TeX.
+        if (/^\s*\\multicolumn\s*\{/.test(inner)) {
+          return leading + hlinePrefix + inner + trailing;
+        }
 
         // 이미 $...$ 혹은 \text{...} 로 감싸진 셀: 그대로.
         if (/^\s*\$[\s\S]*\$\s*$/.test(inner)) return leading + hlinePrefix + inner + trailing;
@@ -763,6 +768,10 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\(?:diamond|lozenge|blacklozenge)(?![A-Za-z])\s+/g, (m) => `${m.trim()}\\;`);
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
+  // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
+  //   \timesbox{(나)} 처럼 미정의 제어열이 되는 경우가 있다. 분리해 placeholder 변환이
+  //   되도록 연산자 매크로 뒤에 공백을 넣어 box{} 를 노출시킨다.
+  out = out.replace(/\\(times|div|cdot|pm|mp|ast|star|circ|bullet)box\{/g, '\\$1 box{');
   // box{X} (내용이 있는 박스) → \boxed{X}. 한글 라벨이 들어간 box{(가)}류는
   // math mode 안에서 한글이 깨지지 않도록 \text{}로 감싼다.
   out = out.replace(/(?<![\\A-Za-z])box\{([^}]+)\}/g, (_match, inner) => {
@@ -856,6 +865,11 @@ function normalizeBlankParenthesisSpaceMarkers(input) {
 
 function normalizeBlankBoxNotation(input) {
   return String(input || '')
+    // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
+    //   \timesbox{(나)} 처럼 들어오는 경우가 있다. 이 단계(한글 기준 math 분할 및
+    //   protectLatexBoxBlocks 보호 이전)에서 먼저 분리해 두어야 box{} 가 정상적으로
+    //   보호·\boxed 변환된다. (normalizeMathSegment 에서 분리하면 이미 분할되어 늦음.)
+    .replace(/\\(times|div|cdot|pm|mp|ast|star|circ|bullet)box\s*\{/g, '\\$1 box{')
     .replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ')
     .replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, 'box{~~}')
     .replace(/\bBOX\b/g, 'box{~~}')
@@ -2561,6 +2575,15 @@ function renderTableLatex(
   const cellMeasureByCol = Array.from({ length: maxCols }, () => []);
 
   const latexRows = rows.map((row) => {
+    const singleRawCell = row.length === 1 && Array.isArray(row[0]) && row[0].length === 1
+      ? String(row[0][0] || '').trim()
+      : '';
+    // Raw tabular headers such as \multicolumn{5}{|c|}{...} must be emitted
+    // directly as alignment cells. Measuring or wrapping them in \parbox would
+    // place \omit outside tabular alignment and fail with "Misplaced \omit".
+    if (/^\\multicolumn\s*\{/.test(singleRawCell)) {
+      return `${singleRawCell} \\\\`;
+    }
     const cells = [];
     for (let i = 0; i < maxCols; i++) {
       const cellLines = row[i] || [''];
@@ -2982,6 +3005,11 @@ function blankChoiceLabels(question) {
 function blankChoiceCells(text, columnCount) {
   const raw = String(text || '').trim();
   let parts = raw.split(/\s*,\s*/).map((v) => v.trim());
+  if (parts.length > columnCount && columnCount > 1) {
+    const trailing = parts.slice(-(columnCount - 1));
+    const leading = parts.slice(0, parts.length - trailing.length).join(', ').trim();
+    parts = [leading].concat(trailing);
+  }
   // 추출 시 쉼표 구분자가 누락된 표형 보기 처리:
   //   "(ㄴ)(ㄱ)(ㄷ)" 또는 "(ㄴ) (ㄱ) (ㄷ)" 처럼 괄호 그룹이 열 개수만큼 연속하면
   //   쉼표 대신 괄호 그룹 단위로 분리한다. (쉼표가 정상이면 폴백을 타지 않음)
@@ -3005,6 +3033,16 @@ function blankChoiceWidthScale(question) {
   return clampTableScale(Number.isFinite(parsed) ? parsed : 1.0);
 }
 
+function blankChoiceHeightScale(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const raw = scales['blank_choice:1'] || null;
+  const parsed = Number(raw?.heightScale ?? raw?.h ?? 1.0);
+  return clampTableScale(Number.isFinite(parsed) ? parsed : 1.0);
+}
+
 function blankChoiceColumnScales(question, columnCount) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const scales = meta.table_scales && typeof meta.table_scales === 'object'
@@ -3018,11 +3056,46 @@ function blankChoiceColumnScales(question, columnCount) {
   });
 }
 
-function renderBlankChoicesLatex(question, choices, equations) {
+function blankChoiceRowScales(question, rowCount) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const raw = scales['blank_choice:1'] || null;
+  const values = Array.isArray(raw?.rowScales) ? raw.rowScales : [];
+  return Array.from({ length: rowCount }, (_, idx) => {
+    const parsed = Number(values[idx]);
+    return clampTableScale(Number.isFinite(parsed) ? parsed : 1.0);
+  });
+}
+
+function renderBlankChoicesLatex(question, choices, equations, options = {}) {
   if (!Array.isArray(choices) || choices.length !== 5) return renderChoicesLatex(choices, equations);
   const labels = blankChoiceLabels(question);
   const widthScale = blankChoiceWidthScale(question);
+  const heightScale = blankChoiceHeightScale(question);
   const columnScales = blankChoiceColumnScales(question, labels.length);
+  const rowScales = blankChoiceRowScales(question, choices.length);
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const blankChoiceFigurePaths = Array.isArray(options.figurePaths) ? options.figurePaths : [];
+  let blankChoiceFigureIdx = Number.isInteger(options.figureOffset) && options.figureOffset > 0
+    ? options.figureOffset
+    : 0;
+  const renderBlankChoiceCell = (cell, rowVisualScale = 1.0) => {
+    const raw = String(cell || '').trim();
+    if (/^\[(?:그림|도형|도표)\]$/.test(raw)) {
+      const p = blankChoiceFigurePaths[blankChoiceFigureIdx];
+      blankChoiceFigureIdx += 1;
+      if (p) {
+        const normalized = String(p).replace(/\\/g, '/');
+        const rawHeight = Number(meta.blank_choice_image_height_em ?? meta.blank_choice_image_heightEm);
+        const baseHeightEm = Number.isFinite(rawHeight) ? Math.max(2.0, Math.min(7.0, rawHeight)) : 4.2;
+        const heightEm = Math.max(2.0, Math.min(9.0, baseHeightEm * Math.max(0.5, Math.min(2.0, rowVisualScale))));
+        return `\\includegraphics[height=${heightEm.toFixed(2)}em,keepaspectratio]{${normalized}}`;
+      }
+    }
+    return smartTexLine(cell, equations);
+  };
   const hasCustomColumns = columnScales.some((v) => Math.abs(v - 1.0) > 0.001);
   const hasWidthScale = Math.abs(widthScale - 1.0) > 0.001;
   const shouldBoxCells = hasWidthScale || hasCustomColumns;
@@ -3050,16 +3123,22 @@ function renderBlankChoicesLatex(question, choices, equations) {
       ? (CIRCLED_DIGITS[idx] || String(idx + 1))
       : (String(choice?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
     const rawText = typeof choice === 'string' ? choice : choice?.text || '';
+    const effectiveHeight = heightScale * rowScales[idx];
     const cells = blankChoiceCells(rawText, labels.length)
-      .map((cell) => smartTexLine(cell, equations));
-    return [label].concat(cells).join(' & ');
+      .map((cell) => renderBlankChoiceCell(cell, effectiveHeight));
+    const rowTex = [label].concat(cells).join(' & ');
+    const extraEm = Math.max(0, (effectiveHeight - 1.0) * 1.8);
+    return {
+      tex: rowTex,
+      gap: extraEm > 0.01 ? `[${extraEm.toFixed(2)}em]` : '',
+    };
   });
   return [
     '{\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em',
     `\\setlength{\\tabcolsep}{${tabColSepPt}pt}`,
     `\\noindent\\begin{tabular}{@{}l${dataColSpec}@{}}`,
     header + ' \\\\',
-    rows.join(' \\\\\n'),
+    rows.map((row) => `${row.tex} \\\\${row.gap}`).join('\n'),
     '\\end{tabular}\\par}',
   ].join('\n');
 }
@@ -5509,7 +5588,7 @@ function renderOneQuestion(question, {
   //   기존 로직은 figIdx(마커 카운터) 부터 순차 방출이었으나, token 경로에서 같은 itemId 를
   //   반복 참조하거나 stem 마커가 순서를 뒤집는 케이스에서는 이 기준이 맞지 않는다.
   //   따라서 실제로 "한 번도 방출되지 않은" local idx 만 순서대로 보충한다.
-  if (!isImageChoice && emittedFigIdxs.size < figurePaths.length) {
+  if (!isImageChoice && !isBlankChoiceQuestion(question) && emittedFigIdxs.size < figurePaths.length) {
     for (let i = 0; i < figurePaths.length; i += 1) {
       if (emittedFigIdxs.has(i)) continue;
       if (figIdxConsumedByGroup.has(i)) continue;
@@ -5596,7 +5675,9 @@ function renderOneQuestion(question, {
     parts.push(`% DBG choices-gap: trailingBigType=${trailingBigType} gap=${choiceGap.replace(/\\/g, '\\\\')}`);
     parts.push(choiceGap);
     parts.push(isBlankChoiceQuestion(question)
-      ? renderBlankChoicesLatex(question, choices, equations)
+      ? renderBlankChoicesLatex(question, choices, equations, {
+        figurePaths,
+      })
       : (isImageChoice
         ? renderImageChoicesLatex(imageChoiceStemFigureCount)
         : renderChoicesLatex(choices, equations, layoutColumns)));

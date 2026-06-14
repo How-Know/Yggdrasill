@@ -850,6 +850,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       }
       return;
     }
+    final isBlankChoiceQuestion = meta['is_blank_choice_question'] == true ||
+        '${meta['choice_layout'] ?? ''}' == 'blank_table';
+    if (isBlankChoiceQuestion) {
+      final assets = meta['figure_assets'];
+      final assetCount = assets is List ? assets.length : 0;
+      if (assetCount > 0) {
+        meta['figure_count'] = assetCount;
+      }
+      return;
+    }
     if (_stemFigureMarkerCount(stem) > 0) return;
     meta['figure_count'] = 0;
     meta.remove('figure_assets');
@@ -861,6 +871,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   List<String>? _figureRefsForSave(ProblemBankQuestion q) {
+    final isBlankChoiceQuestion = q.meta['is_blank_choice_question'] == true ||
+        '${q.meta['choice_layout'] ?? ''}' == 'blank_table';
+    if (isBlankChoiceQuestion) return null;
     if (_stemFigureMarkerCount(q.stem) == 0) return const <String>[];
     return null;
   }
@@ -6866,6 +6879,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return 1.0;
   }
 
+  double _blankChoiceHeightScaleOf(ProblemBankQuestion q) {
+    final raw = q.meta['table_scales'];
+    if (raw is Map) {
+      final blank = raw['blank_choice:1'];
+      if (blank is Map) {
+        final parsed =
+            double.tryParse('${blank['heightScale'] ?? blank['h'] ?? ''}');
+        if (parsed != null) return parsed.clamp(0.5, 2.0).toDouble();
+      }
+    }
+    return 1.0;
+  }
+
   List<double> _blankChoiceColumnScalesOf(ProblemBankQuestion q, int count) {
     final raw = q.meta['table_scales'];
     if (raw is Map) {
@@ -6880,6 +6906,29 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       }
     }
     return List<double>.filled(count, 1.0, growable: false);
+  }
+
+  List<double> _blankChoiceRowScalesOf(ProblemBankQuestion q, int count) {
+    final raw = q.meta['table_scales'];
+    if (raw is Map) {
+      final blank = raw['blank_choice:1'];
+      if (blank is Map && blank['rowScales'] is List) {
+        final values = blank['rowScales'] as List;
+        return List<double>.generate(count, (idx) {
+          if (idx >= values.length) return 1.0;
+          final parsed = double.tryParse('${values[idx]}');
+          return (parsed ?? 1.0).clamp(0.5, 2.0).toDouble();
+        }, growable: false);
+      }
+    }
+    return List<double>.filled(count, 1.0, growable: false);
+  }
+
+  double _blankChoiceImageHeightEmOf(ProblemBankQuestion q) {
+    final parsed = double.tryParse(
+      '${q.meta['blank_choice_image_height_em'] ?? q.meta['blank_choice_image_heightEm'] ?? ''}',
+    );
+    return (parsed ?? 4.2).clamp(2.0, 7.0).toDouble();
   }
 
   static final _structuralMarkerRegex = RegExp(r'\[(박스시작|박스끝|문단|우측꼬리)\]');
@@ -8665,6 +8714,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   List<String> _splitBlankChoiceCells(String text, int columnCount) {
     final raw = text.trim();
     var parts = raw.split(RegExp(r'\s*,\s*')).map((e) => e.trim()).toList();
+    if (parts.length > columnCount && columnCount > 1) {
+      final trailing = parts.sublist(parts.length - (columnCount - 1));
+      final leading =
+          parts.sublist(0, parts.length - trailing.length).join(', ').trim();
+      parts = <String>[leading, ...trailing];
+    }
     // 추출 시 쉼표 구분자가 누락된 표형 보기 처리:
     //   "(ㄴ)(ㄱ)(ㄷ)" 처럼 괄호 그룹이 열 개수만큼 연속하면 괄호 그룹 단위로 분리한다.
     if (parts.where((e) => e.isNotEmpty).length < columnCount) {
@@ -8689,7 +8744,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }) {
     final labels = _blankChoiceLabelsOf(q);
     final widthScale = _blankChoiceWidthScaleOf(q);
+    final heightScale = _blankChoiceHeightScaleOf(q);
     final columnScales = _blankChoiceColumnScalesOf(q, labels.length);
+    final rowScales = _blankChoiceRowScalesOf(q, choices.take(5).length);
+    final figureAssets = _orderedFigureAssetsOf(q);
+    var figureIdx = 0;
     final fontSize = expanded ? 13.6 : 13.4;
     // 번호열은 고정하고, 데이터 열은 기본적으로 같은 폭으로 키운다.
     // 개별 열 폭 차이는 columnScales 로만 반영한다.
@@ -8710,10 +8769,30 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       height: 1.45,
       fontFamily: _previewKoreanFontFamily,
     );
-    Widget cell(String value, int idx, {bool header = false}) {
+    Widget cell(
+      String value,
+      int idx, {
+      bool header = false,
+      double rowVisualScale = 1.0,
+    }) {
       final width = idx >= 0 && idx < columnWidths.length
           ? columnWidths[idx]
           : labelWidth;
+      final raw = value.trim();
+      final isFigureCell = !header &&
+          RegExp(r'^\[(?:그림|도형|도표)\]$').hasMatch(raw);
+      final asset = isFigureCell && figureIdx < figureAssets.length
+          ? figureAssets[figureIdx]
+          : null;
+      if (isFigureCell) figureIdx += 1;
+      final url = _figurePreviewUrlForPath(
+        q.id,
+        '${asset?['path'] ?? ''}'.trim(),
+      );
+      final imageHeight =
+          (_blankChoiceImageHeightEmOf(q) * 9.5 * rowVisualScale)
+              .clamp(26.0, expanded ? 96.0 : 74.0)
+              .toDouble();
       return SizedBox(
         width: width,
         child: Padding(
@@ -8724,15 +8803,45 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           child: ClipRect(
             child: header
                 ? Text(value, textAlign: TextAlign.center, style: headerStyle)
-                : LatexTextRenderer(
-                    _toPreviewMathMarkup(value, forceMathTokenWrap: true),
-                    softWrap: true,
-                    enableDisplayMath: true,
-                    inlineMathScale: _previewMathScale,
-                    fractionInlineMathScale: _previewFractionMathScale,
-                    displayMathScale: _previewMathScale,
-                    style: bodyStyle,
-                  ),
+                : isFigureCell
+                    ? (url.isEmpty
+                        ? Container(
+                            height: imageHeight,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFDFDFE),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: const Color(0xFFE5E8EF),
+                              ),
+                            ),
+                            child: const Text(
+                              '그림',
+                              style: TextStyle(
+                                color: Color(0xFF6F7C95),
+                                fontSize: 10.8,
+                              ),
+                            ),
+                          )
+                        : Image.network(
+                            url,
+                            height: imageHeight,
+                            fit: BoxFit.contain,
+                            alignment: Alignment.center,
+                            errorBuilder: (_, __, ___) => const Text(
+                              '이미지 로드 실패',
+                              style: TextStyle(
+                                color: Color(0xFF906060),
+                                fontSize: 10.8,
+                              ),
+                            ),
+                          ))
+                    : Text(
+                        value,
+                        softWrap: true,
+                        overflow: TextOverflow.visible,
+                        style: bodyStyle,
+                      ),
           ),
         ),
       );
@@ -8748,7 +8857,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             cell(labels[i], i, header: true),
         ],
       ),
-      for (final choice in choices.take(5))
+      for (final indexedChoice in choices.take(5).toList().asMap().entries)
         Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -8760,14 +8869,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   horizontal: expanded ? 6 : 4,
                   vertical: expanded ? 4 : 3,
                 ),
-                child: Text(choice.label, style: bodyStyle),
+                child: Text(indexedChoice.value.label, style: bodyStyle),
               ),
             ),
             for (final entry
-                in _splitBlankChoiceCells(choice.text, labels.length)
+                in _splitBlankChoiceCells(indexedChoice.value.text, labels.length)
                     .asMap()
                     .entries)
-              cell(entry.value, entry.key),
+              cell(
+                entry.value,
+                entry.key,
+                rowVisualScale:
+                    heightScale * rowScales[indexedChoice.key],
+              ),
           ],
         ),
     ];
@@ -11351,7 +11465,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         padding: const EdgeInsets.only(top: 2),
                         child: Text(
                           t.type == 'blank_choice'
-                              ? '* 높이와 글자 크기는 고정하고, 가로 간격만 조정합니다.'
+                              ? '* 그림이 들어간 행은 행별 높이로 따로 키울 수 있습니다.'
                               : '* 기본 글자 크기는 본문에 동기화되며, 저장된 표별 보정값이 있으면 함께 적용됩니다.',
                           style: TextStyle(
                             color: _textSub,
@@ -11463,24 +11577,34 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       },
                       onChangeEnd: (_) => onSettingChanged(),
                     ),
-                    if (t.type != 'blank_choice')
-                      _buildTableScaleSlider(
-                        title: '세로',
-                        value: (drafts[t.key] ?? const TableScaleValue())
-                            .heightScale,
-                        min: minS,
-                        max: maxS,
-                        divisions: divisions,
-                        onChanged: (v) {
-                          final cur = drafts[t.key] ?? const TableScaleValue();
-                          setLocalState(() {
-                            drafts[t.key] = cur.copyWith(heightScale: v);
-                          });
-                        },
-                        onChangeEnd: (_) => onSettingChanged(),
-                      ),
+                    _buildTableScaleSlider(
+                      title: '세로',
+                      value:
+                          (drafts[t.key] ?? const TableScaleValue()).heightScale,
+                      min: minS,
+                      max: maxS,
+                      divisions: divisions,
+                      onChanged: (v) {
+                        final cur = drafts[t.key] ?? const TableScaleValue();
+                        setLocalState(() {
+                          drafts[t.key] = cur.copyWith(heightScale: v);
+                        });
+                      },
+                      onChangeEnd: (_) => onSettingChanged(),
+                    ),
                     if (t.maxCols >= 2)
                       _buildColumnScalesRow(
+                        entry: t,
+                        draft: drafts[t.key] ?? const TableScaleValue(),
+                        minS: minS,
+                        maxS: maxS,
+                        divisions: divisions,
+                        setLocalState: setLocalState,
+                        onSettingChanged: onSettingChanged,
+                        drafts: drafts,
+                      ),
+                    if (t.type == 'blank_choice' && t.maxRows >= 2)
+                      _buildRowScalesRow(
                         entry: t,
                         draft: drafts[t.key] ?? const TableScaleValue(),
                         minS: minS,
@@ -11587,6 +11711,100 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 curList[i] = v;
                 setLocalState(() {
                   drafts[entry.key] = cur.copyWith(columnScales: curList);
+                });
+              },
+              onChangeEnd: (_) => onSettingChanged(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 빈칸형 보기의 행별 높이 섹션.
+  /// 특정 행에 그림이 들어간 경우 전체 표를 키우지 않고 해당 보기 행만 여유를 준다.
+  Widget _buildRowScalesRow({
+    required TableScaleEntry entry,
+    required TableScaleValue draft,
+    required double minS,
+    required double maxS,
+    required int divisions,
+    required void Function(void Function()) setLocalState,
+    required VoidCallback onSettingChanged,
+    required Map<String, TableScaleValue> drafts,
+  }) {
+    final n = entry.maxRows;
+    final current = draft.rowScales;
+    final values = <double>[
+      for (var i = 0; i < n; i += 1)
+        (current != null && i < current.length)
+            ? current[i].clamp(minS, maxS)
+            : 1.0,
+    ];
+    final isUniform = values.every((e) => (e - 1.0).abs() < 1e-3);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '행별 높이',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 11.4,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '($n개)',
+                style: const TextStyle(
+                  color: _textSub,
+                  fontSize: 10.4,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: isUniform
+                    ? null
+                    : () {
+                        setLocalState(() {
+                          drafts[entry.key] = draft.copyWith(
+                            clearRowScales: true,
+                          );
+                        });
+                        onSettingChanged();
+                      },
+                style: TextButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                  minimumSize: const Size(0, 24),
+                ),
+                child: const Text(
+                  '균등',
+                  style: TextStyle(fontSize: 10.6),
+                ),
+              ),
+            ],
+          ),
+          for (var i = 0; i < n; i += 1)
+            _buildTableScaleSlider(
+              title: '행 ${i + 1}',
+              value: values[i],
+              min: minS,
+              max: maxS,
+              divisions: divisions,
+              onChanged: (v) {
+                final cur = drafts[entry.key] ?? const TableScaleValue();
+                final curList =
+                    cur.rowScales != null && cur.rowScales!.length == n
+                        ? List<double>.from(cur.rowScales!)
+                        : List<double>.filled(n, 1.0);
+                curList[i] = v;
+                setLocalState(() {
+                  drafts[entry.key] = cur.copyWith(rowScales: curList);
                 });
               },
               onChangeEnd: (_) => onSettingChanged(),
@@ -12231,6 +12449,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           label: '표 ${i + 1}',
           type: entries[i].type,
           maxCols: entries[i].maxCols,
+          maxRows: entries[i].maxRows,
         ),
       if (_isBlankChoiceQuestion(q) && _previewChoicesOf(q).length == 5)
         TableScaleEntry(
@@ -12238,6 +12457,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           label: '빈칸형 보기',
           type: 'blank_choice',
           maxCols: _blankChoiceLabelsOf(q).length,
+          maxRows: _previewChoicesOf(q).length,
         ),
     ];
   }
@@ -15009,11 +15229,13 @@ class _PartialTableEntry {
     required this.key,
     required this.type,
     required this.maxCols,
+    this.maxRows = 0,
   });
 
   final String key;
   final String type;
   final int maxCols;
+  final int maxRows;
 }
 
 /// 세트형 배점 다이얼로그의 하위문항별 배점 입력 엔트리.

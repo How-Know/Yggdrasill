@@ -307,6 +307,7 @@ class TableScaleEntry {
     required this.label,
     required this.type,
     this.maxCols = 0,
+    this.maxRows = 0,
   });
 
   /// 메타 저장 키. 예) `struct:1`, `raw:2`.
@@ -321,6 +322,9 @@ class TableScaleEntry {
   /// struct 표의 최대 컬럼 수. raw 표나 파싱 실패 시 0.
   /// 컬럼별 독립 너비 UI 의 슬라이더 개수 결정에 사용.
   final int maxCols;
+
+  /// 행별 높이 UI 의 슬라이더 개수 결정에 사용.
+  final int maxRows;
 }
 
 class TableScaleValue {
@@ -330,6 +334,7 @@ class TableScaleValue {
     this.fontSizeDeltaPt = 0.0,
     this.tabColSepPt = 6.0,
     this.columnScales,
+    this.rowScales,
   });
 
   final double widthScale;
@@ -342,13 +347,19 @@ class TableScaleValue {
   /// 예) [1, 2, 1] → 가운데 컬럼이 양쪽의 2 배 폭.
   final List<double>? columnScales;
 
+  /// 표 행별 상대 높이(0.5 ~ 2.0). null 이면 전부 기본 높이.
+  /// 빈칸형 보기처럼 특정 행에 그림이 들어가는 경우 그 행만 키우는 데 사용한다.
+  final List<double>? rowScales;
+
   TableScaleValue copyWith({
     double? widthScale,
     double? heightScale,
     double? fontSizeDeltaPt,
     double? tabColSepPt,
     List<double>? columnScales,
+    List<double>? rowScales,
     bool clearColumnScales = false,
+    bool clearRowScales = false,
   }) =>
       TableScaleValue(
         widthScale: widthScale ?? this.widthScale,
@@ -357,6 +368,7 @@ class TableScaleValue {
         tabColSepPt: tabColSepPt ?? this.tabColSepPt,
         columnScales:
             clearColumnScales ? null : (columnScales ?? this.columnScales),
+        rowScales: clearRowScales ? null : (rowScales ?? this.rowScales),
       );
 
   Map<String, dynamic> toJson() => {
@@ -366,6 +378,7 @@ class TableScaleValue {
         if ((tabColSepPt - 6.0).abs() >= 1e-3) 'tabColSepPt': tabColSepPt,
         if (columnScales != null && columnScales!.isNotEmpty)
           'columnScales': columnScales,
+        if (rowScales != null && rowScales!.isNotEmpty) 'rowScales': rowScales,
       };
 
   static TableScaleValue fromJson(dynamic raw) {
@@ -386,6 +399,14 @@ class TableScaleValue {
           if (v is num) v.toDouble() else 1.0,
       ];
     }
+    final rs = raw['rowScales'];
+    List<double>? parsedRs;
+    if (rs is List && rs.isNotEmpty) {
+      parsedRs = <double>[
+        for (final v in rs)
+          if (v is num) v.toDouble() else 1.0,
+      ];
+    }
     return TableScaleValue(
       widthScale: (w is num) ? w.toDouble() : 1.0,
       heightScale: (h is num) ? h.toDouble() : 1.0,
@@ -393,6 +414,7 @@ class TableScaleValue {
           (f is num) ? f.toDouble().clamp(-4.0, 4.0).toDouble() : 0.0,
       tabColSepPt: (p is num) ? p.toDouble().clamp(0.5, 12.0).toDouble() : 6.0,
       columnScales: parsedCs,
+      rowScales: parsedRs,
     );
   }
 
@@ -402,7 +424,9 @@ class TableScaleValue {
       fontSizeDeltaPt.abs() < 1e-3 &&
       (tabColSepPt - 6.0).abs() < 1e-3 &&
       (columnScales == null ||
-          columnScales!.every((e) => (e - 1.0).abs() < 1e-3));
+          columnScales!.every((e) => (e - 1.0).abs() < 1e-3)) &&
+      (rowScales == null ||
+          rowScales!.every((e) => (e - 1.0).abs() < 1e-3));
 }
 
 class TableScaleResult {
