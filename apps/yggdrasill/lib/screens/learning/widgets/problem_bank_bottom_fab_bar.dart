@@ -72,7 +72,17 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                     label: allVisibleSelected ? '해제' : '전체',
                   ),
                   const SizedBox(width: 8),
-                  _filterButton(disabled: disabled),
+                  _ProblemBankFilterMenuButton(
+                    disabled: disabled,
+                    filterActive: filterActive,
+                    typeFilterOptions: typeFilterOptions,
+                    difficultyFilterOptions: difficultyFilterOptions,
+                    selectedTypeFilters: selectedTypeFilters,
+                    selectedDifficultyFilters: selectedDifficultyFilters,
+                    onToggleTypeFilter: onToggleTypeFilter,
+                    onToggleDifficultyFilter: onToggleDifficultyFilter,
+                    onClearFilters: onClearFilters,
+                  ),
                   const SizedBox(width: 8),
                   _fab(
                     onPressed: disabled ? null : onCreate,
@@ -107,149 +117,6 @@ class ProblemBankBottomFabBar extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _filterButton({required bool disabled}) {
-    final fg = filterActive ? const Color(0xFFBEE7D2) : const Color(0xFF9FB3B3);
-    return PopupMenuButton<String>(
-      enabled: !disabled,
-      tooltip: '필터',
-      offset: const Offset(0, -260),
-      color: const Color(0xFF111A1D),
-      elevation: 12,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: const Color(0xFF355056).withValues(alpha: 0.8)),
-      ),
-      onSelected: (value) {
-        if (value == '__clear') {
-          onClearFilters();
-        } else if (value.startsWith('type|')) {
-          onToggleTypeFilter(value.substring(5));
-        } else if (value.startsWith('difficulty|')) {
-          onToggleDifficultyFilter(value.substring(11));
-        }
-      },
-      itemBuilder: (context) {
-        final items = <PopupMenuEntry<String>>[
-          const PopupMenuItem<String>(
-            enabled: false,
-            child: Text(
-              '문항 필터',
-              style: TextStyle(
-                color: Color(0xFFEAF2F2),
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-          PopupMenuItem<String>(
-            value: '__clear',
-            child: Text(
-              '필터 초기화',
-              style: TextStyle(
-                color: filterActive
-                    ? const Color(0xFFBEE7D2)
-                    : const Color(0xFF7A8F8F),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const PopupMenuDivider(),
-          const PopupMenuItem<String>(
-            enabled: false,
-            child: Text(
-              '유형별',
-              style: TextStyle(
-                color: Color(0xFFD6ECEA),
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ];
-        if (typeFilterOptions.isEmpty) {
-          items.add(
-            const PopupMenuItem<String>(
-              enabled: false,
-              child: Text(
-                '유형 정보 없음',
-                style: TextStyle(color: Color(0xFF6F8585), fontSize: 11),
-              ),
-            ),
-          );
-        } else {
-          items.addAll(
-            typeFilterOptions.map(
-              (option) => CheckedPopupMenuItem<String>(
-                value: 'type|$option',
-                checked: selectedTypeFilters.contains(option),
-                child: Text(
-                  option,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF9FB3B3),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
-          );
-        }
-        items
-          ..add(const PopupMenuDivider())
-          ..add(
-            const PopupMenuItem<String>(
-              enabled: false,
-              child: Text(
-                '난이도별',
-                style: TextStyle(
-                  color: Color(0xFFD6ECEA),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          );
-        if (difficultyFilterOptions.isEmpty) {
-          items.add(
-            const PopupMenuItem<String>(
-              enabled: false,
-              child: Text(
-                '난이도 정보 없음',
-                style: TextStyle(color: Color(0xFF6F8585), fontSize: 11),
-              ),
-            ),
-          );
-        } else {
-          items.addAll(
-            difficultyFilterOptions.map(
-              (option) => CheckedPopupMenuItem<String>(
-                value: 'difficulty|$option',
-                checked: selectedDifficultyFilters.contains(option),
-                child: Text(
-                  option,
-                  style: const TextStyle(
-                    color: Color(0xFF9FB3B3),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
-          );
-        }
-        return items;
-      },
-      child: _fabShell(
-        icon: Icons.filter_list,
-        label: '필터',
-        foregroundColor: fg,
-        backgroundColor:
-            filterActive ? const Color(0xE6173C36) : const Color(0xE610171A),
       ),
     );
   }
@@ -367,34 +234,400 @@ class ProblemBankBottomFabBar extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _fabShell({
-    required IconData icon,
-    required String label,
-    required Color foregroundColor,
-    required Color backgroundColor,
-  }) {
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: foregroundColor),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: foregroundColor,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
+class _ProblemBankFilterMenuButton extends StatefulWidget {
+  const _ProblemBankFilterMenuButton({
+    required this.disabled,
+    required this.filterActive,
+    required this.typeFilterOptions,
+    required this.difficultyFilterOptions,
+    required this.selectedTypeFilters,
+    required this.selectedDifficultyFilters,
+    required this.onToggleTypeFilter,
+    required this.onToggleDifficultyFilter,
+    required this.onClearFilters,
+  });
+
+  final bool disabled;
+  final bool filterActive;
+  final List<String> typeFilterOptions;
+  final List<String> difficultyFilterOptions;
+  final Set<String> selectedTypeFilters;
+  final Set<String> selectedDifficultyFilters;
+  final ValueChanged<String> onToggleTypeFilter;
+  final ValueChanged<String> onToggleDifficultyFilter;
+  final VoidCallback onClearFilters;
+
+  @override
+  State<_ProblemBankFilterMenuButton> createState() =>
+      _ProblemBankFilterMenuButtonState();
+}
+
+class _ProblemBankFilterMenuButtonState
+    extends State<_ProblemBankFilterMenuButton> {
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
+
+  bool get _isOpen => _overlayEntry != null;
+
+  @override
+  void didUpdateWidget(covariant _ProblemBankFilterMenuButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_overlayEntry == null) return;
+    if (oldWidget.filterActive == widget.filterActive &&
+        _setEquals(oldWidget.selectedTypeFilters, widget.selectedTypeFilters) &&
+        _setEquals(
+          oldWidget.selectedDifficultyFilters,
+          widget.selectedDifficultyFilters,
+        ) &&
+        oldWidget.typeFilterOptions == widget.typeFilterOptions &&
+        oldWidget.difficultyFilterOptions == widget.difficultyFilterOptions) {
+      return;
+    }
+    _scheduleOverlayRebuild();
+  }
+
+  bool _setEquals(Set<String> a, Set<String> b) {
+    if (a.length != b.length) return false;
+    for (final value in a) {
+      if (!b.contains(value)) return false;
+    }
+    return true;
+  }
+
+  void _scheduleOverlayRebuild() {
+    if (_overlayEntry == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _overlayEntry == null) return;
+      _overlayEntry!.markNeedsBuild();
+    });
+  }
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    super.dispose();
+  }
+
+  void _toggleOverlay() {
+    if (widget.disabled) return;
+    if (_isOpen) {
+      _removeOverlay();
+      return;
+    }
+    _overlayEntry = _buildOverlayEntry();
+    Overlay.of(context).insert(_overlayEntry!);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _removeOverlay() {
+    final entry = _overlayEntry;
+    if (entry == null) return;
+    _overlayEntry = null;
+    entry.remove();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  OverlayEntry _buildOverlayEntry() {
+    return OverlayEntry(
+      builder: (overlayContext) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _removeOverlay,
+              ),
+            ),
+            CompositedTransformFollower(
+              link: _layerLink,
+              showWhenUnlinked: false,
+              targetAnchor: Alignment.topCenter,
+              followerAnchor: Alignment.bottomCenter,
+              offset: const Offset(0, -10),
+              child: Material(
+                color: Colors.transparent,
+                child: _ProblemBankFilterPanel(
+                filterActive: widget.filterActive,
+                typeFilterOptions: widget.typeFilterOptions,
+                difficultyFilterOptions: widget.difficultyFilterOptions,
+                selectedTypeFilters: widget.selectedTypeFilters,
+                selectedDifficultyFilters: widget.selectedDifficultyFilters,
+                onToggleTypeFilter: widget.onToggleTypeFilter,
+                onToggleDifficultyFilter: widget.onToggleDifficultyFilter,
+                onClearFilters: widget.onClearFilters,
+                onClose: _removeOverlay,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = widget.filterActive || _isOpen
+        ? const Color(0xFFBEE7D2)
+        : const Color(0xFF9FB3B3);
+    final bg = widget.filterActive || _isOpen
+        ? const Color(0xE6173C36)
+        : const Color(0xE610171A);
+
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _toggleOverlay,
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.filter_list, size: 18, color: fg),
+                const SizedBox(width: 8),
+                Text(
+                  '필터',
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProblemBankFilterPanel extends StatelessWidget {
+  const _ProblemBankFilterPanel({
+    required this.filterActive,
+    required this.typeFilterOptions,
+    required this.difficultyFilterOptions,
+    required this.selectedTypeFilters,
+    required this.selectedDifficultyFilters,
+    required this.onToggleTypeFilter,
+    required this.onToggleDifficultyFilter,
+    required this.onClearFilters,
+    required this.onClose,
+  });
+
+  final bool filterActive;
+  final List<String> typeFilterOptions;
+  final List<String> difficultyFilterOptions;
+  final Set<String> selectedTypeFilters;
+  final Set<String> selectedDifficultyFilters;
+  final ValueChanged<String> onToggleTypeFilter;
+  final ValueChanged<String> onToggleDifficultyFilter;
+  final VoidCallback onClearFilters;
+  final VoidCallback onClose;
+
+  static const Color _checkboxBorder = Color(0xFF5E7777);
+  static const Color _checkboxActive = Color(0xFF1A6B5E);
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 420,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF111A1D),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: const Color(0xFF355056).withValues(alpha: 0.8),
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x66000000),
+              blurRadius: 18,
+              offset: Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '문항 필터',
+                    style: TextStyle(
+                      color: Color(0xFFEAF2F2),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: filterActive ? onClearFilters : null,
+                  style: TextButton.styleFrom(
+                    foregroundColor: filterActive
+                        ? const Color(0xFFBEE7D2)
+                        : const Color(0xFF7A8F8F),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 30),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text(
+                    '필터 초기화',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: onClose,
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 18,
+                  color: const Color(0xFF9FB3B3),
+                  tooltip: '닫기',
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const Divider(color: Color(0xFF2A3A3A), height: 1),
+            const SizedBox(height: 10),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _buildFilterColumn(
+                      title: '유형별',
+                      emptyMessage: '유형 정보 없음',
+                      options: typeFilterOptions,
+                      selected: selectedTypeFilters,
+                      onToggle: onToggleTypeFilter,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Container(
+                    width: 1,
+                    color: const Color(0xFF2A3A3A),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: _buildFilterColumn(
+                      title: '난이도별',
+                      emptyMessage: '난이도 정보 없음',
+                      options: difficultyFilterOptions,
+                      selected: selectedDifficultyFilters,
+                      onToggle: onToggleDifficultyFilter,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterColumn({
+    required String title,
+    required String emptyMessage,
+    required List<String> options,
+    required Set<String> selected,
+    required ValueChanged<String> onToggle,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: Color(0xFFD6ECEA),
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (options.isEmpty)
+          Text(
+            emptyMessage,
+            style: const TextStyle(
+              color: Color(0xFF6F8585),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        else
+          for (final option in options)
+            _buildFilterCheckbox(
+              label: option,
+              checked: selected.contains(option),
+              onChanged: () => onToggle(option),
+            ),
+      ],
+    );
+  }
+
+  Widget _buildFilterCheckbox({
+    required String label,
+    required bool checked,
+    required VoidCallback onChanged,
+  }) {
+    return InkWell(
+      onTap: onChanged,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 38,
+              height: 38,
+              child: Checkbox(
+                value: checked,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                side: const BorderSide(color: _checkboxBorder),
+                activeColor: _checkboxActive,
+                onChanged: (_) => onChanged(),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: checked
+                      ? const Color(0xFFD6ECEA)
+                      : const Color(0xFF8FAAAA),
+                  fontSize: 12,
+                  fontWeight: checked ? FontWeight.w800 : FontWeight.w700,
+                  height: 1.25,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

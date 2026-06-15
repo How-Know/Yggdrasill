@@ -1720,6 +1720,27 @@ function setBuilderMacroLines() {
   ];
 }
 
+// 한국식 행렬 모양: 기본 amsmath 행렬은 열간격이 좁고 괄호가 성분에 바짝 붙는다.
+//   교과서(한국식) 스타일에 맞춰 (1) 열간격(\arraycolsep)을 넓히고 (2) 괄호와 성분
+//   사이에 얇은 여백(\mkern)을 두며 (3) 행간(\arraystretch)을 살짝 키운다.
+//   - 각 환경 본문을 `{...}` 그룹으로 감싸 \arraycolsep/\arraystretch 변경을 지역화 →
+//     같은 수식의 다른 array/cases 나 표 조판에 누설되지 않는다.
+//   - amsmath `matrix` 의 선행 `\hskip -\arraycolsep` 가 새 \arraycolsep 값으로 좌측
+//     패딩을 정확히 상쇄하므로, 괄호 옆 여백은 우리가 넣는 \mkern 만 남는다.
+function koreanMatrixMacroLines() {
+  const setup = '\\setlength{\\arraycolsep}{7pt}\\renewcommand{\\arraystretch}{1.2}';
+  const gap = '\\mkern4mu';
+  const renew = (name, open, close) =>
+    `\\renewenvironment{${name}}{\\begingroup${setup}${open}${gap}\\begin{matrix}}{\\end{matrix}${gap}${close}\\endgroup}`;
+  return [
+    renew('pmatrix', '\\left(', '\\right)'),
+    renew('bmatrix', '\\left[', '\\right]'),
+    renew('Bmatrix', '\\left\\{', '\\right\\}'),
+    renew('vmatrix', '\\left|', '\\right|'),
+    renew('Vmatrix', '\\left\\|', '\\right\\|'),
+  ];
+}
+
 // 큰 수식 줄 위/아래 vskip(`\mtvisuallinetallpad`) 정의.
 //   - 기본 동작: 호출 위치를 둘러싼 줄의 위/아래에 0.5em vskip 을 동등하게 추가
 //                해 큰 수식 줄을 시각적으로 대칭 padding.
@@ -2458,6 +2479,32 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
     return lines.join('\n\\par\n');
   }
 
+  // 정렬수식(aligned/array 등) 단독 줄: 선행 `[공백:N]` 마커를 제외하면 단일 수식
+  //   환경만 남는 경우(증명형 박스의 정렬 유도식 등), 박스 내부 폭을 넘칠 때만
+  //   블록 전체를 한 배율로 균일 축소한다.
+  //     - aligned/array 는 하나의 수식 박스라 한 배율 축소 시 `=` 정렬이 보존된다.
+  //     - adjustbox `max width` 는 자연폭이 한계폭보다 넓을 때만 비례 축소하므로
+  //       넘치지 않는 식은 손대지 않는다(표 오버플로우 처리와 동일 메커니즘).
+  //     - 정규화(smartTexLine)는 그대로 거쳐 답칸/간격 처리 일관성을 유지한다.
+  {
+    const leadMarkers = (withFigs.match(/^\s*((?:\[공백:[\d.]+\]\s*)*)/) || [])[1] || '';
+    const leadEm = (leadMarkers.match(/\[공백:([\d.]+)\]/g) || [])
+      .reduce((sum, m) => sum + parseFloat(m.replace(/[^\d.]/g, '')), 0);
+    const core = withFigs
+      .replace(/^\s*(?:\[공백:[\d.]+\]\s*)*/, '')
+      .replace(/\s*(?:\[공백:[\d.]+\]\s*)*$/, '')
+      .trim();
+    const envMatch = core.match(/^\\begin\{(array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}[\s\S]*\\end\{\1\}$/);
+    if (envMatch && !core.includes('[수식줄바꿈')) {
+      const inner = smartTexLine(core, equations, BOX_TEX_OPTIONS);
+      if (inner.trim()) {
+        const indent = leadEm > 0 ? `\\hspace*{${leadEm.toFixed(2)}em}` : '';
+        const target = `\\dimexpr\\linewidth-${(leadEm + 0.6).toFixed(2)}em\\relax`;
+        return `\\noindent ${indent}\\adjustbox{max width=${target}}{${inner}}\\par`;
+      }
+    }
+  }
+
   const labelMatch = withFigs.match(BOGI_ITEM_RE);
   if (labelMatch) {
     const rest = withFigs.replace(BOGI_ITEM_RE, '');
@@ -2604,7 +2651,12 @@ function renderRawBoxLatexEnvironment(lines) {
   if (!raw) return '';
   const envMatch = raw.match(/^\\begin\{(array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}[\s\S]*\\end\{\1\}$/);
   if (!envMatch) return '';
-  return `\\begin{center}$\\displaystyle ${raw}$\\end{center}`;
+  // 정렬수식(aligned/array 등)이 박스 내부 폭(\linewidth)을 넘치면 통째로 균일 축소한다.
+  //   - aligned/array 는 "하나의 수식 박스" 라 한 배율 축소 시 `=` 정렬이 그대로 보존된다.
+  //   - adjustbox 의 `max width` 는 자연폭이 \linewidth 보다 넓을 때만 비례 축소하므로,
+  //     넘치지 않는 일반 수식은 손대지 않는다(표 오버플로우 처리와 동일 메커니즘).
+  //   - 수동 줄바꿈/마커가 필요 없어 정렬 흔들림이 발생하지 않는다.
+  return `\\begin{center}\\adjustbox{max width=\\dimexpr\\linewidth-0.6em\\relax}{$\\displaystyle ${raw}$}\\end{center}`;
 }
 
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
@@ -3672,6 +3724,7 @@ function buildPreamble({
   lines.push('\\newcommand{\\YggRestoreGeometryNoClear}{\\let\\YggSavedClearpage\\clearpage\\let\\clearpage\\relax\\restoregeometry\\let\\clearpage\\YggSavedClearpage}');
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
+  lines.push(...koreanMatrixMacroLines());
   lines.push(...boxMathVisualCenterMacroLines());
   lines.push(...setBuilderMacroLines());
   lines.push(...visualCenterMacroLines());
@@ -6099,6 +6152,7 @@ export function buildTexSource(question, options = {}) {
     '\\documentclass[12pt,varwidth=16cm]{standalone}',
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
+    ...koreanMatrixMacroLines(),
     '\\usepackage{array}',
     '\\usepackage{kotex}',
     // 어절 중간에서 줄바꿈 금지: 공백(어절 경계)에서만 개행.
@@ -6256,6 +6310,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     `\\documentclass[12pt,varwidth=${safeWidth}cm]{standalone}`,
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
+    ...koreanMatrixMacroLines(),
     '\\usepackage{array}',
     '\\usepackage{kotex}',
     '\\XeTeXlinebreaklocale ""',

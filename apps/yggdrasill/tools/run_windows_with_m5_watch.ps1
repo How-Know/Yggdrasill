@@ -1,5 +1,5 @@
 param(
-  [string[]]$DeviceIds = @("m5-device-001", "m5-device-002", "m5-device-003", "m5-device-004", "m5-device-005", "m5-device-006", "m5-device-007", "m5-device-008", "m5-device-009", "m5-device-010", "m5-device-011", "m5-device-012"),
+  [string[]]$DeviceIds = @("m5-device-001", "m5-device-002", "m5-device-003", "m5-device-004", "m5-device-005", "m5-device-006", "m5-device-007", "m5-device-008", "m5-device-009", "m5-device-010", "m5-device-011", "m5-device-012", "m5-device-013", "m5-device-014", "m5-device-015"),
   [string]$DeviceId = "",
   [string]$FlutterDevice = "windows",
   [switch]$PubGet,

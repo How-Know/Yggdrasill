@@ -88,6 +88,27 @@ export function repairLatexBackslashes(input) {
       escapeNext = false;
       continue;
     }
+    // Gemini can occasionally emit literal control characters inside a JSON
+    // string even when responseMimeType is application/json. Raw LF/CR/TAB (and
+    // other < 0x20 controls) are invalid in JSON string literals, so escape
+    // them while preserving normal pretty-print whitespace outside strings.
+    if (ch === '\n') {
+      out.push('\\', 'n');
+      continue;
+    }
+    if (ch === '\r') {
+      out.push('\\', 'r');
+      continue;
+    }
+    if (ch === '\t') {
+      out.push('\\', 't');
+      continue;
+    }
+    const code = ch.charCodeAt(0);
+    if (code >= 0 && code < 0x20) {
+      out.push(`\\u${code.toString(16).padStart(4, '0')}`);
+      continue;
+    }
     if (ch === '\\') {
       const nx = input[i + 1];
       const valid = nx && /["\\/bfnrtu]/.test(nx);

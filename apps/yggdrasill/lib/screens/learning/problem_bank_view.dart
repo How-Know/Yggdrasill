@@ -13,6 +13,7 @@ import '../../services/tenant_service.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
+import 'models/problem_bank_curriculum_filter.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
 import 'widgets/problem_bank_export_options_panel.dart';
@@ -32,15 +33,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   static const _rsBorder = Color(0xFF223131);
   static const _rsTextPrimary = Color(0xFFEAF2F2);
   static const _rsTextMuted = Color(0xFF9FB3B3);
-
-  static const Map<String, String> _curriculumLabels = <String, String>{
-    'legacy_1_6': '1차-6차 포괄',
-    'curr_7th_1997': '7차 (1997)',
-    'rev_2007': '2007 개정',
-    'rev_2009': '2009 개정',
-    'rev_2015': '2015 개정',
-    'rev_2022': '2022 개정',
-  };
 
   static const Map<String, String> _sourceTypeLabels = <String, String>{
     'private_material': '사설 교재',
@@ -73,7 +65,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Timer? _pollTimer;
   Timer? _previewArtifactPollTimer;
 
-  String _selectedCurriculumCode = 'rev_2022';
+  ProblemBankCurriculumFilter _curriculumFilter =
+      ProblemBankCurriculumFilter.defaults();
   String _selectedSchoolLevel = '중';
   String _selectedDetailedCourse = '전체';
   String _selectedSourceTypeCode = 'school_past';
@@ -182,7 +175,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   List<String> _resolveCourseOptions(String level, List<String> labels) {
-    if (_selectedCurriculumCode == 'rev_2015' && level == '고') {
+    if (_curriculumFilter.includesRev2015 && level == '고') {
       return const <String>[
         '전체',
         ..._rev2015HighCourseOptions,
@@ -220,7 +213,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       ];
     }
     if (level == '고') {
-      if (_selectedCurriculumCode == 'rev_2015') {
+      if (_curriculumFilter.includesRev2015) {
         return _rev2015HighCourseOptions;
       }
       return const <String>[
@@ -353,7 +346,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     try {
       final docs = await _service.listReadyDocuments(
         academyId: _academyId!,
-        curriculumCode: _selectedCurriculumCode,
+        curriculumCodes: _curriculumFilter.effectiveCodes(),
         schoolLevel: _selectedSchoolLevel,
         detailedCourse: _selectedDetailedCourse,
         sourceTypeCode: _selectedSourceTypeCode,
@@ -729,7 +722,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       } else {
         final fetched = await _service.searchQuestions(
           academyId: _academyId!,
-          curriculumCode: _selectedCurriculumCode,
+          curriculumCodes: _curriculumFilter.effectiveCodes(),
           schoolLevel: _selectedSchoolLevel,
           detailedCourse: _selectedDetailedCourse,
           sourceTypeCode: _selectedSourceTypeCode,
@@ -856,7 +849,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     String enc(String value) => Uri.encodeComponent(value.trim());
     return <String>[
       'pb_scope_v1',
-      enc(_selectedCurriculumCode),
+      enc(_curriculumFilter.scopeKeySegment()),
       enc(_selectedSchoolLevel),
       enc(_selectedDetailedCourse),
       enc(_selectedSourceTypeCode),
@@ -1060,13 +1053,29 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     unawaited(_fetchQuestionPreviews(target));
   }
 
-  Future<void> _onCurriculumChanged(String? value) async {
-    if (value == null || value == _selectedCurriculumCode) return;
+  Future<void> _onCurriculumFilterChanged(
+    ProblemBankCurriculumFilter next,
+  ) async {
+    final normalized = next.normalized();
+    if (normalized.allSelected == _curriculumFilter.allSelected &&
+        normalized.latestSelected == _curriculumFilter.latestSelected &&
+        normalized.previousSelected == _curriculumFilter.previousSelected &&
+        _setEquals(normalized.legacyCodes, _curriculumFilter.legacyCodes)) {
+      return;
+    }
     setState(() {
-      _selectedCurriculumCode = value;
+      _curriculumFilter = normalized;
     });
     await _loadDetailedCourseOptions(forceResetSelection: true);
     await _reloadSchoolsAndQuestions(resetSelection: true);
+  }
+
+  bool _setEquals<T>(Set<T> a, Set<T> b) {
+    if (a.length != b.length) return false;
+    for (final value in a) {
+      if (!b.contains(value)) return false;
+    }
+    return true;
   }
 
   Future<void> _onSchoolLevelChanged(String value) async {
@@ -3106,7 +3115,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       if (normalizedCourse.contains('공통수학2')) {
         return (gradeKey: 'H1', courseKey: 'H1-c2');
       }
-      if (_selectedCurriculumCode == 'rev_2015') {
+      if (_curriculumFilter.includesRev2015) {
         if (normalizedCourse.contains('수학(상)') ||
             normalizedCourse.contains('수학상')) {
           return (gradeKey: 'H1', courseKey: 'H1-math-upper');
@@ -3625,7 +3634,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     .trim()
                     .isNotEmpty
                 ? preset.naesinCurriculumCode
-                : '${preset.renderConfig['curriculumCode'] ?? _selectedCurriculumCode}',
+                : '${preset.renderConfig['curriculumCode'] ?? _curriculumFilter.primaryCode()}',
           );
 
           final nextLink =
@@ -4212,9 +4221,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       ProblemBankFilterBar(
-                        selectedCurriculumCode: _selectedCurriculumCode,
-                        curriculumLabels: _curriculumLabels,
-                        onCurriculumChanged: _onCurriculumChanged,
+                        curriculumFilter: _curriculumFilter,
+                        onCurriculumFilterChanged: (next) =>
+                            unawaited(_onCurriculumFilterChanged(next)),
                         selectedLevel: _selectedSchoolLevel,
                         levelOptions: _levelOptions,
                         onLevelChanged: _onSchoolLevelChanged,

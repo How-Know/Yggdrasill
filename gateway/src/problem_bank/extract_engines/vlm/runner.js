@@ -797,7 +797,7 @@ async function callGeminiChunkWithRetry({
       const msg = compact(err?.message || err);
       const retryable =
         !isDailyQuotaExceededMessage(msg) &&
-        /aborted|abort|timeout|deadline|429|500|502|503|504|missing_expected_questions/i.test(
+        /aborted|abort|timeout|deadline|429|500|502|503|504|missing_expected_questions|parse_failed/i.test(
           msg,
         );
       if (typeof log === 'function') {

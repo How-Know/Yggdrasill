@@ -711,7 +711,7 @@ const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_14';
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_wrapgap_halfline_01';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_kmatrix_01';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -2922,12 +2922,17 @@ async function listExportPresets(url, res) {
         'selected_question_ids',
         'question_mode_by_question_uid',
         'question_mode_by_question_id',
+        'assignment_library_order',
         'created_at',
         'updated_at',
       ].join(','),
     )
     .eq('academy_id', academyId)
     .eq('preset_kind', presetKind)
+    .order('assignment_library_order', {
+      ascending: true,
+      nullsFirst: false,
+    })
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
   const { data: rows, error } = await query;
@@ -3019,6 +3024,12 @@ async function listExportPresets(url, res) {
       includeExplanation: renderConfig.includeExplanation === true,
       includeQuestionScore: renderConfig.includeQuestionScore === true,
       includeAcademyLogo: renderConfig.includeAcademyLogo === true,
+      assignmentLibraryOrder: Number.isFinite(row?.assignment_library_order)
+        ? row.assignment_library_order
+        : null,
+      assignment_library_order: Number.isFinite(row?.assignment_library_order)
+        ? row.assignment_library_order
+        : null,
       createdAt: row?.created_at || null,
       updatedAt: row?.updated_at || null,
     };
@@ -3066,6 +3077,65 @@ async function renameExportPreset(presetId, body, res) {
   }
 
   sendJson(res, 200, { ok: true, preset });
+}
+
+async function updateExportPresetOrder(body, res) {
+  const academyId = String(body?.academyId || '').trim();
+  const presetKind = normalizePresetKind(body?.presetKind || body?.kind, 'assignment');
+  const orderedPresetIds = Array.isArray(body?.orderedPresetIds)
+    ? body.orderedPresetIds.map((one) => String(one || '').trim()).filter((id) => isUuid(id))
+    : [];
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    return;
+  }
+  if (orderedPresetIds.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'orderedPresetIds required' });
+    return;
+  }
+
+  const { data: rows, error: lookupErr } = await supa
+    .from('pb_export_presets')
+    .select('id,render_config')
+    .eq('academy_id', academyId)
+    .eq('preset_kind', presetKind)
+    .in('id', orderedPresetIds);
+  if (lookupErr) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_preset_order_lookup_failed:${lookupErr.message}`,
+    });
+    return;
+  }
+
+  const orderById = new Map(orderedPresetIds.map((id, index) => [id, index]));
+  const now = new Date().toISOString();
+  for (const row of rows || []) {
+    const id = String(row?.id || '').trim();
+    const order = orderById.get(id);
+    if (!isUuid(id) || !Number.isFinite(order)) continue;
+    const renderConfig = normalizeJsonObject(row?.render_config, {});
+    renderConfig.assignmentLibraryOrder = order;
+    const { error: updateErr } = await supa
+      .from('pb_export_presets')
+      .update({
+        assignment_library_order: order,
+        render_config: renderConfig,
+        updated_at: now,
+      })
+      .eq('academy_id', academyId)
+      .eq('preset_kind', presetKind)
+      .eq('id', id);
+    if (updateErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `export_preset_order_update_failed:${updateErr.message}`,
+      });
+      return;
+    }
+  }
+
+  sendJson(res, 200, { ok: true, updatedCount: (rows || []).length });
 }
 
 async function deleteExportPreset(presetId, body, res) {
@@ -7712,6 +7782,11 @@ async function handler(req, res) {
     }
     if (method === 'GET' && url.pathname === '/pb/export-presets') {
       await listExportPresets(url, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/pb/export-presets/order') {
+      const body = await readJson(req);
+      await updateExportPresetOrder(body, res);
       return;
     }
     if (method === 'POST' && /^\/pb\/export-presets\/[^/]+\/rename$/.test(url.pathname)) {

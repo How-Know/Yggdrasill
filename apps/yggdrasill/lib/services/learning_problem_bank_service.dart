@@ -634,6 +634,7 @@ class LearningProblemDocumentExportPreset {
     required this.timeLimitText,
     required this.includeQuestionScore,
     required this.questionScoreByQuestionUid,
+    this.assignmentLibraryOrder,
     this.createdAt,
     this.updatedAt,
   });
@@ -657,6 +658,7 @@ class LearningProblemDocumentExportPreset {
   final String timeLimitText;
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionUid;
+  final int? assignmentLibraryOrder;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -798,6 +800,11 @@ class LearningProblemDocumentExportPreset {
       timeLimitText: timeLimitText,
       includeQuestionScore: includeQuestionScore,
       questionScoreByQuestionUid: questionScoreByQuestionUid,
+      assignmentLibraryOrder: _intOrNull(
+        map['assignment_library_order'] ??
+            map['assignmentLibraryOrder'] ??
+            renderConfig['assignmentLibraryOrder'],
+      ),
       createdAt: _dateTimeOrNull(map['created_at']),
       updatedAt: _dateTimeOrNull(map['updated_at']),
     );
@@ -1023,23 +1030,23 @@ class LearningProblemBankService {
 
   Future<List<LearningProblemDocumentSummary>> listReadyDocuments({
     required String academyId,
-    required String curriculumCode,
+    List<String> curriculumCodes = const <String>[],
     required String schoolLevel,
     required String detailedCourse,
     required String sourceTypeCode,
     int limit = 2000,
   }) async {
     final dbCodes = pbSourceTypeCodesForLearningUi(sourceTypeCode);
-    final rows = await _client
+    var query = _client
         .from('pb_documents')
         .select(
           'id,school_name,publisher_name,material_name,school_level,grade_key,course_key,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at,exam_year,semester_label,exam_term_label',
         )
         .eq('academy_id', academyId)
-        .eq('curriculum_code', curriculumCode)
         .inFilter('source_type_code', dbCodes)
-        .eq('status', 'ready')
-        .limit(limit);
+        .eq('status', 'ready');
+    query = _applyCurriculumCodeFilter(query, curriculumCodes);
+    final rows = await query.limit(limit);
 
     final list = <LearningProblemDocumentSummary>[];
     for (final item in (rows as List<dynamic>)) {
@@ -1122,7 +1129,7 @@ class LearningProblemBankService {
 
   Future<List<LearningProblemQuestion>> searchQuestions({
     required String academyId,
-    required String curriculumCode,
+    List<String> curriculumCodes = const <String>[],
     required String schoolLevel,
     required String detailedCourse,
     required String sourceTypeCode,
@@ -1133,16 +1140,16 @@ class LearningProblemBankService {
     final safeDocId = (documentId ?? '').trim();
     final safeSchoolName = (schoolName ?? '').trim();
     final dbSourceCodes = pbSourceTypeCodesForLearningUi(sourceTypeCode);
-    final readyDocRows = await _client
+    var readyDocQuery = _client
         .from('pb_documents')
         .select(
           'id,source_filename,school_name,school_level,grade_key,course_key,course_label,grade_label,curriculum_code,source_type_code,meta',
         )
         .eq('academy_id', academyId)
-        .eq('curriculum_code', curriculumCode)
         .inFilter('source_type_code', dbSourceCodes)
-        .eq('status', 'ready')
-        .limit(4000);
+        .eq('status', 'ready');
+    readyDocQuery = _applyCurriculumCodeFilter(readyDocQuery, curriculumCodes);
+    final readyDocRows = await readyDocQuery.limit(4000);
 
     final readyDocIds = <String>{};
     final documentNameMap = <String, String>{};
@@ -1231,9 +1238,9 @@ class LearningProblemBankService {
             ].join(','),
           )
           .eq('academy_id', academyId)
-          .eq('curriculum_code', curriculumCode)
           .inFilter('source_type_code', dbSourceCodes)
           .inFilter('document_id', docChunk);
+      q = _applyCurriculumCodeFilter(q, curriculumCodes);
 
       if (safeDocId.isEmpty && safeSchoolName.isNotEmpty) {
         q = q.eq('school_name', safeSchoolName);
@@ -1762,13 +1769,29 @@ class LearningProblemBankService {
           .toList(growable: false);
     }
 
-    final rows = await _client
+    dynamic rows;
+    try {
+      rows = await _client
+          .from('pb_export_presets')
+          .select('*')
+          .eq('academy_id', academyId)
+          .eq('preset_kind', safePresetKind)
+          .order(
+            'assignment_library_order',
+            ascending: true,
+            nullsFirst: false,
+          )
+          .order('created_at', ascending: false)
+          .range(safeOffset, safeOffset + safeLimit - 1);
+    } catch (_) {
+      rows = await _client
         .from('pb_export_presets')
         .select('*')
         .eq('academy_id', academyId)
         .eq('preset_kind', safePresetKind)
         .order('created_at', ascending: false)
         .range(safeOffset, safeOffset + safeLimit - 1);
+    }
     final rawMaps = (rows as List<dynamic>)
         .map(_mapOrEmpty)
         .where((row) => row.isNotEmpty)
@@ -1881,6 +1904,62 @@ class LearningProblemBankService {
       offset: offset,
       presetKind: 'assignment',
     );
+  }
+
+  Future<void> saveGeneratedAssignmentPresetOrder({
+    required String academyId,
+    required List<String> orderedPresetIds,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safeIds = orderedPresetIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    if (safeAcademyId.isEmpty || safeIds.isEmpty) return;
+    if (hasGateway) {
+      await _gatewayPost(
+        '/pb/export-presets/order',
+        body: <String, dynamic>{
+          'academyId': safeAcademyId,
+          'presetKind': 'assignment',
+          'orderedPresetIds': safeIds,
+        },
+      );
+      return;
+    }
+
+    final orderById = <String, int>{
+      for (final entry in safeIds.asMap().entries) entry.value: entry.key,
+    };
+    final rows = <Map<String, dynamic>>[];
+    for (final chunk in _chunkStrings(safeIds, 250)) {
+      final fetched = await _client
+          .from('pb_export_presets')
+          .select('id,render_config')
+          .eq('academy_id', safeAcademyId)
+          .eq('preset_kind', 'assignment')
+          .inFilter('id', chunk);
+      rows.addAll((fetched as List<dynamic>).map(_mapOrEmpty));
+    }
+    final now = DateTime.now().toIso8601String();
+    for (final row in rows) {
+      final id = '${row['id'] ?? ''}'.trim();
+      final order = orderById[id];
+      if (id.isEmpty || order == null) continue;
+      final renderConfig = <String, dynamic>{
+        ..._mapOrEmpty(row['render_config']),
+        'assignmentLibraryOrder': order,
+      };
+      await _client
+          .from('pb_export_presets')
+          .update(<String, dynamic>{
+            'assignment_library_order': order,
+            'render_config': renderConfig,
+            'updated_at': now,
+          })
+          .eq('academy_id', safeAcademyId)
+          .eq('id', id);
+    }
   }
 
   Future<LearningProblemDocumentExportPreset?> renameExportPreset({
@@ -3060,6 +3139,19 @@ class LearningProblemBankService {
       return null;
     }
   }
+}
+
+T _applyCurriculumCodeFilter<T>(T query, List<String> curriculumCodes) {
+  final codes = curriculumCodes
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toSet()
+      .toList(growable: false);
+  if (codes.isEmpty) return query;
+  if (codes.length == 1) {
+    return (query as dynamic).eq('curriculum_code', codes.first) as T;
+  }
+  return (query as dynamic).inFilter('curriculum_code', codes) as T;
 }
 
 bool _matchesLevel(

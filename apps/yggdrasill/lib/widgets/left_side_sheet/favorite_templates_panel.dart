@@ -46,6 +46,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   StreamSubscription<void>? _assignmentPresetSubscription;
   String _printingPresetId = '';
   String _previewingPresetId = '';
+  bool _assignmentOrderMode = false;
+  bool _savingAssignmentOrder = false;
+  bool _pendingAssignmentOrderSave = false;
 
   @override
   void initState() {
@@ -86,7 +89,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           assignmentPresets = const <LearningProblemDocumentExportPreset>[];
         }
       }
-      final assignmentTemplates = assignmentPresets
+      final sortedAssignmentPresets =
+          _sortGeneratedAssignmentPresets(assignmentPresets);
+      final assignmentTemplates = sortedAssignmentPresets
           .map(
             HomeworkStore.instance.templateFromGeneratedAssignmentPreset,
           )
@@ -296,6 +301,109 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     return '$pageText · $countText';
   }
 
+  int? _assignmentLibraryOrder(LearningProblemDocumentExportPreset preset) {
+    if (preset.assignmentLibraryOrder != null) {
+      return preset.assignmentLibraryOrder;
+    }
+    final raw = preset.renderConfig['assignmentLibraryOrder'] ??
+        preset.renderConfig['assignmentSortOrder'] ??
+        preset.renderConfig['sortOrder'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse('$raw');
+  }
+
+  List<LearningProblemDocumentExportPreset> _sortGeneratedAssignmentPresets(
+    List<LearningProblemDocumentExportPreset> presets,
+  ) {
+    final out = presets.toList(growable: true);
+    out.sort((a, b) {
+      final aOrder = _assignmentLibraryOrder(a);
+      final bOrder = _assignmentLibraryOrder(b);
+      if (aOrder != null && bOrder != null && aOrder != bOrder) {
+        return aOrder.compareTo(bOrder);
+      }
+      if (aOrder != null && bOrder == null) return -1;
+      if (aOrder == null && bOrder != null) return 1;
+      final aDate = a.updatedAt ?? a.createdAt ?? DateTime(1970);
+      final bDate = b.updatedAt ?? b.createdAt ?? DateTime(1970);
+      final dateCmp = bDate.compareTo(aDate);
+      if (dateCmp != 0) return dateCmp;
+      return a.id.compareTo(b.id);
+    });
+    return out;
+  }
+
+  String _presetIdForTemplate(HomeworkRecentTemplate template) {
+    if (template.parts.isEmpty) return '';
+    return (template.parts.first.pbPresetId ?? '').trim();
+  }
+
+  Future<void> _saveAssignmentTemplateOrder(
+    List<HomeworkRecentTemplate> orderedTemplates,
+  ) async {
+    if (_savingAssignmentOrder) {
+      _pendingAssignmentOrderSave = true;
+      return;
+    }
+    final presetIds = orderedTemplates
+        .map(_presetIdForTemplate)
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (presetIds.isEmpty) return;
+    setState(() => _savingAssignmentOrder = true);
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      final safeAcademyId = (academyId ?? '').trim();
+      if (safeAcademyId.isEmpty) {
+        throw Exception('학원 정보를 찾지 못했습니다.');
+      }
+      await _problemBankService.saveGeneratedAssignmentPresetOrder(
+        academyId: safeAcademyId,
+        orderedPresetIds: presetIds,
+      );
+      LearningProblemBankService.generatedAssignmentChanged.add(null);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('과제 순서 저장 실패: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingAssignmentOrder = false);
+      if (_pendingAssignmentOrderSave && mounted) {
+        _pendingAssignmentOrderSave = false;
+        unawaited(_saveAssignmentTemplateOrder(_assignmentTemplates));
+      }
+    }
+  }
+
+  void _reorderAssignmentTemplates({
+    required int oldIndex,
+    required int newIndex,
+    required List<HomeworkRecentTemplate> visibleTemplates,
+  }) {
+    if (oldIndex < 0 || oldIndex >= visibleTemplates.length) return;
+    var targetIndex = newIndex;
+    if (targetIndex > oldIndex) targetIndex -= 1;
+    if (targetIndex < 0) targetIndex = 0;
+    if (targetIndex >= visibleTemplates.length) {
+      targetIndex = visibleTemplates.length - 1;
+    }
+    if (oldIndex == targetIndex) return;
+
+    final reorderedVisible = visibleTemplates.toList(growable: true);
+    final moved = reorderedVisible.removeAt(oldIndex);
+    reorderedVisible.insert(targetIndex, moved);
+    final visibleIds = visibleTemplates.map((e) => e.templateId).toSet();
+    final visibleQueue = reorderedVisible.toList(growable: true);
+    final merged = _assignmentTemplates.map((template) {
+      if (!visibleIds.contains(template.templateId)) return template;
+      return visibleQueue.removeAt(0);
+    }).toList(growable: false);
+    setState(() => _assignmentTemplates = merged);
+    unawaited(_saveAssignmentTemplateOrder(merged));
+  }
+
   void _selectMode(_TemplateLibraryMode mode) {
     if (_mode == mode) return;
     final nextTemplates = mode == _TemplateLibraryMode.assignments
@@ -303,6 +411,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         : _templates;
     setState(() {
       _mode = mode;
+      _assignmentOrderMode = false;
       if (mode == _TemplateLibraryMode.assignments) {
         _gradeFilter = '';
       }
@@ -551,6 +660,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     required double sheetScale,
     VoidCallback? onTitleTap,
     VoidCallback? onFlowTap,
+    bool draggable = true,
   }) {
     final card = _buildTemplateCardSurface(
       template,
@@ -559,6 +669,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       onTitleTap: onTitleTap,
       onFlowTap: onFlowTap,
     );
+    if (!draggable) return card;
     return Draggable<HomeworkRecentTemplate>(
       data: template,
       maxSimultaneousDrags: 1,
@@ -1589,19 +1700,22 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     HomeworkRecentTemplate template, {
     required double width,
     required double sheetScale,
+    bool orderMode = false,
+    int? reorderIndex,
   }) {
     final preset = _presetForTemplate(template);
     final presetId = preset?.id ?? '';
     final isPrinting = presetId.isNotEmpty && _printingPresetId == presetId;
     final isPreviewing = presetId.isNotEmpty && _previewingPresetId == presetId;
     final isBusy = isPrinting || isPreviewing;
-    return Column(
+    final cardBody = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildTemplateCard(
           template,
           width: width,
           sheetScale: sheetScale,
+          draggable: !orderMode,
           onTitleTap: preset == null || isBusy
               ? null
               : () => unawaited(_renameGeneratedAssignmentPreset(preset)),
@@ -1690,6 +1804,31 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         ),
       ],
     );
+    if (!orderMode || reorderIndex == null) return cardBody;
+    final handleWidth = 34 * sheetScale;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ReorderableDragStartListener(
+          index: reorderIndex,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.grab,
+            child: Container(
+              width: handleWidth,
+              margin: EdgeInsets.only(top: 8 * sheetScale),
+              alignment: Alignment.topCenter,
+              child: Icon(
+                Icons.drag_indicator_rounded,
+                color: const Color(0xFF8FA3A3),
+                size: 22 * sheetScale,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(width: 4 * sheetScale),
+        Expanded(child: cardBody),
+      ],
+    );
   }
 
   @override
@@ -1751,12 +1890,53 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                   ),
                 ),
               ),
+              if (isAssignmentMode) ...[
+                Tooltip(
+                  message: _assignmentOrderMode ? '순서 편집 종료' : '순서 편집',
+                  child: SizedBox(
+                    width: 34 * sheetScale,
+                    height: 34 * sheetScale,
+                    child: IconButton(
+                      onPressed: _loading
+                          ? null
+                          : () {
+                              setState(() {
+                                _assignmentOrderMode =
+                                    !_assignmentOrderMode;
+                              });
+                            },
+                      icon: Icon(
+                        _assignmentOrderMode
+                            ? Icons.check_rounded
+                            : Icons.swap_vert_rounded,
+                        size: headerIconSize,
+                        color: _assignmentOrderMode
+                            ? const Color(0xFF9FE3C6)
+                            : kDlgTextSub,
+                      ),
+                      padding: EdgeInsets.zero,
+                      splashRadius: 18 * sheetScale,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ),
+                if (_savingAssignmentOrder)
+                  SizedBox(
+                    width: 24 * sheetScale,
+                    height: 24 * sheetScale,
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+              ],
               SizedBox(
                 width: 34 * sheetScale,
                 height: 34 * sheetScale,
                 child: IconButton(
-                  onPressed:
-                      _loading ? null : () => unawaited(_refreshTemplates()),
+                  onPressed: _loading || _savingAssignmentOrder
+                      ? null
+                      : () => unawaited(_refreshTemplates()),
                   icon: Icon(
                     Icons.refresh_rounded,
                     size: headerIconSize,
@@ -1870,6 +2050,48 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                  );
+                }
+                if (isAssignmentMode && _assignmentOrderMode) {
+                  return ReorderableListView.builder(
+                    buildDefaultDragHandles: false,
+                    itemCount: filteredTemplates.length,
+                    onReorder: (oldIndex, newIndex) =>
+                        _reorderAssignmentTemplates(
+                      oldIndex: oldIndex,
+                      newIndex: newIndex,
+                      visibleTemplates: filteredTemplates,
+                    ),
+                    proxyDecorator: (child, index, animation) {
+                      return Material(
+                        color: Colors.transparent,
+                        child: FadeTransition(
+                          opacity: Tween<double>(
+                            begin: 0.92,
+                            end: 1,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      );
+                    },
+                    itemBuilder: (context, index) {
+                      final template = filteredTemplates[index];
+                      return Padding(
+                        key: ValueKey('assignment-order-${template.templateId}'),
+                        padding: EdgeInsets.only(
+                          bottom: index == filteredTemplates.length - 1
+                              ? 0
+                              : 8 * sheetScale,
+                        ),
+                        child: _buildAssignmentCard(
+                          template,
+                          width: cardWidth - (38 * sheetScale),
+                          sheetScale: sheetScale,
+                          orderMode: true,
+                          reorderIndex: index,
+                        ),
+                      );
+                    },
                   );
                 }
                 return ListView.separated(
