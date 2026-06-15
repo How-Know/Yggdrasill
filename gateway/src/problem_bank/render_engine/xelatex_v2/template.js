@@ -1702,6 +1702,30 @@ function renderDisplayMathStemBlock(lines, equations, options = {}) {
   ].join('\n');
 }
 
+function renderStandaloneMathEnvironmentBlock(lines) {
+  const raw = (Array.isArray(lines) ? lines : [])
+    .map((line) => String(line || ''))
+    .join('\n')
+    .trim();
+  const aligned = raw.match(/^\\begin\{aligned\}([\s\S]*?)\\end\{aligned\}$/);
+  if (!aligned) return '';
+
+  let math = raw;
+  const body = String(aligned[1] || '').trim();
+  if (/\\hline/.test(body)) {
+    const rows = body.split(/\\\\/);
+    const maxAmpersands = Math.max(
+      1,
+      ...rows.map((row) => (String(row).match(/(?<!\\)&/g) || []).length),
+    );
+    const colSpec = `r${'l'.repeat(maxAmpersands)}`;
+    math = `\\begin{array}{${colSpec}}\n${body}\n\\end{array}`;
+  }
+
+  const normalized = symmetrizeTallMathChunk(normalizeMathSegment(math));
+  return `\\par\\noindent\\YggVtwoBaselineGuide{}\\mtlinesymbox{$\\displaystyle ${normalized}$}\\par`;
+}
+
 function texHasTallInlineMath(tex) {
   const value = String(tex || '');
   return /\\(?:dfrac|frac|tfrac|over|sqrt|mtsqrtpad|mtsymmathbox|mtlinesymbox|sum|prod|int|iint|iiint)\b/.test(value)
@@ -5719,6 +5743,12 @@ function renderOneQuestion(question, {
         }
       }
       // rawLine 간 누적된 "빈 줄 + 단독 [문단] 라인" 수. 다음 실제 콘텐츠/마커 앞에 수직 간격으로 반영.
+      const standaloneMathBlock = renderStandaloneMathEnvironmentBlock(seg.lines);
+      if (standaloneMathBlock) {
+        parts.push(standaloneMathBlock);
+        emittedStemTextLineAny = true;
+        continue;
+      }
       let outerPendingEmpty = 0;
       const segLineAligns = Array.isArray(seg.lineAligns) ? seg.lineAligns : [];
       for (let rawIdx = 0; rawIdx < seg.lines.length; rawIdx += 1) {

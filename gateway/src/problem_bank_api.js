@@ -706,12 +706,12 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_14';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_15';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. V1 의 캐시/렌더 결과와 절대로 충돌하지
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_kmatrix_01';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_kmatrix_02';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -5296,6 +5296,21 @@ const VALID_TEXTBOOK_KINDS = new Set(['body', 'ans', 'sol']);
 const UPLOAD_URL_TTL_SEC = 60 * 30;
 const DOWNLOAD_URL_TTL_SEC = 60 * 60;
 
+// Single-page (lossless) solution PDF serving. Large solution PDFs
+// (143~318MB) are far too heavy for the viewer to open even from a local
+// cache. Instead we lazily split out the exact page the grader jumped to with
+// poppler's `pdfseparate` (verbatim object copy → identical resolution) and
+// cache the tiny per-page PDF in Storage so later opens skip the big original
+// entirely.
+const TEXTBOOK_PAGE_CACHE_PREFIX = 'textbook-pages';
+// Persistent-ish disk cache of original PDFs so we download each big source at
+// most once (per server lifetime) to split future pages from it.
+const TEXTBOOK_SRC_CACHE_DIR =
+  process.env.TEXTBOOK_PDF_CACHE_DIR ||
+  path.join(os.tmpdir(), 'ygg-textbook-src');
+// De-dupe concurrent downloads of the same big original.
+const _textbookSrcDownloads = new Map();
+
 function parseGradeComposite(raw) {
   const s = String(raw || '').trim();
   if (!s) return { gradeLabel: '', kind: '' };
@@ -5345,7 +5360,25 @@ async function resolveTextbookLink({
   fileId,
   gradeLabel,
   kind,
+  storageKey,
 }) {
+  // storage_key is the canonical, unambiguous identifier. Prefer it because
+  // the grade composite stored in the row (e.g. `공통수학1#sol`) can differ
+  // from the courseKey segment used in the storage path (e.g. `H1-c1`), which
+  // breaks the tuple lookup for high-school books.
+  const skey = String(storageKey || '').trim();
+  if (skey) {
+    const { data, error } = await supa
+      .from('resource_file_links')
+      .select(
+        'id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at',
+      )
+      .eq('storage_key', skey)
+      .maybeSingle();
+    if (error) return { ok: false, error: `link_lookup_failed: ${error.message}` };
+    if (data) return { ok: true, row: data };
+    // fall through to other identifiers when storage_key did not match
+  }
   if (linkId != null && String(linkId).trim() !== '') {
     const { data, error } = await supa
       .from('resource_file_links')
@@ -5607,6 +5640,7 @@ async function handleTextbookDownloadUrl(url, res) {
   const fileId = (url.searchParams.get('file_id') || '').trim();
   const gradeLabel = (url.searchParams.get('grade_label') || '').trim();
   const kind = (url.searchParams.get('kind') || '').trim().toLowerCase();
+  const storageKey = (url.searchParams.get('storage_key') || '').trim();
 
   const resolved = await resolveTextbookLink({
     linkId: linkIdRaw,
@@ -5614,6 +5648,7 @@ async function handleTextbookDownloadUrl(url, res) {
     fileId,
     gradeLabel,
     kind,
+    storageKey,
   });
   if (!resolved.ok) {
     sendJson(res, 400, { ok: false, error: resolved.error });
@@ -5703,6 +5738,192 @@ async function handleTextbookDownloadUrl(url, res) {
   sendJson(res, 500, {
     ok: false,
     error: `download_url_failed: ${signed.error}`,
+  });
+}
+
+function textbookContentHashShort(row) {
+  const raw = String(row?.content_hash || '').replace(/[^a-z0-9]/gi, '');
+  return raw.slice(0, 16) || 'nohash';
+}
+
+// Downloads the big source PDF to a local disk cache exactly once and returns
+// its path. Subsequent calls reuse the cached file (size-validated against
+// `file_size_bytes`). Concurrent callers share a single in-flight download.
+async function ensureTextbookOriginalCached(row) {
+  const cacheName = `${row.id}_${textbookContentHashShort(row)}.pdf`;
+  const cachePath = path.join(TEXTBOOK_SRC_CACHE_DIR, cacheName);
+  const expected = Number(row.file_size_bytes || 0);
+  try {
+    const st = await fs.promises.stat(cachePath);
+    if (expected === 0 || st.size === expected) return cachePath;
+    await fs.promises.rm(cachePath, { force: true });
+  } catch {
+    // not cached yet
+  }
+  const inFlight = _textbookSrcDownloads.get(cachePath);
+  if (inFlight) return inFlight;
+  const job = (async () => {
+    await fs.promises.mkdir(TEXTBOOK_SRC_CACHE_DIR, { recursive: true });
+    const signed = await storageCreateDownloadUrl({
+      driver: row.storage_driver,
+      bucket: row.storage_bucket,
+      key: row.storage_key,
+      expiresIn: DOWNLOAD_URL_TTL_SEC,
+    });
+    if (!signed.ok) throw new Error(`src_signed_url_failed: ${signed.error}`);
+    const resp = await fetch(signed.url);
+    if (!resp.ok) throw new Error(`src_download_failed: ${resp.status}`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const tmp = `${cachePath}.${randomUUID()}.part`;
+    await fs.promises.writeFile(tmp, buf);
+    await fs.promises.rename(tmp, cachePath);
+    return cachePath;
+  })();
+  _textbookSrcDownloads.set(cachePath, job);
+  try {
+    return await job;
+  } finally {
+    _textbookSrcDownloads.delete(cachePath);
+  }
+}
+
+// Lossless single-page extraction via poppler pdfseparate. Returns the page
+// PDF bytes; caller is responsible for cleaning up `tmpDir`.
+async function extractTextbookPagePdf(srcPath, page) {
+  const tmpDir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'ygg-pgsep-'),
+  );
+  // pdfseparate substitutes %d with the actual page number it writes.
+  const outPattern = path.join(tmpDir, 'p-%d.pdf');
+  try {
+    await execFileAsync(
+      'pdfseparate',
+      ['-f', String(page), '-l', String(page), srcPath, outPattern],
+      { maxBuffer: 64 * 1024 * 1024, windowsHide: true },
+    );
+    const outFile = path.join(tmpDir, `p-${page}.pdf`);
+    const bytes = await fs.promises.readFile(outFile);
+    return { bytes, tmpDir };
+  } catch (e) {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+}
+
+// GET /textbook/pdf/page?link_id=N&page=P
+// Returns a signed URL to a tiny single-page PDF (full original resolution)
+// extracted from the large solution PDF. Lazily splits + caches in Storage on
+// first access; later opens are served straight from Storage.
+async function handleTextbookPagePdf(url, res) {
+  const linkIdRaw = (url.searchParams.get('link_id') || '').trim();
+  const academyId = (url.searchParams.get('academy_id') || '').trim();
+  const fileId = (url.searchParams.get('file_id') || '').trim();
+  const gradeLabel = (url.searchParams.get('grade_label') || '').trim();
+  const kind = (url.searchParams.get('kind') || '').trim().toLowerCase();
+  const storageKey = (url.searchParams.get('storage_key') || '').trim();
+  const page = Number((url.searchParams.get('page') || '').trim());
+  if (!linkIdRaw && !storageKey && !(academyId && fileId && gradeLabel && kind)) {
+    sendJson(res, 400, { ok: false, error: 'missing_identifiers' });
+    return;
+  }
+  if (!Number.isInteger(page) || page < 1) {
+    sendJson(res, 400, { ok: false, error: 'invalid_page' });
+    return;
+  }
+  const resolved = await resolveTextbookLink({
+    linkId: linkIdRaw,
+    academyId,
+    fileId,
+    gradeLabel,
+    kind,
+    storageKey,
+  });
+  if (!resolved.ok || !resolved.row) {
+    sendJson(res, 404, { ok: false, error: resolved.error || 'link_not_found' });
+    return;
+  }
+  const row = resolved.row;
+  const status = String(row.migration_status || 'legacy');
+  const hasStorage =
+    !!row.storage_key && !!row.storage_bucket && !!row.storage_driver;
+  if (status === 'legacy' || !hasStorage) {
+    // Caller should fall back to the full download-url flow.
+    sendJson(res, 409, { ok: false, error: 'page_split_unsupported_legacy' });
+    return;
+  }
+  const bucket = DEFAULT_TEXTBOOK_BUCKET;
+  const pageKey =
+    `${TEXTBOOK_PAGE_CACHE_PREFIX}/${row.id}/` +
+    `${textbookContentHashShort(row)}_p${page}.pdf`;
+
+  const existing = await storageStatObject({
+    driver: DEFAULT_TEXTBOOK_DRIVER,
+    bucket,
+    key: pageKey,
+  });
+  if (!existing.ok) {
+    let srcPath;
+    try {
+      srcPath = await ensureTextbookOriginalCached(row);
+    } catch (e) {
+      sendJson(res, 502, {
+        ok: false,
+        error: `src_cache_failed: ${e?.message || e}`,
+      });
+      return;
+    }
+    let extracted;
+    try {
+      extracted = await extractTextbookPagePdf(srcPath, page);
+    } catch (e) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `page_extract_failed: ${e?.message || e}`,
+      });
+      return;
+    }
+    try {
+      const up = await storageUploadBytes({
+        driver: DEFAULT_TEXTBOOK_DRIVER,
+        bucket,
+        key: pageKey,
+        contentType: 'application/pdf',
+        bytes: extracted.bytes,
+      });
+      if (!up.ok) throw new Error(up.error || 'page_upload_failed');
+    } catch (e) {
+      await fs.promises
+        .rm(extracted.tmpDir, { recursive: true, force: true })
+        .catch(() => {});
+      sendJson(res, 500, {
+        ok: false,
+        error: `page_upload_failed: ${e?.message || e}`,
+      });
+      return;
+    }
+    await fs.promises
+      .rm(extracted.tmpDir, { recursive: true, force: true })
+      .catch(() => {});
+  }
+
+  const signed = await storageCreateDownloadUrl({
+    driver: DEFAULT_TEXTBOOK_DRIVER,
+    bucket,
+    key: pageKey,
+    expiresIn: DOWNLOAD_URL_TTL_SEC,
+  });
+  if (!signed.ok) {
+    sendJson(res, 500, { ok: false, error: `page_url_failed: ${signed.error}` });
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    url: signed.url,
+    expires_in: signed.expires_in,
+    link_id: row.id,
+    source_page: page,
+    local_page: 1,
+    migration_status: status,
   });
 }
 
@@ -7892,6 +8113,10 @@ async function handler(req, res) {
     }
     if (method === 'GET' && url.pathname === '/textbook/pdf/download-url') {
       await handleTextbookDownloadUrl(url, res);
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/textbook/pdf/page') {
+      await handleTextbookPagePdf(url, res);
       return;
     }
 

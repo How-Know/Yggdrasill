@@ -5070,6 +5070,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       fileId: match.group(2),
       gradeLabel: match.group(3),
       kind: fileKind,
+      storageKey: key,
     );
   }
 
@@ -5184,10 +5185,39 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         : session.answerViewerCacheKey.trim();
     setState(() => _answerPdfOpening = true);
     try {
-      final answerPath = await _resolveSessionPdfViewerPath(
-        raw,
-        kind: preferSolutionRawAsBase && solutionRaw.isNotEmpty ? 'sol' : 'ans',
-      );
+      final baseIsSolution = preferSolutionRawAsBase && solutionRaw.isNotEmpty;
+
+      // For solution jumps to a specific page, fetch a tiny single-page PDF
+      // (lossless, original resolution) instead of opening the huge full
+      // solution PDF (143~318MB). Falls back to the full PDF on any failure.
+      String solutionPageFile = '';
+      int effectiveFocusPage = focusPageNumber;
+      if (focusPageNumber > 0 && solutionRaw.isNotEmpty) {
+        final solRef = _textbookPdfRefFromStoragePath(solutionRaw, kind: 'sol');
+        if (solRef != null) {
+          try {
+            final page = await TextbookPdfService.instance
+                .resolvePage(solRef, focusPageNumber);
+            if (page != null && page.localPath.trim().isNotEmpty) {
+              solutionPageFile = page.localPath.trim();
+              effectiveFocusPage = page.localPage;
+            }
+          } catch (e) {
+            debugPrint('[RIGHT_SHEET_PDF] solution page extract failed: $e');
+          }
+        }
+      }
+
+      final String answerPath;
+      if (baseIsSolution && solutionPageFile.isNotEmpty) {
+        // Base document is the solution itself; serve only the focused page.
+        answerPath = solutionPageFile;
+      } else {
+        answerPath = await _resolveSessionPdfViewerPath(
+          raw,
+          kind: baseIsSolution ? 'sol' : 'ans',
+        );
+      }
       if (answerPath.trim().isEmpty) return;
       if (!_isSessionAnswerWebUrl(answerPath)) {
         final file = File(answerPath);
@@ -5201,13 +5231,29 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         }
       }
 
-      final solutionPath = solutionRaw.isEmpty
-          ? ''
-          : await _resolveSessionPdfViewerPath(solutionRaw, kind: 'sol');
+      final String solutionPath;
+      if (baseIsSolution && solutionPageFile.isNotEmpty) {
+        // The focused page is already the base document.
+        solutionPath = '';
+      } else if (solutionPageFile.isNotEmpty) {
+        solutionPath = solutionPageFile;
+      } else if (solutionRaw.isEmpty) {
+        solutionPath = '';
+      } else {
+        solutionPath =
+            await _resolveSessionPdfViewerPath(solutionRaw, kind: 'sol');
+      }
       if (!mounted) return;
-      final shouldShowSolution =
-          initialShowSolution && solutionPath.trim().isNotEmpty;
-      final focusRequestId = focusPageNumber > 0 ? ++_pdfFocusRequestSeq : 0;
+
+      // When the focused page became the base document, it is shown directly
+      // (no solution toggle needed).
+      final focusTargetsBase = baseIsSolution && solutionPageFile.isNotEmpty;
+      final shouldShowSolution = focusTargetsBase
+          ? false
+          : initialShowSolution && solutionPath.trim().isNotEmpty;
+      final finalFocusPage =
+          solutionPageFile.isNotEmpty ? effectiveFocusPage : focusPageNumber;
+      final focusRequestId = finalFocusPage > 0 ? ++_pdfFocusRequestSeq : 0;
       rightSideSheetPdfPanelSession.value = RightSideSheetPdfPanelSession(
         sessionId: session.sessionId,
         title: session.title.trim().isEmpty ? '답지 확인' : session.title.trim(),
@@ -5215,9 +5261,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         solutionPath: solutionPath.trim(),
         cacheKey: cacheKey,
         showSolution: shouldShowSolution,
-        focusPageNumber: focusPageNumber > 0 ? focusPageNumber : 0,
+        focusPageNumber: finalFocusPage > 0 ? finalFocusPage : 0,
         focusRequestId: focusRequestId,
-        focusRect1k: focusPageNumber > 0 ? focusRect1k : const <int>[],
+        focusRect1k: finalFocusPage > 0 ? focusRect1k : const <int>[],
         overlayEntries: session.overlayEntries
             .map(
               (entry) => <String, String>{

@@ -169,6 +169,9 @@ class TextbookPdfService {
 
   Future<_ResolvedTarget> _askGateway(TextbookPdfRef ref) async {
     final query = <String, String>{};
+    if (ref.storageKey != null && ref.storageKey!.trim().isNotEmpty) {
+      query['storage_key'] = ref.storageKey!.trim();
+    }
     if (ref.linkId != null) {
       query['link_id'] = '${ref.linkId}';
     } else {
@@ -305,6 +308,110 @@ class TextbookPdfService {
     }
   }
 
+  /// Resolves a single page of a (large) textbook PDF into a tiny local
+  /// single-page PDF with the original resolution preserved. The gateway
+  /// losslessly extracts the page (`pdfseparate`) and caches it in Storage, so
+  /// the heavy original is never downloaded by the client.
+  ///
+  /// Returns null when the link is not storage-backed (e.g. still `legacy`),
+  /// letting callers fall back to the full-PDF flow.
+  Future<TextbookPagePdf?> resolvePage(TextbookPdfRef ref, int page) async {
+    if (page < 1) return null;
+    final query = <String, String>{'page': '$page'};
+    if (ref.storageKey != null && ref.storageKey!.trim().isNotEmpty) {
+      query['storage_key'] = ref.storageKey!.trim();
+    }
+    if (ref.linkId != null) {
+      query['link_id'] = '${ref.linkId}';
+    } else {
+      if (ref.academyId != null) query['academy_id'] = ref.academyId!;
+      if (ref.fileId != null) query['file_id'] = ref.fileId!;
+      if (ref.gradeLabel != null) query['grade_label'] = ref.gradeLabel!;
+      if (ref.kind != null) query['kind'] = ref.kind!;
+    }
+    final uri = _uri('/textbook/pdf/page', query);
+    final res = await _http.get(uri, headers: _headers());
+    final body = _decodeJsonMap(res.body);
+    if (res.statusCode == 409) {
+      // Not eligible for page splitting (legacy / no storage) -> fall back.
+      return null;
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300 || body['ok'] != true) {
+      throw TextbookPdfException(
+        'gateway_page_failed(${res.statusCode}): ${body['error'] ?? res.body}',
+      );
+    }
+    final signedUrl = '${body['url'] ?? ''}'.trim();
+    if (signedUrl.isEmpty) return null;
+    final linkId = '${body['link_id'] ?? ''}'.trim();
+    final localPageRaw = body['local_page'];
+    final localPage =
+        localPageRaw is int ? localPageRaw : (_asInt(localPageRaw));
+    final linkKey = linkId.isNotEmpty
+        ? 'link_$linkId'
+        : 'tuple_${ref.academyId}_${ref.fileId}_${ref.gradeLabel}_${ref.kind}';
+    final localPath = await _downloadPageToCache(
+      linkKey: linkKey,
+      page: page,
+      signedUrl: signedUrl,
+    );
+    return TextbookPagePdf(
+      localPath: localPath,
+      sourcePage: page,
+      localPage: localPage >= 1 ? localPage : 1,
+      linkId: linkId,
+    );
+  }
+
+  Future<String> _downloadPageToCache({
+    required String linkKey,
+    required int page,
+    required String signedUrl,
+  }) async {
+    final dirPath = await _ensureCacheDir();
+    final pagesDir = Directory(p.join(dirPath, 'pages'));
+    if (!await pagesDir.exists()) {
+      await pagesDir.create(recursive: true);
+    }
+    final sanitized = linkKey.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final destPath = p.join(pagesDir.path, '${sanitized}_p$page.pdf');
+    final destFile = File(destPath);
+    if (await destFile.exists() && await destFile.length() > 0) {
+      return destPath;
+    }
+    final request = http.Request('GET', Uri.parse(signedUrl));
+    final streamed = await _http.send(request);
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      final b = await streamed.stream.bytesToString();
+      throw TextbookPdfException(
+        'page_download_failed(${streamed.statusCode}): $b',
+      );
+    }
+    final tmpPath = '$destPath.download';
+    final sink = File(tmpPath).openWrite();
+    try {
+      await streamed.stream.pipe(sink);
+      await sink.flush();
+      await sink.close();
+      final tmpFile = File(tmpPath);
+      if (await destFile.exists()) {
+        try {
+          await destFile.delete();
+        } catch (_) {}
+      }
+      await tmpFile.rename(destPath);
+    } catch (e) {
+      try {
+        await sink.close();
+      } catch (_) {}
+      try {
+        await File(tmpPath).delete();
+      } catch (_) {}
+      rethrow;
+    }
+    return destPath;
+  }
+
   Future<String> _downloadAndStore({
     required String linkKey,
     required String signedUrl,
@@ -425,6 +532,7 @@ class TextbookPdfRef {
     this.fileId,
     this.gradeLabel,
     this.kind,
+    this.storageKey,
     this.displayName,
   });
 
@@ -436,6 +544,11 @@ class TextbookPdfRef {
   final String? fileId;
   final String? gradeLabel;
   final String? kind; // 'body' | 'ans' | 'sol'
+
+  /// Canonical storage key (`academies/.../<seg>/<kind>.pdf`). Preferred for
+  /// resolution because the grade composite in the DB can differ from the
+  /// path segment (courseKey vs courseLabel) for high-school books.
+  final String? storageKey;
 
   /// Optional display name for the viewer title bar.
   final String? displayName;
@@ -500,6 +613,27 @@ class TextbookPdfSource {
 }
 
 enum TextbookPdfSourceType { localFile, legacyUrl, remoteUrl }
+
+/// A losslessly-extracted single page of a textbook PDF, cached locally.
+class TextbookPagePdf {
+  const TextbookPagePdf({
+    required this.localPath,
+    required this.sourcePage,
+    required this.localPage,
+    required this.linkId,
+  });
+
+  /// Local file path to the tiny single-page PDF.
+  final String localPath;
+
+  /// The page number in the original document.
+  final int sourcePage;
+
+  /// The page index within the extracted PDF (1 for a single-page extract).
+  final int localPage;
+
+  final String linkId;
+}
 
 class _ResolvedTarget {
   _ResolvedTarget({
