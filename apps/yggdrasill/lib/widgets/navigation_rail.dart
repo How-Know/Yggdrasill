@@ -105,35 +105,36 @@ class CustomNavigationRail extends StatelessWidget {
     );
   }
 
-  NavigationRailDestination _destination({
+  Widget _railDestination({
+    required int index,
     required String tooltip,
     required _NavIconKind kind,
-    required Color color,
+    required Color navIconColor,
     required Color highlightColor,
   }) {
-    return NavigationRailDestination(
-      padding: const EdgeInsets.symmetric(
-        vertical: _navDestinationVerticalPadding,
-      ),
-      icon: Tooltip(
-        message: tooltip,
-        child: _navIconSlot(
-          kind: kind,
-          color: color,
-          highlightColor: highlightColor,
-          selected: false,
+    final selected = selectedIndex == index;
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onDestinationSelected(index),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              vertical: _navDestinationVerticalPadding,
+            ),
+            child: Center(
+              child: _navIconSlot(
+                kind: kind,
+                color: navIconColor,
+                highlightColor: highlightColor,
+                selected: selected,
+              ),
+            ),
+          ),
         ),
       ),
-      selectedIcon: Tooltip(
-        message: tooltip,
-        child: _navIconSlot(
-          kind: kind,
-          color: color,
-          highlightColor: highlightColor,
-          selected: true,
-        ),
-      ),
-      label: const Text(''),
     );
   }
 
@@ -153,85 +154,102 @@ class CustomNavigationRail extends StatelessWidget {
     return Column(
       children: [
         Expanded(
-          child: NavigationRail(
-            backgroundColor: navBackground,
-            unselectedIconTheme:
-                IconThemeData(color: navIconColor, size: _navIconSize),
-            selectedIconTheme:
-                IconThemeData(color: navIconColor, size: _navIconSize),
-            selectedIndex: selectedIndex.clamp(0, 5),
-            onDestinationSelected: onDestinationSelected,
-            leading: Padding(
-              padding: const EdgeInsets.only(
-                top: navLeadingPaddingTop,
-                bottom: _navLeadingPaddingBottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: AnimatedBuilder(
-                      animation: rotationAnimation,
-                      builder: (context, child) {
-                        return Transform.rotate(
-                          angle: rotationAnimation.value * (math.pi / 2),
-                          child: _navIcon(
-                            _NavIconKind.package,
-                            color: navIconColor,
+          child: ColoredBox(
+            color: navBackground,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: navRailTopSpacer + navLeadingPaddingTop,
+                    bottom: _navLeadingPaddingBottom,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      GestureDetector(
+                        onTap: onMenuPressed,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: SizedBox(
+                            width: navLeadingIconTapSize,
+                            height: navLeadingIconTapSize,
+                            child: Center(
+                              child: AnimatedBuilder(
+                                animation: rotationAnimation,
+                                builder: (context, child) {
+                                  return Transform.rotate(
+                                    angle: rotationAnimation.value *
+                                        (math.pi / 2),
+                                    child: _navIcon(
+                                      _NavIconKind.package,
+                                      color: navIconColor,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
                           ),
-                        );
-                      },
-                    ),
-                    onPressed: onMenuPressed,
+                        ),
+                      ),
+                      const SizedBox(height: _navDividerTopSpacing),
+                      Container(
+                        width: _navDividerWidth,
+                        height: 1,
+                        color: dividerColor,
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: _navDividerTopSpacing),
-                  Container(
-                    width: _navDividerWidth,
-                    height: 1,
-                    color: dividerColor,
+                ),
+                Expanded(
+                  child: Column(
+                    children: [
+                      _railDestination(
+                        index: 0,
+                        tooltip: '홈',
+                        kind: _NavIconKind.home,
+                        navIconColor: navIconColor,
+                        highlightColor: highlightColor,
+                      ),
+                      _railDestination(
+                        index: 1,
+                        tooltip: '학생',
+                        kind: _NavIconKind.student,
+                        navIconColor: navIconColor,
+                        highlightColor: highlightColor,
+                      ),
+                      _railDestination(
+                        index: 2,
+                        tooltip: '시간',
+                        kind: _NavIconKind.time,
+                        navIconColor: navIconColor,
+                        highlightColor: highlightColor,
+                      ),
+                      _railDestination(
+                        index: 3,
+                        tooltip: '학습',
+                        kind: _NavIconKind.learning,
+                        navIconColor: navIconColor,
+                        highlightColor: highlightColor,
+                      ),
+                      _railDestination(
+                        index: 4,
+                        tooltip: '자료',
+                        kind: _NavIconKind.resources,
+                        navIconColor: navIconColor,
+                        highlightColor: highlightColor,
+                      ),
+                      _railDestination(
+                        index: 5,
+                        tooltip: '설정',
+                        kind: _NavIconKind.settings,
+                        navIconColor: navIconColor,
+                        highlightColor: highlightColor,
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            useIndicator: false,
-            destinations: [
-              _destination(
-                tooltip: '홈',
-                kind: _NavIconKind.home,
-                color: navIconColor,
-                highlightColor: highlightColor,
-              ),
-              _destination(
-                tooltip: '학생',
-                kind: _NavIconKind.student,
-                color: navIconColor,
-                highlightColor: highlightColor,
-              ),
-              _destination(
-                tooltip: '시간',
-                kind: _NavIconKind.time,
-                color: navIconColor,
-                highlightColor: highlightColor,
-              ),
-              _destination(
-                tooltip: '학습',
-                kind: _NavIconKind.learning,
-                color: navIconColor,
-                highlightColor: highlightColor,
-              ),
-              _destination(
-                tooltip: '자료',
-                kind: _NavIconKind.resources,
-                color: navIconColor,
-                highlightColor: highlightColor,
-              ),
-              _destination(
-                tooltip: '설정',
-                kind: _NavIconKind.settings,
-                color: navIconColor,
-                highlightColor: highlightColor,
-              ),
-            ],
           ),
         ),
         SizedBox(

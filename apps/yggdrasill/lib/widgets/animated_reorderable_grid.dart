@@ -26,10 +26,14 @@ class AnimatedReorderableGrid<T extends Object> extends StatefulWidget {
     this.onDragStarted,
     this.onDragEnded,
     this.scrollBottomPadding = 0,
+    this.scrollTopPadding = 0,
   });
 
   /// 스크롤 영역 맨 아래에 비워 둘 높이(오버레이 FAB 등). 뷰포트는 줄이지 않음.
   final double scrollBottomPadding;
+
+  /// 스크롤 영역 맨 위에 비워 둘 높이(플로팅 페이지 타이틀 등). 뷰포트는 줄이지 않음.
+  final double scrollTopPadding;
 
   final List<T> items;
   final String Function(T item) itemId;
@@ -114,7 +118,7 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
     final maxX = math.max(0.0, gridWidth - 1);
     final x = local.dx.clamp(0.0, maxX);
     final scrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0.0;
-    final y = (local.dy + scrollOffset).clamp(0.0, double.infinity);
+    final y = (local.dy + scrollOffset - widget.scrollTopPadding).clamp(0.0, double.infinity);
     final slotWidth = widget.cardWidth + widget.spacing;
     final slotHeight = widget.cardHeight + widget.spacing;
     var col = (x / slotWidth).floor();
@@ -141,7 +145,7 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
     final maxX = math.max(0.0, gridWidth - 1);
     final x = local.dx.clamp(0.0, maxX);
     final scrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0.0;
-    final y = (local.dy + scrollOffset).clamp(0.0, double.infinity);
+    final y = (local.dy + scrollOffset - widget.scrollTopPadding).clamp(0.0, double.infinity);
     final slotWidth = widget.cardWidth + widget.spacing;
     final slotHeight = widget.cardHeight + widget.spacing;
     var col = (x / slotWidth).floor();
@@ -187,7 +191,7 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
         ? widget.cardHeight
         : (rowCount * widget.cardHeight) + ((rowCount - 1) * widget.spacing);
     final contentHeight =
-        baseContentHeight + widget.scrollBottomPadding;
+        baseContentHeight + widget.scrollBottomPadding + widget.scrollTopPadding;
     final gridWidth = (widget.columns * widget.cardWidth) + ((widget.columns - 1) * widget.spacing);
 
     Widget buildDraggableItem(T item, int index) {
@@ -247,11 +251,13 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
           key: _viewportKey,
           width: gridWidth,
           child: SingleChildScrollView(
+            clipBehavior: Clip.none,
             controller: _scrollCtrl,
             child: SizedBox(
               width: gridWidth,
               height: contentHeight,
               child: Stack(
+                clipBehavior: Clip.none,
                 children: [
                   for (int i = 0; i < previewItems.length; i++)
                     AnimatedPositioned(
@@ -259,7 +265,9 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
                       duration: widget.animationDuration,
                       curve: widget.animationCurve,
                       left: (i % widget.columns) * (widget.cardWidth + widget.spacing),
-                      top: (i ~/ widget.columns) * (widget.cardHeight + widget.spacing),
+                      top: widget.scrollTopPadding +
+                          (i ~/ widget.columns) *
+                              (widget.cardHeight + widget.spacing),
                       width: widget.cardWidth,
                       height: widget.cardHeight,
                       child: buildDraggableItem(previewItems[i], i),

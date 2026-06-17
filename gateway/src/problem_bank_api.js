@@ -706,12 +706,12 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_15';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_18';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. V1 의 캐시/렌더 결과와 절대로 충돌하지
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_kmatrix_02';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v2_kmatrix_05';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [

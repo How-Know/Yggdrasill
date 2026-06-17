@@ -932,7 +932,10 @@ String _objectiveAnswerToSubjective(
 bool _looksLikeObjectiveKeyAnswer(String value) {
   final normalized = _normalizeAnswerKey(value);
   if (normalized.isEmpty) return false;
-  return _objectiveAnswerTokens(normalized).isNotEmpty;
+  if (RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]').hasMatch(normalized)) {
+    return _objectiveAnswerTokens(normalized).isNotEmpty;
+  }
+  return RegExp(r'^(?:10|[1-9])\s*번$').hasMatch(normalized);
 }
 
 int? _answerTokenToChoiceIndex(String token) {
@@ -1115,7 +1118,8 @@ extension ProblemBankQuestionSetExtension on ProblemBankQuestion {
   }
 
   Map<String, dynamic> get setCommonTableScales {
-    final raw = setModel['common_table_scales'] ?? setModel['commonTableScales'];
+    final raw =
+        setModel['common_table_scales'] ?? setModel['commonTableScales'];
     if (raw is! Map) return const <String, dynamic>{};
     return Map<String, dynamic>.from(
       raw.map((key, value) => MapEntry('$key', value)),
@@ -1123,7 +1127,8 @@ extension ProblemBankQuestionSetExtension on ProblemBankQuestion {
   }
 
   Map<String, dynamic> get setCommonTableLayout {
-    final raw = setModel['common_table_layout'] ?? setModel['commonTableLayout'];
+    final raw =
+        setModel['common_table_layout'] ?? setModel['commonTableLayout'];
     if (raw is! Map) return const <String, dynamic>{};
     return Map<String, dynamic>.from(
       raw.map((key, value) => MapEntry('$key', value)),

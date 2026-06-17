@@ -988,6 +988,9 @@ function normalizeMathSegment(mathContent) {
   // 라벨 기호 뒤의 추출 공백은 수식 공백 명령으로 고정해 보이게 유지한다.
   out = out.replace(/([◆◇⬦⬥⋄])\s+/g, '\\text{$1}\\;');
   out = out.replace(/\\(?:diamond|lozenge|blacklozenge)(?![A-Za-z])\s+/g, (m) => `${m.trim()}\\;`);
+  // ① 7처럼 박스 안에서 동그라미 번호 바로 뒤에 숫자/수식이 오면 해당 조각이
+  // math mode 로 감싸져 일반 공백이 사라진다. 라벨 뒤 공백을 명시적 수식 공백으로 고정.
+  out = out.replace(/([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])\s+(?=[+\-−]?\d|\\(?:d?frac|text)(?![A-Za-z]))/g, '$1\\;');
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
@@ -1163,14 +1166,28 @@ function smartTexLine(text, equations, options = {}) {
     if (!pieces.some((piece) => piece.type === 'underline')) {
       return smartTexLineCore(raw.replace(/\[\/?밑줄\]/g, ''), equations);
     }
+    const edgeSpaceTex = (value, atStart) => {
+      const match = atStart
+        ? String(value || '').match(/^\s+/)
+        : String(value || '').match(/\s+$/);
+      if (!match) return '';
+      return '\\hspace*{0.33em}';
+    };
+    const renderPieceWithEdgeSpaces = (value) => {
+      const source = String(value || '');
+      const body = source.trim();
+      const tex = body ? smartTexLine(body, equations, options) : '';
+      return `${edgeSpaceTex(source, true)}${tex}${edgeSpaceTex(source, false)}`;
+    };
     const rendered = [];
     for (const piece of pieces) {
       if (piece.type === 'underline') {
-        const inner = smartTexLine(piece.value, equations, options);
-        if (inner) rendered.push(`\\uline{${inner}}`);
+        const source = String(piece.value || '');
+        const inner = smartTexLine(source.trim(), equations, options);
+        if (inner) rendered.push(`${edgeSpaceTex(source, true)}\\uline{${inner}}${edgeSpaceTex(source, false)}`);
         continue;
       }
-      const tex = smartTexLine(piece.value, equations, options);
+      const tex = renderPieceWithEdgeSpaces(piece.value);
       if (tex) rendered.push(tex);
     }
     return rendered.join('');
@@ -2593,7 +2610,7 @@ function boxContentIsCenteredOnly(lines) {
   if (!joined) return false;
   if (joined.includes('[수식줄바꿈')) return false;
   if (/[가-힣ㄱ-ㅎ]/.test(joined)) return false;
-  if (/\\(?:bullet|circ)\b/.test(joined)) return false;
+  if (/\\(?:bullet|circ|cdot)\b/.test(joined)) return false;
   if (/[•●∙◦○]/.test(joined)) return false;
   if (/[❶❷❸❹❺❻❼❽❾❿]/.test(joined)) return false;
   if (BOGI_ITEM_RE.test(joined)) return false;
@@ -2603,8 +2620,8 @@ function boxContentIsCenteredOnly(lines) {
 // "\bullet" / "\circ" / 리터럴 글머리표(•●∙◦○) 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
 // HWPX 추출본은 \bullet 명령 대신 리터럴 가운데점 문자(U+2022 등)를 그대로 내려보내므로
 // 이들도 (가)/(나) 라벨과 동일하게 "구역 시작" 신호로 인식해 줄바꿈+들여쓰기를 적용한다.
-const SYMBOL_LABEL_LINE_RE = /^\s*(?:\\(bullet|circ)\b|([❶❷❸❹❺❻❼❽❾❿])|([•●∙◦○]))\s*/;
-const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
+const SYMBOL_LABEL_LINE_RE = /^\s*(?:\\(bullet|circ|cdot)\b|([❶❷❸❹❺❻❼❽❾❿])|([•●∙◦○]))\s*/;
+const BULLET_LINE_RE = /^\s*\\(?:bullet|cdot)\b\s*/;
 
 function symbolLabelTex(symbol) {
   // 빈 동그라미(○/◦) 와 \circ 는 빈 원으로, 채워진 점(•/●/∙) 과 \bullet 은 채워진 점으로.
@@ -3571,6 +3588,24 @@ function renderChoicesLatex(choices, equations, layoutColumns = 1, options = {})
     items.join('\\par\n'),
     '\\par}',
   ].join('\n');
+}
+
+function choiceTextHasUnderline(choice) {
+  const text = typeof choice === 'string' ? choice : choice?.text || '';
+  return String(text || '').includes('[밑줄]');
+}
+
+function resolveRenderableChoices(question) {
+  const choices = Array.isArray(question?.choices) ? question.choices : [];
+  const objectiveChoices = Array.isArray(question?.objective_choices) ? question.objective_choices : [];
+  if (
+    objectiveChoices.length === choices.length
+    && objectiveChoices.some(choiceTextHasUnderline)
+    && !choices.some(choiceTextHasUnderline)
+  ) {
+    return objectiveChoices;
+  }
+  return choices;
 }
 
 /* ------------------------------------------------------------------ */
@@ -4746,7 +4781,7 @@ function renderOneQuestion(question, {
     || question?.export_mode
     || question?.exportMode
     || 'objective';
-  const choices = qMode === 'objective' ? (question?.choices || []) : [];
+  const choices = qMode === 'objective' ? resolveRenderableChoices(question) : [];
   const figurePaths = question?.figure_local_paths || [];
   const figureInfos = Array.isArray(question?.figure_local_infos)
     ? question.figure_local_infos

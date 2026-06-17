@@ -44,9 +44,41 @@ import '../widgets/home_header_weather_icon.dart';
 import '../utils/homework_page_text.dart';
 import 'class_content/grading_mode_page.dart';
 
+class ClassContentPrintController extends ChangeNotifier {
+  Future<void> Function()? _startPrintFlow;
+  bool Function()? _isPrintPickMode;
+
+  bool get isPrintPickMode => _isPrintPickMode?.call() ?? false;
+
+  Future<void> startPrintFlow() async {
+    final action = _startPrintFlow;
+    if (action == null) return;
+    await action();
+  }
+
+  void _attach({
+    required Future<void> Function() startPrintFlow,
+    required bool Function() isPrintPickMode,
+  }) {
+    _startPrintFlow = startPrintFlow;
+    _isPrintPickMode = isPrintPickMode;
+    notifyListeners();
+  }
+
+  void _detach() {
+    _startPrintFlow = null;
+    _isPrintPickMode = null;
+    notifyListeners();
+  }
+
+  void _notifyStateChanged() => notifyListeners();
+}
+
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
 class ClassContentScreen extends StatefulWidget {
-  const ClassContentScreen({super.key});
+  final ClassContentPrintController? printController;
+
+  const ClassContentScreen({super.key, this.printController});
 
   static const double _attendingCardHeight = 102; // 기존 대비 15% 축소
   static const double _attendingCardWidth = 320; // 고정 폭으로 내부 우측 정렬 보장
@@ -95,6 +127,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   @override
   void initState() {
     super.initState();
+    widget.printController?._attach(
+      startPrintFlow: _startExternalPrintFlow,
+      isPrintPickMode: () => _printPickMode,
+    );
     DataManager.instance.loadDeviceBindings();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -118,6 +154,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
   @override
   void dispose() {
+    widget.printController?._detach();
     final testGradingSessionToClear = rightSideSheetTestGradingSession.value;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       homeBatchConfirmFabVisible.value = false;
@@ -672,7 +709,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                 builder: (context, constraints) {
                                   // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
                                   final double controlsReserve =
-                                      _isGradingMode ? 380 : 270;
+                                      _isGradingMode ? 320 : 210;
                                   final double leftBudget = math.max(
                                     0.0,
                                     constraints.maxWidth -
@@ -815,18 +852,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                         onTap: () => unawaited(
                                           _showM5BindingHistoryDialog(
                                             context: context,
-                                          ),
-                                        ),
-                                      ),
-                                      _buildHeaderPillIconButton(
-                                        icon: Icons.print,
-                                        tooltip: '인쇄',
-                                        iconColor: _printPickMode
-                                            ? const Color(0xFFEAF2F2)
-                                            : const Color(0xFFD0DDDD),
-                                        onTap: () => unawaited(
-                                          _openHeaderHomeworkPrintFlow(
-                                            attendingStudents: list,
                                           ),
                                         ),
                                       ),
@@ -1109,9 +1134,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          if (mounted) setState(() => _printPickMode = false);
-                        },
+                        onTap: () => _setHomePrintPickMode(false),
                         borderRadius: BorderRadius.circular(999),
                         child: Container(
                           width: 20,
@@ -5329,13 +5352,29 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     setState(() => _pendingConfirms[key] = false);
   }
 
+  void _setHomePrintPickMode(bool value) {
+    if (_printPickMode == value) return;
+    if (!mounted) {
+      _printPickMode = value;
+      widget.printController?._notifyStateChanged();
+      return;
+    }
+    setState(() => _printPickMode = value);
+    widget.printController?._notifyStateChanged();
+  }
+
+  Future<void> _startExternalPrintFlow() async {
+    final attendingStudents = _computeAttendingStudentsForDate(
+      attendanceAnchorDateNotifier.value,
+    );
+    await _openHeaderHomeworkPrintFlow(attendingStudents: attendingStudents);
+  }
+
   Future<void> _openHeaderHomeworkPrintFlow({
     required List<_AttendingStudent> attendingStudents,
   }) async {
     if (_printPickMode) {
-      if (mounted) {
-        setState(() => _printPickMode = false);
-      }
+      _setHomePrintPickMode(false);
       return;
     }
     final waitingCandidates = <({String studentId, HomeworkItem hw})>[];
@@ -5378,7 +5417,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _showHomeworkChipSnackBar(context, '인쇄 가능한 문제은행/교재 PDF가 없습니다.');
       return;
     }
-    setState(() => _printPickMode = true);
+    _setHomePrintPickMode(true);
   }
 
   Future<Map<String, HomeworkAssignmentDetail>> _loadActiveAssignmentByItemId(
@@ -5577,7 +5616,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
   void _exitHomePrintPickMode() {
     if (!mounted || !_printPickMode) return;
-    setState(() => _printPickMode = false);
+    _setHomePrintPickMode(false);
   }
 
   Future<void> _handleHomeworkPrintPick({

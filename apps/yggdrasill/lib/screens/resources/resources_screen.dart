@@ -23,13 +23,19 @@ import '../../widgets/pdf/pdf_editor_dialog.dart';
 import '../../widgets/pdf/textbook_viewer_dialog.dart';
 import '../../widgets/resource_file_meta_dialog.dart';
 import '../../widgets/latex_text_renderer.dart';
+import '../../models/education_level.dart';
 import '../../models/textbook_drag_payload.dart';
+import '../../utils/naesin_exam_context.dart';
 import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_viewer_preference.dart';
+import '../../services/learning_problem_bank_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/dialog_tokens.dart';
+import 'exam_preset_card.dart';
+import 'exam_preset_preview_launcher.dart';
+import 'exam_preset_support.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -140,8 +146,40 @@ const List<IconData> _gradeIconPack = [
   Icons.history_edu,
 ];
 
+class ResourcesPrintController extends ChangeNotifier {
+  Future<void> Function()? _startPrintFlow;
+  bool Function()? _isPrintPickMode;
+
+  bool get isPrintPickMode => _isPrintPickMode?.call() ?? false;
+
+  Future<void> startPrintFlow() async {
+    final action = _startPrintFlow;
+    if (action == null) return;
+    await action();
+  }
+
+  void _attach({
+    required Future<void> Function() startPrintFlow,
+    required bool Function() isPrintPickMode,
+  }) {
+    _startPrintFlow = startPrintFlow;
+    _isPrintPickMode = isPrintPickMode;
+    notifyListeners();
+  }
+
+  void _detach() {
+    _startPrintFlow = null;
+    _isPrintPickMode = null;
+    notifyListeners();
+  }
+
+  void _notifyStateChanged() => notifyListeners();
+}
+
 class ResourcesScreen extends StatefulWidget {
-  const ResourcesScreen({super.key});
+  final ResourcesPrintController? printController;
+
+  const ResourcesScreen({super.key, this.printController});
 
   @override
   State<ResourcesScreen> createState() => _ResourcesScreenState();
@@ -186,11 +224,29 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   String? _selectedFolderIdForTree; // null = 루트
   final Set<String> _expandedFolderIds = <String>{};
   Set<String> _favoriteFileIds = <String>{};
-  String? _draggingFolderId;
-  String? _dragIncomingParentId;
-  String? _reorderTargetFolderId;
-  String? _moveToParentFolderId;
   String? _fileDropTargetFolderId;
+
+  final LearningProblemBankService _examPresetService =
+      LearningProblemBankService();
+  final ExamPresetPreviewLauncher _examPresetPreviewLauncher =
+      ExamPresetPreviewLauncher();
+  List<LearningProblemDocumentExportPreset> _examPresets =
+      const <LearningProblemDocumentExportPreset>[];
+  bool _examPresetsLoading = false;
+  String? _examPresetsLoadedForFolderId;
+  String? _examPresetOpeningId;
+
+  double _folderTreePanelWidth(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    const refMinScreen = 1024.0;
+    const refMaxScreen = 1920.0;
+    if (screenWidth <= refMinScreen) return _folderTreePanelWidthMin;
+    if (screenWidth >= refMaxScreen) return _folderTreePanelWidthMax;
+    final t = (screenWidth - refMinScreen) / (refMaxScreen - refMinScreen);
+    return _folderTreePanelWidthMin +
+        t * (_folderTreePanelWidthMax - _folderTreePanelWidthMin);
+  }
+
   String get _currentCategory => _customTabIndex == 0
       ? 'textbook'
       : (_customTabIndex == 1 ? 'exam' : 'other');
@@ -412,294 +468,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     );
     if (selected != null && mounted) {
       setState(() => _selectedGradeIndex = selected);
-    }
-  }
-
-  Future<String?> _promptCourseName({
-    required String title,
-    String? initialText,
-  }) async {
-    final ctrl = ImeAwareTextEditingController(text: initialText ?? '');
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: context.yggSurfaceBase,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: Text(title,
-              style:
-                  const TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
-          content: TextField(
-            controller: ctrl,
-            autofocus: true,
-            style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
-            cursorColor: _rsAccent,
-            decoration: InputDecoration(
-              hintText: '과정 이름',
-              hintStyle: const TextStyle(color: _rsTextSub),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: _rsBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: _rsAccent, width: 1.4),
-              ),
-              filled: true,
-              fillColor: _rsFieldBg,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('취소', style: TextStyle(color: _rsTextSub)),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(ctrl.text),
-              style: FilledButton.styleFrom(backgroundColor: _rsAccent),
-              child: const Text('확인'),
-            ),
-          ],
-        );
-      },
-    );
-    ctrl.dispose();
-    final trimmed = result?.trim();
-    return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-  }
-
-  Future<void> _openCourseEditDialog() async {
-    final items = await _loadAnswerKeyGradeOptions();
-    final originalSelectedName =
-        (_selectedGradeIndex >= 0 && _selectedGradeIndex < _grades.length)
-            ? _grades[_selectedGradeIndex]
-            : null;
-
-    final result = await showDialog<List<_CourseOption>>(
-      context: context,
-      builder: (ctx) {
-        final editing = List<_CourseOption>.from(items);
-        return StatefulBuilder(builder: (ctx, setState) {
-          return AlertDialog(
-            backgroundColor: context.yggSurfaceBase,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: const Text('과정 편집',
-                style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
-            content: SizedBox(
-              width: 520,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final name = await _promptCourseName(title: '과정 추가');
-                        if (name == null) return;
-                        setState(() {
-                          editing.add(_CourseOption(
-                            key: const Uuid().v4(),
-                            label: name,
-                            orderIndex: editing.length,
-                          ));
-                        });
-                      },
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text('과정 추가'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _rsText,
-                        side: const BorderSide(color: _rsBorder),
-                        backgroundColor: _rsPanelBg,
-                        shape: const StadiumBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  if (editing.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _rsPanelBg,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: _rsBorder),
-                      ),
-                      child: const Text(
-                        '등록된 과정이 없습니다.\n“과정 추가”로 먼저 생성하세요.',
-                        style: TextStyle(
-                            color: _rsTextSub,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            height: 1.4),
-                      ),
-                    )
-                  else
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 360),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: editing.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final item = editing[index];
-                          return Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: _rsPanelBg,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: _rsBorder),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    item.label,
-                                    style: const TextStyle(
-                                        color: _rsText,
-                                        fontWeight: FontWeight.w800),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: '위로',
-                                  onPressed: index == 0
-                                      ? null
-                                      : () => setState(() {
-                                            final moved =
-                                                editing.removeAt(index);
-                                            editing.insert(index - 1, moved);
-                                          }),
-                                  icon: Icon(Icons.keyboard_arrow_up,
-                                      size: 18,
-                                      color: index == 0
-                                          ? _rsTextSub.withOpacity(0.35)
-                                          : _rsTextSub),
-                                ),
-                                IconButton(
-                                  tooltip: '아래로',
-                                  onPressed: index == editing.length - 1
-                                      ? null
-                                      : () => setState(() {
-                                            final moved =
-                                                editing.removeAt(index);
-                                            editing.insert(index + 1, moved);
-                                          }),
-                                  icon: Icon(Icons.keyboard_arrow_down,
-                                      size: 18,
-                                      color: index == editing.length - 1
-                                          ? _rsTextSub.withOpacity(0.35)
-                                          : _rsTextSub),
-                                ),
-                                IconButton(
-                                  tooltip: '이름 수정',
-                                  onPressed: () async {
-                                    final name = await _promptCourseName(
-                                        title: '과정 이름 수정',
-                                        initialText: item.label);
-                                    if (name == null) return;
-                                    setState(() {
-                                      editing[index] = _CourseOption(
-                                        key: item.key,
-                                        label: name,
-                                        orderIndex: item.orderIndex,
-                                      );
-                                    });
-                                  },
-                                  icon: const Icon(Icons.edit,
-                                      size: 18, color: _rsTextSub),
-                                ),
-                                IconButton(
-                                  tooltip: '삭제',
-                                  onPressed: () async {
-                                    final ok = await showDialog<bool>(
-                                      context: ctx,
-                                      builder: (c) => AlertDialog(
-                                        backgroundColor: context.yggSurfaceBase,
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(12)),
-                                        title: const Text('과정 삭제',
-                                            style: TextStyle(
-                                                color: _rsText,
-                                                fontWeight: FontWeight.w900)),
-                                        content: Text(
-                                            '“${item.label}”을(를) 삭제할까요?',
-                                            style: const TextStyle(
-                                                color: _rsTextSub)),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () =>
-                                                Navigator.of(c).pop(false),
-                                            child: const Text('취소',
-                                                style: TextStyle(
-                                                    color: _rsTextSub)),
-                                          ),
-                                          FilledButton(
-                                            onPressed: () =>
-                                                Navigator.of(c).pop(true),
-                                            style: FilledButton.styleFrom(
-                                                backgroundColor:
-                                                    const Color(0xFFB74C4C)),
-                                            child: const Text('삭제'),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                    if (ok != true) return;
-                                    setState(() => editing.removeAt(index));
-                                  },
-                                  icon: const Icon(Icons.delete_outline,
-                                      size: 18, color: _rsTextSub),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('취소', style: TextStyle(color: _rsTextSub)),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(editing),
-                style: FilledButton.styleFrom(backgroundColor: _rsAccent),
-                child: const Text('저장'),
-              ),
-            ],
-          );
-        });
-      },
-    );
-
-    if (result == null) return;
-    final rows = <Map<String, dynamic>>[];
-    final seen = <String>{};
-    for (final item in result) {
-      final label = item.label.trim();
-      if (label.isEmpty) continue;
-      if (seen.contains(label)) continue;
-      seen.add(label);
-      rows.add({
-        'grade_key': item.key,
-        'label': label,
-        'order_index': rows.length,
-      });
-    }
-    await DataManager.instance.saveAnswerKeyGrades(rows);
-    await _ensureGradesLoaded();
-    if (originalSelectedName != null) {
-      final idx = _grades.indexWhere((g) => g == originalSelectedName);
-      if (idx >= 0 && mounted) {
-        setState(() => _selectedGradeIndex = idx);
-      }
     }
   }
 
@@ -987,11 +755,20 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     await _openPrintDialogForPath(pathToPrint);
   }
 
+  void _setResourcePrintPickMode(bool value) {
+    if (_printPickMode == value) return;
+    if (!mounted) {
+      _printPickMode = value;
+      widget.printController?._notifyStateChanged();
+      return;
+    }
+    setState(() => _printPickMode = value);
+    widget.printController?._notifyStateChanged();
+  }
+
   Future<void> _openHeaderPrintFlow() async {
     if (_printPickMode) {
-      if (mounted) {
-        setState(() => _printPickMode = false);
-      }
+      _setResourcePrintPickMode(false);
       return;
     }
     if (_currentCategory != 'textbook') {
@@ -1028,7 +805,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       );
       return;
     }
-    setState(() => _printPickMode = true);
+    _setResourcePrintPickMode(true);
   }
 
   Future<void> _handlePrintPick(_ResourceFile file) async {
@@ -1050,7 +827,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       );
       return;
     }
-    if (mounted) setState(() => _printPickMode = false);
+    _setResourcePrintPickMode(false);
     final range = await showDialog<String>(
       context: context,
       builder: (ctx) => _PrintRangeDialog(file: file, gradeLabel: grade),
@@ -2056,11 +1833,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     print('[INLINE][close]');
   }
 
-  Future<void> _onAddFolder() async {
-    await _onAddFolderWithParent(_selectedFolderIdForTree);
-  }
-
+  // ignore: unused_element
   Future<void> _onAddFolderWithParent(String? parentId) async {
+    // 매니저 앱/백엔드 연동 시 재사용. 사용자 앱 UI에서는 호출하지 않음.
+    // 정책: RESOURCE_TEXTBOOK_FOLDER_MANAGEMENT.md
     final result = await showDialog<_ResourceFolder>(
       context: context,
       builder: (context) => const _FolderCreateDialog(),
@@ -2093,7 +1869,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           color: result.color,
           description: result.description,
           position: Offset(baseX, baseY),
-          size: _defaultFolderSize,
+          size: _ResourcesScreenState._defaultFolderSize,
           shape: result.shape,
           parentId: parentId,
           orderIndex: (_childFoldersOf(parentId).isNotEmpty
@@ -2178,6 +1954,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   @override
   void initState() {
     super.initState();
+    widget.printController?._attach(
+      startPrintFlow: _openHeaderPrintFlow,
+      isPrintPickMode: () => _printPickMode,
+    );
     _loadLayout();
     _ensureGradesLoaded();
     _initFavoritesAndDefaultSelection();
@@ -2211,6 +1991,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       _folders.clear();
       _files.clear();
     });
+    widget.printController?._notifyStateChanged();
     _fabTabBarOverlay.sync(
       context,
       selectedIndex: _customTabIndex,
@@ -2222,6 +2003,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   @override
   void dispose() {
+    widget.printController?._detach();
     _fabTabBarOverlay.dispose();
     for (final c in _gridScrollCtrls) {
       c.dispose();
@@ -2268,7 +2050,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     try {
       final rows = await DataManager.instance
           .loadResourceFoldersForCategory(_currentCategory);
-      final loaded = rows
+      var loaded = rows
           .map<_ResourceFolder>((r) => _ResourceFolder(
                 id: r['id'] as String,
                 name: (r['name'] as String?) ?? '',
@@ -2288,6 +2070,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 orderIndex: (r['order_index'] as num?)?.toInt(),
               ))
           .toList();
+      loaded = await _bootstrapExamFoldersIfNeeded(loaded);
       final fileRows = await DataManager.instance
           .loadResourceFilesForCategory(_currentCategory);
       final List<_ResourceFile> loadedFiles = [];
@@ -2352,10 +2135,97 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
               _selectedFolderIdForTree = loaded.first.id;
             }
           }
+          if (_currentCategory == 'exam' && loaded.isNotEmpty) {
+            if (_selectedFolderIdForTree == null ||
+                _selectedFolderIdForTree == '__FAVORITES__') {
+              _selectedFolderIdForTree = _examM1RootId;
+            }
+          }
         });
+        if (_currentCategory == 'exam') {
+          unawaited(_reloadExamPresetsForSelectedFolder());
+        }
       }
     } catch (_) {
       // file not found or parse error: ignore
+    }
+  }
+
+  Future<void> _reloadExamPresetsForSelectedFolder() async {
+    if (_currentCategory != 'exam') return;
+    final folderId = _selectedFolderIdForTree;
+    if (folderId == _examPresetsLoadedForFolderId && !_examPresetsLoading) {
+      return;
+    }
+    final selection = parseExamFolderSelection(folderId);
+    if (!mounted) return;
+    setState(() {
+      _examPresetsLoading = true;
+      _examPresetsLoadedForFolderId = folderId;
+      if (selection == null) {
+        _examPresets = const <LearningProblemDocumentExportPreset>[];
+        _examPresetsLoading = false;
+      }
+    });
+    if (selection == null) return;
+
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      final safeAcademyId = (academyId ?? '').trim();
+      if (safeAcademyId.isEmpty) {
+        if (!mounted || _selectedFolderIdForTree != folderId) return;
+        setState(() {
+          _examPresets = const <LearningProblemDocumentExportPreset>[];
+          _examPresetsLoading = false;
+        });
+        return;
+      }
+      final all = await _examPresetService.listExportPresets(
+        academyId: safeAcademyId,
+        limit: 500,
+      );
+      final filtered = filterAndSortExamPresets(
+        presets: all,
+        selection: selection,
+      );
+      if (!mounted || _selectedFolderIdForTree != folderId) return;
+      setState(() {
+        _examPresets = filtered;
+        _examPresetsLoading = false;
+      });
+    } catch (_) {
+      if (!mounted || _selectedFolderIdForTree != folderId) return;
+      setState(() {
+        _examPresets = const <LearningProblemDocumentExportPreset>[];
+        _examPresetsLoading = false;
+      });
+    }
+  }
+
+  Future<void> _openExamPresetPreview(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    if (_examPresetOpeningId != null) return;
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    final safeAcademyId = (academyId ?? '').trim();
+    if (safeAcademyId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('학원 정보가 없어 프리셋을 열 수 없습니다.')),
+      );
+      return;
+    }
+    setState(() => _examPresetOpeningId = preset.id);
+    try {
+      await _examPresetPreviewLauncher.openPresetPreview(
+        context: context,
+        academyId: safeAcademyId,
+        preset: preset,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _examPresetOpeningId = null);
+      }
     }
   }
 
@@ -2423,37 +2293,36 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // 좌측 폴더 트리: 너비 220~330 (화면 비례) + 좌우 패딩 12
               Padding(
-                padding: const EdgeInsets.fromLTRB(24, 12, 12, 12),
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                 child: SizedBox(
-                  width: 260,
+                  width: _folderTreePanelWidth(context),
                   child: _buildFolderTreeDecoratedPanel(),
                 ),
               ),
               Expanded(
-                child: Column(
-                  children: [
-                    FabStyleScreenMainTitle(
-                      title: _resourceTabLabels[_customTabIndex],
-                      bottomSpacing: 12,
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Builder(
-                                builder: (context) {
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_currentCategory != 'textbook')
+                            SizedBox(height: _resourcesPageTitleBandHeight),
+                          if (_currentCategory != 'textbook') ...[
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Builder(
+                                    builder: (context) {
                             String desc = '';
-                            final addLabel = _currentCategory == 'textbook'
-                                ? '책 추가'
-                                : '파일 추가';
-                            final nameLabel = _currentCategory == 'textbook'
-                                ? '책 이름'
-                                : '파일 이름';
-                            final isPrintMode = _printPickMode;
                             if (_selectedFolderIdForTree == '__FAVORITES__') {
                               desc = '';
                             } else {
@@ -2476,186 +2345,132 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                           color: Colors.white70, fontSize: 15),
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    height: 44,
-                                    child: OutlinedButton(
-                                      onPressed: _openHeaderPrintFlow,
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: isPrintMode
-                                            ? Colors.white
-                                            : Colors.white70,
-                                        side: BorderSide(
-                                            color: isPrintMode
-                                                ? _rsAccent
-                                                : Colors.white24),
-                                        shape: const StadiumBorder(),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 16, vertical: 16),
-                                        backgroundColor: isPrintMode
-                                            ? const Color(0xFF132822)
-                                            : Colors.transparent,
-                                      ),
-                                      child: const Icon(Icons.print, size: 20),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    height: 44,
-                                    child: OutlinedButton.icon(
-                                      onPressed: _openCourseEditDialog,
-                                      icon: const Icon(Icons.edit, size: 20),
-                                      label: const Text('과정 편집',
-                                          style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w700)),
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.white70,
-                                        side: const BorderSide(
-                                            color: Colors.white24),
-                                        shape: const StadiumBorder(),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 22, vertical: 16),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    height: 44,
-                                    child: OutlinedButton.icon(
-                                      onPressed: () async {
-                                        // ignore: avoid_print
-                                        print('[Header] $addLabel 버튼 눌림');
-                                        if (_currentCategory == 'textbook' &&
-                                            (_selectedFolderIdForTree == null ||
-                                                _selectedFolderIdForTree ==
-                                                    '__FAVORITES__')) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(const SnackBar(
-                                                  content:
-                                                      Text('폴더를 먼저 선택하세요.')));
-                                          return;
-                                        }
-                                        if (_currentCategory == 'other' &&
-                                            (_selectedFolderIdForTree == null ||
-                                                _selectedFolderIdForTree ==
-                                                    '__FAVORITES__')) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(const SnackBar(
-                                                  content:
-                                                      Text('폴더를 먼저 선택하세요.')));
-                                          return;
-                                        }
-                                        final meta = await showDialog<
-                                            Map<String, dynamic>>(
-                                          context: context,
-                                          builder: (ctx) => _FileCreateDialog(
-                                            title: addLabel,
-                                            nameLabel: nameLabel,
-                                            allowColor:
-                                                _currentCategory == 'other',
-                                          ),
-                                        );
-                                        if (meta == null ||
-                                            meta['meta'] is! _ResourceFile)
-                                          return;
-                                        var created =
-                                            meta['meta'] as _ResourceFile;
-                                        final parentId =
-                                            _selectedFolderIdForTree;
-                                        final childList =
-                                            _childFilesOf(parentId);
-                                        final nextIndex = childList.isEmpty
-                                            ? 0
-                                            : (childList
-                                                    .map((e) =>
-                                                        e.orderIndex ?? 0)
-                                                    .reduce((a, b) =>
-                                                        a > b ? a : b) +
-                                                1);
-                                        created = created.copyWith(
-                                            parentId: parentId,
-                                            orderIndex: nextIndex);
+                                    const SizedBox(width: 8),
+                                    SizedBox(
+                                      height: 44,
+                                      child: OutlinedButton.icon(
+                                        onPressed: () async {
+                                          // ignore: avoid_print
+                                          print('[Header] 파일 추가 버튼 눌림');
+                                          if (_currentCategory == 'other' &&
+                                              (_selectedFolderIdForTree ==
+                                                      null ||
+                                                  _selectedFolderIdForTree ==
+                                                      '__FAVORITES__')) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(const SnackBar(
+                                                    content: Text(
+                                                        '폴더를 먼저 선택하세요.')));
+                                            return;
+                                          }
+                                          final meta = await showDialog<
+                                              Map<String, dynamic>>(
+                                            context: context,
+                                            builder: (ctx) => _FileCreateDialog(
+                                              title: '파일 추가',
+                                              nameLabel: '파일 이름',
+                                              allowColor:
+                                                  _currentCategory == 'other',
+                                            ),
+                                          );
+                                          if (meta == null ||
+                                              meta['meta'] is! _ResourceFile) {
+                                            return;
+                                          }
+                                          var created =
+                                              meta['meta'] as _ResourceFile;
+                                          final parentId =
+                                              _selectedFolderIdForTree;
+                                          final childList =
+                                              _childFilesOf(parentId);
+                                          final nextIndex = childList.isEmpty
+                                              ? 0
+                                              : (childList
+                                                      .map((e) =>
+                                                          e.orderIndex ?? 0)
+                                                      .reduce((a, b) =>
+                                                          a > b ? a : b) +
+                                                  1);
+                                          created = created.copyWith(
+                                              parentId: parentId,
+                                              orderIndex: nextIndex);
 
-                                        final linksRes = await showDialog<
-                                            Map<String, dynamic>>(
-                                          context: context,
-                                          builder: (ctx) =>
-                                              _currentCategory == 'other'
-                                                  ? _OtherFileLinksDialog(
-                                                      meta: created,
-                                                      initialLinks: const {})
-                                                  : _FileLinksDialog(
-                                                      meta: created,
-                                                      initialLinks: const {}),
-                                        );
-                                        Map<String, String> links = {};
-                                        if (linksRes != null &&
-                                            linksRes['links']
-                                                is Map<String, String>) {
-                                          links = Map<String, String>.from(
-                                              linksRes['links'] as Map);
-                                        }
-                                        created = created.copyWith(
-                                            linksByGrade: links);
+                                          final linksRes = await showDialog<
+                                              Map<String, dynamic>>(
+                                            context: context,
+                                            builder: (ctx) =>
+                                                _currentCategory == 'other'
+                                                    ? _OtherFileLinksDialog(
+                                                        meta: created,
+                                                        initialLinks: const {})
+                                                    : _FileLinksDialog(
+                                                        meta: created,
+                                                        initialLinks: const {}),
+                                          );
+                                          Map<String, String> links = {};
+                                          if (linksRes != null &&
+                                              linksRes['links']
+                                                  is Map<String, String>) {
+                                            links = Map<String, String>.from(
+                                                linksRes['links'] as Map);
+                                          }
+                                          created = created.copyWith(
+                                              linksByGrade: links);
 
-                                        setState(() {
-                                          _files.add(created);
-                                        });
-                                        await DataManager.instance
-                                            .saveResourceFileWithCategory({
-                                          'id': created.id,
-                                          'name': created.name,
-                                          'description': created.description,
-                                          'parent_id': created.parentId,
-                                          'pos_x': created.position.dx,
-                                          'pos_y': created.position.dy,
-                                          'width': created.size.width,
-                                          'height': created.size.height,
-                                          'color':
-                                              created.color?.value.toSigned(32),
-                                          'icon_code': created.icon?.codePoint,
-                                          'icon_image_path':
-                                              created.iconImagePath,
-                                        }, _currentCategory);
-                                        await DataManager.instance
-                                            .saveResourceFileLinks(
-                                                created.id, links);
-                                        await _persistFileOrderForParent(
-                                            parentId);
-                                      },
-                                      icon: const Icon(Icons.add, size: 20),
-                                      label: Text(addLabel,
-                                          style: const TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w700)),
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.white70,
-                                        side: const BorderSide(
-                                            color: Colors.white24),
-                                        shape: const StadiumBorder(),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 22, vertical: 16),
+                                          setState(() {
+                                            _files.add(created);
+                                          });
+                                          await DataManager.instance
+                                              .saveResourceFileWithCategory({
+                                            'id': created.id,
+                                            'name': created.name,
+                                            'description': created.description,
+                                            'parent_id': created.parentId,
+                                            'pos_x': created.position.dx,
+                                            'pos_y': created.position.dy,
+                                            'width': created.size.width,
+                                            'height': created.size.height,
+                                            'color': created.color?.value
+                                                .toSigned(32),
+                                            'icon_code':
+                                                created.icon?.codePoint,
+                                            'icon_image_path':
+                                                created.iconImagePath,
+                                          }, _currentCategory);
+                                          await DataManager.instance
+                                              .saveResourceFileLinks(
+                                                  created.id, links);
+                                          await _persistFileOrderForParent(
+                                              parentId);
+                                        },
+                                        icon: const Icon(Icons.add, size: 20),
+                                        label: const Text('파일 추가',
+                                            style: TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w700)),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.white70,
+                                          side: const BorderSide(
+                                              color: Colors.white24),
+                                          shape: const StadiumBorder(),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 22, vertical: 16),
+                                        ),
                                       ),
                                     ),
-                                  ),
                                 ],
                               ),
                             );
-                                },
-                              ),
+                                    },
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
-                    const Divider(height: 1, color: Colors.white12),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.only(
-                          bottom:
-                              FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
-                        ),
+                        const Divider(height: 1, color: Colors.white12),
+                      ],
+                      Expanded(
                         child: IndexedStack(
                           index: _customTabIndex,
                           children: [
@@ -2665,8 +2480,29 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           ],
                         ),
                       ),
-                    ),
-                  ],
+                        ],
+                      ),
+                      Positioned(
+                        top: FabTabBarTokens.previewAcademyTopInset - 12,
+                        left: 24,
+                        right: 12,
+                        child: IgnorePointer(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              _resourceTabLabels[_customTabIndex],
+                              style:
+                                  FabTabBarTokens.previewAcademyMainTitleStyle(
+                                FabTabBarTokens.previewAcademyPanelStyleFor(
+                                  Theme.of(context).brightness,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -2703,9 +2539,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                               fontWeight: FontWeight.w800)),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          if (mounted) setState(() => _printPickMode = false);
-                        },
+                        onTap: () => _setResourcePrintPickMode(false),
                         borderRadius: BorderRadius.circular(999),
                         child: Container(
                           width: 20,
@@ -2731,64 +2565,204 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }
 }
 
-// --- 교재 탭: 좌측 트리 + 우측 그리드 ---
-extension _ResourcesScreenTree on _ResourcesScreenState {
-  Widget _buildDragFeedback(_ResourceFolder f) {
-    final children = _childFoldersOf(f.id);
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        width: 240,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A).withOpacity(0.92),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.white24),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withOpacity(0.35),
-                blurRadius: 14,
-                offset: const Offset(0, 6))
-          ],
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.folder,
-                color: (f.color ?? Colors.amber).withOpacity(0.9), size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                f.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16),
-              ),
-            ),
-            if (children.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.25),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: Text('${children.length}',
-                    style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
-              ),
-          ],
-        ),
+const double _folderTreePanelWidthMin = 220;
+const double _folderTreePanelWidthMax = 330;
+const double _folderTreeItemSpacing = 4;
+const double _folderTreeTitleListGap = 20;
+const double _folderTreeNavRowPaddingVertical = 12;
+const double _folderTreeLeadingWidth = 18.0;
+const Duration _folderTreeExpandDuration = Duration(milliseconds: 220);
+const Curve _folderTreeExpandCurve = Curves.easeOutCubic;
+const double _folderTreeHighlightInsetVertical = 0;
+const double _textbookCoverA4Ratio = 1.414;
+const double _textbookCardMetaHeight = 77.0;
+const double _textbookCardCoverMetaGap = 14.0;
+const String _examM1RootId = 'exam-folder-M1-naesin';
+const String _examLegacyMiddleSchoolRootId = 'exam-folder-middle-school';
+const List<String> _examCanonicalRootIds = <String>[
+  'exam-folder-M1-naesin',
+  'exam-folder-M2-naesin',
+  'exam-folder-M3-naesin',
+  'exam-folder-H1-naesin',
+  'exam-folder-H2-naesin',
+  'exam-folder-H1-mock',
+  'exam-folder-H2-mock',
+  'exam-folder-H3-mock',
+];
+
+List<BoxShadow> _textbookCoverBoxShadows() => [
+      BoxShadow(
+        color: Colors.black.withOpacity(0.10),
+        blurRadius: 14,
+        spreadRadius: 0,
       ),
+      BoxShadow(
+        color: Colors.black.withOpacity(0.16),
+        blurRadius: 18,
+        spreadRadius: -2,
+        offset: const Offset(3, 7),
+      ),
+    ];
+
+/// 우측 FAB 스타일 페이지 타이틀이 차지하는 세로 밴드(시험·기타 헤더 밀어내기·그리드 상단 여백).
+const double _resourcesPageTitleBandHeight =
+    (FabTabBarTokens.previewAcademyTopInset - 12) +
+        FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15 +
+        12;
+
+// --- 교재 탭: 좌측 트리 + 우측 그리드 ---
+// 폴더 트리는 읽기 전용(2026-06). 정책·너비: RESOURCE_TEXTBOOK_FOLDER_MANAGEMENT.md
+extension _ResourcesScreenTree on _ResourcesScreenState {
+  Future<List<_ResourceFolder>> _bootstrapExamFoldersIfNeeded(
+    List<_ResourceFolder> loaded,
+  ) async {
+    if (_currentCategory != 'exam') return loaded;
+
+    final hasCanonical = _examCanonicalRootIds.every(
+      (id) => loaded.any((f) => f.id == id),
+    );
+    final hasLegacy =
+        loaded.any((f) => f.id == _examLegacyMiddleSchoolRootId);
+    if (hasCanonical && !hasLegacy) return loaded;
+
+    final created = <_ResourceFolder>[];
+    var order = 0;
+
+    void addRoot({
+      required String id,
+      required String name,
+      required String? parentId,
+      required int orderIndex,
+    }) {
+      created.add(
+        _ResourceFolder(
+          id: id,
+          name: name,
+          color: null,
+          description: '',
+          position: Offset.zero,
+          size: _ResourcesScreenState._defaultFolderSize,
+          shape: 'rect',
+          parentId: parentId,
+          orderIndex: orderIndex,
+        ),
+      );
+    }
+
+    void addNaesinGradeRoot({
+      required String gradeKey,
+      required String label,
+      required List<String> schools,
+    }) {
+      final gradeRootId = 'exam-folder-$gradeKey-naesin';
+      addRoot(
+        id: gradeRootId,
+        name: '$label 내신',
+        parentId: null,
+        orderIndex: order++,
+      );
+      var schoolOrder = 0;
+      for (final school in schools) {
+        addRoot(
+          id: 'exam-folder-$gradeKey-$school',
+          name: school,
+          parentId: gradeRootId,
+          orderIndex: schoolOrder++,
+        );
+      }
+    }
+
+    for (final grade
+        in NaesinExamContext.gradeOptionsForLevel(EducationLevel.middle)) {
+      addNaesinGradeRoot(
+        gradeKey: grade.key,
+        label: grade.label,
+        schools: NaesinExamContext.middleSchools,
+      );
+    }
+
+    for (final grade
+        in NaesinExamContext.gradeOptionsForLevel(EducationLevel.high)) {
+      if (grade.grade > 2) continue;
+      addNaesinGradeRoot(
+        gradeKey: grade.key,
+        label: grade.label,
+        schools: NaesinExamContext.highSchools,
+      );
+    }
+
+    for (final grade
+        in NaesinExamContext.gradeOptionsForLevel(EducationLevel.high)) {
+      addRoot(
+        id: 'exam-folder-${grade.key}-mock',
+        name: '${grade.label} 모의고사',
+        parentId: null,
+        orderIndex: order++,
+      );
+    }
+
+    final rows = created
+        .map(
+          (f) => {
+            'id': f.id,
+            'name': f.name,
+            'description': f.description,
+            'color': f.color?.value,
+            'pos_x': f.position.dx,
+            'pos_y': f.position.dy,
+            'width': f.size.width,
+            'height': f.size.height,
+            'shape': f.shape,
+            'parent_id': f.parentId,
+            'order_index': f.orderIndex,
+          },
+        )
+        .toList();
+    await DataManager.instance.saveResourceFoldersForCategory('exam', rows);
+    return created;
+  }
+
+  double _folderTreeLeftInset(int depth) {
+    return depth * 10.0;
+  }
+
+  double _folderTreeNavRowLeftInset(int depth) {
+    if (_currentCategory == 'exam') return 0;
+    return _folderTreeLeftInset(depth);
+  }
+
+  double _folderTreeRowOuterPaddingLeft([double leftInset = 0]) {
+    return FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal -
+        18 +
+        leftInset;
+  }
+
+  IconData _folderTreeIcon({
+    required int depth,
+    required bool selected,
+    required bool hasChildren,
+  }) {
+    return selected ? Icons.folder : Icons.folder_outlined;
+  }
+
+  TextStyle _folderTreeLabelStyle({
+    required PreviewAcademyPanelStyle panelStyle,
+    required bool selected,
+    required int depth,
+  }) {
+    final color = selected ? _rsAccent : panelStyle.title;
+    return TextStyle(
+      color: color,
+      fontWeight: FontWeight.w600,
+      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+      letterSpacing: -0.1,
     );
   }
 
+  // ignore: unused_element
   void _reorderSiblings(
       {required _ResourceFolder target, required _ResourceFolder incoming}) {
+    // 매니저 앱/백엔드 연동 시 재사용. 사용자 앱 UI에서는 호출하지 않음.
     final parent = target.parentId;
     final siblings = _childFoldersOf(parent);
     final minIndex = siblings
@@ -2818,9 +2792,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     _saveLayout();
   }
 
+  // ignore: unused_element
   void _moveToAsChild(
       {required _ResourceFolder targetParent,
       required _ResourceFolder incoming}) {
+    // 매니저 앱/백엔드 연동 시 재사용. 사용자 앱 UI에서는 호출하지 않음.
     // 부모만 바꾸고, 마지막 인덱스로 부여
     final childList = _childFoldersOf(targetParent.id);
     final nextIndex = childList.isEmpty
@@ -2838,11 +2814,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     _saveLayout();
   }
 
-  Future<void> _handleAddChildFolder(_ResourceFolder parent) async {
-    await _onAddFolderWithParent(parent.id);
-  }
-
+  // ignore: unused_element
   Future<void> _handleEditFolder(_ResourceFolder folder) async {
+    // 매니저 앱/백엔드 연동 시 재사용. 사용자 앱 UI에서는 호출하지 않음.
     final result = await showDialog<_ResourceFolder>(
       context: context,
       builder: (ctx) => _FolderEditDialog(initial: folder),
@@ -2859,7 +2833,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     }
   }
 
+  // ignore: unused_element
   Future<void> _handleDeleteFolder(_ResourceFolder folder) async {
+    // 매니저 앱/백엔드 연동 시 재사용. 사용자 앱 UI에서는 호출하지 않음.
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2895,481 +2871,466 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
   Widget _buildFolderTreeDecoratedPanel() {
     final brightness = Theme.of(context).brightness;
     final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-    final palette = FabTabBarTokens.paletteFor(brightness);
-    final radius = FabTabBarTokens.previewAcademyGroupedCardRadius;
 
-    return SizedBox.expand(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          boxShadow: palette.boxShadows,
+    return DecoratedBox(
+      decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
+        panelStyle,
+        brightness: brightness,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(
+          FabTabBarTokens.previewAcademyGroupedCardRadius,
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(radius),
-          child: Container(
-            decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
-              panelStyle,
-              brightness: brightness,
+        child: _buildFolderTreePanel(panelStyle),
+      ),
+    );
+  }
+
+  Widget _buildExamFolderTreeRow({
+    required PreviewAcademyPanelStyle panelStyle,
+    required bool selected,
+    required String label,
+    required VoidCallback onTap,
+    required bool hasChildren,
+    required bool isExpanded,
+    double leftInset = 0,
+    bool showDivider = true,
+  }) {
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final dividerColor =
+        isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE5E5E5);
+    final labelColor = selected
+        ? (isDark ? Colors.white : const Color(0xFF1A1A1A))
+        : (isDark ? panelStyle.hint : const Color(0xFF666666));
+    final chevronColor =
+        isDark ? Colors.white.withOpacity(0.72) : const Color(0xFF1A1A1A);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            _folderTreeRowOuterPaddingLeft(leftInset),
+            0,
+            12,
+            showDivider ? 0 : _folderTreeItemSpacing,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              hoverColor: Colors.transparent,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: _folderTreeNavRowPaddingVertical,
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: _folderTreeLeadingWidth),
+                    const SizedBox(width: 2),
+                    Expanded(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: labelColor,
+                          fontWeight: FontWeight.w400,
+                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                    ),
+                    if (hasChildren)
+                      Icon(
+                        isExpanded
+                            ? Icons.expand_more
+                            : Icons.chevron_right,
+                        size: 20,
+                        color: chevronColor,
+                      ),
+                  ],
+                ),
+              ),
             ),
-            child: _buildFolderTreePanel(),
+          ),
+        ),
+        if (showDivider)
+          Divider(height: 1, thickness: 1, color: dividerColor),
+      ],
+    );
+  }
+
+  Widget _buildFolderTreeNavRow({
+    required PreviewAcademyPanelStyle panelStyle,
+    required bool selected,
+    required String label,
+    required IconData icon,
+    required VoidCallback onTap,
+    double leftInset = 0,
+    int depth = 0,
+    Widget? leading,
+  }) {
+    final brightness = Theme.of(context).brightness;
+    final iconColor = selected
+        ? _rsAccent
+        : panelStyle.title.withOpacity(0.92);
+    final labelStyle = _folderTreeLabelStyle(
+      panelStyle: panelStyle,
+      selected: selected,
+      depth: depth,
+    );
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        _folderTreeRowOuterPaddingLeft(leftInset),
+        0,
+        12,
+        _folderTreeItemSpacing,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(999),
+          hoverColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          child: Ink(
+            decoration: BoxDecoration(
+              color: selected
+                  ? FabTabBarTokens.fabHighlightPillFill(brightness)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: _folderTreeNavRowPaddingVertical,
+            ),
+            child: Row(
+              children: [
+                if (leading != null) ...[
+                  leading,
+                  const SizedBox(width: 2),
+                ],
+                Icon(icon, size: 20, color: iconColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: labelStyle,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildTextbooksTreeLayout(int tabSlot) {
-    return Stack(
+  Widget _buildTextbookStyleFolderTreeRow({
+    required PreviewAcademyPanelStyle panelStyle,
+    required _ResourceFolder folder,
+    required int depth,
+    required bool isSelected,
+    required bool isExpanded,
+    required bool hasChildren,
+    required List<_ResourceFile?> candFiles,
+    bool trailingSectionDivider = false,
+  }) {
+    final active =
+        _fileDropTargetFolderId == folder.id && candFiles.isNotEmpty;
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final dividerColor =
+        isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE5E5E5);
+
+    Widget row = Stack(
       children: [
-        Positioned.fill(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 15, left: 0),
-            child: _buildFolderContentGrid(tabSlot),
+        _buildFolderTreeNavRow(
+          panelStyle: panelStyle,
+          selected: isSelected,
+          label: folder.name,
+          icon: _folderTreeIcon(
+            depth: depth,
+            selected: isSelected,
+            hasChildren: hasChildren,
           ),
+          leftInset: _folderTreeNavRowLeftInset(depth),
+          depth: depth,
+          leading: hasChildren
+              ? InkWell(
+                  onTap: () => setState(() {
+                    if (isExpanded) {
+                      _expandedFolderIds.remove(folder.id);
+                    } else {
+                      _expandedFolderIds.add(folder.id);
+                    }
+                  }),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(
+                      isExpanded
+                          ? Icons.expand_more
+                          : Icons.chevron_right,
+                      size: 16,
+                      color: panelStyle.icon,
+                    ),
+                  ),
+                )
+              : const SizedBox(width: _folderTreeLeadingWidth),
+          onTap: () {
+            setState(() {
+              _selectedFolderIdForTree = folder.id;
+              if (hasChildren) {
+                if (isExpanded) {
+                  _expandedFolderIds.remove(folder.id);
+                } else {
+                  _expandedFolderIds.add(folder.id);
+                }
+              }
+            });
+            if (_currentCategory == 'exam') {
+              unawaited(_reloadExamPresetsForSelectedFolder());
+            }
+          },
         ),
+        if (active)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  _folderTreeRowOuterPaddingLeft(
+                    _folderTreeNavRowLeftInset(depth),
+                  ),
+                  _folderTreeHighlightInsetVertical,
+                  12,
+                  _folderTreeHighlightInsetVertical,
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: _rsAccent.withOpacity(0.55),
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+
+    if (!trailingSectionDivider) return row;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        row,
+        Divider(height: 1, thickness: 1, color: dividerColor),
       ],
     );
   }
 
-  Widget _buildFolderTreePanel() {
-    const double _folderRowMinHeight = 56;
-    const double _folderNameFontSize = 18;
-    const double _folderActionIconSize = 20;
-    const double _folderLeftActionWidth = 76;
-    const double _folderRightActionWidth = 168;
-    final flattened = <Map<String, dynamic>>[];
-    void visit(String? parentId, int depth) {
-      final children = _childFoldersOf(parentId);
-      for (final f in children) {
-        flattened.add({'folder': f, 'depth': depth});
-        if (_expandedFolderIds.contains(f.id)) {
-          visit(f.id, depth + 1);
+  List<Widget> _buildFolderTreeFolderEntries({
+    required String? parentId,
+    required int depth,
+    required PreviewAcademyPanelStyle panelStyle,
+  }) {
+    final folders = _childFoldersOf(parentId);
+    return [
+      for (var i = 0; i < folders.length; i++)
+        _buildFolderTreeFolderEntry(
+          folder: folders[i],
+          depth: depth,
+          panelStyle: panelStyle,
+          isLastAmongSiblings: i == folders.length - 1,
+        ),
+    ];
+  }
+
+  Widget _buildFolderTreeFolderEntry({
+    required _ResourceFolder folder,
+    required int depth,
+    required PreviewAcademyPanelStyle panelStyle,
+    required bool isLastAmongSiblings,
+  }) {
+    final childFolders = _childFoldersOf(folder.id);
+    final isExpanded = _expandedFolderIds.contains(folder.id);
+    final isSelected = _selectedFolderIdForTree == folder.id;
+    final isExam = _currentCategory == 'exam';
+    final useExamTopLevelStyle = isExam && depth == 0;
+    final hasChildren = childFolders.isNotEmpty;
+
+    void onFolderRowTap() {
+      setState(() {
+        _selectedFolderIdForTree = folder.id;
+        if (hasChildren) {
+          if (isExpanded) {
+            _expandedFolderIds.remove(folder.id);
+          } else {
+            _expandedFolderIds.add(folder.id);
+          }
         }
+      });
+      if (_currentCategory == 'exam') {
+        unawaited(_reloadExamPresetsForSelectedFolder());
       }
     }
 
-    // root pseudo node omitted; 바로 폴더 목록으로 시작
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: 8),
+        DragTarget<_ResourceFile>(
+          onWillAccept: (incomingFile) {
+            final ok = incomingFile != null;
+            if (ok) {
+              setState(() => _fileDropTargetFolderId = folder.id);
+            }
+            return ok;
+          },
+          onAcceptWithDetails: (details) async {
+            final incoming = details.data;
+            final idx = _files.indexWhere((x) => x.id == incoming.id);
+            if (idx != -1) {
+              final prevParent = _files[idx].parentId;
+              final childList = _childFilesOf(folder.id);
+              final nextIndex = childList.isEmpty
+                  ? 0
+                  : (childList
+                          .map((e) => e.orderIndex ?? 0)
+                          .reduce((a, b) => a > b ? a : b) +
+                      1);
+              setState(() {
+                _files[idx] = _files[idx].copyWith(
+                  parentId: folder.id,
+                  orderIndex: nextIndex,
+                );
+                _fileDropTargetFolderId = null;
+              });
+              await DataManager.instance.saveResourceFile(
+                  {'id': incoming.id, 'parent_id': folder.id});
+              await _persistFileOrderForParent(folder.id);
+              if (prevParent != folder.id) {
+                await _persistFileOrderForParent(prevParent);
+              }
+            }
+          },
+          onLeave: (_) => setState(() {
+            if (_fileDropTargetFolderId == folder.id) {
+              _fileDropTargetFolderId = null;
+            }
+          }),
+          builder: (context, candFiles, rejFiles) {
+            if (useExamTopLevelStyle) {
+              return _buildExamFolderTreeRow(
+                panelStyle: panelStyle,
+                selected: isSelected,
+                label: folder.name,
+                hasChildren: hasChildren,
+                isExpanded: isExpanded,
+                showDivider: isExam && !isExpanded,
+                onTap: onFolderRowTap,
+              );
+            }
+
+            return _buildTextbookStyleFolderTreeRow(
+              panelStyle: panelStyle,
+              folder: folder,
+              depth: depth,
+              isSelected: isSelected,
+              isExpanded: isExpanded,
+              hasChildren: hasChildren,
+              candFiles: candFiles,
+              trailingSectionDivider:
+                  isExam && depth > 0 && isLastAmongSiblings,
+            );
+          },
+        ),
+        if (hasChildren)
+          AnimatedSize(
+            duration: _folderTreeExpandDuration,
+            curve: _folderTreeExpandCurve,
+            alignment: Alignment.topCenter,
+            clipBehavior: Clip.hardEdge,
+            child: isExpanded
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: _buildFolderTreeFolderEntries(
+                      parentId: folder.id,
+                      depth: depth + 1,
+                      panelStyle: panelStyle,
+                    ),
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTextbooksTreeLayout(int tabSlot) {
+    return _buildFolderContentGrid(tabSlot);
+  }
+
+  Widget _buildFolderTreePanel(PreviewAcademyPanelStyle panelStyle) {
+    final rootFolders = _childFoldersOf(null);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text('폴더',
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.85),
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16)),
-              ),
-              SizedBox(
-                width: 32,
-                height: 32,
-                child: IconButton(
-                  tooltip: '최상위 폴더 추가',
-                  padding: EdgeInsets.zero,
-                  iconSize: 18,
-                  onPressed: () async => await _onAddFolderWithParent(null),
-                  hoverColor: Colors.transparent,
-                  highlightColor: Colors.transparent,
-                  splashColor: Colors.transparent,
-                  icon: const Icon(Icons.add, color: Colors.white70),
-                ),
-              ),
-            ],
+          padding: EdgeInsets.fromLTRB(
+            FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal - 6,
+            20,
+            FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+            _folderTreeTitleListGap,
+          ),
+          child: Text(
+            '폴더',
+            style: TextStyle(
+              color: panelStyle.title,
+              fontWeight: FontWeight.w600,
+              fontSize: FabTabBarTokens.fabBarLabelFontSize,
+            ),
           ),
         ),
         Expanded(
-          child: Builder(
-            builder: (context) {
-              flattened.clear();
-              visit(null, 0);
-              return ListView.builder(
-                itemCount: flattened.length,
-                itemBuilder: (context, index) {
-                  final f = flattened[index]['folder'] as _ResourceFolder;
-                  final depth = flattened[index]['depth'] as int;
-                  final children = _childFoldersOf(f.id);
-                  final isExpanded = _expandedFolderIds.contains(f.id);
-                  final isSelected = _selectedFolderIdForTree == f.id;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      LongPressDraggable<_ResourceFolder>(
-                        data: f,
-                        hapticFeedbackOnStart: true,
-                        feedback: _buildDragFeedback(f),
-                        dragAnchorStrategy: pointerDragAnchorStrategy,
-                        onDragStarted: () {
-                          setState(() {
-                            _draggingFolderId = f.id;
-                            _moveToParentFolderId = null;
-                            _reorderTargetFolderId = null;
-                          });
-                        },
-                        onDragEnd: (_) {
-                          setState(() {
-                            _draggingFolderId = null;
-                            _moveToParentFolderId = null;
-                            _reorderTargetFolderId = null;
-                          });
-                        },
-                        // 1) 폴더 재정렬/이동 DragTarget
-                        child: DragTarget<_ResourceFolder>(
-                          onWillAccept: (incoming) {
-                            if (incoming == null) return false;
-                            if (incoming.id == f.id) return false; // self
-                            final sameLevel =
-                                (incoming.parentId ?? '') == (f.parentId ?? '');
-                            // 같은 레벨: 재정렬 표시, 다른 레벨: 이동 하이라이트
-                            setState(() {
-                              if (sameLevel) {
-                                _reorderTargetFolderId = f.id;
-                              } else {
-                                _moveToParentFolderId = f.id;
-                              }
-                            });
-                            return true;
-                          },
-                          onAcceptWithDetails: (details) {
-                            final incoming = details.data;
-                            final sameLevel =
-                                (incoming.parentId ?? '') == (f.parentId ?? '');
-                            if (sameLevel) {
-                              _reorderSiblings(target: f, incoming: incoming);
-                            } else {
-                              _moveToAsChild(
-                                  targetParent: f, incoming: incoming);
-                            }
-                            setState(() {
-                              _moveToParentFolderId = null;
-                              _reorderTargetFolderId = null;
-                            });
-                          },
-                          onLeave: (_) {
-                            setState(() {
-                              if (_reorderTargetFolderId == f.id)
-                                _reorderTargetFolderId = null;
-                              if (_moveToParentFolderId == f.id)
-                                _moveToParentFolderId = null;
-                            });
-                          },
-                          builder: (context, candidate, rejected) {
-                            final highlightMove =
-                                _moveToParentFolderId == f.id &&
-                                    _draggingFolderId != null &&
-                                    _draggingFolderId != f.id;
-                            final highlightReorder =
-                                _reorderTargetFolderId == f.id &&
-                                    _draggingFolderId != null &&
-                                    _draggingFolderId != f.id;
-                            return DragTarget<_ResourceFile>(
-                              onWillAccept: (incomingFile) {
-                                final ok = incomingFile != null;
-                                if (ok)
-                                  setState(() {
-                                    _fileDropTargetFolderId = f.id;
-                                  });
-                                return ok;
-                              },
-                              onAcceptWithDetails: (details) async {
-                                final incoming = details.data;
-                                final idx = _files
-                                    .indexWhere((x) => x.id == incoming.id);
-                                if (idx != -1) {
-                                  final prevParent = _files[idx].parentId;
-                                  final childList = _childFilesOf(f.id);
-                                  final nextIndex = childList.isEmpty
-                                      ? 0
-                                      : (childList
-                                              .map((e) => e.orderIndex ?? 0)
-                                              .reduce((a, b) => a > b ? a : b) +
-                                          1);
-                                  setState(() {
-                                    _files[idx] = _files[idx].copyWith(
-                                        parentId: f.id, orderIndex: nextIndex);
-                                    _fileDropTargetFolderId = null;
-                                  });
-                                  await DataManager.instance.saveResourceFile(
-                                      {'id': incoming.id, 'parent_id': f.id});
-                                  await _persistFileOrderForParent(f.id);
-                                  if (prevParent != f.id) {
-                                    await _persistFileOrderForParent(
-                                        prevParent);
-                                  }
-                                }
-                              },
-                              onLeave: (_) => setState(() {
-                                if (_fileDropTargetFolderId == f.id)
-                                  _fileDropTargetFolderId = null;
-                              }),
-                              builder: (context, candFiles, rejFiles) {
-                                final active =
-                                    _fileDropTargetFolderId == f.id &&
-                                        candFiles.isNotEmpty;
-                                return Stack(
-                                  children: [
-                                    _DualSwipeActionReveal(
-                                      leftActionWidth: _folderLeftActionWidth,
-                                      rightActionWidth: _folderRightActionWidth,
-                                      borderRadius: BorderRadius.circular(8),
-                                      leftActionPane: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8),
-                                        child: Material(
-                                          color: _rsAccent,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          child: InkWell(
-                                            onTap: () async =>
-                                                _handleAddChildFolder(f),
-                                            borderRadius:
-                                                BorderRadius.circular(12),
-                                            splashFactory:
-                                                NoSplash.splashFactory,
-                                            highlightColor:
-                                                Colors.white.withOpacity(0.08),
-                                            hoverColor:
-                                                Colors.white.withOpacity(0.04),
-                                            child: const SizedBox.expand(
-                                              child: Center(
-                                                child: Icon(
-                                                  Icons.add,
-                                                  color: Colors.white,
-                                                  size: _folderActionIconSize,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      rightActionPane: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Material(
-                                                color: const Color(0xFF223131),
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                child: InkWell(
-                                                  onTap: () async =>
-                                                      _handleEditFolder(f),
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                  splashFactory:
-                                                      NoSplash.splashFactory,
-                                                  highlightColor: Colors.white
-                                                      .withOpacity(0.06),
-                                                  hoverColor: Colors.white
-                                                      .withOpacity(0.03),
-                                                  child: SizedBox.expand(
-                                                    child: Center(
-                                                      child: Icon(
-                                                        Icons.edit_outlined,
-                                                        color: const Color(
-                                                            0xFFEAF2F2),
-                                                        size:
-                                                            _folderActionIconSize,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Expanded(
-                                              child: Material(
-                                                color: const Color(0xFFB74C4C),
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                child: InkWell(
-                                                  onTap: () async =>
-                                                      _handleDeleteFolder(f),
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                  splashFactory:
-                                                      NoSplash.splashFactory,
-                                                  highlightColor: Colors.white
-                                                      .withOpacity(0.08),
-                                                  hoverColor: Colors.white
-                                                      .withOpacity(0.04),
-                                                  child: SizedBox.expand(
-                                                    child: Center(
-                                                      child: Icon(
-                                                        Icons
-                                                            .delete_outline_rounded,
-                                                        color: Colors.white,
-                                                        size:
-                                                            _folderActionIconSize,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      child: InkWell(
-                                        onTap: () => setState(() {
-                                          _selectedFolderIdForTree = f.id;
-                                          if (children.isNotEmpty) {
-                                            if (isExpanded) {
-                                              _expandedFolderIds.remove(f.id);
-                                            } else {
-                                              _expandedFolderIds.add(f.id);
-                                            }
-                                          }
-                                        }),
-                                        child: Container(
-                                          constraints: const BoxConstraints(
-                                              minHeight: _folderRowMinHeight),
-                                          color: highlightMove
-                                              ? const Color(0xFF2F3A4A)
-                                              : (isSelected
-                                                  ? const Color(0xFF2A2A2A)
-                                                  : const Color(0xFF232323)),
-                                          padding: EdgeInsets.only(
-                                              left: depth * 16.0,
-                                              right: 14.0,
-                                              top: 10.0,
-                                              bottom: 10.0),
-                                          child: Row(
-                                            children: [
-                                              if (children.isNotEmpty)
-                                                InkWell(
-                                                  onTap: () => setState(() {
-                                                    if (isExpanded) {
-                                                      _expandedFolderIds
-                                                          .remove(f.id);
-                                                    } else {
-                                                      _expandedFolderIds
-                                                          .add(f.id);
-                                                    }
-                                                  }),
-                                                  child: Icon(
-                                                      isExpanded
-                                                          ? Icons.expand_more
-                                                          : Icons.chevron_right,
-                                                      color: Colors.white54,
-                                                      size: 20),
-                                                )
-                                              else
-                                                const SizedBox(width: 20),
-                                              const SizedBox(width: 8),
-                                              Icon(Icons.folder,
-                                                  color:
-                                                      (f.color ?? Colors.amber)
-                                                          .withOpacity(0.85),
-                                                  size: 20),
-                                              const SizedBox(width: 10),
-                                              Expanded(
-                                                child: Text(
-                                                  f.name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                      color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.w800,
-                                                      fontSize:
-                                                          _folderNameFontSize,
-                                                      letterSpacing: -0.2),
-                                                ),
-                                              ),
-                                              if (highlightMove)
-                                                Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                          left: 8.0),
-                                                  child: Text(
-                                                      '"${f.name}"으로 이동',
-                                                      style: const TextStyle(
-                                                          color: Colors.white60,
-                                                          fontSize: 12)),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    if (highlightReorder)
-                                      Positioned(
-                                        left: 0,
-                                        right: 0,
-                                        bottom: 0,
-                                        child: SizedBox(
-                                            height: 2,
-                                            child: DecoratedBox(
-                                                decoration: BoxDecoration(
-                                                    color: const Color(
-                                                        0xFF64A6DD)))),
-                                      ),
-                                    if (active)
-                                      Positioned.fill(
-                                        child: IgnorePointer(
-                                          child: AnimatedContainer(
-                                            duration: const Duration(
-                                                milliseconds: 120),
-                                            decoration: BoxDecoration(
-                                              border: Border.all(
-                                                  color:
-                                                      const Color(0xFF64A6DD),
-                                                  width: 2),
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              );
-            },
-          ),
-        ),
-        // 즐겨찾기 고정 항목
-        Container(
-          height: _folderRowMinHeight,
-          child: InkWell(
-            onTap: () =>
-                setState(() => _selectedFolderIdForTree = '__FAVORITES__'),
-            child: Row(
-              children: [
-                const SizedBox(width: 12),
-                Icon(
-                  Icons.bookmark,
-                  color: _selectedFolderIdForTree == '__FAVORITES__'
-                      ? Colors.amber
-                      : Colors.white54,
-                  size: 20,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '즐겨찾기',
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.95),
-                        fontWeight: FontWeight.w800,
-                        fontSize: _folderNameFontSize,
-                        letterSpacing: -0.2),
-                  ),
-                ),
-              ],
-            ),
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 8),
+            children: [
+              ..._buildFolderTreeFolderEntries(
+                parentId: null,
+                depth: 0,
+                panelStyle: panelStyle,
+              ),
+              if (rootFolders.isNotEmpty)
+                const SizedBox(height: _folderTreeItemSpacing),
+              _buildFolderTreeNavRow(
+                panelStyle: panelStyle,
+                selected: _selectedFolderIdForTree == '__FAVORITES__',
+                label: '즐겨찾기',
+                icon: _selectedFolderIdForTree == '__FAVORITES__'
+                    ? Icons.bookmark
+                    : Icons.bookmark_border,
+                leading: const SizedBox(width: _folderTreeLeadingWidth),
+                    onTap: () {
+                      setState(() => _selectedFolderIdForTree = '__FAVORITES__');
+                      if (_currentCategory == 'exam') {
+                        unawaited(_reloadExamPresetsForSelectedFolder());
+                      }
+                    },
+              ),
+            ],
           ),
         ),
       ],
@@ -3377,16 +3338,21 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
   }
 
   Widget _buildFolderContentGrid(int tabSlot) {
+    if (_currentCategory == 'exam') {
+      return _buildExamPresetGrid(tabSlot);
+    }
     final files = _childFilesOf(_selectedFolderIdForTree);
     final gridScrollCtrl = _gridScrollCtrls[tabSlot];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(30, 4, 16, 16),
+      padding: const EdgeInsets.fromLTRB(24, 0, 16, 0),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isTextbook = _currentCategory == 'textbook';
           final double gridCardWidth = isTextbook ? 240.0 : 290.0;
           final double baseCardHeight =
-              isTextbook ? (gridCardWidth * 1.414 * 0.9 + 115.0) : 170.0;
+              isTextbook
+                  ? (gridCardWidth * _textbookCoverA4Ratio + _textbookCardMetaHeight)
+                  : 170.0;
           final bool showPrintTest = isTextbook && _kShowBookPrintTestControls;
           final double printBarHeight = showPrintTest ? 36.0 : 0.0;
           final double printBarGap = showPrintTest ? 8.0 : 0.0;
@@ -3421,7 +3387,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
 
           Widget buildFeedbackCell(_ResourceFile fi) {
             final normal = buildCardCell(fi);
-            return ValueListenableBuilder<bool>(
+            return Transform.translate(
+              offset: const Offset(10, 10),
+              child: ValueListenableBuilder<bool>(
               valueListenable: isTextbookDraggingOverLeftSideSheet,
               builder: (context, hoveringSideSheet, _) {
                 final payload = activeTextbookDragPayload.value;
@@ -3440,6 +3408,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   ),
                 );
               },
+            ),
             );
           }
 
@@ -3465,12 +3434,16 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           itemBuilder: (context, file) => buildCardCell(file),
                           feedbackBuilder: (context, file) =>
                               buildFeedbackCell(file),
-                          dragAnchorStrategy: pointerDragAnchorStrategy,
                           cardWidth: gridCardWidth,
                           cardHeight: gridCardHeight,
                           spacing: spacing,
                           columns: cols,
                           scrollController: gridScrollCtrl,
+                          scrollTopPadding: _currentCategory == 'textbook'
+                              ? _resourcesPageTitleBandHeight
+                              : 0,
+                          scrollBottomPadding:
+                              FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
                           animationDuration: const Duration(milliseconds: 180),
                           animationCurve: Curves.easeOutCubic,
                           onDragStarted: (file) =>
@@ -3501,6 +3474,98 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                             }
                           },
                         ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildExamPresetGrid(int tabSlot) {
+    final gridScrollCtrl = _gridScrollCtrls[tabSlot];
+    const double gridCardWidth = 240.0;
+    const double gridCardHeight = 240.0;
+    const double spacing = 22.4;
+    final selection = parseExamFolderSelection(_selectedFolderIdForTree);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 16, 0),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cols = (constraints.maxWidth / (gridCardWidth + spacing))
+              .floor()
+              .clamp(1, 999);
+          final gridWidth =
+              (cols * gridCardWidth) + ((cols - 1) * spacing);
+
+          Widget buildBody() {
+            if (selection == null) {
+              return const Center(
+                child: Text(
+                  '폴더를 선택하세요.',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              );
+            }
+            if (_examPresetsLoading) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (_examPresets.isEmpty) {
+              return const Center(
+                child: Text(
+                  '연결된 프리셋이 없습니다.',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              );
+            }
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (final preset in _examPresets)
+                  SizedBox(
+                    width: gridCardWidth,
+                    height: gridCardHeight,
+                    child: ExamPresetCard(
+                      preset: preset,
+                      busy: _examPresetOpeningId == preset.id,
+                      onTap: () => unawaited(_openExamPresetPreview(preset)),
+                    ),
+                  ),
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(
+                    width: gridWidth,
+                    child: ScrollConfiguration(
+                      behavior: ScrollConfiguration.of(context)
+                          .copyWith(scrollbars: false),
+                      child: SingleChildScrollView(
+                        controller: gridScrollCtrl,
+                        padding: EdgeInsets.only(
+                          top: _resourcesPageTitleBandHeight,
+                          bottom: FabTabBarTokens
+                              .fabStyleScreenTabBarBottomPadding,
+                        ),
+                        child: buildBody(),
                       ),
                     ),
                   ),
@@ -5996,44 +6061,318 @@ class _GridFileCardState extends State<_GridFileCard> {
       state.setState(() {});
     }
 
+    final cardRadius = FabTabBarTokens.previewAcademyGroupedCardRadius;
+
+    if (isTextbook) {
+      return MouseRegion(
+        cursor:
+            isPrintMode ? SystemMouseCursors.copy : SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () async {
+            if (isPrintMode) {
+              await resState?._handlePrintPick(file);
+              return;
+            }
+            openMetaDialog();
+          },
+          onDoubleTap: isPrintMode ? null : openPrimaryLink,
+          child: IgnorePointer(
+            ignoring: isPrintMode,
+            child: LayoutBuilder(
+                builder: (context, box) {
+                  final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+                    Theme.of(context).brightness,
+                  );
+                  final desiredCoverHeight =
+                      box.maxWidth * _textbookCoverA4Ratio;
+                  final coverHeight = math.min(
+                    desiredCoverHeight,
+                    math.max(0.0, box.maxHeight - _textbookCardMetaHeight),
+                  );
+                  final metaHeight = math.max(
+                    0.0,
+                    box.maxHeight - coverHeight - _textbookCardCoverMetaGap,
+                  );
+                  final isFav =
+                      resState?._favoriteFileIds.contains(file.id) ?? false;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        height: coverHeight,
+                        width: double.infinity,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            if (hasForCurrent)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      borderRadius:
+                                          BorderRadius.circular(cardRadius),
+                                      boxShadow: _textbookCoverBoxShadows(),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            Positioned.fill(
+                              child: ClipRRect(
+                                clipBehavior: Clip.antiAliasWithSaveLayer,
+                                borderRadius:
+                                    BorderRadius.circular(cardRadius),
+                                child: Material(
+                                  color: hasCoverImage
+                                      ? bg
+                                      : const Color(0xFF2B2B2B),
+                                  child: Listener(
+                                    behavior: HitTestBehavior.opaque,
+                                    onPointerSignal: (signal) {
+                                      if (signal is PointerScrollEvent) {
+                                        final dx = signal.scrollDelta.dx;
+                                        final dy = signal.scrollDelta.dy;
+                                        if (dx != 0 && dx.abs() >= dy.abs()) {
+                                          handleGradeDelta(dx < 0 ? 1 : -1);
+                                        }
+                                      }
+                                    },
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onHorizontalDragStart: (_) =>
+                                          _gradeDragDx = 0.0,
+                                      onHorizontalDragUpdate: (d) =>
+                                          _handleGradeDragUpdate(
+                                              d, handleGradeDelta),
+                                      onHorizontalDragEnd: (_) =>
+                                          _gradeDragDx = 0.0,
+                                      onHorizontalDragCancel: () =>
+                                          _gradeDragDx = 0.0,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: hasCoverImage
+                                              ? bg
+                                              : const Color(0xFF2B2B2B),
+                                          image: hasCoverImage
+                                              ? DecorationImage(
+                                                  image: coverImage!,
+                                                  fit: BoxFit.cover,
+                                                )
+                                              : null,
+                                        ),
+                                        child: Stack(
+                                          fit: StackFit.expand,
+                                          children: [
+                                            if (!hasCoverImage)
+                                              Center(
+                                                child: Icon(
+                                                  file.icon ??
+                                                      Icons.menu_book,
+                                                  size: 36,
+                                                  color: Colors.white60,
+                                                ),
+                                              ),
+                                            if (hasCoverImage &&
+                                                hasExplicitIcon &&
+                                                file.icon != null)
+                                              IgnorePointer(
+                                                child: Center(
+                                                  child: Icon(
+                                                    file.icon!,
+                                                    size: 72,
+                                                    color: Colors.white
+                                                        .withOpacity(0.18),
+                                                  ),
+                                                ),
+                                              ),
+                                            Positioned(
+                                              top: 8,
+                                              right: 8,
+                                              child: InkWell(
+                                                onTap: toggleFavorite,
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.all(6),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.transparent,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            16),
+                                                  ),
+                                                  child: Icon(
+                                                    Icons.bookmark,
+                                                    size: 20,
+                                                    color: isFav
+                                                        ? Colors.amber
+                                                        : Colors.white70,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            Positioned(
+                                              bottom: 8,
+                                              left: 8,
+                                              right: 48,
+                                              child: Row(
+                                                children: [
+                                                  _SmallLinkButtonPill(
+                                                    file: file,
+                                                    kind: 'ans',
+                                                    currentGrade: currentGrade,
+                                                    overlay: true,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  _SmallLinkButtonPill(
+                                                    file: file,
+                                                    kind: 'sol',
+                                                    currentGrade: currentGrade,
+                                                    overlay: true,
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            Positioned(
+                                              bottom: 8,
+                                              right: 8,
+                                              child: Container(
+                                                width: 32,
+                                                height: 32,
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black
+                                                      .withOpacity(0.45),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                alignment: Alignment.center,
+                                                child: _MoreMenuButton(
+                                                  file: file,
+                                                  compact: true,
+                                                  hitSize: 32,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: _textbookCardCoverMetaGap),
+                      SizedBox(
+                        height: metaHeight,
+                        width: double.infinity,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: LatexTextRenderer(
+                                      file.name,
+                                      maxLines: 1,
+                                      softWrap: false,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color:
+                                            file.textColor ?? panelStyle.title,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: -0.2,
+                                      ),
+                                    ),
+                                  ),
+                                  if (displayGrade != null) ...[
+                                    const SizedBox(width: 6),
+                                    _MiniPill(
+                                      text: displayGrade,
+                                      fontSize: 13,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 5,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              if ((file.description ?? '').isNotEmpty) ...[
+                                const SizedBox(height: 1),
+                                LatexTextRenderer(
+                                  file.description!,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: panelStyle.hint,
+                                    fontSize: 14.5,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+      );
+    }
+
     return MouseRegion(
       cursor: isPrintMode ? SystemMouseCursors.copy : SystemMouseCursors.click,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () async {
-              if (isPrintMode) {
-                await resState?._handlePrintPick(file);
-                return;
-              }
-              openMetaDialog();
-            },
-            onDoubleTap: isPrintMode ? null : openPrimaryLink,
-            splashColor: Colors.white.withOpacity(0.06),
-            highlightColor: Colors.white.withOpacity(0.03),
-            child: IgnorePointer(
-              ignoring: isPrintMode,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isTextbook ? _rsPanelBg : bg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                      color: Colors.white.withOpacity(0.05), width: 0.8),
-                  boxShadow: [
-                    if (hasForCurrent) ...[
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          if (hasForCurrent)
+            Positioned(
+              left: 28,
+              right: 28,
+              bottom: -12,
+              height: 20,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(cardRadius),
+                    boxShadow: [
                       BoxShadow(
-                          color: Colors.black.withOpacity(0.35),
-                          blurRadius: 18,
-                          offset: const Offset(0, 12)),
-                      BoxShadow(
-                          color: Colors.white.withOpacity(0.03),
-                          blurRadius: 2,
-                          offset: const Offset(0, 1)),
+                        color: Colors.black.withOpacity(0.32),
+                        blurRadius: 22,
+                        offset: const Offset(0, 12),
+                      ),
                     ],
-                  ],
+                  ),
                 ),
+              ),
+            ),
+          Positioned.fill(
+            child: ClipRRect(
+              clipBehavior: Clip.antiAliasWithSaveLayer,
+              borderRadius: BorderRadius.circular(cardRadius),
+              child: Material(
+                color: isTextbook ? _rsPanelBg : bg,
+                child: InkWell(
+              onTap: () async {
+                if (isPrintMode) {
+                  await resState?._handlePrintPick(file);
+                  return;
+                }
+                openMetaDialog();
+              },
+              onDoubleTap: isPrintMode ? null : openPrimaryLink,
+              splashColor: Colors.white.withOpacity(0.06),
+              highlightColor: Colors.white.withOpacity(0.03),
+              child: IgnorePointer(
+                ignoring: isPrintMode,
                 child: LayoutBuilder(
                   builder: (context, box) {
                     if (!isTextbook) {
@@ -6042,8 +6381,9 @@ class _GridFileCardState extends State<_GridFileCard> {
                           currentGrade: currentGrade,
                           isOther: isOther);
                     }
-                    final metaMinHeight = 115.0;
-                    final desiredCoverHeight = box.maxWidth * 1.414 * 0.9;
+                    final metaMinHeight = _textbookCardMetaHeight;
+                    final desiredCoverHeight =
+                        box.maxWidth * _textbookCoverA4Ratio;
                     final coverHeight = math.min(desiredCoverHeight,
                         math.max(0.0, box.maxHeight - metaMinHeight));
                     final isFav =
@@ -6079,86 +6419,102 @@ class _GridFileCardState extends State<_GridFileCard> {
                                       : const Color(0xFF2B2B2B),
                                   image: hasCoverImage
                                       ? DecorationImage(
-                                          image: coverImage!, fit: BoxFit.cover)
+                                          image: coverImage!,
+                                          fit: BoxFit.cover)
                                       : null,
                                 ),
                                 child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    if (!hasCoverImage)
-                                      Center(
-                                        child: Icon(
-                                          file.icon ?? Icons.menu_book,
-                                          size: 36,
-                                          color: Colors.white60,
-                                        ),
-                                      ),
-                                    if (hasCoverImage &&
-                                        hasExplicitIcon &&
-                                        file.icon != null)
-                                      IgnorePointer(
-                                        child: Center(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      if (!hasCoverImage)
+                                        Center(
                                           child: Icon(
-                                            file.icon!,
-                                            size: 72,
-                                            color:
-                                                Colors.white.withOpacity(0.18),
+                                            file.icon ?? Icons.menu_book,
+                                            size: 36,
+                                            color: Colors.white60,
+                                          ),
+                                        ),
+                                      if (hasCoverImage &&
+                                          hasExplicitIcon &&
+                                          file.icon != null)
+                                        IgnorePointer(
+                                          child: Center(
+                                            child: Icon(
+                                              file.icon!,
+                                              size: 72,
+                                              color: Colors.white
+                                                  .withOpacity(0.18),
+                                            ),
+                                          ),
+                                        ),
+                                      Positioned(
+                                        top: 8,
+                                        right: 8,
+                                        child: InkWell(
+                                          onTap: toggleFavorite,
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.transparent,
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                            child: Icon(
+                                              Icons.bookmark,
+                                              size: 20,
+                                              color: isFav
+                                                  ? Colors.amber
+                                                  : Colors.white70,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    Positioned(
-                                      top: 8,
-                                      right: 8,
-                                      child: InkWell(
-                                        onTap: toggleFavorite,
-                                        borderRadius: BorderRadius.circular(16),
+                                      Positioned(
+                                        bottom: 8,
+                                        left: 8,
+                                        right: 48,
+                                        child: Row(
+                                          children: [
+                                            _SmallLinkButtonPill(
+                                              file: file,
+                                              kind: 'ans',
+                                              currentGrade: currentGrade,
+                                              overlay: true,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            _SmallLinkButtonPill(
+                                              file: file,
+                                              kind: 'sol',
+                                              currentGrade: currentGrade,
+                                              overlay: true,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Positioned(
+                                        bottom: 8,
+                                        right: 8,
                                         child: Container(
-                                          padding: const EdgeInsets.all(6),
+                                          width: 32,
+                                          height: 32,
                                           decoration: BoxDecoration(
-                                            color: Colors.transparent,
-                                            borderRadius:
-                                                BorderRadius.circular(16),
+                                            color:
+                                                Colors.black.withOpacity(0.45),
+                                            shape: BoxShape.circle,
                                           ),
-                                          child: Icon(
-                                            Icons.bookmark,
-                                            size: 18,
-                                            color: isFav
-                                                ? Colors.amber
-                                                : Colors.white70,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    // Migration-phase toggle: swap between
-                                    // the legacy (Dropbox / external app)
-                                    // flow and the new in-app viewer.
-                                    // TODO: remove once the new viewer is
-                                    // fully stabilised.
-                                    const Positioned(
-                                      top: 8,
-                                      left: 8,
-                                      child: _TextbookViewerModeToggle(),
-                                    ),
-                                    Positioned(
-                                      bottom: 8,
-                                      right: 8,
-                                      child: Container(
-                                        width: 32,
-                                        height: 32,
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withOpacity(0.45),
-                                          shape: BoxShape.circle,
-                                        ),
-                                        alignment: Alignment.center,
-                                        child: _MoreMenuButton(
+                                          alignment: Alignment.center,
+                                          child: _MoreMenuButton(
                                             file: file,
                                             compact: true,
-                                            hitSize: 32),
+                                            hitSize: 32,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
                             ),
                           ),
                         ),
@@ -6205,24 +6561,6 @@ class _GridFileCardState extends State<_GridFileCard> {
                                   ),
                                 ],
                                 const Spacer(),
-                                Row(
-                                  children: [
-                                    _SmallLinkButtonPill(
-                                        file: file,
-                                        kind: 'ans',
-                                        currentGrade: currentGrade),
-                                    const SizedBox(width: 6),
-                                    _SmallLinkButtonPill(
-                                        file: file,
-                                        kind: 'sol',
-                                        currentGrade: currentGrade),
-                                    const SizedBox(width: 6),
-                                    Flexible(
-                                        child: _BodyExtBadge(
-                                            file: file,
-                                            currentGrade: currentGrade)),
-                                  ],
-                                ),
                                 const SizedBox(height: 10),
                               ],
                             ),
@@ -6236,6 +6574,8 @@ class _GridFileCardState extends State<_GridFileCard> {
             ),
           ),
         ),
+      ),
+        ],
       ),
     );
   }
@@ -6503,140 +6843,6 @@ class _GridFileCardState extends State<_GridFileCard> {
   }
 }
 
-class _DualSwipeActionReveal extends StatefulWidget {
-  final Widget child;
-  final Widget? leftActionPane;
-  final double leftActionWidth;
-  final Widget? rightActionPane;
-  final double rightActionWidth;
-  final BorderRadius borderRadius;
-  final bool enabled;
-  final Duration snapDuration;
-  final double openThreshold;
-
-  const _DualSwipeActionReveal({
-    required this.child,
-    this.leftActionPane,
-    this.leftActionWidth = 0,
-    this.rightActionPane,
-    this.rightActionWidth = 0,
-    this.borderRadius = const BorderRadius.all(Radius.circular(12)),
-    this.enabled = true,
-    this.snapDuration = const Duration(milliseconds: 160),
-    this.openThreshold = 0.38,
-  });
-
-  @override
-  State<_DualSwipeActionReveal> createState() => _DualSwipeActionRevealState();
-}
-
-class _DualSwipeActionRevealState extends State<_DualSwipeActionReveal>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl =
-      AnimationController.unbounded(vsync: this, value: 0);
-
-  bool get _isOpen => _ctrl.value.abs() > 0.01;
-
-  void _animateTo(double v) => _ctrl.animateTo(v,
-      duration: widget.snapDuration, curve: Curves.easeOutCubic);
-
-  void _close() => _animateTo(0);
-
-  void _handleHorizontalDragUpdate(DragUpdateDetails d) {
-    if (!widget.enabled) return;
-    final maxRight =
-        widget.leftActionPane == null ? 0.0 : widget.leftActionWidth;
-    final maxLeft =
-        widget.rightActionPane == null ? 0.0 : widget.rightActionWidth;
-    if (maxRight <= 0 && d.delta.dx > 0) return;
-    if (maxLeft <= 0 && d.delta.dx < 0) return;
-    final next = _ctrl.value + d.delta.dx;
-    _ctrl.value = next.clamp(-maxLeft, maxRight);
-  }
-
-  void _handleHorizontalDragEnd(DragEndDetails d) {
-    if (!widget.enabled) return;
-    final v = d.primaryVelocity ?? 0.0;
-    if (v > 250 &&
-        widget.leftActionPane != null &&
-        widget.leftActionWidth > 0) {
-      _animateTo(widget.leftActionWidth);
-      return;
-    }
-    if (v < -250 &&
-        widget.rightActionPane != null &&
-        widget.rightActionWidth > 0) {
-      _animateTo(-widget.rightActionWidth);
-      return;
-    }
-    final openRight = widget.leftActionWidth * widget.openThreshold;
-    final openLeft = widget.rightActionWidth * widget.openThreshold;
-    if (_ctrl.value >= openRight && widget.leftActionPane != null) {
-      _animateTo(widget.leftActionWidth);
-    } else if (_ctrl.value <= -openLeft && widget.rightActionPane != null) {
-      _animateTo(-widget.rightActionWidth);
-    } else {
-      _close();
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final radius = widget.borderRadius;
-    final leftWidth =
-        widget.leftActionPane == null ? 0.0 : widget.leftActionWidth;
-    final rightWidth =
-        widget.rightActionPane == null ? 0.0 : widget.rightActionWidth;
-    return GestureDetector(
-      onHorizontalDragUpdate: _handleHorizontalDragUpdate,
-      onHorizontalDragEnd: _handleHorizontalDragEnd,
-      onHorizontalDragCancel: _close,
-      behavior: HitTestBehavior.translucent,
-      child: ClipRRect(
-        borderRadius: radius,
-        child: Stack(
-          children: [
-            if (widget.leftActionPane != null && leftWidth > 0)
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: leftWidth,
-                child: widget.leftActionPane!,
-              ),
-            if (widget.rightActionPane != null && rightWidth > 0)
-              Positioned(
-                right: 0,
-                top: 0,
-                bottom: 0,
-                width: rightWidth,
-                child: widget.rightActionPane!,
-              ),
-            AnimatedBuilder(
-              animation: _ctrl,
-              builder: (context, child) {
-                return Transform.translate(
-                    offset: Offset(_ctrl.value, 0), child: child);
-              },
-              child: GestureDetector(
-                onTap: _isOpen ? _close : null,
-                behavior: HitTestBehavior.translucent,
-                child: widget.child,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _MiniPill extends StatelessWidget {
   final String text;
   final double fontSize;
@@ -6644,92 +6850,23 @@ class _MiniPill extends StatelessWidget {
   const _MiniPill({required this.text, this.fontSize = 11, this.padding});
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle =
+        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     return Container(
       padding:
           padding ?? const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.2),
+        color: brightness == Brightness.light
+            ? Colors.black.withOpacity(0.06)
+            : Colors.black.withOpacity(0.2),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(text,
           style: TextStyle(
-              color: Colors.white70,
+              color: panelStyle.label,
               fontSize: fontSize,
               fontWeight: FontWeight.w700)),
-    );
-  }
-}
-
-/// Compact toggle that lets each textbook cover pick between the legacy
-/// Dropbox/external-launcher flow and the new in-app pdfrx viewer. The state
-/// is global (stored in [TextbookViewerPreference]) so flipping it on one
-/// card immediately updates every other card.
-///
-/// TODO(migration-cleanup): delete this widget and all usages once the
-/// in-app viewer is promoted to the default behaviour.
-class _TextbookViewerModeToggle extends StatelessWidget {
-  const _TextbookViewerModeToggle();
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: TextbookViewerPreference.instance.useInAppListenable,
-      builder: (context, useInApp, _) {
-        final label = useInApp ? '신규' : '기존';
-        final tooltip = useInApp
-            ? '인앱 뷰어(로컬 캐시) 사용 중 · 탭하면 기존 방식으로'
-            : '기존 방식(Dropbox/외부 앱) 사용 중 · 탭하면 인앱 뷰어로';
-        final bg = useInApp
-            ? const Color(0xFF1F3A28).withOpacity(0.85)
-            : Colors.black.withOpacity(0.45);
-        final fg = useInApp ? const Color(0xFF7CC67C) : Colors.white70;
-        return Tooltip(
-          message: tooltip,
-          waitDuration: const Duration(milliseconds: 400),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () async {
-                await TextbookViewerPreference.instance.toggle();
-              },
-              borderRadius: BorderRadius.circular(999),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: useInApp
-                        ? const Color(0xFF7CC67C).withOpacity(0.55)
-                        : Colors.white24,
-                    width: 0.8,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      useInApp ? Icons.picture_as_pdf : Icons.open_in_new,
-                      size: 12,
-                      color: fg,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: fg,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 }
@@ -6821,8 +6958,13 @@ class _SmallLinkButtonPill extends StatelessWidget {
   final _ResourceFile file;
   final String kind; // 'ans' | 'sol'
   final String? currentGrade;
-  const _SmallLinkButtonPill(
-      {required this.file, required this.kind, required this.currentGrade});
+  final bool overlay;
+  const _SmallLinkButtonPill({
+    required this.file,
+    required this.kind,
+    required this.currentGrade,
+    this.overlay = false,
+  });
   @override
   Widget build(BuildContext context) {
     final key = currentGrade != null ? '${currentGrade}#${kind}' : null;
@@ -6861,15 +7003,18 @@ class _SmallLinkButtonPill extends StatelessWidget {
                   await OpenFilex.open(link);
                 }
               },
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(overlay ? 16 : 8),
         child: Container(
-          height: 28,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          height: overlay ? 32 : 28,
+          padding: EdgeInsets.symmetric(horizontal: overlay ? 10 : 8),
           decoration: BoxDecoration(
-            color: enabled ? const Color(0xFF3A3F44) : const Color(0xFF2A2A2A),
-            borderRadius: BorderRadius.circular(8),
+            color: overlay
+                ? Colors.black.withOpacity(enabled ? 0.45 : 0.28)
+                : (enabled ? const Color(0xFF3A3F44) : const Color(0xFF2A2A2A)),
+            borderRadius: BorderRadius.circular(overlay ? 16 : 8),
             // 윤곽선 제거
           ),
+          alignment: Alignment.center,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

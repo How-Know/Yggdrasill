@@ -10,6 +10,7 @@ import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../widgets/latex_text_renderer.dart';
+import 'textbook_course_edit_dialog.dart';
 import 'textbook_crop_extract_dialog.dart';
 import 'textbook_register_wizard.dart';
 import 'textbook_unit_authoring_dialog.dart';
@@ -572,6 +573,19 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           ),
         ),
         const SizedBox(width: 12),
+        OutlinedButton.icon(
+          onPressed: _openCourseEditDialog,
+          icon: const Icon(Icons.edit, size: 16, color: Color(0xFFB3B3B3)),
+          label: const Text(
+            '과정 편집',
+            style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 12),
+          ),
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: Color(0xFF2A2A2A)),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+        ),
+        const SizedBox(width: 8),
         FilledButton.icon(
           onPressed: _openAddBookWizard,
           icon: const Icon(Icons.library_add, size: 16, color: Colors.white),
@@ -598,6 +612,15 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _openCourseEditDialog() async {
+    final defaultAcademyId = _selectedBook?.academyId ??
+        (_books.isNotEmpty ? _books.first.academyId : null);
+    await TextbookCourseEditDialog.show(
+      context,
+      defaultAcademyId: defaultAcademyId,
     );
   }
 

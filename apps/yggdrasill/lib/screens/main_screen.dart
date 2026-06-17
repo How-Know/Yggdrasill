@@ -145,6 +145,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // StudentScreen 관련 상태
   final GlobalKey<StudentScreenState> _studentScreenKey =
       GlobalKey<StudentScreenState>();
+  final ClassContentPrintController _classContentPrintController =
+      ClassContentPrintController();
+  final ResourcesPrintController _resourcesPrintController =
+      ResourcesPrintController();
   StudentViewType _viewType = StudentViewType.all;
   final List<GroupInfo> _groups = [];
   final List<Student> _students = [];
@@ -1204,6 +1208,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     rightSideSheetEdgeOpenEnabled.value = (_selectedIndex != 0);
     blockRightSideSheetOpen.value =
         (_selectedIndex == 0 && !gradingModeActive.value);
+    _classContentPrintController.addListener(_onPrintControllerChanged);
+    _resourcesPrintController.addListener(_onPrintControllerChanged);
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
     DataManager.instance.attendanceRecordsNotifier.addListener(
       _markSideSheetDirty,
@@ -1252,6 +1258,49 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final id = await TenantService.instance.getActiveAcademyId();
     if (!mounted || id == null) return;
     await M5QuestionRequestStore.instance.start(id);
+  }
+
+  void _onPrintControllerChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  bool get _sideSheetPrintSupported =>
+      _selectedIndex == 0 || _selectedIndex == 4;
+
+  bool get _sideSheetPrintActive {
+    if (_selectedIndex == 0) {
+      return _classContentPrintController.isPrintPickMode;
+    }
+    if (_selectedIndex == 4) {
+      return _resourcesPrintController.isPrintPickMode;
+    }
+    return false;
+  }
+
+  String get _sideSheetPrintTooltip {
+    if (_selectedIndex == 0) {
+      return _sideSheetPrintActive ? '홈 인쇄 선택 종료' : '홈 과제 인쇄';
+    }
+    if (_selectedIndex == 4) {
+      return _sideSheetPrintActive ? '자료 인쇄 선택 종료' : '자료 교재 인쇄';
+    }
+    return '현재 화면은 인쇄를 지원하지 않습니다';
+  }
+
+  Future<void> _handleSideSheetPrintPressed() async {
+    if (_selectedIndex == 0) {
+      await _classContentPrintController.startPrintFlow();
+      return;
+    }
+    if (_selectedIndex == 4) {
+      await _resourcesPrintController.startPrintFlow();
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('현재 화면은 인쇄를 지원하지 않습니다.')),
+    );
   }
 
   Future<void> _initializeData() async {
@@ -1374,6 +1423,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _classTagBarrierTimer?.cancel();
     _attendedTapTimer?.cancel();
     _classTagBarrierActive.dispose();
+    _classContentPrintController.removeListener(_onPrintControllerChanged);
+    _resourcesPrintController.removeListener(_onPrintControllerChanged);
     DataManager.instance.attendanceRecordsNotifier.removeListener(
       _markSideSheetDirty,
     );
@@ -1464,14 +1515,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   double _sideSheetHomeworkChipFontSize(double scale) =>
-      _sideSheetScalableNameFontSize(scale);
+      FabTabBarTokens.fabBarLabelFontSize;
 
-  TextStyle _sideSheetHomeworkChipTextStyle(double scale) {
+  TextStyle _sideSheetHomeworkChipTextStyle(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     return TextStyle(
-      color: const Color(0xFFEAF2F2),
-      fontSize: _sideSheetHomeworkChipFontSize(scale),
-      fontWeight: FontWeight.w500,
-      fontFamily: FabTabBarTokens.previewAcademyValueFontFamily,
+      color: palette.labelSelected,
+      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+      fontWeight: FontWeight.w600,
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
       height: 1.0,
       leadingDistribution: TextLeadingDistribution.even,
     );
@@ -2244,7 +2296,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Expanded(child: ClassContentScreen()),
+            Expanded(
+              child: ClassContentScreen(
+                printController: _classContentPrintController,
+              ),
+            ),
             _buildHomeQuestionChipsStrip(),
           ],
         );
@@ -2255,7 +2311,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 3:
         return const LearningScreen();
       case 4:
-        return const ResourcesScreen();
+        return ResourcesScreen(printController: _resourcesPrintController);
       case 5:
         return const SettingsScreen();
       default:
@@ -2615,6 +2671,43 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     ),
                                                     onPressed:
                                                         _toggleSideSheetBottomView,
+                                                  ),
+                                                ),
+                                                SizedBox(
+                                                  width: 10 * sideSheetScale,
+                                                ),
+                                                Tooltip(
+                                                  message:
+                                                      _sideSheetPrintTooltip,
+                                                  child: IconButton(
+                                                    icon: Icon(
+                                                      Icons.print_rounded,
+                                                      color:
+                                                          _sideSheetPrintActive
+                                                              ? const Color(
+                                                                  0xFF33A373)
+                                                              : (_sideSheetPrintSupported
+                                                                  ? sideSheetPalette
+                                                                      .labelUnselected
+                                                                  : sideSheetPalette
+                                                                      .labelUnselected
+                                                                      .withOpacity(
+                                                                      0.36,
+                                                                    )),
+                                                      size: actionIconSize,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints:
+                                                        BoxConstraints(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed: () =>
+                                                        unawaited(
+                                                      _handleSideSheetPrintPressed(),
+                                                    ),
                                                   ),
                                                 ),
                                                 SizedBox(
@@ -3813,7 +3906,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final studentId = t.student.id;
     final groups = HomeworkStore.instance.groups(studentId);
     final List<Widget> chips = [];
-    const Color statusAccent = Color(0xFF33A373);
     void addGroupTitleChip(
       String rawTitle, {
       int visualPhase = 1, // 1:대기 2:수행 3:제출 4:확인
@@ -3827,9 +3919,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           builder: (context) {
             final tick = _uiAnimController.value;
             final phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
+            final palette = FabTabBarTokens.paletteFor(
+              Theme.of(context).brightness,
+            );
+            // FabStyleTabBar 선택 알약과 동일: palette.highlight
+            final chipFill = palette.highlight;
             final chipFontSize = _sideSheetHomeworkChipFontSize(scale);
             final chipRadius = _sideSheetHomeworkChipRadius * scale;
-            final style = _sideSheetHomeworkChipTextStyle(scale);
+            final style = _sideSheetHomeworkChipTextStyle(context);
             final chipPad = _sideSheetHomeworkChipPadding(
               scale,
               attendedTwoLine: attendedTwoLine,
@@ -3838,23 +3935,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               scale,
               attendedTwoLine: attendedTwoLine,
             );
-            final double borderWidth = visualPhase == 1 ? 1.0 * scale : 2.0 * scale;
-            final Border border = switch (visualPhase) {
-              2 => Border.all(
-                  color: statusAccent.withOpacity(0.9),
-                  width: borderWidth,
-                ),
-              3 => Border.all(color: Colors.transparent, width: borderWidth),
-              4 => Border.all(
-                  color: Color.lerp(
-                        Colors.white24,
-                        statusAccent.withOpacity(0.9),
-                        phase4Pulse,
-                      ) ??
-                      Colors.white24,
-                  width: borderWidth,
-                ),
-              _ => Border.all(color: Colors.white24, width: borderWidth),
+            final Color backgroundColor = switch (visualPhase) {
+              2 => chipFill,
+              3 => chipFill,
+              4 => Color.lerp(
+                    chipFill.withValues(
+                      alpha: (chipFill.a * 0.45).clamp(0.0, 1.0),
+                    ),
+                    chipFill,
+                    phase4Pulse,
+                  ) ??
+                  chipFill,
+              _ => Colors.transparent,
             };
             Widget chipInner = Container(
               constraints: BoxConstraints(
@@ -3866,9 +3958,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   ? Alignment.center
                   : Alignment.centerLeft,
               decoration: BoxDecoration(
-                color: Colors.transparent,
+                color: backgroundColor,
                 borderRadius: BorderRadius.circular(chipRadius),
-                border: border,
               ),
               child: Text(
                 chipTitle,
@@ -3891,19 +3982,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 ),
               ),
             );
-            if (visualPhase == 3) {
-              chipInner = RepaintBoundary(
-                child: CustomPaint(
-                  foregroundPainter: _RotatingBorderPainter(
-                    baseColor: statusAccent,
-                    tick: tick,
-                    strokeWidth: 2.0 * scale,
-                    cornerRadius: chipRadius,
-                  ),
-                  child: chipInner,
-                ),
-              );
-            }
 
             return Tooltip(
               message: chipTitle,

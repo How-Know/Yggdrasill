@@ -613,6 +613,33 @@ const String kUnifiedAnswerRenderStyleVersion =
     'answer-xelatex-v10-rightsheet-asset-driven';
 const List<String> kUnifiedAnswerRenderStyleVersionFallbacks = <String>[];
 
+Map<String, dynamic> _withConsistentAssignmentSubjectTitle(
+  Map<String, dynamic> renderConfig,
+) {
+  final currentSubject = '${renderConfig['subjectTitleText'] ?? ''}'
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (currentSubject.isNotEmpty && currentSubject != '수학 영역') {
+    return renderConfig;
+  }
+
+  final headers = _listOrEmpty(renderConfig['titlePageHeaders']);
+  for (final raw in headers) {
+    final row = _mapOrEmpty(raw);
+    final page = _intOrNull(row['page']);
+    if (page != null && page != 1) continue;
+    final title = '${row['title'] ?? row['subjectTitleText'] ?? ''}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (title.isEmpty || title == '수학 영역') continue;
+    return <String, dynamic>{
+      ...renderConfig,
+      'subjectTitleText': title,
+    };
+  }
+  return renderConfig;
+}
+
 class LearningProblemDocumentExportPreset {
   const LearningProblemDocumentExportPreset({
     required this.id,
@@ -695,9 +722,9 @@ class LearningProblemDocumentExportPreset {
   factory LearningProblemDocumentExportPreset.fromMap(
     Map<String, dynamic> map,
   ) {
-    final renderConfig = _mapOrEmpty(
+    final renderConfig = _withConsistentAssignmentSubjectTitle(_mapOrEmpty(
       map['render_config'] is Map ? map['render_config'] : map['renderConfig'],
-    );
+    ));
     final modeMapRaw = _mapOrEmpty(
       map['question_mode_by_question_uid'] is Map
           ? map['question_mode_by_question_uid']
@@ -1785,12 +1812,12 @@ class LearningProblemBankService {
           .range(safeOffset, safeOffset + safeLimit - 1);
     } catch (_) {
       rows = await _client
-        .from('pb_export_presets')
-        .select('*')
-        .eq('academy_id', academyId)
-        .eq('preset_kind', safePresetKind)
-        .order('created_at', ascending: false)
-        .range(safeOffset, safeOffset + safeLimit - 1);
+          .from('pb_export_presets')
+          .select('*')
+          .eq('academy_id', academyId)
+          .eq('preset_kind', safePresetKind)
+          .order('created_at', ascending: false)
+          .range(safeOffset, safeOffset + safeLimit - 1);
     }
     final rawMaps = (rows as List<dynamic>)
         .map(_mapOrEmpty)
@@ -1863,11 +1890,12 @@ class LearningProblemBankService {
     required bool includeExplanation,
     required String displayName,
   }) async {
-    final assignmentRenderConfig = <String, dynamic>{
+    final assignmentRenderConfig =
+        _withConsistentAssignmentSubjectTitle(<String, dynamic>{
       ...renderConfig,
       'presetKind': 'assignment',
       'assignmentLibraryKind': 'generated_assignment',
-    };
+    });
     final result = await saveExportSettingsAsDocument(
       academyId: academyId,
       sourceDocumentId: sourceDocumentId,
