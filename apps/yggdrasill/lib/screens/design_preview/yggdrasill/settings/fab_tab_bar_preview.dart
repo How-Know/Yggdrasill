@@ -128,8 +128,9 @@ class FabTabBarTokens {
 
   /// Preview — 글래스 드롭다운 뒤 화면 흐림 (BackdropFilter)
   static const double previewAcademyMenuGlassBlurSigma = 18;
+  // 화이트 모드: 흰 패널 위에서도 보이도록 반투명 검정(연한 회색) 사용.
   static const Color previewAcademyMenuGlassHoverOverlayLight =
-      Color(0x12FFFFFF);
+      Color(0x14000000);
   static const Color previewAcademyMenuGlassHoverOverlayDark =
       Color(0x12FFFFFF);
 
@@ -438,6 +439,14 @@ class FabTabBarTokens {
     return paletteFor(brightness).highlight;
   }
 
+  /// 공용 그룹 카드 행 누름 — FAB 탭 하이라이트를 카드 배경 위에 합성한 불투명 단일 색.
+  static Color groupedCardRowPressFill(Brightness brightness) {
+    final cardBg = brightness == Brightness.light
+        ? previewAcademyInfoPanelLight
+        : previewAcademyInfoPanelDark;
+    return Color.alphaBlend(paletteFor(brightness).highlight, cardBg);
+  }
+
   /// 플로팅 메모 배너 내부 패딩
   static const double fabMemoBannerPaddingLeft = 18;
   static const double fabMemoBannerPaddingRight = 14;
@@ -684,9 +693,11 @@ class PreviewAcademyTimePill extends StatelessWidget {
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final palette = FabTabBarTokens.paletteFor(brightness);
-    final background = FabTabBarTokens.fabHighlightPillFill(brightness);
-    final textColor =
-        isPlaceholder ? style.hint : palette.labelSelected;
+    final rowPressed = GroupedCardPressScope.pressedOf(context);
+    final background = rowPressed
+        ? Colors.transparent
+        : FabTabBarTokens.fabHighlightPillFill(brightness);
+    final textColor = isPlaceholder ? style.hint : palette.labelSelected;
 
     final pillBody = Padding(
       padding: const EdgeInsets.symmetric(
@@ -1071,6 +1082,81 @@ class _PreviewAcademyBreakTimeAddRow extends StatelessWidget {
   }
 }
 
+/// 공용 그룹 카드 행 누름 상태 — 자식(시간 알약 등)이 행 하이라이트와 겹치지 않게 한다.
+class GroupedCardPressScope extends InheritedWidget {
+  final bool pressed;
+
+  const GroupedCardPressScope({
+    super.key,
+    required this.pressed,
+    required super.child,
+  });
+
+  static bool pressedOf(BuildContext context) {
+    return context
+            .dependOnInheritedWidgetOfExactType<GroupedCardPressScope>()
+            ?.pressed ??
+        false;
+  }
+
+  @override
+  bool updateShouldNotify(GroupedCardPressScope oldWidget) {
+    return oldWidget.pressed != pressed;
+  }
+}
+
+/// 공용 그룹 카드 행 — 호버/ripple 없이 누르는 동안 FAB 탭 하이라이트로 전체 배경 표시.
+class FabStyleGroupedCardTapTarget extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+
+  const FabStyleGroupedCardTapTarget({
+    super.key,
+    required this.child,
+    this.onTap,
+  });
+
+  @override
+  State<FabStyleGroupedCardTapTarget> createState() =>
+      _FabStyleGroupedCardTapTargetState();
+}
+
+class _FabStyleGroupedCardTapTargetState
+    extends State<FabStyleGroupedCardTapTarget> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.onTap == null) return widget.child;
+
+    final brightness = Theme.of(context).brightness;
+    final pressFill = FabTabBarTokens.groupedCardRowPressFill(brightness);
+
+    return GroupedCardPressScope(
+      pressed: _pressed,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => _setPressed(true),
+          onTapUp: (_) => _setPressed(false),
+          onTapCancel: () => _setPressed(false),
+          onTap: widget.onTap,
+          child: ColoredBox(
+            color: _pressed ? pressFill : Colors.transparent,
+            child: widget.child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Preview — 학원명·학원주소·슬로건 묶음 카드 (스크린샷 설정 앱형).
 class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
   final PreviewAcademyPanelStyle style;
@@ -1182,12 +1268,9 @@ class PreviewAcademyGroupedFieldsCard extends StatelessWidget {
                       ),
                     );
                   }
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: row.onTap,
-                      child: child,
-                    ),
+                  return FabStyleGroupedCardTapTarget(
+                    onTap: row.onTap,
+                    child: child,
                   );
                 }
 
@@ -1420,7 +1503,8 @@ class PreviewAcademyTwoLineRow extends StatelessWidget {
     final Widget content = Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
-        vertical: FabTabBarTokens.previewAcademyGroupedTwoLineRowPaddingVertical,
+        vertical:
+            FabTabBarTokens.previewAcademyGroupedTwoLineRowPaddingVertical,
       ),
       child: Row(
         children: [
@@ -1471,12 +1555,9 @@ class PreviewAcademyTwoLineRow extends StatelessWidget {
     );
 
     if (onTap == null) return content;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: content,
-      ),
+    return FabStyleGroupedCardTapTarget(
+      onTap: onTap,
+      child: content,
     );
   }
 }
@@ -1632,37 +1713,42 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(
+      FabTabBarTokens.previewAcademyMenuRadius,
+    );
+    final shadows =
+        FabTabBarTokens.paletteFor(Theme.of(context).brightness).boxShadows;
+
     return AnimatedBuilder(
       animation: animation,
       builder: (context, child) {
         final t = _easedProgress(animation);
-        final heightFactor = 0.08 + 0.92 * t;
-        final scaleX = 0.96 + 0.04 * t;
-        final slideY = (1 - t) * -6;
-        final radius = BorderRadius.circular(
-          FabTabBarTokens.previewAcademyMenuRadius,
-        );
 
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: radius,
-            boxShadow:
-                FabTabBarTokens.paletteFor(Theme.of(context).brightness)
-                    .boxShadows,
-          ),
-          child: ClipRRect(
-            borderRadius: radius,
-            clipBehavior: Clip.antiAlias,
-            child: Align(
-              alignment: Alignment.topRight,
-              heightFactor: heightFactor,
-              child: Transform.translate(
-                offset: Offset(0, slideY),
-                child: Transform.scale(
-                  scaleX: scaleX,
-                  scaleY: 1,
+        // 위(앵커)에서 아래로 펼쳐지는 높이 reveal.
+        final heightFactor = (0.1 + 0.9 * t).clamp(0.0, 1.0);
+        // 그림자·클립·콘텐츠 전체에 동일하게 적용되는 미세 스케일/페이드.
+        // (그림자가 콘텐츠와 항상 같은 형태로 움직이므로 펼침 중 불일치가 없다.)
+        final scale = 0.965 + 0.035 * t;
+        final opacity =
+            Curves.easeOut.transform(animation.value.clamp(0.0, 1.0));
+
+        return Opacity(
+          opacity: opacity,
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.topRight,
+            filterQuality: FilterQuality.high,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                boxShadow: shadows,
+              ),
+              child: ClipRRect(
+                borderRadius: radius,
+                clipBehavior: Clip.antiAlias,
+                child: Align(
                   alignment: Alignment.topRight,
-                  filterQuality: FilterQuality.high,
+                  heightFactor: heightFactor,
                   child: child,
                 ),
               ),
@@ -1744,7 +1830,12 @@ class _PreviewAcademyGlassMenuPanelState
                       child: const ColoredBox(color: Colors.transparent),
                     ),
                   ),
-                  ColoredBox(
+                  // 호버 색 변경이 BackdropFilter 레이어까지 repaint를
+                  // 전파시키면(공유 RepaintBoundary) 블러가 다시 칠해지며
+                  // 영역 전체가 한 프레임 번쩍인다. 전경 콘텐츠를 별도
+                  // RepaintBoundary로 격리해 블러 재계산을 차단한다.
+                  RepaintBoundary(
+                    child: ColoredBox(
                     color: glassTint,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1801,6 +1892,7 @@ class _PreviewAcademyGlassMenuPanelState
                         ],
                       ),
                     ),
+                    ),
                   ),
                 ],
               ),
@@ -1811,6 +1903,7 @@ class _PreviewAcademyGlassMenuPanelState
     );
   }
 }
+
 /// Preview — 기본 정보 입력 시트에서 포커스할 필드.
 enum PreviewAcademyBasicInfoField {
   academyName,
@@ -2935,8 +3028,8 @@ class PreviewAcademyGlassMenu {
         anchor.localToGlobal(anchor.size.topRight(Offset.zero));
     final screenSize = MediaQuery.sizeOf(context);
     const menuWidth = 240.0;
-    final top =
-        anchorTopRight.dy - FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
+    final top = anchorTopRight.dy -
+        FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
     final left = (anchorTopRight.dx - menuWidth)
         .clamp(8.0, screenSize.width - menuWidth - 8);
 
@@ -3155,29 +3248,53 @@ class FabStyleGlassPanel extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final Border? border;
 
+  /// 라이트 모드에서 FAB 글래스 대신 공용 그룹 카드 배경(#F1F1F1)을 쓴다.
+  final bool useGroupedCardBackgroundInLight;
+
   const FabStyleGlassPanel({
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
     this.border,
+    this.useGroupedCardBackgroundInLight = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final brightness = Theme.of(context).brightness;
+    final useGroupedCard =
+        useGroupedCardBackgroundInLight && brightness == Brightness.light;
+    final radius = BorderRadius.circular(
+      useGroupedCard
+          ? FabTabBarTokens.previewAcademyGroupedCardRadius
+          : FabTabBarTokens.fabMenuPillRadius,
+    );
+
+    if (useGroupedCard) {
+      final resolvedBorder =
+          border ?? FabTabBarTokens.groupedCardBorderFor(brightness);
+      return Container(
+        decoration: BoxDecoration(
+          color: FabTabBarTokens.previewAcademyInfoPanelLight,
+          borderRadius: radius,
+          border: resolvedBorder,
+        ),
+        padding: padding,
+        child: child,
+      );
+    }
+
     final resolvedBorder =
         border ?? FabTabBarTokens.fabRelatedBorderFor(brightness);
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        borderRadius:
-            BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
+        borderRadius: radius,
         boxShadow: palette.boxShadows,
       ),
       child: ClipRRect(
-        borderRadius:
-            BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
+        borderRadius: radius,
         child: BackdropFilter(
           filter: ImageFilter.blur(
             sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
@@ -3186,8 +3303,7 @@ class FabStyleGlassPanel extends StatelessWidget {
           child: Container(
             decoration: BoxDecoration(
               color: palette.surface,
-              borderRadius:
-                  BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius),
+              borderRadius: radius,
               border: resolvedBorder,
             ),
             padding: padding,
@@ -3476,7 +3592,8 @@ class FabStyleScreenMainTitle extends StatelessWidget {
 }
 
 /// [MainFabAlternative] + 버튼 — 탭바 오버레이와 동일한 24px 여백 (Scaffold 기본 16px 대신).
-class FabStyleFloatingActionButtonLocation extends FloatingActionButtonLocation {
+class FabStyleFloatingActionButtonLocation
+    extends FloatingActionButtonLocation {
   const FabStyleFloatingActionButtonLocation();
 
   @override

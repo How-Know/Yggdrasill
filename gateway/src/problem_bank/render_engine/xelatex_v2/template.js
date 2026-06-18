@@ -1847,7 +1847,9 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   const STEM_STRETCH = '1.53';
   const enableVisualLineTallMathPad = false;
   const stemTexOptions = { visualLineTallMathPad: enableVisualLineTallMathPad };
-  const wrapStem = (inner) => `{${stretchWithFontTex(STEM_STRETCH, options.fontSizePt)}\\lineskiplimit=0.4em\\lineskip=0.8em${withBaselineGuide(inner)}\\par}`;
+  // \parskip=0pt: [문단] 강제 단락마다 문서 기본 \parskip 이 끼어 자동 줄바꿈보다
+  //   간격이 넓어지는 것을 막아, 강제/자동 줄바꿈 간격을 동일하게 맞춘다.
+  const wrapStem = (inner) => `{${stretchWithFontTex(STEM_STRETCH, options.fontSizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=0.8em${withBaselineGuide(inner)}\\par}`;
   // inline-text(글 중간) 그림: 텍스트는 smartTexLine, 그림 sentinel 은 resolver 가
   // 텍스트 모드 그대로 끼워넣어 줄 흐름 안에 둔다.
   const inlineFigResolver = typeof options?.inlineFigureResolver === 'function'
@@ -3100,7 +3102,12 @@ function renderCellContent(line, equations) {
   if (/^\$[\s\S]*\$$/.test(s)) {
     // 안쪽에 중첩된 $가 있으면 이상한 셀 → 그대로 smartTexLine 에 맡긴다.
     const inner = s.slice(1, -1);
-    if (!/\$/.test(inner)) return s;
+    if (!/\$/.test(inner)) {
+      const math = inner.trim();
+      return /^\\displaystyle(?![A-Za-z])/.test(math)
+        ? `$${math}$`
+        : `$\\displaystyle ${math}$`;
+    }
   }
   // 그 외는 struct 경로처럼 smartTexLine.
   return smartTexLine(unwrapLatexTextCommandsForTextMode(s), equations);
@@ -4973,13 +4980,16 @@ function renderOneQuestion(question, {
     const hOffset = Math.abs(offsetX) > 1e-3 ? `\\hspace*{${offsetX.toFixed(2)}em}` : '';
     const vOffsetPre = offsetY > 1e-3 ? `\\vspace*{${offsetY.toFixed(2)}em}` : '';
     const vOffsetPost = offsetY < -1e-3 ? `\\vspace*{${offsetY.toFixed(2)}em}` : '';
+    // 그림 하단 잘림은 렌더러의 그림 정규화(normalizeFigureAssetForXeLatex)에서 하단에
+    //   흰색 여백을 덧붙여 방지한다(이미지 가장자리에 내용이 닿지 않게 함).
+    const include = expr.include;
     let body;
     if (anchor === 'left') {
-      body = `\\par\\noindent ${hOffset}${expr.include}\\par`;
+      body = `\\par\\noindent ${hOffset}${include}\\par`;
     } else if (anchor === 'right') {
-      body = `\\par\\noindent\\hfill${expr.include}${hOffset}\\par`;
+      body = `\\par\\noindent\\hfill${include}${hOffset}\\par`;
     } else {
-      body = `\\par\\noindent{\\hfill${hOffset}${expr.include}\\hfill\\null}\\par`;
+      body = `\\par\\noindent{\\hfill${hOffset}${include}\\hfill\\null}\\par`;
     }
     const pre = vOffsetPre ? `\n${vOffsetPre}` : '';
     const post = vOffsetPost ? `\n${vOffsetPost}` : '';

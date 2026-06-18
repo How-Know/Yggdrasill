@@ -35,6 +35,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   static const Color _text = Color(0xFFEAF2F2);
   static const Color _textSub = Color(0xFF9FB3B3);
   static const Color _accent = Color(0xFF33A373);
+  static const Color _danger = Color(0xFFDE6A73);
   static const String _previewKoreanFontFamily = 'HCRBatang';
   static const double _previewMathScale = 1.10;
   // 분수는 명령(\dfrac) 승격으로 키우고, 식 전체 스케일은 일반 수식과 동일하게 유지한다.
@@ -7944,7 +7945,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           order: orderHint,
         );
     Widget withDeleteButton(Widget child) {
-      if (!hasFigureAsset || asset == null) return child;
+      if (!hasFigureAsset) return child;
       return Stack(
         children: [
           child,
@@ -15421,8 +15422,7 @@ class _PartialTableEntry {
     required this.key,
     required this.type,
     required this.maxCols,
-    this.maxRows = 0,
-  });
+  }) : maxRows = 0;
 
   final String key;
   final String type;

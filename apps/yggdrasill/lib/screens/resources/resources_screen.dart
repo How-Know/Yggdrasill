@@ -25,6 +25,7 @@ import '../../widgets/resource_file_meta_dialog.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../models/education_level.dart';
 import '../../models/textbook_drag_payload.dart';
+import '../../models/exam_preset_drag_payload.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
@@ -32,6 +33,7 @@ import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_viewer_preference.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import 'exam_preset_card.dart';
 import 'exam_preset_preview_launcher.dart';
@@ -396,9 +398,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     await _ensureGradesLoaded();
     if (!mounted) return;
     if (_grades.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과정이 없습니다. 오른쪽 슬라이드에서 과정을 먼저 추가하세요.')),
-      );
+      showAppSnackBar(context, '과정이 없습니다. 오른쪽 슬라이드에서 과정을 먼저 추가하세요.');
       return;
     }
     final selected = await showDialog<int>(
@@ -646,14 +646,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.6,
-                        color: _rsAccent,
-                      ),
-                    ),
+                    const YggLoadingIndicator(),
                     const SizedBox(width: 14),
                     Expanded(
                       child: ValueListenableBuilder<String>(
@@ -705,33 +698,25 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     final grade = _effectiveGradeLabelForFile(file);
     if (grade == null || grade.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과정이 없습니다.')),
-      );
+      showAppSnackBar(context, '과정이 없습니다.');
       return;
     }
     final raw = file.linksByGrade['${grade}#body']?.trim() ?? '';
     if (raw.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('해당 과정에 본문 링크가 없습니다.')),
-      );
+      showAppSnackBar(context, '해당 과정에 본문 링크가 없습니다.');
       return;
     }
     if (raw.startsWith('http://') || raw.startsWith('https://')) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('URL 인쇄는 지원하지 않습니다. 파일 경로를 사용하세요.')),
-      );
+      showAppSnackBar(context, 'URL 인쇄는 지원하지 않습니다. 파일 경로를 사용하세요.');
       return;
     }
     final isPdf = raw.toLowerCase().endsWith('.pdf');
     final trimmedRange = range.trim();
     if (trimmedRange.isNotEmpty && !isPdf) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('페이지 범위는 PDF에서만 지원합니다.')),
-      );
+      showAppSnackBar(context, '페이지 범위는 PDF에서만 지원합니다.');
       return;
     }
     String pathToPrint = raw;
@@ -743,9 +728,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       );
       if (out == null || out.isEmpty) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('페이지 범위를 확인하세요. (예: 10-15, 20)')),
-        );
+        showAppSnackBar(context, '페이지 범위를 확인하세요. (예: 10-15, 20)');
         return;
       }
       pathToPrint = out;
@@ -773,24 +756,18 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
     if (_currentCategory != 'textbook') {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('교재 탭에서만 인쇄를 지원합니다.')),
-      );
+      showAppSnackBar(context, '교재 탭에서만 인쇄를 지원합니다.');
       return;
     }
     await _ensureGradesLoaded();
     if (!mounted) return;
     if (_grades.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과정이 없습니다. 오른쪽 슬라이드에서 과정을 먼저 추가하세요.')),
-      );
+      showAppSnackBar(context, '과정이 없습니다. 오른쪽 슬라이드에서 과정을 먼저 추가하세요.');
       return;
     }
     final files = _childFilesOf(_selectedFolderIdForTree);
     if (files.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('인쇄할 파일이 없습니다.')),
-      );
+      showAppSnackBar(context, '인쇄할 파일이 없습니다.');
       return;
     }
     final anyPrintable = files.any((f) {
@@ -800,9 +777,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       return body.isNotEmpty;
     });
     if (!anyPrintable) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('인쇄 가능한 본문 링크가 없습니다.')),
-      );
+      showAppSnackBar(context, '인쇄 가능한 본문 링크가 없습니다.');
       return;
     }
     _setResourcePrintPickMode(true);
@@ -815,16 +790,12 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         grade == null ? '' : (file.linksByGrade['$grade#body']?.trim() ?? '');
     if (grade == null || grade.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과정이 없습니다.')),
-      );
+      showAppSnackBar(context, '과정이 없습니다.');
       return;
     }
     if (body.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('해당 과정에 본문 링크가 없습니다.')),
-      );
+      showAppSnackBar(context, '해당 과정에 본문 링크가 없습니다.');
       return;
     }
     _setResourcePrintPickMode(false);
@@ -845,9 +816,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('인쇄 요청 중 오류가 발생했습니다.')),
-      );
+      showAppSnackBar(context, '인쇄 요청 중 오류가 발생했습니다.');
     }
   }
 
@@ -926,6 +895,141 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   void _clearActiveTextbookDragPayload() {
     activeTextbookDragPayload.value = null;
     isTextbookDraggingOverLeftSideSheet.value = false;
+  }
+
+  void _setActiveExamPresetDragPayload(LearningProblemDocumentExportPreset preset) {
+    activeExamPresetDragPayload.value =
+        ExamPresetDragPayload(preset: preset);
+    isExamPresetDraggingOverLeftSideSheet.value = false;
+  }
+
+  void _clearActiveExamPresetDragPayload() {
+    activeExamPresetDragPayload.value = null;
+    isExamPresetDraggingOverLeftSideSheet.value = false;
+  }
+
+  Widget _buildCompactExamPresetDragFeedback(
+    LearningProblemDocumentExportPreset preset, {
+    required double maxWidth,
+  }) {
+    final parsed = parsedNaesinLinkOfPreset(preset);
+    final double width = math.min(maxWidth * 0.7, 188.0);
+    final line1 = parsed == null ? preset.displayName : examPresetCardLine1(parsed);
+    final line2 = parsed == null ? '' : examPresetCardLine2(parsed);
+    return Container(
+      width: width,
+      height: 54,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF141E22),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.28),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.picture_as_pdf_outlined,
+            size: 17,
+            color: Color(0xFF7FB8D8),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  line1,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _rsText,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (line2.isNotEmpty)
+                  Text(
+                    line2,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _rsTextSub,
+                      fontSize: 11.2,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExamPresetDragCell({
+    required LearningProblemDocumentExportPreset preset,
+    required double gridCardWidth,
+    required double gridCardHeight,
+    required bool busy,
+    required VoidCallback onTap,
+  }) {
+    final card = ExamPresetCard(
+      preset: preset,
+      busy: busy,
+      onTap: onTap,
+    );
+    if (busy) return card;
+
+    Widget buildFeedbackContent({required bool compact}) {
+      if (compact) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: _buildCompactExamPresetDragFeedback(
+            preset,
+            maxWidth: gridCardWidth,
+          ),
+        );
+      }
+      return card;
+    }
+
+    return LongPressDraggable<ExamPresetDragPayload>(
+      data: ExamPresetDragPayload(preset: preset),
+      hapticFeedbackOnStart: true,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      onDragStarted: () => _setActiveExamPresetDragPayload(preset),
+      onDragEnd: (_) => _clearActiveExamPresetDragPayload(),
+      onDraggableCanceled: (_, __) => _clearActiveExamPresetDragPayload(),
+      feedback: Material(
+        color: Colors.transparent,
+        child: Opacity(
+          opacity: 0.9,
+          child: SizedBox(
+            width: gridCardWidth,
+            height: gridCardHeight,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: isExamPresetDraggingOverLeftSideSheet,
+              builder: (context, hoveringSideSheet, _) {
+                final payload = activeExamPresetDragPayload.value;
+                final compact = hoveringSideSheet &&
+                    payload != null &&
+                    payload.preset.id == preset.id;
+                return buildFeedbackContent(compact: compact);
+              },
+            ),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: card),
+      child: card,
+    );
   }
 
   Widget _buildCompactTextbookDragFeedback(
@@ -1892,15 +1996,13 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     if (_currentCategory == 'textbook' &&
         (_selectedFolderIdForTree == null ||
             _selectedFolderIdForTree == '__FAVORITES__')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('폴더를 먼저 선택하세요.')));
+      showAppSnackBar(context, '폴더를 먼저 선택하세요.');
       return;
     }
     if (_currentCategory == 'other' &&
         (_selectedFolderIdForTree == null ||
             _selectedFolderIdForTree == '__FAVORITES__')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('폴더를 먼저 선택하세요.')));
+      showAppSnackBar(context, '폴더를 먼저 선택하세요.');
       return;
     }
     // 1단계: 메타 입력
@@ -2009,6 +2111,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       c.dispose();
     }
     _clearActiveTextbookDragPayload();
+    _clearActiveExamPresetDragPayload();
     super.dispose();
   }
 
@@ -2210,9 +2313,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     final safeAcademyId = (academyId ?? '').trim();
     if (safeAcademyId.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('학원 정보가 없어 프리셋을 열 수 없습니다.')),
-      );
+      showAppSnackBar(context, '학원 정보가 없어 프리셋을 열 수 없습니다.');
       return;
     }
     setState(() => _examPresetOpeningId = preset.id);
@@ -2310,9 +2411,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (_currentCategory != 'textbook')
+                          if (_currentCategory == 'other')
                             SizedBox(height: _resourcesPageTitleBandHeight),
-                          if (_currentCategory != 'textbook') ...[
+                          if (_currentCategory == 'other') ...[
                         Align(
                           alignment: Alignment.centerLeft,
                           child: Padding(
@@ -2357,10 +2458,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                                       null ||
                                                   _selectedFolderIdForTree ==
                                                       '__FAVORITES__')) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(const SnackBar(
-                                                    content: Text(
-                                                        '폴더를 먼저 선택하세요.')));
+                                            showAppSnackBar(context, '폴더를 먼저 선택하세요.');
                                             return;
                                           }
                                           final meta = await showDialog<
@@ -3387,9 +3485,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
 
           Widget buildFeedbackCell(_ResourceFile fi) {
             final normal = buildCardCell(fi);
-            return Transform.translate(
-              offset: const Offset(10, 10),
-              child: ValueListenableBuilder<bool>(
+            return ValueListenableBuilder<bool>(
               valueListenable: isTextbookDraggingOverLeftSideSheet,
               builder: (context, hoveringSideSheet, _) {
                 final payload = activeTextbookDragPayload.value;
@@ -3399,16 +3495,12 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 if (!compact) return normal;
                 return Align(
                   alignment: Alignment.topLeft,
-                  child: Transform.translate(
-                    offset: const Offset(8, 8),
-                    child: _buildCompactTextbookDragFeedback(
-                      fi,
-                      maxWidth: gridCardWidth,
-                    ),
+                  child: _buildCompactTextbookDragFeedback(
+                    fi,
+                    maxWidth: gridCardWidth,
                   ),
                 );
               },
-            ),
             );
           }
 
@@ -3438,6 +3530,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           cardHeight: gridCardHeight,
                           spacing: spacing,
                           columns: cols,
+                          dragAnchorStrategy: pointerDragAnchorStrategy,
                           scrollController: gridScrollCtrl,
                           scrollTopPadding: _currentCategory == 'textbook'
                               ? _resourcesPageTitleBandHeight
@@ -3502,48 +3595,92 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               .clamp(1, 999);
           final gridWidth =
               (cols * gridCardWidth) + ((cols - 1) * spacing);
+          final presets = _examPresets;
+          final rowCount =
+              presets.isEmpty ? 0 : (presets.length / cols).ceil();
+          final baseContentHeight = rowCount == 0
+              ? gridCardHeight
+              : (rowCount * gridCardHeight) + ((rowCount - 1) * spacing);
+          final contentHeight = baseContentHeight +
+              _resourcesPageTitleBandHeight +
+              FabTabBarTokens.fabStyleScreenTabBarBottomPadding;
 
-          Widget buildBody() {
+          Widget buildScrollChild() {
             if (selection == null) {
-              return const Center(
-                child: Text(
-                  '폴더를 선택하세요.',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
+              return SizedBox(
+                width: gridWidth,
+                height: contentHeight,
+                child: Padding(
+                  padding: EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
+                  child: const Align(
+                    alignment: Alignment.topCenter,
+                    child: Text(
+                      '폴더를 선택하세요.',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               );
             }
             if (_examPresetsLoading) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (_examPresets.isEmpty) {
-              return const Center(
-                child: Text(
-                  '연결된 프리셋이 없습니다.',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
+              return SizedBox(
+                width: gridWidth,
+                height: contentHeight,
+                child: Padding(
+                  padding: EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
+                  child: const Align(
+                    alignment: Alignment.topCenter,
+                    child: YggLoadingIndicator(),
                   ),
                 ),
               );
             }
-            return Wrap(
-              spacing: spacing,
-              runSpacing: spacing,
-              children: [
-                for (final preset in _examPresets)
-                  SizedBox(
-                    width: gridCardWidth,
-                    height: gridCardHeight,
-                    child: ExamPresetCard(
-                      preset: preset,
-                      busy: _examPresetOpeningId == preset.id,
-                      onTap: () => unawaited(_openExamPresetPreview(preset)),
+            if (presets.isEmpty) {
+              return SizedBox(
+                width: gridWidth,
+                height: contentHeight,
+                child: Padding(
+                  padding: EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
+                  child: const Align(
+                    alignment: Alignment.topCenter,
+                    child: Text(
+                      '연결된 프리셋이 없습니다.',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-              ],
+                ),
+              );
+            }
+            return SizedBox(
+              width: gridWidth,
+              height: contentHeight,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (int i = 0; i < presets.length; i++)
+                    Positioned(
+                      left: (i % cols) * (gridCardWidth + spacing),
+                      top: _resourcesPageTitleBandHeight +
+                          (i ~/ cols) * (gridCardHeight + spacing),
+                      width: gridCardWidth,
+                      height: gridCardHeight,
+                      child: _buildExamPresetDragCell(
+                        preset: presets[i],
+                        gridCardWidth: gridCardWidth,
+                        gridCardHeight: gridCardHeight,
+                        busy: _examPresetOpeningId == presets[i].id,
+                        onTap: () =>
+                            unawaited(_openExamPresetPreview(presets[i])),
+                      ),
+                    ),
+                ],
+              ),
             );
           }
 
@@ -3559,13 +3696,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       behavior: ScrollConfiguration.of(context)
                           .copyWith(scrollbars: false),
                       child: SingleChildScrollView(
+                        clipBehavior: Clip.none,
                         controller: gridScrollCtrl,
-                        padding: EdgeInsets.only(
-                          top: _resourcesPageTitleBandHeight,
-                          bottom: FabTabBarTokens
-                              .fabStyleScreenTabBarBottomPadding,
-                        ),
-                        child: buildBody(),
+                        child: buildScrollChild(),
                       ),
                     ),
                   ),
@@ -3691,8 +3824,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
     final raw = path.trim();
     if (raw.isEmpty) return;
     if (_coverUploadingGrades.contains(grade)) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('표지 업로드가 진행 중입니다.')));
+      showAppSnackBar(context, '표지 업로드가 진행 중입니다.');
       return;
     }
     if (_isRemoteUrl(raw)) {
@@ -3703,8 +3835,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
     }
     final localPath = _normalizeLocalPath(raw);
     if (!_isImagePath(localPath)) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('이미지 파일만 등록할 수 있어요.')));
+      showAppSnackBar(context, '이미지 파일만 등록할 수 있어요.');
       return;
     }
     setState(() {
@@ -3721,11 +3852,9 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
       }
     });
     if (uploadedUrl == null || uploadedUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('표지 업로드 실패: 로컬 경로로 유지됩니다.')));
+      showAppSnackBar(context, '표지 업로드 실패: 로컬 경로로 유지됩니다.');
     } else {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('표지 업로드 완료')));
+      showAppSnackBar(context, '표지 업로드 완료');
     }
   }
 
@@ -3767,7 +3896,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
             if (_isLoadingGrades)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 28),
-                child: Center(child: CircularProgressIndicator()),
+                child: Center(child: YggLoadingIndicator()),
               )
             else if (_grades.isEmpty)
               Container(
@@ -3869,9 +3998,8 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                                 }),
                                 onDragDone: (detail) async {
                                   if (isUploading) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                            content: Text('표지 업로드가 진행 중입니다.')));
+                                    showAppSnackBar(
+                                        context, '표지 업로드가 진행 중입니다.');
                                     return;
                                   }
                                   if (detail.files.isEmpty) return;
@@ -4180,8 +4308,7 @@ class _OtherFileLinksDialogState extends State<_OtherFileLinksDialog> {
     final raw = path.trim();
     if (raw.isEmpty) return;
     if (_isCoverUploading) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('표지 업로드가 진행 중입니다.')));
+      showAppSnackBar(context, '표지 업로드가 진행 중입니다.');
       return;
     }
     if (_isRemoteUrl(raw)) {
@@ -4190,8 +4317,7 @@ class _OtherFileLinksDialogState extends State<_OtherFileLinksDialog> {
     }
     final localPath = _normalizeLocalPath(raw);
     if (!_isImagePath(localPath)) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('이미지 파일만 등록할 수 있어요.')));
+      showAppSnackBar(context, '이미지 파일만 등록할 수 있어요.');
       return;
     }
     setState(() {
@@ -4207,11 +4333,9 @@ class _OtherFileLinksDialogState extends State<_OtherFileLinksDialog> {
       }
     });
     if (uploadedUrl == null || uploadedUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('표지 업로드 실패: 로컬 경로로 유지됩니다.')));
+      showAppSnackBar(context, '표지 업로드 실패: 로컬 경로로 유지됩니다.');
     } else {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('표지 업로드 완료')));
+      showAppSnackBar(context, '표지 업로드 완료');
     }
   }
 
@@ -4286,9 +4410,7 @@ class _OtherFileLinksDialogState extends State<_OtherFileLinksDialog> {
             final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
             if (!extensions.contains(ext)) {
               onDragChanged(false);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('$label 파일만 드롭할 수 있어요.')),
-              );
+              showAppSnackBar(context, '$label 파일만 드롭할 수 있어요.');
               return;
             }
             controller.text = path;
@@ -7536,14 +7658,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
           border: Border.all(color: _rsBorder),
         ),
         child: const Center(
-          child: SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(_rsTextSub),
-            ),
-          ),
+          child: YggLoadingIndicator(size: 18, strokeWidth: 2),
         ),
       );
     }
@@ -7799,9 +7914,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
     if (_unitMode) {
       final range = _pagesToRangeText(_collectSelectedPages());
       if (range.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('인쇄할 단원을 선택하세요.')),
-        );
+        showAppSnackBar(context, '인쇄할 단원을 선택하세요.');
         return;
       }
       Navigator.of(context).pop(range);
@@ -8489,8 +8602,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
   void _handleSave() {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('이름을 입력하세요.')));
+      showAppSnackBar(context, '이름을 입력하세요.');
       return;
     }
     Navigator.of(context).pop({
@@ -8625,8 +8737,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
                   const allowed = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
                   if (!allowed.contains(ext)) {
                     setState(() => _isCoverDrag = false);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('이미지 파일만 드롭할 수 있어요.')));
+                    showAppSnackBar(context, '이미지 파일만 드롭할 수 있어요.');
                     return;
                   }
                   setState(() {
@@ -8731,9 +8842,7 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
     final name = _nameController.text.trim();
     final desc = _descController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('폴더명을 입력하세요.')),
-      );
+      showAppSnackBar(context, '폴더명을 입력하세요.');
       return;
     }
     Navigator.of(context).pop(
@@ -9799,7 +9908,7 @@ class _BookmarkManageDialogState extends State<_BookmarkManageDialog> {
         width: 520,
         height: 420,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: YggLoadingIndicator())
             : ReorderableListView(
                 buildDefaultDragHandles: false,
                 children: [
@@ -10131,7 +10240,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog>
                                   }
                                   if (!snapshot.hasData) {
                                     return const Center(
-                                        child: CircularProgressIndicator());
+                                        child: YggLoadingIndicator());
                                   }
                                   final doc = snapshot.data!;
                                   final pageCount = doc.pages.length;
@@ -10718,8 +10827,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog>
                       await File(outPath).writeAsBytes(outBytes, flush: true);
                       setState(() => _outputPath = outPath);
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
+                        showAppSnackBar(context, 'PDF 생성이 완료되었습니다.');
                         Navigator.pop(context, outPath);
                       }
                     } finally {
@@ -10732,7 +10840,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog>
                 ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: YggLoadingIndicator(size: 16, strokeWidth: 2))
                 : const Text('생성')),
       ],
     );

@@ -51,23 +51,32 @@ async function normalizeFigureAssetForXeLatex(bytes) {
       .png({ compressionLevel: 9, adaptiveFiltering: true })
       .toBuffer();
     const trimmedMeta = await sharp(trimmed, { failOn: 'none' }).metadata();
-    const normalizedWidth = Number(trimmedMeta.width || 0) || width;
-    const normalizedHeight = Number(trimmedMeta.height || 0) || height;
-    const stripHeight = Math.max(1, Math.min(3, Math.round(normalizedHeight * 0.004)));
-    const bottomWhiteStrip = Buffer.from(
-      `<svg width="${normalizedWidth}" height="${stripHeight}" xmlns="http://www.w3.org/2000/svg">`
-      + '<rect width="100%" height="100%" fill="#fff"/></svg>',
-    );
+    const trimmedWidth = Number(trimmedMeta.width || 0) || width;
+    const trimmedHeight = Number(trimmedMeta.height || 0) || height;
+    // 하단 잘림 방지: trim 으로 내용이 가장자리에 딱 붙으면, PDF 래스터화 단계에서
+    //   그림 맨 아래 픽셀 줄이 드롭되어 잘려 보인다. 과거에는 하단 1~3px 에 흰색
+    //   사각형을 "덮어써서(composite)" 처리했는데, 이는 좌표평면 격자 하단선처럼 실제
+    //   내용을 지워버리는 부작용이 있었다. → 흰색 줄을 "추가(extend)" 하는 방식으로 변경.
+    //   - 하단(및 안전상 상단)에 흰색 여백을 덧붙여 내용이 가장자리에 닿지 않게 한다.
+    //   - 래스터화가 맨 아래 줄을 드롭해도 그건 추가한 여백이라 내용 손실이 없다.
+    const pad = Math.max(2, Math.min(4, Math.round(trimmedHeight * 0.006)));
     const normalized = await sharp(trimmed, { failOn: 'none' })
-      .composite([{ input: bottomWhiteStrip, left: 0, top: normalizedHeight - stripHeight }])
+      .extend({
+        top: pad,
+        bottom: pad,
+        left: 0,
+        right: 0,
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      })
       .png({ compressionLevel: 9, adaptiveFiltering: true })
       .toBuffer();
+    const normalizedMeta = await sharp(normalized, { failOn: 'none' }).metadata();
     return {
       bytes: normalized,
       ext: 'png',
       mimeType: 'image/png',
-      width: normalizedWidth,
-      height: normalizedHeight,
+      width: Number(normalizedMeta.width || 0) || trimmedWidth,
+      height: Number(normalizedMeta.height || 0) || (trimmedHeight + pad * 2),
     };
   } catch (_) {
     return { bytes, ext: '', mimeType: '' };

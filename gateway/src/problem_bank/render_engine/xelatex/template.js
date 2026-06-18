@@ -1606,7 +1606,10 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
     const tallMathTopPad = allowTallMathTopPad && tallMath
       ? '\\par\\vspace{0.10\\baselineskip}'
       : '';
-    return `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.6em${tallMathTopPad}${inner}\\par}`;
+    // \parskip=0pt: [문단] 강제 단락은 각 줄이 독립 paragraph 라, 문서 기본 \parskip
+    //   (0.3em) 이 단락마다 추가로 끼어 자동 줄바꿈(한 paragraph 내 줄)보다 간격이
+    //   넓어진다. 여기서 0 으로 눌러 강제 줄바꿈 간격을 자동 줄바꿈과 동일하게 맞춘다.
+    return `{\\setstretch{${STEM_STRETCH}}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=0.6em${tallMathTopPad}${inner}\\par}`;
   };
   const renderManualMathLineBreak = (source, manualFirstPrefix = '') => {
     const pieces = splitByMathLineBreakMarkers(source);
@@ -2687,9 +2690,25 @@ function renderTableLatex(
   // adjustbox 의 max width 는 자연폭이 \linewidth 보다 클 때만 비례 축소하므로
   // 폭이 충분하면 그대로, 넘칠 때만 표 전체가 같은 비율로 작아진다.
   // → 어떤 경우에도 모든 셀의 글자 크기는 서로 동일하게 유지되고 오버플로우는 사라진다.
+  // 표 셀 안에서는 전역 \dfrac/\frac/\tfrac 의 "베이스라인 대칭 박스" 재정의를 끄고
+  // 자연 수직 메트릭(분수 막대=math axis 기준 대칭) 으로 되돌린다.
+  //   - 전역 재정의는 ht/dp 를 0.5(h+d) 로 균등화해 baseline 기준 대칭 박스를 만든다
+  //     (본문 줄간격 균형용). 그러나 표 셀은 \parbox[c]+\vspace*{\fill} 로 "바운딩박스"
+  //     기준 수직 중앙정렬하므로, baseline 대칭 박스를 중앙정렬하면 분수 막대가
+  //     math axis 높이(~0.25em) 만큼 셀 중앙보다 위로 들린다 → 자연수 셀 글리프
+  //     중앙(=박스 중앙)보다 분수 막대가 위로 떠 보인다.
+  //   - 자연 분수는 분자/분모 높이가 같을 때 막대가 박스의 시각적 중앙(≈math axis)
+  //     이므로, 바운딩박스 중앙정렬 시 막대가 셀 중앙에 와서 자연수 중앙과 수평이 맞는다.
+  //   - `\,` 패딩(막대 길이 보정) 은 유지해 외형/폭 측정 일관성을 보존한다.
+  const tableFracReset = '\\ifcsname origdfrac\\endcsname'
+    + '\\renewcommand{\\dfrac}[2]{\\origdfrac{\\,#1\\,}{\\,#2\\,}}'
+    + '\\renewcommand{\\frac}[2]{\\origfrac{\\,#1\\,}{\\,#2\\,}}'
+    + '\\renewcommand{\\tfrac}[2]{\\origtfrac{\\,#1\\,}{\\,#2\\,}}'
+    + '\\fi%';
   const tableInner = [
     '\\adjustbox{max width=\\linewidth}{%',
     `{\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
+    tableFracReset,
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
     latexRows.join('\n\\hline\n'),
@@ -2782,7 +2801,12 @@ function renderCellContent(line, equations) {
   if (/^\$[\s\S]*\$$/.test(s)) {
     // 안쪽에 중첩된 $가 있으면 이상한 셀 → 그대로 smartTexLine 에 맡긴다.
     const inner = s.slice(1, -1);
-    if (!/\$/.test(inner)) return s;
+    if (!/\$/.test(inner)) {
+      const math = inner.trim();
+      return /^\\displaystyle(?![A-Za-z])/.test(math)
+        ? `$${math}$`
+        : `$\\displaystyle ${math}$`;
+    }
   }
   // 그 외는 struct 경로처럼 smartTexLine.
   return smartTexLine(unwrapLatexTextCommandsForTextMode(s), equations);

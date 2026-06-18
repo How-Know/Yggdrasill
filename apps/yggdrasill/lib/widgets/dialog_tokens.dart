@@ -14,6 +14,30 @@ const Color kDlgText = Color(0xFFEAF2F2);
 const Color kDlgTextSub = Color(0xFF9FB3B3);
 const Color kDlgAccent = Color(0xFF33A373);
 
+/// 학습·학원 앱 공통 로딩 스피너 (초록 accent).
+class YggLoadingIndicator extends StatelessWidget {
+  const YggLoadingIndicator({
+    super.key,
+    this.size = 22,
+    double? strokeWidth,
+  }) : strokeWidth = strokeWidth ?? (size <= 18 ? 2.0 : 2.6);
+
+  final double size;
+  final double strokeWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CircularProgressIndicator(
+        strokeWidth: strokeWidth,
+        color: kDlgAccent,
+      ),
+    );
+  }
+}
+
 class YggDialogSectionHeader extends StatelessWidget {
   final IconData icon;
   final String title;

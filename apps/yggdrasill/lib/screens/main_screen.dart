@@ -48,6 +48,7 @@ import '../widgets/homework_assign_dialog.dart';
 import '../widgets/left_side_sheet/favorite_templates_panel.dart';
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/textbook_flow_link_action.dart';
+import '../widgets/naesin_preset_homework_drop_action.dart';
 import 'student/student_profile_page.dart';
 import '../models/behavior_card_drag_payload.dart';
 import '../widgets/top_glass_snack_bar.dart';
@@ -75,37 +76,52 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   static const double _sideSheetDesignScreenWidth = 3840.0;
   static const double _sideSheetWidthRatio = 0.21;
   static const double _sideSheetMinWidth = 420.0;
+
   /// 최소 폭(420)에서의 UI 스케일 — 4K 풀 시트(~806)에서는 1.0
   static const double _sideSheetScaleAtMin = 0.88;
   static const double _sideSheetScaleAtFull = 1.0;
+
   /// 등원학생(출석) 컨테이너 ↔ 등원예정 리스트 사이 간격 — 최대 스케일 기준 36
   static const double _sideSheetAttendedToWaitingGap = 36.0;
+
   /// 사이드시트 출석·등원예정 카드 학생명 글자 크기 (최대 스케일 기준)
   static const double _sideSheetStudentNameFontSize = 18.0;
+
   /// 등원예정 알약 칩 추가 높이 (상·하 패딩에 각각 절반)
   static const double _sideSheetWaitingCardExtraHeight = 4.0;
+
   /// 등원학생 리스트 카드 간 세로 간격
   static const double _sideSheetAttendedCardSpacing = 16.0;
+
   /// 등원예정 리스트 — 같은 시간대 내 카드 간격 (_cardSpacing + 4)
   static const double _sideSheetWaitingCardSpacing = 12.0;
+
   /// 등원학생 행 — 왼쪽 블록 ↔ 과제칩 사이 여백 (1줄 모드, 절대 px)
   static const double _sideSheetAttendedToHomeworkGap = 22.0;
+
   /// 2줄 모드 — 이름 텍스트 끝 ↔ 과제칩 (절대 px, scale 미적용)
   static const double _sideSheetAttendedTwoLineNameToHomeworkGap = 56.0;
+
   /// 사이드시트 과제칩 내부 좌·우 여백 (최대 스케일 기준)
   static const double _sideSheetHomeworkChipHorizontalPad = 12.0;
+
   /// 사이드시트 과제칩·등원예정 이름 글자 크기 하한 (등원학생 이름 18px은 고정)
   static const double _sideSheetHomeworkChipMinFontSize = 16.0;
   static const double _sideSheetHomeworkChipMinWidth = 70.0;
   static const double _sideSheetHomeworkChipRadius = 6.0;
+
   /// 27" 4K 기준 화면 너비가 이 비율 이하로 줄면 등원학생 2줄 표시
   static const double _sideSheetAttendedTwoLineWidthRatio = 0.75;
+
   /// 사이드시트 상단 액션 버튼 크기 추가 배율
   static const double _sideSheetActionButtonExtraScale = 1.1;
+
   /// 사이드시트 날짜 헤더 왼쪽 추가 여백
   static const double _sideSheetDateHeaderLeftInset = 4.0;
+
   /// 사이드시트 콘텐츠 공통 왼쪽 inset
   static const double _sideSheetContentLeftInset = 12.0;
+
   /// 사이드시트 액션 버튼 ↔ 등원학생(글래스 패널) 사이 간격 — 최대 스케일 기준 32
   /// (헤더 Padding bottom 12 + 아래 SizedBox remainder)
   static const double _sideSheetActionToAttendedGap = 32.0;
@@ -616,7 +632,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   bool get _hasActiveStudentDropPayload =>
       activeTextbookDragPayload.value != null ||
-      activeBehaviorCardDragPayload.value != null;
+      activeBehaviorCardDragPayload.value != null ||
+      activeExamPresetDragPayload.value != null;
 
   void _syncSideSheetHoverState(bool hovering) {
     final bool hasTextbookPayload = activeTextbookDragPayload.value != null;
@@ -629,11 +646,19 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         isBehaviorDraggingOverLeftSideSheet.value != hovering) {
       isBehaviorDraggingOverLeftSideSheet.value = hovering;
     }
+    final bool hasExamPresetPayload = activeExamPresetDragPayload.value != null;
+    if (hasExamPresetPayload &&
+        isExamPresetDraggingOverLeftSideSheet.value != hovering) {
+      isExamPresetDraggingOverLeftSideSheet.value = hovering;
+    }
     if (!hasTextbookPayload && isTextbookDraggingOverLeftSideSheet.value) {
       isTextbookDraggingOverLeftSideSheet.value = false;
     }
     if (!hasBehaviorPayload && isBehaviorDraggingOverLeftSideSheet.value) {
       isBehaviorDraggingOverLeftSideSheet.value = false;
+    }
+    if (!hasExamPresetPayload && isExamPresetDraggingOverLeftSideSheet.value) {
+      isExamPresetDraggingOverLeftSideSheet.value = false;
     }
   }
 
@@ -655,7 +680,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       studentId: studentId,
       payload: payload,
     );
+    activeTextbookDragPayload.value = null;
     _syncSideSheetHoverState(false);
+  }
+
+  Future<void> _handleExamPresetDropForStudent(String studentId) async {
+    final payload = activeExamPresetDragPayload.value;
+    if (payload == null) return;
+    try {
+      await assignDraggedExamPresetHomeworkToStudent(
+        context: context,
+        studentId: studentId,
+        preset: payload.preset,
+      );
+    } finally {
+      activeExamPresetDragPayload.value = null;
+      _syncSideSheetHoverState(false);
+    }
   }
 
   Future<void> _handleBehaviorDropForStudent(
@@ -698,6 +739,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           unawaited(_handleBehaviorDropForStudent(studentId, behaviorPayload));
           return;
         }
+        if (activeExamPresetDragPayload.value != null) {
+          unawaited(_handleExamPresetDropForStudent(studentId));
+          return;
+        }
         if (activeTextbookDragPayload.value != null) {
           unawaited(_handleTextbookDropForStudent(studentId));
         }
@@ -708,7 +753,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         if (!hovering) return child;
         final Color lineColor = activeBehaviorCardDragPayload.value != null
             ? const Color(0xFF8D7CFF)
-            : const Color(0xFF33A373);
+            : (activeExamPresetDragPayload.value != null
+                ? const Color(0xFF5B9BD5)
+                : const Color(0xFF33A373));
         return Stack(
           fit: StackFit.passthrough,
           children: [
@@ -1450,8 +1497,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final fullWidth = _sideSheetDesignScreenWidth * _sideSheetWidthRatio;
     final span = fullWidth - _sideSheetMinWidth;
     if (span <= 0) return _sideSheetScaleAtFull;
-    final t =
-        ((containerWidth - _sideSheetMinWidth) / span).clamp(0.0, 1.0);
+    final t = ((containerWidth - _sideSheetMinWidth) / span).clamp(0.0, 1.0);
     return _sideSheetScaleAtMin +
         (_sideSheetScaleAtFull - _sideSheetScaleAtMin) * t;
   }
@@ -1538,13 +1584,56 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final chipFontSize = _sideSheetHomeworkChipFontSize(scale);
     const metaFontSize = 14.0;
     if (attendedTwoLine) {
-      return rowPad.top +
-          chipFontSize +
-          2 * scale +
-          metaFontSize * scale +
-          rowPad.bottom;
+      return _sideSheetStudentNameFontSize + 2 * scale + metaFontSize * scale;
     }
     return rowPad.top + chipFontSize + rowPad.bottom;
+  }
+
+  double _sideSheetAttendedRowSlotHeight(
+    double scale, {
+    required bool attendedTwoLine,
+  }) {
+    final rowPad = _sideSheetAttendedNameRowPadding(scale);
+    const metaFontSize = 14.0;
+    if (attendedTwoLine) {
+      return rowPad.top +
+          _sideSheetStudentNameFontSize +
+          2 * scale +
+          metaFontSize * scale * 1.2 +
+          rowPad.bottom +
+          4 * scale;
+    }
+    return _sideSheetHomeworkChipHeight(
+          scale,
+          attendedTwoLine: attendedTwoLine,
+        ) +
+        4 * scale;
+  }
+
+  int _sideSheetVisibleAttendedRowCount({
+    required int totalRows,
+  }) {
+    final rowCount = math.max(1, totalRows);
+    return math.min(rowCount, _attendedMaxLines);
+  }
+
+  double _sideSheetAttendedPanelHeight({
+    required int totalRows,
+    required double scale,
+    required bool attendedTwoLine,
+    required double verticalPadding,
+  }) {
+    final rowHeight = _sideSheetAttendedRowSlotHeight(
+      scale,
+      attendedTwoLine: attendedTwoLine,
+    );
+    final spacing = _sideSheetAttendedCardSpacing * scale;
+    final visibleRows = _sideSheetVisibleAttendedRowCount(
+      totalRows: totalRows,
+    );
+    final contentHeight =
+        rowHeight * visibleRows + spacing * math.max(0, visibleRows - 1);
+    return verticalPadding * 2 + contentHeight;
   }
 
   EdgeInsets _sideSheetHomeworkChipPadding(
@@ -2461,7 +2550,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final maxWidth = _resolveSideSheetMaxWidth(screenWidth);
               // 바깥에서 보이는 실제 너비(애니메이션). 콘텐츠는 항상 maxWidth로
               // 레이아웃하고, 이 clipWidth로 잘라내며 펼치고/접는다.
-              final double clipWidth = (maxWidth * progress).clamp(0.0, maxWidth);
+              final double clipWidth =
+                  (maxWidth * progress).clamp(0.0, maxWidth);
               // 콘텐츠 내부 스케일 계산은 최종 너비(maxWidth) 기준으로 고정해
               // 슬라이드 중 카드가 리플로우/스케일되지 않도록 한다.
               final double containerWidth = maxWidth;
@@ -2499,587 +2589,696 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         width: maxWidth,
                         child: Opacity(
                           opacity: contentOpacity,
-                          child:
-                              ValueListenableBuilder<List<AttendanceRecord>>(
-                  valueListenable:
-                      DataManager.instance.attendanceRecordsNotifier,
-                  builder: (context, _records, _) {
-                    if (_sideSheetDataDirty) {
-                      if (_sideSheetDebug) {
-                        debugPrint(
-                          '[SIDE][recompute-start] recordsLen=${_records.length}',
-                        );
-                      }
-                      _recomputeSideSheetCache(_records);
-                      if (_sideSheetDebug) {
-                        debugPrint(
-                          '[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}',
-                        );
-                      }
-                    }
-                    final attended = _cachedAttended;
-                    final leaved = _cachedLeaved;
-                    final arrivalBySet = _arrivalBySetCache;
-                    final departureBySet = _departureBySetCache;
-                    final waitingByTime = _waitingByTimeCache;
+                          child: ValueListenableBuilder<List<AttendanceRecord>>(
+                            valueListenable:
+                                DataManager.instance.attendanceRecordsNotifier,
+                            builder: (context, _records, _) {
+                              if (_sideSheetDataDirty) {
+                                if (_sideSheetDebug) {
+                                  debugPrint(
+                                    '[SIDE][recompute-start] recordsLen=${_records.length}',
+                                  );
+                                }
+                                _recomputeSideSheetCache(_records);
+                                if (_sideSheetDebug) {
+                                  debugPrint(
+                                    '[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}',
+                                  );
+                                }
+                              }
+                              final attended = _cachedAttended;
+                              final leaved = _cachedLeaved;
+                              final arrivalBySet = _arrivalBySetCache;
+                              final departureBySet = _departureBySetCache;
+                              final waitingByTime = _waitingByTimeCache;
 
-                    return ValueListenableBuilder<List<ConsultTrialLessonSlot>>(
-                      valueListenable:
-                          ConsultTrialLessonService.instance.slotsNotifier,
-                      builder: (context, trialSlots, _) {
-                        final targetDate = _dateOnly(_sideSheetAnchorDate);
+                              return ValueListenableBuilder<
+                                  List<ConsultTrialLessonSlot>>(
+                                valueListenable: ConsultTrialLessonService
+                                    .instance.slotsNotifier,
+                                builder: (context, trialSlots, _) {
+                                  final targetDate =
+                                      _dateOnly(_sideSheetAnchorDate);
 
-                        final trialToday = trialSlots.where((s) {
-                          final wk = _dateOnly(s.weekStart);
-                          final slotDate = _dateOnly(
-                            wk.add(Duration(days: s.dayIndex)),
-                          );
-                          return slotDate == targetDate;
-                        }).toList();
+                                  final trialToday = trialSlots.where((s) {
+                                    final wk = _dateOnly(s.weekStart);
+                                    final slotDate = _dateOnly(
+                                      wk.add(Duration(days: s.dayIndex)),
+                                    );
+                                    return slotDate == targetDate;
+                                  }).toList();
 
-                        final trialAttended = trialToday
-                            .where(
-                              (s) =>
-                                  s.arrivalTime != null &&
-                                  s.departureTime == null,
-                            )
-                            .toList()
-                          ..sort((a, b) {
-                            final ta = a.hour * 60 + a.minute;
-                            final tb = b.hour * 60 + b.minute;
-                            final t = ta.compareTo(tb);
-                            if (t != 0) return t;
-                            return a.title.compareTo(b.title);
-                          });
-                        final trialWaiting = trialToday
-                            .where((s) => s.arrivalTime == null)
-                            .toList()
-                          ..sort((a, b) {
-                            final ta = a.hour * 60 + a.minute;
-                            final tb = b.hour * 60 + b.minute;
-                            final t = ta.compareTo(tb);
-                            if (t != 0) return t;
-                            return a.title.compareTo(b.title);
-                          });
+                                  final trialAttended = trialToday
+                                      .where(
+                                        (s) =>
+                                            s.arrivalTime != null &&
+                                            s.departureTime == null,
+                                      )
+                                      .toList()
+                                    ..sort((a, b) {
+                                      final ta = a.hour * 60 + a.minute;
+                                      final tb = b.hour * 60 + b.minute;
+                                      final t = ta.compareTo(tb);
+                                      if (t != 0) return t;
+                                      return a.title.compareTo(b.title);
+                                    });
+                                  final trialWaiting = trialToday
+                                      .where((s) => s.arrivalTime == null)
+                                      .toList()
+                                    ..sort((a, b) {
+                                      final ta = a.hour * 60 + a.minute;
+                                      final tb = b.hour * 60 + b.minute;
+                                      final t = ta.compareTo(tb);
+                                      if (t != 0) return t;
+                                      return a.title.compareTo(b.title);
+                                    });
 
-                        final trialWaitingByTime = SplayTreeMap<DateTime,
-                            List<ConsultTrialLessonSlot>>();
-                        for (final s in trialWaiting) {
-                          final k = DateTime(
-                            targetDate.year,
-                            targetDate.month,
-                            targetDate.day,
-                            s.hour,
-                            s.minute,
-                          );
-                          (trialWaitingByTime[k] ??= <ConsultTrialLessonSlot>[])
-                              .add(s);
-                        }
-                        final double sideSheetScale =
-                            _resolveSideSheetScale(containerWidth);
-                        final bool attendedTwoLine =
-                            _shouldUseAttendedTwoLineLayout(screenWidth);
-                        final double sideSheetPad = 24.0 * sideSheetScale;
-                        const double sideSheetPadLeft =
-                            _sideSheetContentLeftInset;
-                        final sideSheetPalette = FabTabBarTokens.paletteFor(
-                          Theme.of(context).brightness,
-                        );
-                        final double actionIconSize = 22.0 *
-                            1.1 *
-                            sideSheetScale *
-                            _sideSheetActionButtonExtraScale;
-                        final double actionButtonMinSize = 44.0 *
-                            sideSheetScale *
-                            _sideSheetActionButtonExtraScale;
+                                  final trialWaitingByTime = SplayTreeMap<
+                                      DateTime, List<ConsultTrialLessonSlot>>();
+                                  for (final s in trialWaiting) {
+                                    final k = DateTime(
+                                      targetDate.year,
+                                      targetDate.month,
+                                      targetDate.day,
+                                      s.hour,
+                                      s.minute,
+                                    );
+                                    (trialWaitingByTime[k] ??=
+                                            <ConsultTrialLessonSlot>[])
+                                        .add(s);
+                                  }
+                                  final double sideSheetScale =
+                                      _resolveSideSheetScale(containerWidth);
+                                  final bool attendedTwoLine =
+                                      _shouldUseAttendedTwoLineLayout(
+                                          screenWidth);
+                                  final double sideSheetPad =
+                                      24.0 * sideSheetScale;
+                                  final int attendedRowCount =
+                                      attended.length + trialAttended.length;
+                                  final double attendedRowSlotHeight =
+                                      _sideSheetAttendedRowSlotHeight(
+                                    sideSheetScale,
+                                    attendedTwoLine: attendedTwoLine,
+                                  );
+                                  final double attendedPanelHeight =
+                                      _sideSheetAttendedPanelHeight(
+                                    totalRows: attendedRowCount,
+                                    scale: sideSheetScale,
+                                    attendedTwoLine: attendedTwoLine,
+                                    verticalPadding: sideSheetPad,
+                                  );
+                                  final bool attendedListScrollable =
+                                      attendedRowCount > _attendedMaxLines;
+                                  const double sideSheetPadLeft =
+                                      _sideSheetContentLeftInset;
+                                  final sideSheetPalette =
+                                      FabTabBarTokens.paletteFor(
+                                    Theme.of(context).brightness,
+                                  );
+                                  final double actionIconSize = 22.0 *
+                                      1.1 *
+                                      sideSheetScale *
+                                      _sideSheetActionButtonExtraScale;
+                                  final double actionButtonMinSize = 44.0 *
+                                      sideSheetScale *
+                                      _sideSheetActionButtonExtraScale;
 
-                        return Container(
-                          width: containerWidth,
-                          color: context.yggSurfaceBase,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              Column(
-                                children: [
-                                  Padding(
-                                    padding: EdgeInsets.fromLTRB(
-                                      sideSheetPadLeft,
-                                      navSideSheetDateHeaderTopInset,
-                                      sideSheetPad,
-                                      12 * sideSheetScale,
-                                    ),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
+                                  return Container(
+                                    width: containerWidth,
+                                    color: context.yggSurfaceBase,
+                                    child: Stack(
+                                      fit: StackFit.expand,
                                       children: [
-                                        SizedBox(
-                                          height: navLeadingIconTapSize,
-                                          child: Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.center,
-                                            children: [
-                                              Padding(
-                                                padding: const EdgeInsets.only(
-                                                  left:
-                                                      _sideSheetDateHeaderLeftInset,
-                                                ),
-                                                child: _SideSheetDateHeader(
-                                                  date: _sideSheetAnchorDate,
-                                                  scale: sideSheetScale,
-                                                  onDateTap:
-                                                      _pickSideSheetAnchorDate,
-                                                ),
+                                        Column(
+                                          children: [
+                                            Padding(
+                                              padding: EdgeInsets.fromLTRB(
+                                                sideSheetPadLeft,
+                                                navSideSheetDateHeaderTopInset,
+                                                sideSheetPad,
+                                                12 * sideSheetScale,
                                               ),
-                                              const Spacer(),
-                                            ],
-                                          ),
-                                        ),
-                                        SizedBox(height: 12 * sideSheetScale),
-                                        Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.start,
-                                            children: [
-                                                Tooltip(
-                                                  message: _sideSheetBottomView ==
-                                                          _SideSheetBottomView
-                                                              .allStudents
-                                                      ? '출석 페이지 보기'
-                                                      : '모든 학생 리스트 보기',
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      _sideSheetBottomView ==
-                                                              _SideSheetBottomView
-                                                                  .allStudents
-                                                          ? Icons.groups
-                                                          : Icons
-                                                              .groups_outlined,
-                                                      color: _sideSheetBottomView ==
-                                                              _SideSheetBottomView
-                                                                  .allStudents
-                                                          ? const Color(
-                                                              0xFF33A373,
-                                                            )
-                                                          : sideSheetPalette
-                                                              .labelUnselected,
-                                                      size: actionIconSize,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: BoxConstraints(
-                                                      minWidth:
-                                                          actionButtonMinSize,
-                                                      minHeight:
-                                                          actionButtonMinSize,
-                                                    ),
-                                                    onPressed:
-                                                        _toggleSideSheetBottomView,
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 10 * sideSheetScale,
-                                                ),
-                                                Tooltip(
-                                                  message:
-                                                      _sideSheetPrintTooltip,
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      Icons.print_rounded,
-                                                      color:
-                                                          _sideSheetPrintActive
-                                                              ? const Color(
-                                                                  0xFF33A373)
-                                                              : (_sideSheetPrintSupported
-                                                                  ? sideSheetPalette
-                                                                      .labelUnselected
-                                                                  : sideSheetPalette
-                                                                      .labelUnselected
-                                                                      .withOpacity(
-                                                                      0.36,
-                                                                    )),
-                                                      size: actionIconSize,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints:
-                                                        BoxConstraints(
-                                                      minWidth:
-                                                          actionButtonMinSize,
-                                                      minHeight:
-                                                          actionButtonMinSize,
-                                                    ),
-                                                    onPressed: () =>
-                                                        unawaited(
-                                                      _handleSideSheetPrintPressed(),
-                                                    ),
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 10 * sideSheetScale,
-                                                ),
-                                                Tooltip(
-                                                  message: '보강 관리',
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      Icons.event_repeat,
-                                                      color: sideSheetPalette
-                                                          .labelUnselected,
-                                                      size: actionIconSize,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: BoxConstraints(
-                                                      minWidth:
-                                                          actionButtonMinSize,
-                                                      minHeight:
-                                                          actionButtonMinSize,
-                                                    ),
-                                                    onPressed:
-                                                        _showMakeupManagementDialog,
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 10 * sideSheetScale,
-                                                ),
-                                                Tooltip(
-                                                  message: '수업 타임라인',
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      Icons.timeline,
-                                                      color: sideSheetPalette
-                                                          .labelUnselected,
-                                                      size: actionIconSize,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: BoxConstraints(
-                                                      minWidth:
-                                                          actionButtonMinSize,
-                                                      minHeight:
-                                                          actionButtonMinSize,
-                                                    ),
-                                                    onPressed: () async {
-                                                      await showDialog(
-                                                        context: context,
-                                                        builder: (_) =>
-                                                            const ClassContentEventsDialog(),
-                                                      );
-                                                    },
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 6 * sideSheetScale,
-                                                ),
-                                                Tooltip(
-                                                  message: '하원 리스트',
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      Icons.featured_play_list,
-                                                      color: sideSheetPalette
-                                                          .labelUnselected,
-                                                      size: actionIconSize,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: BoxConstraints(
-                                                      minWidth:
-                                                          actionButtonMinSize,
-                                                      minHeight:
-                                                          actionButtonMinSize,
-                                                    ),
-                                                    onPressed: () async {
-                                                      await _showLeavedStudentsDialog(
-                                                        leaved,
-                                                        arrivalBySet,
-                                                        departureBySet,
-                                                      );
-                                                    },
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 10 * sideSheetScale,
-                                                ),
-                                                Tooltip(
-                                                  message: _sideSheetBottomView ==
-                                                          _SideSheetBottomView
-                                                              .favoriteTemplates
-                                                      ? '과제 닫기'
-                                                      : '과제',
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      Icons.star_rounded,
-                                                      color: _sideSheetBottomView ==
-                                                              _SideSheetBottomView
-                                                                  .favoriteTemplates
-                                                          ? const Color(
-                                                              0xFF33A373)
-                                                          : sideSheetPalette
-                                                              .labelUnselected,
-                                                      size: actionIconSize,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: BoxConstraints(
-                                                      minWidth:
-                                                          actionButtonMinSize,
-                                                      minHeight:
-                                                          actionButtonMinSize,
-                                                    ),
-                                                    onPressed:
-                                                        _toggleFavoriteTemplatesSideSheetView,
-                                                  ),
-                                                ),
-                                              ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (_sideSheetBottomView ==
-                                      _SideSheetBottomView.waiting) ...[
-                                    SizedBox(
-                                      height: (_sideSheetActionToAttendedGap -
-                                              12) *
-                                          sideSheetScale,
-                                    ),
-                                    // 출석 박스
-                                    Padding(
-                                      padding: EdgeInsets.only(
-                                        left: sideSheetPadLeft,
-                                        right: sideSheetPad,
-                                      ),
-                                      child: ConstrainedBox(
-                                        constraints: BoxConstraints(
-                                          minHeight:
-                                              _cardActualHeight * sideSheetScale,
-                                          maxHeight: _cardActualHeight *
-                                                  sideSheetScale *
-                                                  _attendedMaxLines +
-                                              _attendedRunSpacing *
-                                                  sideSheetScale *
-                                                  (_attendedMaxLines - 1),
-                                        ),
-                                        child: FabStyleGlassPanel(
-                                          padding: EdgeInsets.fromLTRB(
-                                            sideSheetPad,
-                                            sideSheetPad,
-                                            12.0 * sideSheetScale,
-                                            sideSheetPad,
-                                          ),
-                                          child: Scrollbar(
-                                            controller: _attendedScrollCtrl,
-                                            thumbVisibility: true,
-                                            child: SingleChildScrollView(
-                                              controller: _attendedScrollCtrl,
                                               child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                if (attended.isEmpty &&
-                                                    trialAttended.isEmpty)
-                                                  Center(
-                                                    child: Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                        left: 14.0,
-                                                      ),
-                                                      child: Text(
-                                                        '출석',
-                                                        style: TextStyle(
-                                                          color: FabTabBarTokens
-                                                              .paletteFor(
-                                                            Theme.of(context)
-                                                                .brightness,
-                                                          ).labelUnselected,
-                                                          fontSize:
-                                                              22 * sideSheetScale,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                if (attended.isNotEmpty)
-                                                  Column(
-                                                    crossAxisAlignment:
-                                                        CrossAxisAlignment
-                                                            .start,
-                                                    children: [
-                                                      for (int i = 0;
-                                                          i < attended.length;
-                                                          i++) ...[
-                                                        _buildAttendanceCard(
-                                                          attended[i],
-                                                          status: 'attended',
-                                                          key: ValueKey(
-                                                            'attended_${attended[i].setId}',
-                                                          ),
-                                                          scale: sideSheetScale,
-                                                          attendedTwoLine:
-                                                              attendedTwoLine,
-                                                          arrival: arrivalBySet[
-                                                              attended[i]
-                                                                  .setId],
-                                                          departure:
-                                                              departureBySet[
-                                                                  attended[i]
-                                                                      .setId],
-                                                        ),
-                                                        if (i !=
-                                                            attended.length - 1)
-                                                          SizedBox(
-                                                            height:
-                                                                _sideSheetAttendedCardSpacing *
-                                                                    sideSheetScale,
-                                                          ),
-                                                      ],
-                                                    ],
-                                                  ),
-                                                if (trialAttended
-                                                    .isNotEmpty) ...[
-                                                  if (attended.isNotEmpty)
-                                                    SizedBox(
-                                                      height:
-                                                          _sideSheetAttendedCardSpacing *
-                                                              sideSheetScale,
-                                                    ),
-                                                  for (int i = 0;
-                                                      i < trialAttended.length;
-                                                      i++) ...[
-                                                    _buildTrialLessonAttendanceCard(
-                                                      trialAttended[i],
-                                                      status: 'attended',
-                                                      key: ValueKey(
-                                                        'trial_attended_${trialAttended[i].id}',
-                                                      ),
-                                                      scale: sideSheetScale,
-                                                    ),
-                                                    if (i !=
-                                                        trialAttended.length -
-                                                            1)
-                                                      SizedBox(
-                                                        height:
-                                                            _sideSheetAttendedCardSpacing *
-                                                                sideSheetScale,
-                                                      ),
-                                                  ],
-                                                ],
-                                              ],
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    // 출석 전 학생 리스트
-                                    if (waitingByTime.isNotEmpty ||
-                                        trialWaitingByTime.isNotEmpty)
-                                      Expanded(
-                                        child: Padding(
-                                          padding: EdgeInsets.only(
-                                            top: _sideSheetAttendedToWaitingGap *
-                                                sideSheetScale,
-                                            left: sideSheetPadLeft,
-                                            right: sideSheetPad,
-                                            bottom: sideSheetPad,
-                                          ),
-                                          child: ListView(
-                                            controller: _waitingScrollCtrl,
-                                            padding: EdgeInsets.zero,
-                                            children: [
-                                              for (final t in (<DateTime>{
-                                                  ...waitingByTime.keys,
-                                                  ...trialWaitingByTime.keys,
-                                                }.toList()
-                                                  ..sort(
-                                                    (a, b) => a.compareTo(b),
-                                                  ))) ...[
-                                                  Padding(
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                      bottom: 12.0,
-                                                    ),
-                                                    child: Center(
-                                                      child: Text(
-                                                        _formatTime(t),
-                                                        style: TextStyle(
-                                                          color: sideSheetPalette
-                                                              .labelUnselected,
-                                                          fontSize:
-                                                              14 * sideSheetScale,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  Center(
-                                                    child: Wrap(
-                                                      alignment:
-                                                          WrapAlignment.center,
-                                                      spacing:
-                                                          _sideSheetWaitingCardSpacing *
-                                                              sideSheetScale,
-                                                      runSpacing:
-                                                          _sideSheetWaitingCardSpacing *
-                                                              sideSheetScale,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  SizedBox(
+                                                    height:
+                                                        navLeadingIconTapSize,
+                                                    child: Row(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .center,
                                                       children: [
-                                                        for (final w
-                                                            in (waitingByTime[
-                                                                    t] ??
-                                                                const <_AttendanceTarget>[]))
-                                                          _buildAttendanceCard(
-                                                            w,
-                                                            status: 'waiting',
-                                                            key: ValueKey(
-                                                              'waiting_${w.setId}',
-                                                            ),
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                            left:
+                                                                _sideSheetDateHeaderLeftInset,
+                                                          ),
+                                                          child:
+                                                              _SideSheetDateHeader(
+                                                            date:
+                                                                _sideSheetAnchorDate,
                                                             scale:
                                                                 sideSheetScale,
-                                                            arrival:
-                                                                arrivalBySet[
-                                                                    w.setId],
-                                                            departure:
-                                                                departureBySet[
-                                                                    w.setId],
+                                                            onDateTap:
+                                                                _pickSideSheetAnchorDate,
                                                           ),
-                                                        for (final s
-                                                            in (trialWaitingByTime[
-                                                                    t] ??
-                                                                const <ConsultTrialLessonSlot>[]))
-                                                          _buildTrialLessonAttendanceCard(
-                                                            s,
-                                                            status: 'waiting',
-                                                            key: ValueKey(
-                                                              'trial_waiting_${s.id}',
-                                                            ),
-                                                            scale:
-                                                                sideSheetScale,
-                                                          ),
+                                                        ),
+                                                        const Spacer(),
                                                       ],
                                                     ),
                                                   ),
                                                   SizedBox(
-                                                    height: 12 * sideSheetScale,
+                                                      height:
+                                                          12 * sideSheetScale),
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment.start,
+                                                    children: [
+                                                      Tooltip(
+                                                        message: _sideSheetBottomView ==
+                                                                _SideSheetBottomView
+                                                                    .allStudents
+                                                            ? '출석 페이지 보기'
+                                                            : '모든 학생 리스트 보기',
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            _sideSheetBottomView ==
+                                                                    _SideSheetBottomView
+                                                                        .allStudents
+                                                                ? Icons.groups
+                                                                : Icons
+                                                                    .groups_outlined,
+                                                            color: _sideSheetBottomView ==
+                                                                    _SideSheetBottomView
+                                                                        .allStudents
+                                                                ? const Color(
+                                                                    0xFF33A373,
+                                                                  )
+                                                                : sideSheetPalette
+                                                                    .labelUnselected,
+                                                            size:
+                                                                actionIconSize,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              BoxConstraints(
+                                                            minWidth:
+                                                                actionButtonMinSize,
+                                                            minHeight:
+                                                                actionButtonMinSize,
+                                                          ),
+                                                          onPressed:
+                                                              _toggleSideSheetBottomView,
+                                                        ),
+                                                      ),
+                                                      SizedBox(
+                                                        width:
+                                                            10 * sideSheetScale,
+                                                      ),
+                                                      Tooltip(
+                                                        message:
+                                                            _sideSheetPrintTooltip,
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            Icons.print_rounded,
+                                                            color:
+                                                                _sideSheetPrintActive
+                                                                    ? const Color(
+                                                                        0xFF33A373)
+                                                                    : (_sideSheetPrintSupported
+                                                                        ? sideSheetPalette
+                                                                            .labelUnselected
+                                                                        : sideSheetPalette
+                                                                            .labelUnselected
+                                                                            .withOpacity(
+                                                                            0.36,
+                                                                          )),
+                                                            size:
+                                                                actionIconSize,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              BoxConstraints(
+                                                            minWidth:
+                                                                actionButtonMinSize,
+                                                            minHeight:
+                                                                actionButtonMinSize,
+                                                          ),
+                                                          onPressed: () =>
+                                                              unawaited(
+                                                            _handleSideSheetPrintPressed(),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      SizedBox(
+                                                        width:
+                                                            10 * sideSheetScale,
+                                                      ),
+                                                      Tooltip(
+                                                        message: '보강 관리',
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            Icons.event_repeat,
+                                                            color: sideSheetPalette
+                                                                .labelUnselected,
+                                                            size:
+                                                                actionIconSize,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              BoxConstraints(
+                                                            minWidth:
+                                                                actionButtonMinSize,
+                                                            minHeight:
+                                                                actionButtonMinSize,
+                                                          ),
+                                                          onPressed:
+                                                              _showMakeupManagementDialog,
+                                                        ),
+                                                      ),
+                                                      SizedBox(
+                                                        width:
+                                                            10 * sideSheetScale,
+                                                      ),
+                                                      Tooltip(
+                                                        message: '수업 타임라인',
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            Icons.timeline,
+                                                            color: sideSheetPalette
+                                                                .labelUnselected,
+                                                            size:
+                                                                actionIconSize,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              BoxConstraints(
+                                                            minWidth:
+                                                                actionButtonMinSize,
+                                                            minHeight:
+                                                                actionButtonMinSize,
+                                                          ),
+                                                          onPressed: () async {
+                                                            await showDialog(
+                                                              context: context,
+                                                              builder: (_) =>
+                                                                  const ClassContentEventsDialog(),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                      SizedBox(
+                                                        width:
+                                                            6 * sideSheetScale,
+                                                      ),
+                                                      Tooltip(
+                                                        message: '하원 리스트',
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            Icons
+                                                                .featured_play_list,
+                                                            color: sideSheetPalette
+                                                                .labelUnselected,
+                                                            size:
+                                                                actionIconSize,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              BoxConstraints(
+                                                            minWidth:
+                                                                actionButtonMinSize,
+                                                            minHeight:
+                                                                actionButtonMinSize,
+                                                          ),
+                                                          onPressed: () async {
+                                                            await _showLeavedStudentsDialog(
+                                                              leaved,
+                                                              arrivalBySet,
+                                                              departureBySet,
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                      SizedBox(
+                                                        width:
+                                                            10 * sideSheetScale,
+                                                      ),
+                                                      Tooltip(
+                                                        message: _sideSheetBottomView ==
+                                                                _SideSheetBottomView
+                                                                    .favoriteTemplates
+                                                            ? '과제 닫기'
+                                                            : '과제',
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            Icons.star_rounded,
+                                                            color: _sideSheetBottomView ==
+                                                                    _SideSheetBottomView
+                                                                        .favoriteTemplates
+                                                                ? const Color(
+                                                                    0xFF33A373)
+                                                                : sideSheetPalette
+                                                                    .labelUnselected,
+                                                            size:
+                                                                actionIconSize,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              BoxConstraints(
+                                                            minWidth:
+                                                                actionButtonMinSize,
+                                                            minHeight:
+                                                                actionButtonMinSize,
+                                                          ),
+                                                          onPressed:
+                                                              _toggleFavoriteTemplatesSideSheetView,
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
                                                 ],
-                                              ],
+                                              ),
                                             ),
-                                          ),
+                                            if (_sideSheetBottomView ==
+                                                _SideSheetBottomView
+                                                    .waiting) ...[
+                                              SizedBox(
+                                                height:
+                                                    (_sideSheetActionToAttendedGap -
+                                                            12) *
+                                                        sideSheetScale,
+                                              ),
+                                              // 출석 박스
+                                              Padding(
+                                                padding: EdgeInsets.only(
+                                                  left: sideSheetPadLeft,
+                                                  right: sideSheetPad,
+                                                ),
+                                                child: SizedBox(
+                                                  height: attendedPanelHeight,
+                                                  child: FabStyleGlassPanel(
+                                                    useGroupedCardBackgroundInLight:
+                                                        true,
+                                                    padding:
+                                                        EdgeInsets.fromLTRB(
+                                                      sideSheetPad,
+                                                      sideSheetPad,
+                                                      12.0 * sideSheetScale,
+                                                      sideSheetPad,
+                                                    ),
+                                                    child: Scrollbar(
+                                                      controller:
+                                                          _attendedScrollCtrl,
+                                                      thumbVisibility:
+                                                          attendedListScrollable,
+                                                      notificationPredicate: (_) =>
+                                                          attendedListScrollable,
+                                                      child:
+                                                          SingleChildScrollView(
+                                                        controller:
+                                                            _attendedScrollCtrl,
+                                                        physics: attendedListScrollable
+                                                            ? const BouncingScrollPhysics()
+                                                            : const NeverScrollableScrollPhysics(),
+                                                        child: Column(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            if (attended
+                                                                    .isEmpty &&
+                                                                trialAttended
+                                                                    .isEmpty)
+                                                              SizedBox(
+                                                                height:
+                                                                    attendedRowSlotHeight,
+                                                                child: Center(
+                                                                  child:
+                                                                      Padding(
+                                                                    padding:
+                                                                        const EdgeInsets
+                                                                            .only(
+                                                                      left:
+                                                                          14.0,
+                                                                    ),
+                                                                    child: Text(
+                                                                      '출석',
+                                                                      style:
+                                                                          TextStyle(
+                                                                        color: FabTabBarTokens
+                                                                            .paletteFor(
+                                                                          Theme.of(context)
+                                                                              .brightness,
+                                                                        ).labelUnselected,
+                                                                        fontSize:
+                                                                            22 *
+                                                                                sideSheetScale,
+                                                                        fontWeight:
+                                                                            FontWeight.bold,
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            if (attended
+                                                                .isNotEmpty)
+                                                              Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  for (int i =
+                                                                          0;
+                                                                      i <
+                                                                          attended
+                                                                              .length;
+                                                                      i++) ...[
+                                                                    SizedBox(
+                                                                      height:
+                                                                          attendedRowSlotHeight,
+                                                                      child:
+                                                                          _buildAttendanceCard(
+                                                                        attended[
+                                                                            i],
+                                                                        status:
+                                                                            'attended',
+                                                                        key:
+                                                                            ValueKey(
+                                                                          'attended_${attended[i].setId}',
+                                                                        ),
+                                                                        scale:
+                                                                            sideSheetScale,
+                                                                        attendedTwoLine:
+                                                                            attendedTwoLine,
+                                                                        arrival:
+                                                                            arrivalBySet[attended[i].setId],
+                                                                        departure:
+                                                                            departureBySet[attended[i].setId],
+                                                                      ),
+                                                                    ),
+                                                                    if (i !=
+                                                                        attended.length -
+                                                                            1)
+                                                                      SizedBox(
+                                                                        height: _sideSheetAttendedCardSpacing *
+                                                                            sideSheetScale,
+                                                                      ),
+                                                                  ],
+                                                                ],
+                                                              ),
+                                                            if (trialAttended
+                                                                .isNotEmpty) ...[
+                                                              if (attended
+                                                                  .isNotEmpty)
+                                                                SizedBox(
+                                                                  height: _sideSheetAttendedCardSpacing *
+                                                                      sideSheetScale,
+                                                                ),
+                                                              for (int i = 0;
+                                                                  i <
+                                                                      trialAttended
+                                                                          .length;
+                                                                  i++) ...[
+                                                                SizedBox(
+                                                                  height:
+                                                                      attendedRowSlotHeight,
+                                                                  child:
+                                                                      _buildTrialLessonAttendanceCard(
+                                                                    trialAttended[
+                                                                        i],
+                                                                    status:
+                                                                        'attended',
+                                                                    key:
+                                                                        ValueKey(
+                                                                      'trial_attended_${trialAttended[i].id}',
+                                                                    ),
+                                                                    scale:
+                                                                        sideSheetScale,
+                                                                  ),
+                                                                ),
+                                                                if (i !=
+                                                                    trialAttended
+                                                                            .length -
+                                                                        1)
+                                                                  SizedBox(
+                                                                    height: _sideSheetAttendedCardSpacing *
+                                                                        sideSheetScale,
+                                                                  ),
+                                                              ],
+                                                            ],
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              // 출석 전 학생 리스트
+                                              if (waitingByTime.isNotEmpty ||
+                                                  trialWaitingByTime.isNotEmpty)
+                                                Expanded(
+                                                  child: Padding(
+                                                    padding: EdgeInsets.only(
+                                                      top:
+                                                          _sideSheetAttendedToWaitingGap *
+                                                              sideSheetScale,
+                                                      left: sideSheetPadLeft,
+                                                      right: sideSheetPad,
+                                                      bottom: sideSheetPad,
+                                                    ),
+                                                    child: ListView(
+                                                      controller:
+                                                          _waitingScrollCtrl,
+                                                      padding: EdgeInsets.zero,
+                                                      children: [
+                                                        for (final t
+                                                            in (<DateTime>{
+                                                          ...waitingByTime.keys,
+                                                          ...trialWaitingByTime
+                                                              .keys,
+                                                        }.toList()
+                                                              ..sort(
+                                                                (a, b) =>
+                                                                    a.compareTo(
+                                                                        b),
+                                                              ))) ...[
+                                                          Padding(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .only(
+                                                              bottom: 12.0,
+                                                            ),
+                                                            child: Center(
+                                                              child: Text(
+                                                                _formatTime(t),
+                                                                style:
+                                                                    TextStyle(
+                                                                  color: sideSheetPalette
+                                                                      .labelUnselected,
+                                                                  fontSize: 14 *
+                                                                      sideSheetScale,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          Center(
+                                                            child: Wrap(
+                                                              alignment:
+                                                                  WrapAlignment
+                                                                      .center,
+                                                              spacing:
+                                                                  _sideSheetWaitingCardSpacing *
+                                                                      sideSheetScale,
+                                                              runSpacing:
+                                                                  _sideSheetWaitingCardSpacing *
+                                                                      sideSheetScale,
+                                                              children: [
+                                                                for (final w
+                                                                    in (waitingByTime[
+                                                                            t] ??
+                                                                        const <_AttendanceTarget>[]))
+                                                                  _buildAttendanceCard(
+                                                                    w,
+                                                                    status:
+                                                                        'waiting',
+                                                                    key:
+                                                                        ValueKey(
+                                                                      'waiting_${w.setId}',
+                                                                    ),
+                                                                    scale:
+                                                                        sideSheetScale,
+                                                                    arrival:
+                                                                        arrivalBySet[
+                                                                            w.setId],
+                                                                    departure:
+                                                                        departureBySet[
+                                                                            w.setId],
+                                                                  ),
+                                                                for (final s
+                                                                    in (trialWaitingByTime[
+                                                                            t] ??
+                                                                        const <ConsultTrialLessonSlot>[]))
+                                                                  _buildTrialLessonAttendanceCard(
+                                                                    s,
+                                                                    status:
+                                                                        'waiting',
+                                                                    key:
+                                                                        ValueKey(
+                                                                      'trial_waiting_${s.id}',
+                                                                    ),
+                                                                    scale:
+                                                                        sideSheetScale,
+                                                                  ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                          SizedBox(
+                                                            height: 12 *
+                                                                sideSheetScale,
+                                                          ),
+                                                        ],
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                            if (_sideSheetBottomView ==
+                                                _SideSheetBottomView
+                                                    .allStudents)
+                                              _buildAllStudentsBottomPanel(
+                                                containerWidth: containerWidth,
+                                              ),
+                                            if (_sideSheetBottomView ==
+                                                _SideSheetBottomView
+                                                    .favoriteTemplates)
+                                              _buildFavoriteTemplatesBottomPanel(
+                                                containerWidth: containerWidth,
+                                              ),
+                                          ],
                                         ),
-                                  ],
-                                  if (_sideSheetBottomView ==
-                                      _SideSheetBottomView.allStudents)
-                                    _buildAllStudentsBottomPanel(
-                                      containerWidth: containerWidth,
+                                        // 커버 생략
+                                        // 하단 임시 A/B 버튼 제거됨
+                                      ],
                                     ),
-                                  if (_sideSheetBottomView ==
-                                      _SideSheetBottomView.favoriteTemplates)
-                                    _buildFavoriteTemplatesBottomPanel(
-                                      containerWidth: containerWidth,
-                                    ),
-                                ],
-                              ),
-                              // 커버 생략
-                              // 하단 임시 A/B 버튼 제거됨
-                            ],
-                          ),
-                        );
-                      },
-                    );
-                  },
+                                  );
+                                },
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -3205,8 +3404,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       await DataManager.instance.saveOrUpdateAttendance(
         studentId: t.student.id,
         classDateTime: classDateTime,
-        classEndTime:
-            existing?.classEndTime ?? classDateTime.add(t.duration),
+        classEndTime: existing?.classEndTime ?? classDateTime.add(t.duration),
         className: existing?.className ?? t.classInfo?.name ?? '수업',
         isPresent: false,
         arrivalTime: null,
@@ -3259,8 +3457,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     DateTime? arrival,
     DateTime? departure,
   }) {
-    final fabPalette =
-        FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final fabPalette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     Color borderColor;
     Color textColor = fabPalette.labelUnselected;
     Widget nameWidget;
@@ -3341,8 +3538,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       final TextStyle nameStyle = _sideSheetStudentNameStyle(
         textColor,
         scale,
-        decoration:
-            underlineColor != null ? TextDecoration.underline : null,
+        decoration: underlineColor != null ? TextDecoration.underline : null,
         decorationColor: underlineColor,
         decorationThickness: underlineColor != null ? 2 : null,
       );
@@ -3525,94 +3721,94 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             Flexible(
               fit: FlexFit.loose,
               child: LayoutBuilder(
-              builder: (context, leftConstraints) {
-                final dragAxis = leftConstraints.maxWidth.isFinite
-                    ? leftConstraints.maxWidth
-                    : leftConstraints.minWidth;
-                return ClipRect(
-                  child: GestureDetector(
-                    onTapDown: (details) {
-                      _lastTagTapPosition = details.globalPosition;
-                    },
-                    onTap: () => _handleAttendedCardTap(t),
-                    onLongPress: () async {
-                      if (!await _confirmRevertAttendedToWaiting(t)) {
-                        return;
-                      }
-                      await _revertAttendedToWaiting(t);
-                    },
-                    child: attendedTwoLine
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              buildAttendedNameSwipe(
-                                dragAxisExtent: dragAxis,
-                                swipeChild: Padding(
-                                  padding: EdgeInsets.only(
-                                    top: rowPad.top,
-                                    right:
-                                        _sideSheetAttendedTwoLineNameToHomeworkGap,
-                                  ),
-                                  child: name,
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsets.fromLTRB(
-                                  0,
-                                  2 * scale,
-                                  rowPad.right,
-                                  rowPad.bottom,
-                                ),
-                                child: metaRow,
-                              ),
-                            ],
-                          )
-                        : Padding(
-                            padding: rowPad,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              alignment: Alignment.centerLeft,
+                builder: (context, leftConstraints) {
+                  final dragAxis = leftConstraints.maxWidth.isFinite
+                      ? leftConstraints.maxWidth
+                      : leftConstraints.minWidth;
+                  return ClipRect(
+                    child: GestureDetector(
+                      onTapDown: (details) {
+                        _lastTagTapPosition = details.globalPosition;
+                      },
+                      onTap: () => _handleAttendedCardTap(t),
+                      onLongPress: () async {
+                        if (!await _confirmRevertAttendedToWaiting(t)) {
+                          return;
+                        }
+                        await _revertAttendedToWaiting(t);
+                      },
+                      child: attendedTwoLine
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.center,
-                                  children: [
-                                    Opacity(
-                                      opacity: 0,
-                                      child: name,
+                                buildAttendedNameSwipe(
+                                  dragAxisExtent: dragAxis,
+                                  swipeChild: Padding(
+                                    padding: EdgeInsets.only(
+                                      top: rowPad.top,
+                                      right:
+                                          _sideSheetAttendedTwoLineNameToHomeworkGap,
                                     ),
-                                    SizedBox(width: 14 * scale),
-                                    Text(
-                                      arrivalText,
-                                      style: timeLabelStyle,
-                                      textScaler: TextScaler.noScaling,
-                                    ),
-                                    SizedBox(width: 8 * scale),
-                                    Text(
-                                      className,
-                                      style: timeLabelStyle,
-                                      textScaler: TextScaler.noScaling,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                                Positioned.fill(
-                                  child: buildAttendedNameSwipe(
-                                    dragAxisExtent: dragAxis,
-                                    swipeChild: Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: name,
-                                    ),
+                                    child: name,
                                   ),
+                                ),
+                                Padding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    0,
+                                    2 * scale,
+                                    rowPad.right,
+                                    rowPad.bottom,
+                                  ),
+                                  child: metaRow,
                                 ),
                               ],
+                            )
+                          : Padding(
+                              padding: rowPad,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                alignment: Alignment.centerLeft,
+                                children: [
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      Opacity(
+                                        opacity: 0,
+                                        child: name,
+                                      ),
+                                      SizedBox(width: 14 * scale),
+                                      Text(
+                                        arrivalText,
+                                        style: timeLabelStyle,
+                                        textScaler: TextScaler.noScaling,
+                                      ),
+                                      SizedBox(width: 8 * scale),
+                                      Text(
+                                        className,
+                                        style: timeLabelStyle,
+                                        textScaler: TextScaler.noScaling,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                  Positioned.fill(
+                                    child: buildAttendedNameSwipe(
+                                      dragAxisExtent: dragAxis,
+                                      swipeChild: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: name,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                  ),
-                );
-              },
+                    ),
+                  );
+                },
               ),
             ),
             if (!attendedTwoLine)
@@ -3620,9 +3816,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             Expanded(
               child: Stack(
                 clipBehavior: Clip.none,
-                alignment: attendedTwoLine
-                    ? Alignment.topLeft
-                    : Alignment.centerLeft,
+                alignment:
+                    attendedTwoLine ? Alignment.topLeft : Alignment.centerLeft,
                 children: [
                   SizedBox(height: homeworkSlotHeight),
                   Align(
@@ -3677,9 +3872,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final nameStyle = _sideSheetStudentNameStyle(
       trialPalette.labelSelected,
       scale,
-      fontSize: status == 'waiting'
-          ? _sideSheetScalableNameFontSize(scale)
-          : null,
+      fontSize:
+          status == 'waiting' ? _sideSheetScalableNameFontSize(scale) : null,
     );
 
     if (status == 'attended') {
@@ -3954,9 +4148,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 minHeight: chipHeight,
               ),
               padding: chipPad,
-              alignment: attendedTwoLine
-                  ? Alignment.center
-                  : Alignment.centerLeft,
+              alignment:
+                  attendedTwoLine ? Alignment.center : Alignment.centerLeft,
               decoration: BoxDecoration(
                 color: backgroundColor,
                 borderRadius: BorderRadius.circular(chipRadius),
@@ -4036,6 +4229,7 @@ class _SideSheetAttendedSwipe extends StatefulWidget {
   final Widget child;
   final Widget background;
   final Future<bool> Function() onConfirmDismiss;
+
   /// 스와이프 거리·임계값 계산용 기준 너비(왼쪽 열 전체). 미지정 시 자식 너비.
   final double? dragAxisExtent;
 
@@ -4099,13 +4293,14 @@ class _SideSheetAttendedSwipeState extends State<_SideSheetAttendedSwipe>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final layoutWidth = constraints.maxWidth.isFinite && constraints.maxWidth > 0
-            ? constraints.maxWidth
-            : null;
-        final referenceExtent = widget.dragAxisExtent != null &&
-                widget.dragAxisExtent! > 0
-            ? widget.dragAxisExtent!
-            : layoutWidth;
+        final layoutWidth =
+            constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                ? constraints.maxWidth
+                : null;
+        final referenceExtent =
+            widget.dragAxisExtent != null && widget.dragAxisExtent! > 0
+                ? widget.dragAxisExtent!
+                : layoutWidth;
         if (referenceExtent == null || referenceExtent <= 0) {
           return widget.child;
         }
@@ -4133,8 +4328,8 @@ class _SideSheetAttendedSwipeState extends State<_SideSheetAttendedSwipe>
                   onHorizontalDragUpdate: (details) {
                     if (_confirming) return;
                     setState(() {
-                      _dragExtent = (_dragExtent + details.delta.dx)
-                          .clamp(0.0, maxDrag);
+                      _dragExtent =
+                          (_dragExtent + details.delta.dx).clamp(0.0, maxDrag);
                     });
                   },
                   onHorizontalDragEnd: (_) => _handleDragEnd(thresholdPx),
@@ -4165,10 +4360,9 @@ class _SideSheetDateHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final panelStyle = PreviewAcademyPanelStyle.forBrightness(brightness);
-    final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle)
-        .copyWith(
-      fontSize:
-          FabTabBarTokens.previewAcademyMainTitleFontSize * scale,
+    final dateStyle =
+        FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle).copyWith(
+      fontSize: FabTabBarTokens.previewAcademyMainTitleFontSize * scale,
     );
 
     return Tooltip(

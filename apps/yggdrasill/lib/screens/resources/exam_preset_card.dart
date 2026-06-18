@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../../widgets/dialog_tokens.dart';
 import '../../services/learning_problem_bank_service.dart';
 import 'exam_preset_support.dart';
 
@@ -139,11 +140,7 @@ class ExamPresetCard extends StatelessWidget {
                     child: const ColoredBox(
                       color: Color(0x33000000),
                       child: Center(
-                        child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
+                        child: YggLoadingIndicator(size: 22),
                       ),
                     ),
                   ),

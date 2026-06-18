@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'models/behavior_card_drag_payload.dart';
+import 'models/exam_preset_drag_payload.dart';
 import 'models/textbook_drag_payload.dart';
 
 typedef AsyncUiAction = Future<void> Function();
@@ -265,4 +266,12 @@ final ValueNotifier<BehaviorCardDragPayload?> activeBehaviorCardDragPayload =
 
 /// 행동 카드 드래그 피드백이 왼쪽 사이드시트 영역에 진입했는지 여부.
 final ValueNotifier<bool> isBehaviorDraggingOverLeftSideSheet =
+    ValueNotifier<bool>(false);
+
+/// 시험(내신) 프리셋 카드 드래그 중 payload.
+final ValueNotifier<ExamPresetDragPayload?> activeExamPresetDragPayload =
+    ValueNotifier<ExamPresetDragPayload?>(null);
+
+/// 시험 프리셋 카드 드래그 피드백이 왼쪽 사이드시트 영역에 진입했는지 여부.
+final ValueNotifier<bool> isExamPresetDraggingOverLeftSideSheet =
     ValueNotifier<bool>(false);

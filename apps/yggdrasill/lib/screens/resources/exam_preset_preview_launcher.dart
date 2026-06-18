@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/learning_problem_bank_service.dart';
+import '../../widgets/app_snackbar.dart';
 import '../learning/models/problem_bank_export_models.dart';
 import '../learning/widgets/problem_bank_export_server_preview_dialog.dart';
 import 'exam_preset_support.dart';
@@ -109,9 +110,7 @@ class ExamPresetPreviewLauncher {
   }
 
   void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message);
   }
 }
 

@@ -6,7 +6,9 @@ import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../theme/ygg_semantic_colors.dart';
 
 const double _navIconSize = 35.2;
-const double _navIconStrokeWidth = 2.64;
+const double _navMenuIconStrokeWidth = 2.64;
+const double _navIconStrokeWidthSelected = 3.0;
+const double _navIconStrokeWidthUnselectedLight = 2.2;
 const double _navDestinationVerticalPadding = 12.1;
 const double _navHighlightWidth = 67.8;
 const double _navHighlightHeight = 38.7;
@@ -36,6 +38,8 @@ const double _navDividerTopSpacing = 14.5;
 const double _navDividerWidth = 38.7;
 const Color _navIconColorDark = Color(0xFFEAF2F2);
 const Color _navIconColorLight = Color(0xFF1F2933);
+const Color _navIconColorLightSelected = Color(0xFF060B12);
+const Color _navIconColorDarkSelected = Color(0xFFFFFFFF);
 
 enum _NavIconKind {
   package,
@@ -65,6 +69,7 @@ class CustomNavigationRail extends StatelessWidget {
     _NavIconKind kind, {
     double size = _navIconSize,
     required Color color,
+    double strokeWidth = _navMenuIconStrokeWidth,
   }) {
     return RepaintBoundary(
       child: SizedBox.square(
@@ -73,7 +78,7 @@ class CustomNavigationRail extends StatelessWidget {
           painter: _NavIconPainter(
             kind: kind,
             color: color,
-            strokeWidth: _navIconStrokeWidth,
+            strokeWidth: strokeWidth,
           ),
         ),
       ),
@@ -85,9 +90,22 @@ class CustomNavigationRail extends StatelessWidget {
     required Color color,
     required Color highlightColor,
     required bool selected,
+    required Brightness brightness,
   }) {
+    final strokeWidth = brightness == Brightness.light && !selected
+        ? _navIconStrokeWidthUnselectedLight
+        : _navIconStrokeWidthSelected;
+    final resolvedColor = selected
+        ? (brightness == Brightness.light
+            ? _navIconColorLightSelected
+            : _navIconColorDarkSelected)
+        : color;
     final icon = Center(
-      child: _navIcon(kind, color: color),
+      child: _navIcon(
+        kind,
+        color: resolvedColor,
+        strokeWidth: strokeWidth,
+      ),
     );
 
     return SizedBox(
@@ -111,6 +129,7 @@ class CustomNavigationRail extends StatelessWidget {
     required _NavIconKind kind,
     required Color navIconColor,
     required Color highlightColor,
+    required Brightness brightness,
   }) {
     final selected = selectedIndex == index;
     return Tooltip(
@@ -130,6 +149,7 @@ class CustomNavigationRail extends StatelessWidget {
                 color: navIconColor,
                 highlightColor: highlightColor,
                 selected: selected,
+                brightness: brightness,
               ),
             ),
           ),
@@ -209,6 +229,7 @@ class CustomNavigationRail extends StatelessWidget {
                         kind: _NavIconKind.home,
                         navIconColor: navIconColor,
                         highlightColor: highlightColor,
+                        brightness: brightness,
                       ),
                       _railDestination(
                         index: 1,
@@ -216,6 +237,7 @@ class CustomNavigationRail extends StatelessWidget {
                         kind: _NavIconKind.student,
                         navIconColor: navIconColor,
                         highlightColor: highlightColor,
+                        brightness: brightness,
                       ),
                       _railDestination(
                         index: 2,
@@ -223,6 +245,7 @@ class CustomNavigationRail extends StatelessWidget {
                         kind: _NavIconKind.time,
                         navIconColor: navIconColor,
                         highlightColor: highlightColor,
+                        brightness: brightness,
                       ),
                       _railDestination(
                         index: 3,
@@ -230,6 +253,7 @@ class CustomNavigationRail extends StatelessWidget {
                         kind: _NavIconKind.learning,
                         navIconColor: navIconColor,
                         highlightColor: highlightColor,
+                        brightness: brightness,
                       ),
                       _railDestination(
                         index: 4,
@@ -237,6 +261,7 @@ class CustomNavigationRail extends StatelessWidget {
                         kind: _NavIconKind.resources,
                         navIconColor: navIconColor,
                         highlightColor: highlightColor,
+                        brightness: brightness,
                       ),
                       _railDestination(
                         index: 5,
@@ -244,6 +269,7 @@ class CustomNavigationRail extends StatelessWidget {
                         kind: _NavIconKind.settings,
                         navIconColor: navIconColor,
                         highlightColor: highlightColor,
+                        brightness: brightness,
                       ),
                     ],
                   ),
@@ -305,7 +331,7 @@ class _NavIconPainter extends CustomPainter {
         _paintStudent(canvas, paint, p);
         break;
       case _NavIconKind.time:
-        _paintTime(canvas, paint, p);
+        _paintTime(canvas, paint, p, s);
         break;
       case _NavIconKind.learning:
         _paintLearning(canvas, paint, p);
@@ -398,12 +424,18 @@ class _NavIconPainter extends CustomPainter {
     Canvas canvas,
     Paint paint,
     Offset Function(double x, double y) p,
+    double scale,
   ) {
-    canvas.drawCircle(p(12, 13), 7, paint);
-    canvas.drawLine(p(12, 13), p(12, 9), paint);
-    canvas.drawLine(p(12, 13), p(15, 13), paint);
-    canvas.drawLine(p(9, 3), p(15, 3), paint);
-    canvas.drawLine(p(12, 3), p(12, 5), paint);
+    // 홈·학생(y≈5~20)과 동일한 시각 무게 — 중심을 살짝 내리고 반지름을 스케일함.
+    final faceCenter = p(12, 12.5);
+    const faceRadius = 8.0;
+
+    canvas.drawCircle(faceCenter, faceRadius * scale, paint);
+
+    // 10:10 — 분침(2시) / 시침(10시)
+    canvas
+      ..drawLine(faceCenter, p(16.7, 9.9), paint)
+      ..drawLine(faceCenter, p(8.4, 10.4), paint);
   }
 
   void _paintLearning(
@@ -411,8 +443,9 @@ class _NavIconPainter extends CustomPainter {
     Paint paint,
     Offset Function(double x, double y) p,
   ) {
+    // 좌·우 반구 외곽선 유지, 내부 장식만 제거(굵은 stroke에서도 깔끔).
     final left = Path()
-      ..moveTo(p(11.2, 5).dx, p(11.2, 5).dy)
+      ..moveTo(p(10.85, 5).dx, p(10.85, 5).dy)
       ..cubicTo(
         p(7.8, 5).dx,
         p(7.8, 5).dy,
@@ -434,12 +467,12 @@ class _NavIconPainter extends CustomPainter {
         p(6.2, 18).dy,
         p(8, 20).dx,
         p(8, 20).dy,
-        p(11.2, 19).dx,
-        p(11.2, 19).dy,
+        p(10.85, 19).dx,
+        p(10.85, 19).dy,
       )
-      ..lineTo(p(11.2, 5).dx, p(11.2, 5).dy);
+      ..lineTo(p(10.85, 5).dx, p(10.85, 5).dy);
     final right = Path()
-      ..moveTo(p(12.8, 5).dx, p(12.8, 5).dy)
+      ..moveTo(p(13.15, 5).dx, p(13.15, 5).dy)
       ..cubicTo(
         p(16.2, 5).dx,
         p(16.2, 5).dy,
@@ -461,17 +494,13 @@ class _NavIconPainter extends CustomPainter {
         p(17.8, 18).dy,
         p(16, 20).dx,
         p(16, 20).dy,
-        p(12.8, 19).dx,
-        p(12.8, 19).dy,
+        p(13.15, 19).dx,
+        p(13.15, 19).dy,
       )
-      ..lineTo(p(12.8, 5).dx, p(12.8, 5).dy);
+      ..lineTo(p(13.15, 5).dx, p(13.15, 5).dy);
     canvas
       ..drawPath(left, paint)
-      ..drawPath(right, paint)
-      ..drawLine(p(8, 10), p(10.5, 10), paint)
-      ..drawLine(p(13.5, 14), p(16, 14), paint)
-      ..drawCircle(p(7.8, 13.5), 0.8, paint)
-      ..drawCircle(p(16.2, 10.5), 0.8, paint);
+      ..drawPath(right, paint);
   }
 
   void _paintResources(
@@ -486,10 +515,10 @@ class _NavIconPainter extends CustomPainter {
         p(6.7, 5.6).dy,
         p(9.4, 6.2).dx,
         p(9.4, 6.2).dy,
-        p(12, 8).dx,
-        p(12, 8).dy,
+        p(11.5, 8).dx,
+        p(11.5, 8).dy,
       )
-      ..lineTo(p(12, 20).dx, p(12, 20).dy)
+      ..lineTo(p(11.5, 20).dx, p(11.5, 20).dy)
       ..cubicTo(
         p(9.4, 18.2).dx,
         p(9.4, 18.2).dy,
@@ -506,10 +535,10 @@ class _NavIconPainter extends CustomPainter {
         p(17.3, 5.6).dy,
         p(14.6, 6.2).dx,
         p(14.6, 6.2).dy,
-        p(12, 8).dx,
-        p(12, 8).dy,
+        p(12.5, 8).dx,
+        p(12.5, 8).dy,
       )
-      ..lineTo(p(12, 20).dx, p(12, 20).dy)
+      ..lineTo(p(12.5, 20).dx, p(12.5, 20).dy)
       ..cubicTo(
         p(14.6, 18.2).dx,
         p(14.6, 18.2).dy,

@@ -437,8 +437,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           .select('config_value')
           .eq('config_key', 'openai_api_key')
           .maybeSingle();
-      return res != null &&
-          (res['config_value'] as String? ?? '').isNotEmpty;
+      return res != null && (res['config_value'] as String? ?? '').isNotEmpty;
     } catch (_) {
       return false;
     }
@@ -517,8 +516,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
 
     if (pickedId == null || !mounted) return;
-    final next =
-        pickedId == 'dark' ? ThemeMode.dark : ThemeMode.light;
+    final next = pickedId == 'dark' ? ThemeMode.dark : ThemeMode.light;
     setState(() => _selectedThemeMode = next);
     AppThemeController.setMode(next);
   }
@@ -526,9 +524,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _openPreviewLaunchModeMenu(
     PreviewAcademyPanelStyle style,
   ) async {
-    final box =
-        _previewLaunchModeMenuAnchorKey.currentContext?.findRenderObject()
-            as RenderBox?;
+    final box = _previewLaunchModeMenuAnchorKey.currentContext
+        ?.findRenderObject() as RenderBox?;
     if (box == null) return;
 
     final current = _currentLaunchMode();
@@ -1239,77 +1236,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final canExpand = isActive && _hasRegisteredOperatingHours(day);
     final isExpanded = _previewBreakTimesExpanded.contains(day);
 
-    return SizedBox(
-      height: FabTabBarTokens.previewAcademyOperatingRowHeight,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: canExpand ? () => _togglePreviewBreakTimes(day) : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal:
-                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
-            ),
-            child: Row(
-              children: [
-                Text(
-                  day.koreanName,
-                  style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: isActive
-                        ? Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(
-                                fit: FlexFit.loose,
-                                child: IntrinsicWidth(
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: _buildPreviewOperatingHoursPills(
-                                      previewStyle,
-                                      day,
-                                    ),
+    return FabStyleGroupedCardTapTarget(
+      onTap: canExpand ? () => _togglePreviewBreakTimes(day) : null,
+      child: SizedBox(
+        height: FabTabBarTokens.previewAcademyOperatingRowHeight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal:
+                FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+          ),
+          child: Row(
+            children: [
+              Text(
+                day.koreanName,
+                style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: isActive
+                      ? Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              fit: FlexFit.loose,
+                              child: IntrinsicWidth(
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: _buildPreviewOperatingHoursPills(
+                                    previewStyle,
+                                    day,
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 4),
-                              Icon(
-                                isExpanded
-                                    ? Icons.keyboard_arrow_down
-                                    : Icons.chevron_right,
-                                size: FabTabBarTokens.previewAcademyChevronSize,
-                                color: previewStyle.chevron,
-                              ),
-                            ],
-                          )
-                        : const SizedBox.shrink(),
-                  ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              isExpanded
+                                  ? Icons.keyboard_arrow_down
+                                  : Icons.chevron_right,
+                              size: FabTabBarTokens.previewAcademyChevronSize,
+                              color: previewStyle.chevron,
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
                 ),
-                const SizedBox(width: 16),
-                PreviewAcademyIosSwitch(
-                  key: ValueKey('preview-hours-switch-${day.name}'),
-                  value: isActive,
-                  inactiveColor: switchInactive,
-                  onChanged: (enabled) {
-                    setState(() {
-                      if (enabled) {
-                        _previewOperatingDaysActive.add(day);
-                      } else {
-                        _previewOperatingDaysActive.remove(day);
-                        _previewBreakTimesExpanded.remove(day);
-                        _operatingHours[day] = null;
-                        _breakTimes[day] = [];
-                      }
-                    });
-                  },
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 16),
+              PreviewAcademyIosSwitch(
+                key: ValueKey('preview-hours-switch-${day.name}'),
+                value: isActive,
+                inactiveColor: switchInactive,
+                onChanged: (enabled) {
+                  setState(() {
+                    if (enabled) {
+                      _previewOperatingDaysActive.add(day);
+                    } else {
+                      _previewOperatingDaysActive.remove(day);
+                      _previewBreakTimesExpanded.remove(day);
+                      _operatingHours[day] = null;
+                      _breakTimes[day] = [];
+                    }
+                  });
+                },
+              ),
+            ],
           ),
         ),
       ),
@@ -1322,74 +1316,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
     int index,
     TimeRange breakTime,
   ) {
-    return SizedBox(
-      height: FabTabBarTokens.previewAcademyOperatingRowHeight,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => _editPreviewBreakTime(day, index),
-          behavior: HitTestBehavior.opaque,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal:
-                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
-            ),
-            child: Row(
-              children: [
-                Text(
-                  '휴식 ${index + 1}',
-                  style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        PreviewAcademyTimePill(
-                          style: previewStyle,
-                          text: PreviewAcademyTimePill.formatTimeOfDay(
-                            TimeOfDay(
-                              hour: breakTime.startHour,
-                              minute: breakTime.startMinute,
-                            ),
+    return FabStyleGroupedCardTapTarget(
+      onTap: () => _editPreviewBreakTime(day, index),
+      child: SizedBox(
+        height: FabTabBarTokens.previewAcademyOperatingRowHeight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal:
+                FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+          ),
+          child: Row(
+            children: [
+              Text(
+                '휴식 ${index + 1}',
+                style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PreviewAcademyTimePill(
+                        style: previewStyle,
+                        text: PreviewAcademyTimePill.formatTimeOfDay(
+                          TimeOfDay(
+                            hour: breakTime.startHour,
+                            minute: breakTime.startMinute,
                           ),
                         ),
-                        const SizedBox(
-                          width: FabTabBarTokens.previewAcademyTimePillGap,
-                        ),
-                        PreviewAcademyTimePill(
-                          style: previewStyle,
-                          text: PreviewAcademyTimePill.formatTimeOfDay(
-                            TimeOfDay(
-                              hour: breakTime.endHour,
-                              minute: breakTime.endMinute,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () => _deletePreviewBreakTime(day, index),
-                  behavior: HitTestBehavior.opaque,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Icon(
-                        Icons.close,
-                        size: 18,
-                        color: previewStyle.hint,
                       ),
+                      const SizedBox(
+                        width: FabTabBarTokens.previewAcademyTimePillGap,
+                      ),
+                      PreviewAcademyTimePill(
+                        style: previewStyle,
+                        text: PreviewAcademyTimePill.formatTimeOfDay(
+                          TimeOfDay(
+                            hour: breakTime.endHour,
+                            minute: breakTime.endMinute,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _deletePreviewBreakTime(day, index),
+                behavior: HitTestBehavior.opaque,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Icon(
+                      Icons.close,
+                      size: 18,
+                      color: previewStyle.hint,
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -3404,12 +3394,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       img = NetworkImage(t!.avatarUrl!);
     }
     final Color bg = _parseAvatarColor(t?.avatarPresetColor);
-    final String label = (t?.avatarPresetInitial != null &&
-            t!.avatarPresetInitial!.isNotEmpty)
-        ? t.avatarPresetInitial!
-        : _avatarInitials(t?.name ?? '');
-    final double labelFontSize =
-        ((radius - 8).clamp(10.0, radius)).toDouble();
+    final String label =
+        (t?.avatarPresetInitial != null && t!.avatarPresetInitial!.isNotEmpty)
+            ? t.avatarPresetInitial!
+            : _avatarInitials(t?.name ?? '');
+    final double labelFontSize = ((radius - 8).clamp(10.0, radius)).toDouble();
 
     Widget avatar = CircleAvatar(
       radius: radius,
@@ -3493,7 +3482,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onDelete: isOwnerTeacher
           ? null
           : () async {
-              final idx = DataManager.instance.teachersNotifier.value.indexOf(t);
+              final idx =
+                  DataManager.instance.teachersNotifier.value.indexOf(t);
               if (idx != -1) {
                 await DataManager.instance.deleteTeacher(idx);
               }

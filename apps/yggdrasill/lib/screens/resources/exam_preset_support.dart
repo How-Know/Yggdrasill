@@ -74,15 +74,34 @@ int semesterFromCourseKey(String courseKey) {
   return 1;
 }
 
+String gradeLabelFromKey(String gradeKey) {
+  for (final grade in NaesinExamContext.allGradeOptions()) {
+    if (grade.key == gradeKey) return grade.label;
+  }
+  return gradeKey;
+}
+
+String shortExamTermLabel(String examTerm) {
+  final normalized = examTerm.trim();
+  if (normalized.contains('중간')) return '중간';
+  if (normalized.contains('기말')) return '기말';
+  return normalized;
+}
+
 String formatExamPresetYearShort(int year) => '${year % 100}';
 
 String examPresetCardLine1(NaesinLinkSelection parsed) {
-  return '${formatExamPresetYearShort(parsed.year)} ${parsed.school}';
+  final year = formatExamPresetYearShort(parsed.year);
+  final school = parsed.school.trim();
+  final grade = gradeLabelFromKey(parsed.gradeKey);
+  if (school.isEmpty) return '$year $grade';
+  return '$year $school $grade';
 }
 
 String examPresetCardLine2(NaesinLinkSelection parsed) {
   final semester = semesterFromCourseKey(parsed.courseKey);
-  return '$semester학기 ${parsed.examTerm}';
+  final term = shortExamTermLabel(parsed.examTerm);
+  return '${semester}학기 $term';
 }
 
 
