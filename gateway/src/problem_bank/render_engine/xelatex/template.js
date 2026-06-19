@@ -1149,6 +1149,11 @@ function normalizeLiteralEscapedNewlines(input) {
 
 function normalizeSoftLineBreakArtifacts(input) {
   return String(input || '')
+    // VLM sometimes drops the backslash of \neq at a visual line break:
+    //   "a\neq0" in source PDF -> "a\neq0" in stored text.
+    // Rebuild it before Korean/math segmentation so the condition renders as
+    // the intended "a \ne 0" instead of leaking "eq0" into the body.
+    .replace(/([A-Za-z])[\r\n]+\s*eq\s*0\b/g, '$1\\neq 0')
     // Some extracted rows preserve a visual line break before a plain function
     // call as leading "n\" on the continued line. The intended content is the
     // function call itself: n\f(12) -> f(12).

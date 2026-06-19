@@ -8,8 +8,9 @@ import '../theme/ygg_semantic_colors.dart';
 const double _navIconSize = 35.2;
 const double _navMenuIconStrokeWidth = 2.64;
 const double _navIconStrokeWidthSelected = 3.0;
-const double _navIconStrokeWidthUnselectedLight = 2.2;
-const double _navDestinationVerticalPadding = 12.1;
+/// 하단 탭 비선택 — 라이트·다크 공통 (선택 시 [_navIconStrokeWidthSelected]).
+const double _navIconStrokeWidthUnselected = 2.0;
+const double _navDestinationVerticalPadding = 16.0;
 const double _navHighlightWidth = 67.8;
 const double _navHighlightHeight = 38.7;
 /// Material [NavigationRail] 기본 폭 — 오버레이·고정 배치 계산용.
@@ -92,9 +93,9 @@ class CustomNavigationRail extends StatelessWidget {
     required bool selected,
     required Brightness brightness,
   }) {
-    final strokeWidth = brightness == Brightness.light && !selected
-        ? _navIconStrokeWidthUnselectedLight
-        : _navIconStrokeWidthSelected;
+    final strokeWidth = selected
+        ? _navIconStrokeWidthSelected
+        : _navIconStrokeWidthUnselected;
     final resolvedColor = selected
         ? (brightness == Brightness.light
             ? _navIconColorLightSelected
@@ -296,6 +297,9 @@ class CustomNavigationRail extends StatelessWidget {
   }
 }
 
+/// 학습·설정 아이콘 — 다른 탭 대비 시각적으로 작아 보여 10% 확대.
+const double _navIconLearningSettingsScale = 1.1;
+
 class _NavIconPainter extends CustomPainter {
   final _NavIconKind kind;
   final Color color;
@@ -311,6 +315,9 @@ class _NavIconPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final s = size.shortestSide / 24;
     Offset p(double x, double y) => Offset(x * s, y * s);
+    double r(double logical) => logical * s;
+    Offset ps(double x, double y, [double factor = _navIconLearningSettingsScale]) =>
+        p(12 + (x - 12) * factor, 12 + (y - 12) * factor);
 
     final paint = Paint()
       ..color = color
@@ -328,19 +335,19 @@ class _NavIconPainter extends CustomPainter {
         _paintHome(canvas, paint, p);
         break;
       case _NavIconKind.student:
-        _paintStudent(canvas, paint, p);
+        _paintStudent(canvas, paint, p, r);
         break;
       case _NavIconKind.time:
-        _paintTime(canvas, paint, p, s);
+        _paintTime(canvas, paint, p, r);
         break;
       case _NavIconKind.learning:
-        _paintLearning(canvas, paint, p);
+        _paintLearning(canvas, paint, ps);
         break;
       case _NavIconKind.resources:
         _paintResources(canvas, paint, p);
         break;
       case _NavIconKind.settings:
-        _paintSettings(canvas, paint, p);
+        _paintSettings(canvas, paint, ps, r);
         break;
     }
   }
@@ -397,8 +404,9 @@ class _NavIconPainter extends CustomPainter {
     Canvas canvas,
     Paint paint,
     Offset Function(double x, double y) p,
+    double Function(double logical) r,
   ) {
-    canvas.drawCircle(p(12, 7.5), 3.0, paint);
+    canvas.drawCircle(p(12, 7.5), r(3.0), paint);
     final path = Path()
       ..moveTo(p(5, 20).dx, p(5, 20).dy)
       ..cubicTo(
@@ -424,13 +432,11 @@ class _NavIconPainter extends CustomPainter {
     Canvas canvas,
     Paint paint,
     Offset Function(double x, double y) p,
-    double scale,
+    double Function(double logical) r,
   ) {
-    // 홈·학생(y≈5~20)과 동일한 시각 무게 — 중심을 살짝 내리고 반지름을 스케일함.
     final faceCenter = p(12, 12.5);
-    const faceRadius = 8.0;
 
-    canvas.drawCircle(faceCenter, faceRadius * scale, paint);
+    canvas.drawCircle(faceCenter, r(8.0), paint);
 
     // 10:10 — 분침(2시) / 시침(10시)
     canvas
@@ -441,63 +447,63 @@ class _NavIconPainter extends CustomPainter {
   void _paintLearning(
     Canvas canvas,
     Paint paint,
-    Offset Function(double x, double y) p,
+    Offset Function(double x, double y) ps,
   ) {
     // 좌·우 반구 외곽선 유지, 내부 장식만 제거(굵은 stroke에서도 깔끔).
     final left = Path()
-      ..moveTo(p(10.85, 5).dx, p(10.85, 5).dy)
+      ..moveTo(ps(10.85, 5).dx, ps(10.85, 5).dy)
       ..cubicTo(
-        p(7.8, 5).dx,
-        p(7.8, 5).dy,
-        p(6, 7.2).dx,
-        p(6, 7.2).dy,
-        p(6.6, 10.2).dx,
-        p(6.6, 10.2).dy,
+        ps(7.8, 5).dx,
+        ps(7.8, 5).dy,
+        ps(6, 7.2).dx,
+        ps(6, 7.2).dy,
+        ps(6.6, 10.2).dx,
+        ps(6.6, 10.2).dy,
       )
       ..cubicTo(
-        p(4.4, 11).dx,
-        p(4.4, 11).dy,
-        p(4, 14.2).dx,
-        p(4, 14.2).dy,
-        p(6.6, 15.4).dx,
-        p(6.6, 15.4).dy,
+        ps(4.4, 11).dx,
+        ps(4.4, 11).dy,
+        ps(4, 14.2).dx,
+        ps(4, 14.2).dy,
+        ps(6.6, 15.4).dx,
+        ps(6.6, 15.4).dy,
       )
       ..cubicTo(
-        p(6.2, 18).dx,
-        p(6.2, 18).dy,
-        p(8, 20).dx,
-        p(8, 20).dy,
-        p(10.85, 19).dx,
-        p(10.85, 19).dy,
+        ps(6.2, 18).dx,
+        ps(6.2, 18).dy,
+        ps(8, 20).dx,
+        ps(8, 20).dy,
+        ps(10.85, 19).dx,
+        ps(10.85, 19).dy,
       )
-      ..lineTo(p(10.85, 5).dx, p(10.85, 5).dy);
+      ..lineTo(ps(10.85, 5).dx, ps(10.85, 5).dy);
     final right = Path()
-      ..moveTo(p(13.15, 5).dx, p(13.15, 5).dy)
+      ..moveTo(ps(13.15, 5).dx, ps(13.15, 5).dy)
       ..cubicTo(
-        p(16.2, 5).dx,
-        p(16.2, 5).dy,
-        p(18, 7.2).dx,
-        p(18, 7.2).dy,
-        p(17.4, 10.2).dx,
-        p(17.4, 10.2).dy,
+        ps(16.2, 5).dx,
+        ps(16.2, 5).dy,
+        ps(18, 7.2).dx,
+        ps(18, 7.2).dy,
+        ps(17.4, 10.2).dx,
+        ps(17.4, 10.2).dy,
       )
       ..cubicTo(
-        p(19.6, 11).dx,
-        p(19.6, 11).dy,
-        p(20, 14.2).dx,
-        p(20, 14.2).dy,
-        p(17.4, 15.4).dx,
-        p(17.4, 15.4).dy,
+        ps(19.6, 11).dx,
+        ps(19.6, 11).dy,
+        ps(20, 14.2).dx,
+        ps(20, 14.2).dy,
+        ps(17.4, 15.4).dx,
+        ps(17.4, 15.4).dy,
       )
       ..cubicTo(
-        p(17.8, 18).dx,
-        p(17.8, 18).dy,
-        p(16, 20).dx,
-        p(16, 20).dy,
-        p(13.15, 19).dx,
-        p(13.15, 19).dy,
+        ps(17.8, 18).dx,
+        ps(17.8, 18).dy,
+        ps(16, 20).dx,
+        ps(16, 20).dy,
+        ps(13.15, 19).dx,
+        ps(13.15, 19).dy,
       )
-      ..lineTo(p(13.15, 5).dx, p(13.15, 5).dy);
+      ..lineTo(ps(13.15, 5).dx, ps(13.15, 5).dy);
     canvas
       ..drawPath(left, paint)
       ..drawPath(right, paint);
@@ -556,14 +562,19 @@ class _NavIconPainter extends CustomPainter {
   void _paintSettings(
     Canvas canvas,
     Paint paint,
-    Offset Function(double x, double y) p,
+    Offset Function(double x, double y) ps,
+    double Function(double logical) r,
   ) {
+    const scale = _navIconLearningSettingsScale;
     final path = Path();
     const teeth = 8;
     for (int i = 0; i < teeth * 2; i++) {
-      final radius = i.isEven ? 8.0 : 6.4;
+      final radius = i.isEven ? 7.7 : 6.2;
       final angle = -math.pi / 2 + i * math.pi / teeth;
-      final point = p(12 + math.cos(angle) * radius, 12 + math.sin(angle) * radius);
+      final point = ps(
+        12 + math.cos(angle) * radius,
+        12 + math.sin(angle) * radius,
+      );
       if (i == 0) {
         path.moveTo(point.dx, point.dy);
       } else {
@@ -572,7 +583,7 @@ class _NavIconPainter extends CustomPainter {
     }
     path.close();
     canvas.drawPath(path, paint);
-    canvas.drawCircle(p(12, 12), 2.8, paint);
+    canvas.drawCircle(ps(12, 12), r(2.8 * scale), paint);
   }
 
   @override

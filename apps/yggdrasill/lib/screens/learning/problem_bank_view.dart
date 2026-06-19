@@ -13,6 +13,7 @@ import '../../services/tenant_service.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
+import '../../widgets/shared_folder_tree.dart';
 import 'models/problem_bank_curriculum_filter.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
@@ -4202,296 +4203,306 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Widget _buildProblemBankSidebar() {
+    return ProblemBankSchoolSheet(
+      sidebarRevision: _sidebarRevision,
+      selectedSourceTypeCode: _selectedSourceTypeCode,
+      documents: _sidebarDocuments,
+      selectedDocumentId: _selectedDocumentId,
+      onDocumentSelected: _onSidebarDocumentSelected,
+      isLoading: _isLoadingSchools || _isLoadingPrivateMaterialPages,
+      privateMaterialUnits: _privateMaterialUnits,
+      selectedPrivateMaterialPageKeys: _selectedPrivateMaterialPageKeys,
+      onPrivateMaterialPageToggled: _onPrivateMaterialPageToggled,
+      onPrivateMaterialPageKeysToggled: _onPrivateMaterialPageKeysToggled,
+      privateMaterialTitle: _selectedPrivateMaterialOption?.label ?? '',
+      privateMaterialEmptyMessage: _privateMaterialEmptyMessage,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final busy = _isInitializing || _isLoadingQuestions || _isLoadingSchools;
     final exportBusy = _isExporting || _isSavingExportLocally;
+    final sidebarWidth = sharedFolderTreePanelWidthFor(context);
     return Container(
       color: context.yggSurfaceBase,
-      child: Column(
+      child: Stack(
         children: [
+          Positioned(
+            left: 12,
+            top: 12,
+            bottom: 12,
+            width: sidebarWidth,
+            child: _buildProblemBankSidebar(),
+          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: EdgeInsets.only(left: sidebarWidth + 30),
+            child: Column(
               children: [
-                Expanded(
-                  flex: 13,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 12, 12, 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      ProblemBankFilterBar(
-                        curriculumFilter: _curriculumFilter,
-                        onCurriculumFilterChanged: (next) =>
-                            unawaited(_onCurriculumFilterChanged(next)),
-                        selectedLevel: _selectedSchoolLevel,
-                        levelOptions: _levelOptions,
-                        onLevelChanged: _onSchoolLevelChanged,
-                        selectedCourse: _selectedDetailedCourse,
-                        courseOptions: _courseOptions,
-                        onCourseChanged: _onDetailedCourseChanged,
-                        selectedSourceTypeCode: _selectedSourceTypeCode,
-                        sourceTypeLabels: _sourceTypeLabels,
-                        onSourceTypeChanged: _onSourceTypeChanged,
-                        selectedPrivateMaterialKey:
-                            _selectedPrivateMaterialDropdownValue(),
-                        privateMaterialOptions: _privateMaterialOptions
-                            .map(
-                              (m) => DropdownMenuItem<String>(
-                                value: m.key,
-                                child: Text(
-                                  m.label,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(growable: false),
-                        onPrivateMaterialChanged: _onPrivateMaterialChanged,
-                        isBusy: busy || exportBusy,
+                      Expanded(
+                        flex: 13,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ProblemBankFilterBar(
+                              curriculumFilter: _curriculumFilter,
+                              onCurriculumFilterChanged: (next) =>
+                                  unawaited(_onCurriculumFilterChanged(next)),
+                              selectedLevel: _selectedSchoolLevel,
+                              levelOptions: _levelOptions,
+                              onLevelChanged: _onSchoolLevelChanged,
+                              selectedCourse: _selectedDetailedCourse,
+                              courseOptions: _courseOptions,
+                              onCourseChanged: _onDetailedCourseChanged,
+                              selectedSourceTypeCode: _selectedSourceTypeCode,
+                              sourceTypeLabels: _sourceTypeLabels,
+                              onSourceTypeChanged: _onSourceTypeChanged,
+                              selectedPrivateMaterialKey:
+                                  _selectedPrivateMaterialDropdownValue(),
+                              privateMaterialOptions: _privateMaterialOptions
+                                  .map(
+                                    (m) => DropdownMenuItem<String>(
+                                      value: m.key,
+                                      child: Text(
+                                        m.label,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                              onPrivateMaterialChanged:
+                                  _onPrivateMaterialChanged,
+                              isBusy: busy || exportBusy,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildRangeSummaryControls(
+                              isBusy: busy || exportBusy,
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      _buildRangeSummaryControls(
-                        isBusy: busy || exportBusy,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 12,
+                        child: ProblemBankExportOptionsPanel(
+                          settings: _exportSettings,
+                          selectedCount: _makeTargetQuestions.length,
+                          isBusy: _isExporting,
+                          isSavingLocally: _isSavingExportLocally,
+                          activeJob: _activeExportJob,
+                          onTemplateChanged: (value) {
+                            setState(() {
+                              if (value == '과제형') {
+                                _exportSettings = _exportSettings.copyWith(
+                                  templateLabel: value,
+                                  paperLabel: 'A4',
+                                  layoutColumnLabel: '2단',
+                                  maxQuestionsPerPageLabel: '4',
+                                );
+                              } else if (value == '모의고사형' || value == '수능형') {
+                                _exportSettings = _exportSettings.copyWith(
+                                  templateLabel: value,
+                                  paperLabel: 'B4',
+                                  layoutColumnLabel: '2단',
+                                  maxQuestionsPerPageLabel: '4',
+                                );
+                              } else {
+                                _exportSettings = _exportSettings.copyWith(
+                                  templateLabel: value,
+                                );
+                              }
+                            });
+                          },
+                          onPaperChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                paperLabel: value,
+                              );
+                            });
+                          },
+                          onQuestionModeChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                questionModeLabel: value,
+                              );
+                            });
+                          },
+                          onLayoutColumnsChanged: _setExportLayoutColumns,
+                          onMaxQuestionsPerPageChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                maxQuestionsPerPageLabel: value,
+                              );
+                            });
+                          },
+                          onFontFamilyChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                fontFamilyLabel: value,
+                              );
+                            });
+                          },
+                          onFontSizeChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                fontSizeLabel: value,
+                              );
+                            });
+                          },
+                          onIncludeAnswerSheetChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                includeAnswerSheet: value,
+                              );
+                            });
+                          },
+                          onIncludeExplanationChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                includeExplanation: value,
+                              );
+                            });
+                          },
+                          onPageMarginChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  pageMargin: value,
+                                ),
+                              );
+                            });
+                          },
+                          onColumnGapChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  columnGap: value,
+                                ),
+                              );
+                            });
+                          },
+                          onQuestionGapChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  questionGap: value,
+                                ),
+                              );
+                            });
+                          },
+                          onNumberLaneWidthChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  numberLaneWidth: value,
+                                ),
+                              );
+                            });
+                          },
+                          onNumberGapChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  numberGap: value,
+                                ),
+                              );
+                            });
+                          },
+                          onHangingIndentChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  hangingIndent: value,
+                                ),
+                              );
+                            });
+                          },
+                          onLineHeightChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  lineHeight: value,
+                                ),
+                              );
+                            });
+                          },
+                          onChoiceSpacingChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                layoutTuning:
+                                    _exportSettings.layoutTuning.copyWith(
+                                  choiceSpacing: value,
+                                ),
+                              );
+                            });
+                          },
+                          onTargetDpiChanged: (value) {
+                            setState(() {
+                              _exportSettings = _exportSettings.copyWith(
+                                figureQuality:
+                                    _exportSettings.figureQuality.copyWith(
+                                  targetDpi: value,
+                                  minDpi: math.min(
+                                    _exportSettings.figureQuality.minDpi,
+                                    value,
+                                  ),
+                                ),
+                              );
+                            });
+                          },
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 10),
                 Expanded(
-                  flex: 12,
-                  child: ProblemBankExportOptionsPanel(
-                    settings: _exportSettings,
-                    selectedCount: _makeTargetQuestions.length,
-                    isBusy: _isExporting,
-                    isSavingLocally: _isSavingExportLocally,
-                    activeJob: _activeExportJob,
-                    onTemplateChanged: (value) {
-                      setState(() {
-                        if (value == '과제형') {
-                          _exportSettings = _exportSettings.copyWith(
-                            templateLabel: value,
-                            paperLabel: 'A4',
-                            layoutColumnLabel: '2단',
-                            maxQuestionsPerPageLabel: '4',
-                          );
-                        } else if (value == '모의고사형' || value == '수능형') {
-                          _exportSettings = _exportSettings.copyWith(
-                            templateLabel: value,
-                            paperLabel: 'B4',
-                            layoutColumnLabel: '2단',
-                            maxQuestionsPerPageLabel: '4',
-                          );
-                        } else {
-                          _exportSettings = _exportSettings.copyWith(
-                            templateLabel: value,
-                          );
-                        }
-                      });
-                    },
-                    onPaperChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          paperLabel: value,
-                        );
-                      });
-                    },
-                    onQuestionModeChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          questionModeLabel: value,
-                        );
-                      });
-                    },
-                    onLayoutColumnsChanged: _setExportLayoutColumns,
-                    onMaxQuestionsPerPageChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          maxQuestionsPerPageLabel: value,
-                        );
-                      });
-                    },
-                    onFontFamilyChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          fontFamilyLabel: value,
-                        );
-                      });
-                    },
-                    onFontSizeChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          fontSizeLabel: value,
-                        );
-                      });
-                    },
-                    onIncludeAnswerSheetChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          includeAnswerSheet: value,
-                        );
-                      });
-                    },
-                    onIncludeExplanationChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          includeExplanation: value,
-                        );
-                      });
-                    },
-                    onPageMarginChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            pageMargin: value,
-                          ),
-                        );
-                      });
-                    },
-                    onColumnGapChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            columnGap: value,
-                          ),
-                        );
-                      });
-                    },
-                    onQuestionGapChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            questionGap: value,
-                          ),
-                        );
-                      });
-                    },
-                    onNumberLaneWidthChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            numberLaneWidth: value,
-                          ),
-                        );
-                      });
-                    },
-                    onNumberGapChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            numberGap: value,
-                          ),
-                        );
-                      });
-                    },
-                    onHangingIndentChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            hangingIndent: value,
-                          ),
-                        );
-                      });
-                    },
-                    onLineHeightChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            lineHeight: value,
-                          ),
-                        );
-                      });
-                    },
-                    onChoiceSpacingChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          layoutTuning: _exportSettings.layoutTuning.copyWith(
-                            choiceSpacing: value,
-                          ),
-                        );
-                      });
-                    },
-                    onTargetDpiChanged: (value) {
-                      setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          figureQuality: _exportSettings.figureQuality.copyWith(
-                            targetDpi: value,
-                            minDpi: math.min(
-                              _exportSettings.figureQuality.minDpi,
-                              value,
-                            ),
-                          ),
-                        );
-                      });
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Row(
+                  child: Stack(
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
-                        child: SizedBox(
-                          width: 260,
-                          child: ProblemBankSchoolSheet(
-                            sidebarRevision: _sidebarRevision,
-                            selectedSourceTypeCode: _selectedSourceTypeCode,
-                            documents: _sidebarDocuments,
-                            selectedDocumentId: _selectedDocumentId,
-                            onDocumentSelected: _onSidebarDocumentSelected,
-                            isLoading: _isLoadingSchools ||
-                                _isLoadingPrivateMaterialPages,
-                            privateMaterialUnits: _privateMaterialUnits,
-                            selectedPrivateMaterialPageKeys:
-                                _selectedPrivateMaterialPageKeys,
-                            onPrivateMaterialPageToggled:
-                                _onPrivateMaterialPageToggled,
-                            onPrivateMaterialPageKeysToggled:
-                                _onPrivateMaterialPageKeysToggled,
-                            privateMaterialTitle:
-                                _selectedPrivateMaterialOption?.label ?? '',
-                            privateMaterialEmptyMessage:
-                                _privateMaterialEmptyMessage,
-                          ),
-                        ),
-                      ),
-                      Expanded(
+                      Positioned.fill(
                         child: Padding(
                           padding: const EdgeInsets.fromLTRB(8, 0, 12, 0),
                           child: _buildQuestionPanel(),
                         ),
                       ),
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 16,
+                        child: ProblemBankBottomFabBar(
+                          cartCount: _cartQuestionIds.length,
+                          cartActive: _showOnlySelectedQuestions,
+                          allVisibleSelected: _allVisibleQuestionsSelected,
+                          filterActive: _questionFilterActive,
+                          isBusy: exportBusy,
+                          typeFilterOptions: _typeFilterOptions,
+                          difficultyFilterOptions: _difficultyFilterOptions,
+                          selectedTypeFilters: _activeTypeFilters,
+                          selectedDifficultyFilters: _activeDifficultyFilters,
+                          onToggleSelectAll: _toggleSelectAllVisibleQuestions,
+                          onToggleCart: _onToggleShowOnlySelectedFilter,
+                          onClearCart: _clearCartQuestions,
+                          onAddToCart: _addSelectedQuestionsToCart,
+                          onCreate: _openExportLayoutPreviewDialog,
+                          onPreset: _openExportPresetManagerDialog,
+                          onToggleTypeFilter: _toggleTypeFilter,
+                          onToggleDifficultyFilter: _toggleDifficultyFilter,
+                          onClearFilters: _clearQuestionFilters,
+                        ),
+                      ),
                     ],
-                  ),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 16,
-                  child: ProblemBankBottomFabBar(
-                    cartCount: _cartQuestionIds.length,
-                    cartActive: _showOnlySelectedQuestions,
-                    allVisibleSelected: _allVisibleQuestionsSelected,
-                    filterActive: _questionFilterActive,
-                    isBusy: exportBusy,
-                    typeFilterOptions: _typeFilterOptions,
-                    difficultyFilterOptions: _difficultyFilterOptions,
-                    selectedTypeFilters: _activeTypeFilters,
-                    selectedDifficultyFilters: _activeDifficultyFilters,
-                    onToggleSelectAll: _toggleSelectAllVisibleQuestions,
-                    onToggleCart: _onToggleShowOnlySelectedFilter,
-                    onClearCart: _clearCartQuestions,
-                    onAddToCart: _addSelectedQuestionsToCart,
-                    onCreate: _openExportLayoutPreviewDialog,
-                    onPreset: _openExportPresetManagerDialog,
-                    onToggleTypeFilter: _toggleTypeFilter,
-                    onToggleDifficultyFilter: _toggleDifficultyFilter,
-                    onClearFilters: _clearQuestionFilters,
                   ),
                 ),
               ],

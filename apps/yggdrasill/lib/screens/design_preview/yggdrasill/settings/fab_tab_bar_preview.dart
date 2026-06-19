@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -120,7 +121,7 @@ class FabTabBarTokens {
 
   /// Preview — 글래스 드롭다운 닫힘 애니메이션 (열림보다 빠르게)
   static const Duration previewAcademyMenuCloseDuration =
-      Duration(milliseconds: 90);
+      Duration(milliseconds: 40);
 
   /// Preview — 글래스 메뉴 틴트 (불투명도 90%)
   static const Color previewAcademyMenuGlassTintLight = Color(0xE6FFFFFF);
@@ -1701,7 +1702,8 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
     required this.child,
   });
 
-  static const _openCurve = Cubic(0.16, 1.0, 0.3, 1.0);
+  // 초반 빠르게 펼쳐지고 마지막에 살짝 감속해 착지.
+  static const _openCurve = Cubic(0.0, 0.88, 0.18, 1.0);
   static const _closeCurve = Cubic(0.55, 0.0, 1.0, 1.0);
 
   double _easedProgress(Animation<double> anim) {
@@ -1724,33 +1726,46 @@ class _PreviewAcademyGlassMenuTransition extends StatelessWidget {
       builder: (context, child) {
         final t = _easedProgress(animation);
 
-        // 위(앵커)에서 아래로 펼쳐지는 높이 reveal.
+        // 위(앵커)에서 아래로 펼쳐지는 높이 reveal + 미세 스케일.
+        //
+        // Opacity 페이드는 쓰지 않는다 — Opacity는 saveLayer를 만들고
+        // 완료 시(1.0) 이를 제거하는데, 그 순간 반투명 틴트가 제값으로
+        // 드러나며 "흰 시트가 덧씌워진" 듯 밝아지는 팝이 생긴다.
+        // 정적 글래스 카드(불투명 틴트)는 처음부터 같은 밝기로 펼쳐진다.
         final heightFactor = (0.1 + 0.9 * t).clamp(0.0, 1.0);
-        // 그림자·클립·콘텐츠 전체에 동일하게 적용되는 미세 스케일/페이드.
-        // (그림자가 콘텐츠와 항상 같은 형태로 움직이므로 펼침 중 불일치가 없다.)
         final scale = 0.965 + 0.035 * t;
-        final opacity =
-            Curves.easeOut.transform(animation.value.clamp(0.0, 1.0));
+        // 라이트 모드 그림자는 blur가 클립 바깥으로 먼저 번져, 메뉴가
+        // 아직 덜 펼쳐졌을 때 회색 호버 박스처럼 보일 수 있다. 패널 reveal이
+        // 거의 끝난 뒤에만 짧게 fade-in 시켜 그림자와 콘텐츠 타이밍을 맞춘다.
+        final shadowProgress = ((animation.value - 0.9) / 0.1).clamp(0.0, 1.0);
+        final shadowOpacity = Curves.easeOut.transform(shadowProgress);
+        final animatedShadows = [
+          for (final shadow in shadows)
+            shadow.copyWith(
+              color: Color.lerp(
+                Colors.transparent,
+                shadow.color,
+                shadowOpacity,
+              )!,
+            ),
+        ];
 
-        return Opacity(
-          opacity: opacity,
-          child: Transform.scale(
-            scale: scale,
-            alignment: Alignment.topRight,
-            filterQuality: FilterQuality.high,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: radius,
-                boxShadow: shadows,
-              ),
-              child: ClipRRect(
-                borderRadius: radius,
-                clipBehavior: Clip.antiAlias,
-                child: Align(
-                  alignment: Alignment.topRight,
-                  heightFactor: heightFactor,
-                  child: child,
-                ),
+        return Transform.scale(
+          scale: scale,
+          alignment: Alignment.topRight,
+          filterQuality: FilterQuality.high,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              boxShadow: animatedShadows,
+            ),
+            child: ClipRRect(
+              borderRadius: radius,
+              clipBehavior: Clip.antiAlias,
+              child: Align(
+                alignment: Alignment.topRight,
+                heightFactor: heightFactor,
+                child: child,
               ),
             ),
           ),
@@ -1767,12 +1782,14 @@ class _PreviewAcademyGlassMenuPanel extends StatefulWidget {
   final String selectedId;
   final List<PreviewAcademyMenuOption> options;
   final ValueChanged<String> onOptionSelected;
+  final Animation<double> animation;
 
   const _PreviewAcademyGlassMenuPanel({
     required this.style,
     required this.selectedId,
     required this.options,
     required this.onOptionSelected,
+    required this.animation,
   });
 
   @override
@@ -1782,8 +1799,6 @@ class _PreviewAcademyGlassMenuPanel extends StatefulWidget {
 
 class _PreviewAcademyGlassMenuPanelState
     extends State<_PreviewAcademyGlassMenuPanel> {
-  int? _hoveredIndex;
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1813,89 +1828,116 @@ class _PreviewAcademyGlassMenuPanelState
                 width: 0.5,
               ),
             ),
+            // 라이브 BackdropFilter를 쓰지 않는다 — 드롭다운은 정적(모달)
+            // 배경 위에 열리고 틴트가 이미 불투명에 가까워 블러 효과가
+            // 거의 보이지 않는다. 대신 라이브 블러는 repaint마다 재합성되며
+            // 틴트가 한 겹 더 겹친 듯 번쩍이는 아티팩트를 만든다. 정적
+            // 틴트 카드로 바꿔 이 합성 아티팩트를 원천 제거한다.
             child: ClipRRect(
               borderRadius: BorderRadius.circular(radius),
               clipBehavior: Clip.antiAlias,
-              child: Stack(
-                fit: StackFit.passthrough,
-                children: [
-                  Positioned.fill(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(
-                        sigmaX:
-                            FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
-                        sigmaY:
-                            FabTabBarTokens.previewAcademyMenuGlassBlurSigma,
-                      ),
-                      child: const ColoredBox(color: Colors.transparent),
-                    ),
+              child: ColoredBox(
+                color: glassTint,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final option in widget.options)
+                        _PreviewAcademyGlassMenuItem(
+                          label: option.label,
+                          selected: option.id == widget.selectedId,
+                          hoverOverlay: hoverOverlay,
+                          style: widget.style,
+                          animation: widget.animation,
+                          onTap: () => widget.onOptionSelected(option.id),
+                        ),
+                    ],
                   ),
-                  // 호버 색 변경이 BackdropFilter 레이어까지 repaint를
-                  // 전파시키면(공유 RepaintBoundary) 블러가 다시 칠해지며
-                  // 영역 전체가 한 프레임 번쩍인다. 전경 콘텐츠를 별도
-                  // RepaintBoundary로 격리해 블러 재계산을 차단한다.
-                  RepaintBoundary(
-                    child: ColoredBox(
-                    color: glassTint,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          for (int i = 0; i < widget.options.length; i++)
-                            MouseRegion(
-                              onEnter: (_) => setState(() => _hoveredIndex = i),
-                              onExit: (_) =>
-                                  setState(() => _hoveredIndex = null),
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () => widget
-                                    .onOptionSelected(widget.options[i].id),
-                                child: ColoredBox(
-                                  color: _hoveredIndex == i
-                                      ? hoverOverlay
-                                      : Colors.transparent,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 14,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 28,
-                                          child: widget.options[i].id ==
-                                                  widget.selectedId
-                                              ? Icon(
-                                                  Icons.check,
-                                                  size: FabTabBarTokens
-                                                      .previewAcademyBaseFontSize,
-                                                  color: widget.style.title,
-                                                )
-                                              : null,
-                                        ),
-                                        Expanded(
-                                          child: Text(
-                                            widget.options[i].label,
-                                            style: FabTabBarTokens
-                                                .previewMenuItemTextStyle(
-                                              widget.style,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    ),
-                  ),
-                ],
+                ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Preview — 글래스 메뉴 행 (호버 상태를 로컬로 관리해 패널 리빌드를 막음).
+class _PreviewAcademyGlassMenuItem extends StatefulWidget {
+  final String label;
+  final bool selected;
+  final Color hoverOverlay;
+  final PreviewAcademyPanelStyle style;
+  final Animation<double> animation;
+  final VoidCallback onTap;
+
+  const _PreviewAcademyGlassMenuItem({
+    required this.label,
+    required this.selected,
+    required this.hoverOverlay,
+    required this.style,
+    required this.animation,
+    required this.onTap,
+  });
+
+  @override
+  State<_PreviewAcademyGlassMenuItem> createState() =>
+      _PreviewAcademyGlassMenuItemState();
+}
+
+class _PreviewAcademyGlassMenuItemState
+    extends State<_PreviewAcademyGlassMenuItem> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: AnimatedBuilder(
+          animation: widget.animation,
+          builder: (context, child) {
+            // 펼침/접힘 중에는 마우스가 이미 행 위에 있어도 호버 색을 칠하지
+            // 않는다. animation은 행 내부에서만 읽으므로 배리어/오버레이
+            // 전체를 setState로 다시 빌드하지 않는다.
+            final showHover = _hovered &&
+                widget.animation.status == AnimationStatus.completed;
+            return ColoredBox(
+              color: showHover ? widget.hoverOverlay : Colors.transparent,
+              child: child!,
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 14,
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 28,
+                  child: widget.selected
+                      ? Icon(
+                          Icons.check,
+                          size: FabTabBarTokens.previewAcademyBaseFontSize,
+                          color: widget.style.title,
+                        )
+                      : null,
+                ),
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    style: FabTabBarTokens.previewMenuItemTextStyle(
+                      widget.style,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -3002,6 +3044,7 @@ class _PreviewAcademyGlassMenuOverlayState
                 style: widget.style,
                 selectedId: widget.selectedId,
                 options: widget.options,
+                animation: _controller,
                 onOptionSelected: (id) => _close(id),
               ),
             ),
@@ -3102,7 +3145,31 @@ class FabStyleTabBar extends StatelessWidget {
     final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final double radius = height / 2;
     final double innerHeight = (height - padding * 2).clamp(0.0, 9999.0);
-    final double slotWidth = tabWidth;
+    final textStyle = TextStyle(
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      fontWeight: FontWeight.w600,
+      fontSize: fontSize,
+    );
+    final textDirection = Directionality.of(context);
+    final slotWidths = tabs.map((label) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: textStyle),
+        textDirection: textDirection,
+        maxLines: 1,
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      return math.max(tabWidth, painter.width + 64);
+    }).toList(growable: false);
+    final safeSelectedIndex = slotWidths.isEmpty
+        ? 0
+        : selectedIndex.clamp(0, slotWidths.length - 1).toInt();
+    final selectedLeft = slotWidths
+        .take(safeSelectedIndex)
+        .fold<double>(0.0, (sum, width) => sum + width);
+    final selectedWidth =
+        slotWidths.isEmpty ? tabWidth : slotWidths[safeSelectedIndex];
+    final totalWidth =
+        slotWidths.fold<double>(0.0, (sum, width) => sum + width);
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -3128,16 +3195,16 @@ class FabStyleTabBar extends StatelessWidget {
               borderRadius: BorderRadius.circular(radius),
             ),
             child: SizedBox(
-              width: slotWidth * tabs.length,
+              width: totalWidth,
               child: Stack(
                 children: [
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 250),
                     curve: Curves.easeOutCubic,
-                    left: selectedIndex * slotWidth,
+                    left: selectedLeft,
                     top: 0,
                     bottom: 0,
-                    width: slotWidth,
+                    width: selectedWidth,
                     child: Container(
                       decoration: BoxDecoration(
                         color: palette.highlight,
@@ -3154,18 +3221,14 @@ class FabStyleTabBar extends StatelessWidget {
                         onTap: () => onTabSelected(index),
                         behavior: HitTestBehavior.opaque,
                         child: SizedBox(
-                          width: slotWidth,
+                          width: slotWidths[index],
                           child: Center(
                             child: AnimatedDefaultTextStyle(
                               duration: const Duration(milliseconds: 200),
-                              style: TextStyle(
-                                fontFamily: FabTabBarTokens
-                                    .previewAcademyLabelFontFamily,
+                              style: textStyle.copyWith(
                                 color: isSelected
                                     ? palette.labelSelected
                                     : palette.labelUnselected,
-                                fontWeight: FontWeight.w600,
-                                fontSize: fontSize,
                               ),
                               child: Text(label),
                             ),
@@ -3616,6 +3679,8 @@ class FabStyleScreenTabBarOverlay {
   int _selectedIndex = 0;
   List<String> _tabs = const [];
   ValueChanged<int>? _onTabSelected;
+  bool _syncScheduled = false;
+  bool _disposed = false;
 
   void sync(
     BuildContext context, {
@@ -3623,24 +3688,36 @@ class FabStyleScreenTabBarOverlay {
     required List<String> tabs,
     required ValueChanged<int> onTabSelected,
   }) {
+    _disposed = false;
     _selectedIndex = selectedIndex;
     _tabs = tabs;
     _onTabSelected = onTabSelected;
 
-    final overlay = Overlay.maybeOf(context, rootOverlay: true);
-    if (overlay == null) return;
+    if (_syncScheduled) return;
+    _syncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncScheduled = false;
+      if (_disposed || !context.mounted) return;
+      final overlay = Overlay.maybeOf(context, rootOverlay: true);
+      if (overlay == null) return;
 
-    if (_entry == null) {
-      _entry = OverlayEntry(builder: _buildOverlay);
-      overlay.insert(_entry!);
-    } else {
-      _entry!.markNeedsBuild();
-    }
+      if (_entry == null) {
+        _entry = OverlayEntry(builder: _buildOverlay);
+        overlay.insert(_entry!);
+      } else {
+        _entry!.markNeedsBuild();
+      }
+    });
   }
 
-  void markNeedsBuild() => _entry?.markNeedsBuild();
+  void markNeedsBuild() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_disposed) _entry?.markNeedsBuild();
+    });
+  }
 
   void dispose() {
+    _disposed = true;
     _entry?.remove();
     _entry = null;
   }

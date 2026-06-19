@@ -35,9 +35,11 @@ import '../../services/learning_problem_bank_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/shared_folder_tree.dart';
 import 'exam_preset_card.dart';
 import 'exam_preset_preview_launcher.dart';
 import 'exam_preset_support.dart';
+import 'other_resource_card.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -169,10 +171,10 @@ class ResourcesPrintController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _detach() {
+  void _detach({bool notify = true}) {
     _startPrintFlow = null;
     _isPrintPickMode = null;
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   void _notifyStateChanged() => notifyListeners();
@@ -237,16 +239,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   bool _examPresetsLoading = false;
   String? _examPresetsLoadedForFolderId;
   String? _examPresetOpeningId;
+  String? _otherDocumentOpeningId;
 
   double _folderTreePanelWidth(BuildContext context) {
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    const refMinScreen = 1024.0;
-    const refMaxScreen = 1920.0;
-    if (screenWidth <= refMinScreen) return _folderTreePanelWidthMin;
-    if (screenWidth >= refMaxScreen) return _folderTreePanelWidthMax;
-    final t = (screenWidth - refMinScreen) / (refMaxScreen - refMinScreen);
-    return _folderTreePanelWidthMin +
-        t * (_folderTreePanelWidthMax - _folderTreePanelWidthMin);
+    return sharedFolderTreePanelWidthFor(context);
   }
 
   String get _currentCategory => _customTabIndex == 0
@@ -897,9 +893,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     isTextbookDraggingOverLeftSideSheet.value = false;
   }
 
-  void _setActiveExamPresetDragPayload(LearningProblemDocumentExportPreset preset) {
-    activeExamPresetDragPayload.value =
-        ExamPresetDragPayload(preset: preset);
+  void _setActiveExamPresetDragPayload(
+      LearningProblemDocumentExportPreset preset) {
+    activeExamPresetDragPayload.value = ExamPresetDragPayload(preset: preset);
     isExamPresetDraggingOverLeftSideSheet.value = false;
   }
 
@@ -914,7 +910,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }) {
     final parsed = parsedNaesinLinkOfPreset(preset);
     final double width = math.min(maxWidth * 0.7, 188.0);
-    final line1 = parsed == null ? preset.displayName : examPresetCardLine1(parsed);
+    final line1 =
+        parsed == null ? preset.displayName : examPresetCardLine1(parsed);
     final line2 = parsed == null ? '' : examPresetCardLine2(parsed);
     return Container(
       width: width,
@@ -2105,7 +2102,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   @override
   void dispose() {
-    widget.printController?._detach();
+    widget.printController?._detach(notify: false);
     _fabTabBarOverlay.dispose();
     for (final c in _gridScrollCtrls) {
       c.dispose();
@@ -2330,6 +2327,202 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
   }
 
+  Future<void> _openOtherResourceLink(String link) async {
+    final raw = link.trim();
+    if (raw.isEmpty) return;
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      final uri = Uri.parse(raw);
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
+      return;
+    }
+    await OpenFilex.open(raw);
+  }
+
+  Future<void> _openOtherDocumentPdf(_ResourceFile file) async {
+    if (_otherDocumentOpeningId != null) return;
+    final pdf = file.linksByGrade['pdf']?.trim() ?? '';
+    if (pdf.isEmpty) {
+      if (!mounted) return;
+      showAppSnackBar(context, 'PDF 링크가 없습니다.');
+      return;
+    }
+    setState(() => _otherDocumentOpeningId = file.id);
+    try {
+      await _openOtherResourceLink(pdf);
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, 'PDF를 열 수 없습니다.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _otherDocumentOpeningId = null);
+      }
+    }
+  }
+
+  Future<void> _openOtherDocumentHwp(_ResourceFile file) async {
+    if (_otherDocumentOpeningId != null) return;
+    final hwp = file.linksByGrade['hwp']?.trim() ?? '';
+    if (hwp.isEmpty) return;
+    setState(() => _otherDocumentOpeningId = file.id);
+    try {
+      await _openOtherResourceLink(hwp);
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, 'HWP를 열 수 없습니다.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _otherDocumentOpeningId = null);
+      }
+    }
+  }
+
+  Widget _buildOtherDocumentCard(_ResourceFile file) {
+    final pdf = file.linksByGrade['pdf']?.trim() ?? '';
+    final hwp = file.linksByGrade['hwp']?.trim() ?? '';
+    final busy = _otherDocumentOpeningId == file.id;
+    return OtherResourceCard(
+      title: file.name,
+      subtitle: (file.description ?? '').trim(),
+      hasPdf: pdf.isNotEmpty,
+      hasHwp: hwp.isNotEmpty,
+      busy: busy,
+      onTap: pdf.isEmpty ? null : () => unawaited(_openOtherDocumentPdf(file)),
+      onHwpTap:
+          hwp.isEmpty ? null : () => unawaited(_openOtherDocumentHwp(file)),
+    );
+  }
+
+  Widget _buildOtherTabListHeader() {
+    String desc = '';
+    if (_selectedFolderIdForTree == '__FAVORITES__') {
+      desc = '';
+    } else {
+      final idx = _folders.indexWhere((x) => x.id == _selectedFolderIdForTree);
+      if (idx != -1) {
+        desc = _folders[idx].description;
+      }
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(
+                    desc,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 44,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    if (_selectedFolderIdForTree == null ||
+                        _selectedFolderIdForTree == '__FAVORITES__') {
+                      showAppSnackBar(context, '폴더를 먼저 선택하세요.');
+                      return;
+                    }
+                    final meta = await showDialog<Map<String, dynamic>>(
+                      context: context,
+                      builder: (ctx) => _FileCreateDialog(
+                        title: '파일 추가',
+                        nameLabel: '파일 이름',
+                        allowColor: true,
+                      ),
+                    );
+                    if (meta == null || meta['meta'] is! _ResourceFile) {
+                      return;
+                    }
+                    var created = meta['meta'] as _ResourceFile;
+                    final parentId = _selectedFolderIdForTree;
+                    final childList = _childFilesOf(parentId);
+                    final nextIndex = childList.isEmpty
+                        ? 0
+                        : (childList
+                                .map((e) => e.orderIndex ?? 0)
+                                .reduce((a, b) => a > b ? a : b) +
+                            1);
+                    created = created.copyWith(
+                      parentId: parentId,
+                      orderIndex: nextIndex,
+                    );
+
+                    final linksRes = await showDialog<Map<String, dynamic>>(
+                      context: context,
+                      builder: (ctx) => _OtherFileLinksDialog(
+                        meta: created,
+                        initialLinks: const {},
+                      ),
+                    );
+                    Map<String, String> links = {};
+                    if (linksRes != null &&
+                        linksRes['links'] is Map<String, String>) {
+                      links =
+                          Map<String, String>.from(linksRes['links'] as Map);
+                    }
+                    created = created.copyWith(linksByGrade: links);
+
+                    setState(() {
+                      _files.add(created);
+                    });
+                    await DataManager.instance.saveResourceFileWithCategory({
+                      'id': created.id,
+                      'name': created.name,
+                      'description': created.description,
+                      'parent_id': created.parentId,
+                      'pos_x': created.position.dx,
+                      'pos_y': created.position.dy,
+                      'width': created.size.width,
+                      'height': created.size.height,
+                      'color': created.color?.value.toSigned(32),
+                      'icon_code': created.icon?.codePoint,
+                      'icon_image_path': created.iconImagePath,
+                    }, _currentCategory);
+                    await DataManager.instance
+                        .saveResourceFileLinks(created.id, links);
+                    await _persistFileOrderForParent(parentId);
+                  },
+                  icon: const Icon(Icons.add, size: 20),
+                  label: const Text(
+                    '파일 추가',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: const BorderSide(color: Colors.white24),
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 22,
+                      vertical: 16,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: Colors.white12),
+      ],
+    );
+  }
+
   bool _rectsHorizontallyOverlap(Rect a, Rect b) =>
       !(a.right < b.left || b.right < a.left);
   bool _rectsVerticallyOverlap(Rect a, Rect b) =>
@@ -2411,173 +2604,31 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (_currentCategory == 'other')
-                            SizedBox(height: _resourcesPageTitleBandHeight),
-                          if (_currentCategory == 'other') ...[
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                            child: Row(
+                          Expanded(
+                            child: Stack(
+                              clipBehavior: Clip.none,
                               children: [
-                                Expanded(
-                                  child: Builder(
-                                    builder: (context) {
-                            String desc = '';
-                            if (_selectedFolderIdForTree == '__FAVORITES__') {
-                              desc = '';
-                            } else {
-                              final idx = _folders.indexWhere(
-                                  (x) => x.id == _selectedFolderIdForTree);
-                              if (idx != -1) {
-                                desc = _folders[idx].description;
-                              }
-                            }
-                            return Padding(
-                              padding: const EdgeInsets.only(left: 4),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      desc,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          color: Colors.white70, fontSize: 15),
-                                    ),
-                                  ),
-                                    const SizedBox(width: 8),
-                                    SizedBox(
-                                      height: 44,
-                                      child: OutlinedButton.icon(
-                                        onPressed: () async {
-                                          // ignore: avoid_print
-                                          print('[Header] 파일 추가 버튼 눌림');
-                                          if (_currentCategory == 'other' &&
-                                              (_selectedFolderIdForTree ==
-                                                      null ||
-                                                  _selectedFolderIdForTree ==
-                                                      '__FAVORITES__')) {
-                                            showAppSnackBar(context, '폴더를 먼저 선택하세요.');
-                                            return;
-                                          }
-                                          final meta = await showDialog<
-                                              Map<String, dynamic>>(
-                                            context: context,
-                                            builder: (ctx) => _FileCreateDialog(
-                                              title: '파일 추가',
-                                              nameLabel: '파일 이름',
-                                              allowColor:
-                                                  _currentCategory == 'other',
-                                            ),
-                                          );
-                                          if (meta == null ||
-                                              meta['meta'] is! _ResourceFile) {
-                                            return;
-                                          }
-                                          var created =
-                                              meta['meta'] as _ResourceFile;
-                                          final parentId =
-                                              _selectedFolderIdForTree;
-                                          final childList =
-                                              _childFilesOf(parentId);
-                                          final nextIndex = childList.isEmpty
-                                              ? 0
-                                              : (childList
-                                                      .map((e) =>
-                                                          e.orderIndex ?? 0)
-                                                      .reduce((a, b) =>
-                                                          a > b ? a : b) +
-                                                  1);
-                                          created = created.copyWith(
-                                              parentId: parentId,
-                                              orderIndex: nextIndex);
-
-                                          final linksRes = await showDialog<
-                                              Map<String, dynamic>>(
-                                            context: context,
-                                            builder: (ctx) =>
-                                                _currentCategory == 'other'
-                                                    ? _OtherFileLinksDialog(
-                                                        meta: created,
-                                                        initialLinks: const {})
-                                                    : _FileLinksDialog(
-                                                        meta: created,
-                                                        initialLinks: const {}),
-                                          );
-                                          Map<String, String> links = {};
-                                          if (linksRes != null &&
-                                              linksRes['links']
-                                                  is Map<String, String>) {
-                                            links = Map<String, String>.from(
-                                                linksRes['links'] as Map);
-                                          }
-                                          created = created.copyWith(
-                                              linksByGrade: links);
-
-                                          setState(() {
-                                            _files.add(created);
-                                          });
-                                          await DataManager.instance
-                                              .saveResourceFileWithCategory({
-                                            'id': created.id,
-                                            'name': created.name,
-                                            'description': created.description,
-                                            'parent_id': created.parentId,
-                                            'pos_x': created.position.dx,
-                                            'pos_y': created.position.dy,
-                                            'width': created.size.width,
-                                            'height': created.size.height,
-                                            'color': created.color?.value
-                                                .toSigned(32),
-                                            'icon_code':
-                                                created.icon?.codePoint,
-                                            'icon_image_path':
-                                                created.iconImagePath,
-                                          }, _currentCategory);
-                                          await DataManager.instance
-                                              .saveResourceFileLinks(
-                                                  created.id, links);
-                                          await _persistFileOrderForParent(
-                                              parentId);
-                                        },
-                                        icon: const Icon(Icons.add, size: 20),
-                                        label: const Text('파일 추가',
-                                            style: TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w700)),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: Colors.white70,
-                                          side: const BorderSide(
-                                              color: Colors.white24),
-                                          shape: const StadiumBorder(),
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 22, vertical: 16),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            );
-                                    },
+                                Positioned.fill(
+                                  child: IndexedStack(
+                                    index: _customTabIndex,
+                                    children: [
+                                      _buildTextbooksTreeLayout(0),
+                                      _buildTextbooksTreeLayout(1),
+                                      _buildTextbooksTreeLayout(2),
+                                    ],
                                   ),
                                 ),
+                                if (_currentCategory == 'other')
+                                  Positioned(
+                                    top: _resourcesPageTitleBandHeight -
+                                        _otherTabListHeaderHeight,
+                                    left: 0,
+                                    right: 0,
+                                    child: _buildOtherTabListHeader(),
+                                  ),
                               ],
                             ),
                           ),
-                        ),
-                        const Divider(height: 1, color: Colors.white12),
-                      ],
-                      Expanded(
-                        child: IndexedStack(
-                          index: _customTabIndex,
-                          children: [
-                            _buildTextbooksTreeLayout(0),
-                            _buildTextbooksTreeLayout(1),
-                            _buildTextbooksTreeLayout(2),
-                          ],
-                        ),
-                      ),
                         ],
                       ),
                       Positioned(
@@ -2708,6 +2759,9 @@ const double _resourcesPageTitleBandHeight =
         FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15 +
         12;
 
+/// 기타 탭 상단 설명·파일 추가 행 — 타이틀 밴드 하단에 오버레이(그리드 밀지 않음).
+const double _otherTabListHeaderHeight = 57.0;
+
 // --- 교재 탭: 좌측 트리 + 우측 그리드 ---
 // 폴더 트리는 읽기 전용(2026-06). 정책·너비: RESOURCE_TEXTBOOK_FOLDER_MANAGEMENT.md
 extension _ResourcesScreenTree on _ResourcesScreenState {
@@ -2719,8 +2773,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     final hasCanonical = _examCanonicalRootIds.every(
       (id) => loaded.any((f) => f.id == id),
     );
-    final hasLegacy =
-        loaded.any((f) => f.id == _examLegacyMiddleSchoolRootId);
+    final hasLegacy = loaded.any((f) => f.id == _examLegacyMiddleSchoolRootId);
     if (hasCanonical && !hasLegacy) return loaded;
 
     final created = <_ResourceFolder>[];
@@ -2967,20 +3020,161 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
   }
 
   Widget _buildFolderTreeDecoratedPanel() {
-    final brightness = Theme.of(context).brightness;
-    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-
-    return DecoratedBox(
-      decoration: PreviewAcademyGroupedFieldsCard.cardDecoration(
-        panelStyle,
-        brightness: brightness,
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(
-          FabTabBarTokens.previewAcademyGroupedCardRadius,
+    final rootFolders = _childFoldersOf(null);
+    return SharedFolderTreePanel(
+      title: '폴더',
+      nodes: _buildSharedFolderTreeNodes(null, 0),
+      trailingNodes: [
+        SharedFolderTreeNode(
+          id: '__FAVORITES__',
+          label: '즐겨찾기',
+          icon: Icons.bookmark_border,
+          selectedIcon: Icons.bookmark,
         ),
-        child: _buildFolderTreePanel(panelStyle),
-      ),
+      ],
+      selectedNodeId: _selectedFolderIdForTree,
+      expandedNodeIds: _expandedFolderIds,
+      accentColor: _rsAccent,
+      onToggleExpanded: (node) {
+        if (node.children.isEmpty) return;
+        setState(() {
+          if (_expandedFolderIds.contains(node.id)) {
+            _expandedFolderIds.remove(node.id);
+          } else {
+            _expandedFolderIds.add(node.id);
+          }
+        });
+      },
+      onNodeTap: _handleSharedFolderTreeNodeTap,
+      wrapNodeRow: _wrapSharedFolderTreeNodeRow,
+      listBottomPadding: 8,
+      emptyMessage: rootFolders.isEmpty ? '표시할 폴더가 없습니다.' : null,
+    );
+  }
+
+  List<SharedFolderTreeNode> _buildSharedFolderTreeNodes(
+    String? parentId,
+    int depth,
+  ) {
+    final folders = _childFoldersOf(parentId);
+    final isExam = _currentCategory == 'exam';
+    return [
+      for (var i = 0; i < folders.length; i++)
+        SharedFolderTreeNode(
+          id: folders[i].id,
+          label: folders[i].name,
+          icon: Icons.folder_outlined,
+          selectedIcon: Icons.folder,
+          rowStyle: isExam && depth == 0
+              ? SharedFolderTreeRowStyle.section
+              : SharedFolderTreeRowStyle.pill,
+          showDividerWhenCollapsed: isExam && depth == 0,
+          showDividerAfter: isExam && depth > 0 && i == folders.length - 1,
+          data: folders[i],
+          children: _buildSharedFolderTreeNodes(folders[i].id, depth + 1),
+        ),
+    ];
+  }
+
+  void _handleSharedFolderTreeNodeTap(SharedFolderTreeNode node) {
+    setState(() {
+      _selectedFolderIdForTree = node.id;
+      if (node.children.isNotEmpty) {
+        if (_expandedFolderIds.contains(node.id)) {
+          _expandedFolderIds.remove(node.id);
+        } else {
+          _expandedFolderIds.add(node.id);
+        }
+      }
+    });
+    if (_currentCategory == 'exam') {
+      unawaited(_reloadExamPresetsForSelectedFolder());
+    }
+  }
+
+  Widget _wrapSharedFolderTreeNodeRow(
+    BuildContext context,
+    SharedFolderTreeNode node,
+    int depth,
+    Widget row,
+  ) {
+    final folder = node.data;
+    if (folder is! _ResourceFolder) return row;
+
+    return DragTarget<_ResourceFile>(
+      onWillAccept: (incomingFile) {
+        final ok = incomingFile != null;
+        if (ok) {
+          setState(() => _fileDropTargetFolderId = folder.id);
+        }
+        return ok;
+      },
+      onAcceptWithDetails: (details) async {
+        final incoming = details.data;
+        final idx = _files.indexWhere((x) => x.id == incoming.id);
+        if (idx != -1) {
+          final prevParent = _files[idx].parentId;
+          final childList = _childFilesOf(folder.id);
+          final nextIndex = childList.isEmpty
+              ? 0
+              : (childList
+                      .map((e) => e.orderIndex ?? 0)
+                      .reduce((a, b) => a > b ? a : b) +
+                  1);
+          setState(() {
+            _files[idx] = _files[idx].copyWith(
+              parentId: folder.id,
+              orderIndex: nextIndex,
+            );
+            _fileDropTargetFolderId = null;
+          });
+          await DataManager.instance
+              .saveResourceFile({'id': incoming.id, 'parent_id': folder.id});
+          await _persistFileOrderForParent(folder.id);
+          if (prevParent != folder.id) {
+            await _persistFileOrderForParent(prevParent);
+          }
+        }
+      },
+      onLeave: (_) => setState(() {
+        if (_fileDropTargetFolderId == folder.id) {
+          _fileDropTargetFolderId = null;
+        }
+      }),
+      builder: (context, candFiles, rejFiles) {
+        final active = _fileDropTargetFolderId == folder.id &&
+            candFiles.isNotEmpty &&
+            node.rowStyle == SharedFolderTreeRowStyle.pill;
+        if (!active) return row;
+        return Stack(
+          children: [
+            row,
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal -
+                        18 +
+                        depth * 10.0,
+                    0,
+                    12,
+                    0,
+                  ),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: _rsAccent.withOpacity(0.55),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -3045,9 +3239,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                     ),
                     if (hasChildren)
                       Icon(
-                        isExpanded
-                            ? Icons.expand_more
-                            : Icons.chevron_right,
+                        isExpanded ? Icons.expand_more : Icons.chevron_right,
                         size: 20,
                         color: chevronColor,
                       ),
@@ -3057,8 +3249,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
             ),
           ),
         ),
-        if (showDivider)
-          Divider(height: 1, thickness: 1, color: dividerColor),
+        if (showDivider) Divider(height: 1, thickness: 1, color: dividerColor),
       ],
     );
   }
@@ -3074,9 +3265,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     Widget? leading,
   }) {
     final brightness = Theme.of(context).brightness;
-    final iconColor = selected
-        ? _rsAccent
-        : panelStyle.title.withOpacity(0.92);
+    final iconColor = selected ? _rsAccent : panelStyle.title.withOpacity(0.92);
     final labelStyle = _folderTreeLabelStyle(
       panelStyle: panelStyle,
       selected: selected,
@@ -3142,8 +3331,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     required List<_ResourceFile?> candFiles,
     bool trailingSectionDivider = false,
   }) {
-    final active =
-        _fileDropTargetFolderId == folder.id && candFiles.isNotEmpty;
+    final active = _fileDropTargetFolderId == folder.id && candFiles.isNotEmpty;
     final brightness = Theme.of(context).brightness;
     final isDark = brightness == Brightness.dark;
     final dividerColor =
@@ -3175,9 +3363,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   child: Padding(
                     padding: const EdgeInsets.all(2),
                     child: Icon(
-                      isExpanded
-                          ? Icons.expand_more
-                          : Icons.chevron_right,
+                      isExpanded ? Icons.expand_more : Icons.chevron_right,
                       size: 16,
                       color: panelStyle.icon,
                     ),
@@ -3421,12 +3607,12 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                     ? Icons.bookmark
                     : Icons.bookmark_border,
                 leading: const SizedBox(width: _folderTreeLeadingWidth),
-                    onTap: () {
-                      setState(() => _selectedFolderIdForTree = '__FAVORITES__');
-                      if (_currentCategory == 'exam') {
-                        unawaited(_reloadExamPresetsForSelectedFolder());
-                      }
-                    },
+                onTap: () {
+                  setState(() => _selectedFolderIdForTree = '__FAVORITES__');
+                  if (_currentCategory == 'exam') {
+                    unawaited(_reloadExamPresetsForSelectedFolder());
+                  }
+                },
               ),
             ],
           ),
@@ -3441,28 +3627,36 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     }
     final files = _childFilesOf(_selectedFolderIdForTree);
     final gridScrollCtrl = _gridScrollCtrls[tabSlot];
+    final isOther = _currentCategory == 'other';
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 16, 0),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isTextbook = _currentCategory == 'textbook';
-          final double gridCardWidth = isTextbook ? 240.0 : 290.0;
-          final double baseCardHeight =
-              isTextbook
-                  ? (gridCardWidth * _textbookCoverA4Ratio + _textbookCardMetaHeight)
-                  : 170.0;
+          final double gridCardWidth = isTextbook || isOther ? 240.0 : 290.0;
+          final double baseCardHeight = isTextbook
+              ? (gridCardWidth * _textbookCoverA4Ratio +
+                  _textbookCardMetaHeight)
+              : (isOther ? 240.0 : 170.0);
           final bool showPrintTest = isTextbook && _kShowBookPrintTestControls;
           final double printBarHeight = showPrintTest ? 36.0 : 0.0;
           final double printBarGap = showPrintTest ? 8.0 : 0.0;
           final double gridCardHeight =
               baseCardHeight + printBarGap + printBarHeight;
-          final double spacing = isTextbook ? 22.4 : 16.0;
+          final double spacing = isTextbook || isOther ? 22.4 : 16.0;
           final cols = (constraints.maxWidth / (gridCardWidth + spacing))
               .floor()
               .clamp(1, 999);
           final double gridWidth =
               (cols * gridCardWidth) + ((cols - 1) * spacing);
           Widget buildCardCell(_ResourceFile fi) {
+            if (isOther) {
+              return SizedBox(
+                width: double.infinity,
+                height: baseCardHeight,
+                child: _buildOtherDocumentCard(fi),
+              );
+            }
             final card = SizedBox(
               width: double.infinity,
               height: baseCardHeight,
@@ -3532,7 +3726,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           columns: cols,
                           dragAnchorStrategy: pointerDragAnchorStrategy,
                           scrollController: gridScrollCtrl,
-                          scrollTopPadding: _currentCategory == 'textbook'
+                          scrollTopPadding: (_currentCategory == 'textbook' ||
+                                  _currentCategory == 'other')
                               ? _resourcesPageTitleBandHeight
                               : 0,
                           scrollBottomPadding:
@@ -3593,11 +3788,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           final cols = (constraints.maxWidth / (gridCardWidth + spacing))
               .floor()
               .clamp(1, 999);
-          final gridWidth =
-              (cols * gridCardWidth) + ((cols - 1) * spacing);
+          final gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
           final presets = _examPresets;
-          final rowCount =
-              presets.isEmpty ? 0 : (presets.length / cols).ceil();
+          final rowCount = presets.isEmpty ? 0 : (presets.length / cols).ceil();
           final baseContentHeight = rowCount == 0
               ? gridCardHeight
               : (rowCount * gridCardHeight) + ((rowCount - 1) * spacing);
@@ -3611,7 +3804,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 width: gridWidth,
                 height: contentHeight,
                 child: Padding(
-                  padding: EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
+                  padding:
+                      EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
                   child: const Align(
                     alignment: Alignment.topCenter,
                     child: Text(
@@ -3630,7 +3824,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 width: gridWidth,
                 height: contentHeight,
                 child: Padding(
-                  padding: EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
+                  padding:
+                      EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
                   child: const Align(
                     alignment: Alignment.topCenter,
                     child: YggLoadingIndicator(),
@@ -3643,7 +3838,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 width: gridWidth,
                 height: contentHeight,
                 child: Padding(
-                  padding: EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
+                  padding:
+                      EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
                   child: const Align(
                     alignment: Alignment.topCenter,
                     child: Text(
@@ -6201,252 +6397,247 @@ class _GridFileCardState extends State<_GridFileCard> {
           child: IgnorePointer(
             ignoring: isPrintMode,
             child: LayoutBuilder(
-                builder: (context, box) {
-                  final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
-                    Theme.of(context).brightness,
-                  );
-                  final desiredCoverHeight =
-                      box.maxWidth * _textbookCoverA4Ratio;
-                  final coverHeight = math.min(
-                    desiredCoverHeight,
-                    math.max(0.0, box.maxHeight - _textbookCardMetaHeight),
-                  );
-                  final metaHeight = math.max(
-                    0.0,
-                    box.maxHeight - coverHeight - _textbookCardCoverMetaGap,
-                  );
-                  final isFav =
-                      resState?._favoriteFileIds.contains(file.id) ?? false;
+              builder: (context, box) {
+                final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+                  Theme.of(context).brightness,
+                );
+                final desiredCoverHeight = box.maxWidth * _textbookCoverA4Ratio;
+                final coverHeight = math.min(
+                  desiredCoverHeight,
+                  math.max(0.0, box.maxHeight - _textbookCardMetaHeight),
+                );
+                final metaHeight = math.max(
+                  0.0,
+                  box.maxHeight - coverHeight - _textbookCardCoverMetaGap,
+                );
+                final isFav =
+                    resState?._favoriteFileIds.contains(file.id) ?? false;
 
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        height: coverHeight,
-                        width: double.infinity,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            if (hasForCurrent)
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      borderRadius:
-                                          BorderRadius.circular(cardRadius),
-                                      boxShadow: _textbookCoverBoxShadows(),
-                                    ),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      height: coverHeight,
+                      width: double.infinity,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          if (hasForCurrent)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius:
+                                        BorderRadius.circular(cardRadius),
+                                    boxShadow: _textbookCoverBoxShadows(),
                                   ),
                                 ),
                               ),
-                            Positioned.fill(
-                              child: ClipRRect(
-                                clipBehavior: Clip.antiAliasWithSaveLayer,
-                                borderRadius:
-                                    BorderRadius.circular(cardRadius),
-                                child: Material(
-                                  color: hasCoverImage
-                                      ? bg
-                                      : const Color(0xFF2B2B2B),
-                                  child: Listener(
-                                    behavior: HitTestBehavior.opaque,
-                                    onPointerSignal: (signal) {
-                                      if (signal is PointerScrollEvent) {
-                                        final dx = signal.scrollDelta.dx;
-                                        final dy = signal.scrollDelta.dy;
-                                        if (dx != 0 && dx.abs() >= dy.abs()) {
-                                          handleGradeDelta(dx < 0 ? 1 : -1);
-                                        }
+                            ),
+                          Positioned.fill(
+                            child: ClipRRect(
+                              clipBehavior: Clip.antiAliasWithSaveLayer,
+                              borderRadius: BorderRadius.circular(cardRadius),
+                              child: Material(
+                                color: hasCoverImage
+                                    ? bg
+                                    : const Color(0xFF2B2B2B),
+                                child: Listener(
+                                  behavior: HitTestBehavior.opaque,
+                                  onPointerSignal: (signal) {
+                                    if (signal is PointerScrollEvent) {
+                                      final dx = signal.scrollDelta.dx;
+                                      final dy = signal.scrollDelta.dy;
+                                      if (dx != 0 && dx.abs() >= dy.abs()) {
+                                        handleGradeDelta(dx < 0 ? 1 : -1);
                                       }
-                                    },
-                                    child: GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onHorizontalDragStart: (_) =>
-                                          _gradeDragDx = 0.0,
-                                      onHorizontalDragUpdate: (d) =>
-                                          _handleGradeDragUpdate(
-                                              d, handleGradeDelta),
-                                      onHorizontalDragEnd: (_) =>
-                                          _gradeDragDx = 0.0,
-                                      onHorizontalDragCancel: () =>
-                                          _gradeDragDx = 0.0,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: hasCoverImage
-                                              ? bg
-                                              : const Color(0xFF2B2B2B),
-                                          image: hasCoverImage
-                                              ? DecorationImage(
-                                                  image: coverImage!,
-                                                  fit: BoxFit.cover,
-                                                )
-                                              : null,
-                                        ),
-                                        child: Stack(
-                                          fit: StackFit.expand,
-                                          children: [
-                                            if (!hasCoverImage)
-                                              Center(
+                                    }
+                                  },
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onHorizontalDragStart: (_) =>
+                                        _gradeDragDx = 0.0,
+                                    onHorizontalDragUpdate: (d) =>
+                                        _handleGradeDragUpdate(
+                                            d, handleGradeDelta),
+                                    onHorizontalDragEnd: (_) =>
+                                        _gradeDragDx = 0.0,
+                                    onHorizontalDragCancel: () =>
+                                        _gradeDragDx = 0.0,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: hasCoverImage
+                                            ? bg
+                                            : const Color(0xFF2B2B2B),
+                                        image: hasCoverImage
+                                            ? DecorationImage(
+                                                image: coverImage!,
+                                                fit: BoxFit.cover,
+                                              )
+                                            : null,
+                                      ),
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          if (!hasCoverImage)
+                                            Center(
+                                              child: Icon(
+                                                file.icon ?? Icons.menu_book,
+                                                size: 36,
+                                                color: Colors.white60,
+                                              ),
+                                            ),
+                                          if (hasCoverImage &&
+                                              hasExplicitIcon &&
+                                              file.icon != null)
+                                            IgnorePointer(
+                                              child: Center(
                                                 child: Icon(
-                                                  file.icon ??
-                                                      Icons.menu_book,
-                                                  size: 36,
-                                                  color: Colors.white60,
-                                                ),
-                                              ),
-                                            if (hasCoverImage &&
-                                                hasExplicitIcon &&
-                                                file.icon != null)
-                                              IgnorePointer(
-                                                child: Center(
-                                                  child: Icon(
-                                                    file.icon!,
-                                                    size: 72,
-                                                    color: Colors.white
-                                                        .withOpacity(0.18),
-                                                  ),
-                                                ),
-                                              ),
-                                            Positioned(
-                                              top: 8,
-                                              right: 8,
-                                              child: InkWell(
-                                                onTap: toggleFavorite,
-                                                borderRadius:
-                                                    BorderRadius.circular(16),
-                                                child: Container(
-                                                  padding:
-                                                      const EdgeInsets.all(6),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.transparent,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            16),
-                                                  ),
-                                                  child: Icon(
-                                                    Icons.bookmark,
-                                                    size: 20,
-                                                    color: isFav
-                                                        ? Colors.amber
-                                                        : Colors.white70,
-                                                  ),
+                                                  file.icon!,
+                                                  size: 72,
+                                                  color: Colors.white
+                                                      .withOpacity(0.18),
                                                 ),
                                               ),
                                             ),
-                                            Positioned(
-                                              bottom: 8,
-                                              left: 8,
-                                              right: 48,
-                                              child: Row(
-                                                children: [
-                                                  _SmallLinkButtonPill(
-                                                    file: file,
-                                                    kind: 'ans',
-                                                    currentGrade: currentGrade,
-                                                    overlay: true,
-                                                  ),
-                                                  const SizedBox(width: 6),
-                                                  _SmallLinkButtonPill(
-                                                    file: file,
-                                                    kind: 'sol',
-                                                    currentGrade: currentGrade,
-                                                    overlay: true,
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Positioned(
-                                              bottom: 8,
-                                              right: 8,
+                                          Positioned(
+                                            top: 8,
+                                            right: 8,
+                                            child: InkWell(
+                                              onTap: toggleFavorite,
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
                                               child: Container(
-                                                width: 32,
-                                                height: 32,
+                                                padding:
+                                                    const EdgeInsets.all(6),
                                                 decoration: BoxDecoration(
-                                                  color: Colors.black
-                                                      .withOpacity(0.45),
-                                                  shape: BoxShape.circle,
+                                                  color: Colors.transparent,
+                                                  borderRadius:
+                                                      BorderRadius.circular(16),
                                                 ),
-                                                alignment: Alignment.center,
-                                                child: _MoreMenuButton(
-                                                  file: file,
-                                                  compact: true,
-                                                  hitSize: 32,
+                                                child: Icon(
+                                                  Icons.bookmark,
+                                                  size: 20,
+                                                  color: isFav
+                                                      ? Colors.amber
+                                                      : Colors.white70,
                                                 ),
                                               ),
                                             ),
-                                          ],
-                                        ),
+                                          ),
+                                          Positioned(
+                                            bottom: 8,
+                                            left: 8,
+                                            right: 48,
+                                            child: Row(
+                                              children: [
+                                                _SmallLinkButtonPill(
+                                                  file: file,
+                                                  kind: 'ans',
+                                                  currentGrade: currentGrade,
+                                                  overlay: true,
+                                                ),
+                                                const SizedBox(width: 6),
+                                                _SmallLinkButtonPill(
+                                                  file: file,
+                                                  kind: 'sol',
+                                                  currentGrade: currentGrade,
+                                                  overlay: true,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 8,
+                                            right: 8,
+                                            child: Container(
+                                              width: 32,
+                                              height: 32,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black
+                                                    .withOpacity(0.45),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              alignment: Alignment.center,
+                                              child: _MoreMenuButton(
+                                                file: file,
+                                                compact: true,
+                                                hitSize: 32,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: _textbookCardCoverMetaGap),
+                    SizedBox(
+                      height: metaHeight,
+                      width: double.infinity,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: LatexTextRenderer(
+                                    file.name,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: file.textColor ?? panelStyle.title,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                ),
+                                if (displayGrade != null) ...[
+                                  const SizedBox(width: 6),
+                                  _MiniPill(
+                                    text: displayGrade,
+                                    fontSize: 13,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            if ((file.description ?? '').isNotEmpty) ...[
+                              const SizedBox(height: 1),
+                              LatexTextRenderer(
+                                file.description!,
+                                maxLines: 1,
+                                softWrap: false,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: panelStyle.hint,
+                                  fontSize: 14.5,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
-                      const SizedBox(height: _textbookCardCoverMetaGap),
-                      SizedBox(
-                        height: metaHeight,
-                        width: double.infinity,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: LatexTextRenderer(
-                                      file.name,
-                                      maxLines: 1,
-                                      softWrap: false,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color:
-                                            file.textColor ?? panelStyle.title,
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: -0.2,
-                                      ),
-                                    ),
-                                  ),
-                                  if (displayGrade != null) ...[
-                                    const SizedBox(width: 6),
-                                    _MiniPill(
-                                      text: displayGrade,
-                                      fontSize: 13,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 5,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              if ((file.description ?? '').isNotEmpty) ...[
-                                const SizedBox(height: 1),
-                                LatexTextRenderer(
-                                  file.description!,
-                                  maxLines: 1,
-                                  softWrap: false,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: panelStyle.hint,
-                                    fontSize: 14.5,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
+        ),
       );
     }
 
@@ -6483,220 +6674,231 @@ class _GridFileCardState extends State<_GridFileCard> {
               child: Material(
                 color: isTextbook ? _rsPanelBg : bg,
                 child: InkWell(
-              onTap: () async {
-                if (isPrintMode) {
-                  await resState?._handlePrintPick(file);
-                  return;
-                }
-                openMetaDialog();
-              },
-              onDoubleTap: isPrintMode ? null : openPrimaryLink,
-              splashColor: Colors.white.withOpacity(0.06),
-              highlightColor: Colors.white.withOpacity(0.03),
-              child: IgnorePointer(
-                ignoring: isPrintMode,
-                child: LayoutBuilder(
-                  builder: (context, box) {
-                    if (!isTextbook) {
-                      return _buildWideMeta(context,
-                          hasForCurrent: hasForCurrent,
-                          currentGrade: currentGrade,
-                          isOther: isOther);
+                  onTap: () async {
+                    if (isPrintMode) {
+                      await resState?._handlePrintPick(file);
+                      return;
                     }
-                    final metaMinHeight = _textbookCardMetaHeight;
-                    final desiredCoverHeight =
-                        box.maxWidth * _textbookCoverA4Ratio;
-                    final coverHeight = math.min(desiredCoverHeight,
-                        math.max(0.0, box.maxHeight - metaMinHeight));
-                    final isFav =
-                        resState?._favoriteFileIds.contains(file.id) ?? false;
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          height: coverHeight,
-                          width: double.infinity,
-                          child: Listener(
-                            behavior: HitTestBehavior.opaque,
-                            onPointerSignal: (signal) {
-                              if (signal is PointerScrollEvent) {
-                                final dx = signal.scrollDelta.dx;
-                                final dy = signal.scrollDelta.dy;
-                                if (dx != 0 && dx.abs() >= dy.abs()) {
-                                  handleGradeDelta(dx < 0 ? 1 : -1);
-                                }
-                              }
-                            },
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onHorizontalDragStart: (_) => _gradeDragDx = 0.0,
-                              onHorizontalDragUpdate: (d) =>
-                                  _handleGradeDragUpdate(d, handleGradeDelta),
-                              onHorizontalDragEnd: (_) => _gradeDragDx = 0.0,
-                              onHorizontalDragCancel: () => _gradeDragDx = 0.0,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: hasCoverImage
-                                      ? bg
-                                      : const Color(0xFF2B2B2B),
-                                  image: hasCoverImage
-                                      ? DecorationImage(
-                                          image: coverImage!,
-                                          fit: BoxFit.cover)
-                                      : null,
-                                ),
-                                child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      if (!hasCoverImage)
-                                        Center(
-                                          child: Icon(
-                                            file.icon ?? Icons.menu_book,
-                                            size: 36,
-                                            color: Colors.white60,
-                                          ),
-                                        ),
-                                      if (hasCoverImage &&
-                                          hasExplicitIcon &&
-                                          file.icon != null)
-                                        IgnorePointer(
-                                          child: Center(
+                    openMetaDialog();
+                  },
+                  onDoubleTap: isPrintMode ? null : openPrimaryLink,
+                  splashColor: Colors.white.withOpacity(0.06),
+                  highlightColor: Colors.white.withOpacity(0.03),
+                  child: IgnorePointer(
+                    ignoring: isPrintMode,
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        if (!isTextbook) {
+                          return _buildWideMeta(context,
+                              hasForCurrent: hasForCurrent,
+                              currentGrade: currentGrade,
+                              isOther: isOther);
+                        }
+                        final metaMinHeight = _textbookCardMetaHeight;
+                        final desiredCoverHeight =
+                            box.maxWidth * _textbookCoverA4Ratio;
+                        final coverHeight = math.min(desiredCoverHeight,
+                            math.max(0.0, box.maxHeight - metaMinHeight));
+                        final isFav =
+                            resState?._favoriteFileIds.contains(file.id) ??
+                                false;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              height: coverHeight,
+                              width: double.infinity,
+                              child: Listener(
+                                behavior: HitTestBehavior.opaque,
+                                onPointerSignal: (signal) {
+                                  if (signal is PointerScrollEvent) {
+                                    final dx = signal.scrollDelta.dx;
+                                    final dy = signal.scrollDelta.dy;
+                                    if (dx != 0 && dx.abs() >= dy.abs()) {
+                                      handleGradeDelta(dx < 0 ? 1 : -1);
+                                    }
+                                  }
+                                },
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onHorizontalDragStart: (_) =>
+                                      _gradeDragDx = 0.0,
+                                  onHorizontalDragUpdate: (d) =>
+                                      _handleGradeDragUpdate(
+                                          d, handleGradeDelta),
+                                  onHorizontalDragEnd: (_) =>
+                                      _gradeDragDx = 0.0,
+                                  onHorizontalDragCancel: () =>
+                                      _gradeDragDx = 0.0,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: hasCoverImage
+                                          ? bg
+                                          : const Color(0xFF2B2B2B),
+                                      image: hasCoverImage
+                                          ? DecorationImage(
+                                              image: coverImage!,
+                                              fit: BoxFit.cover)
+                                          : null,
+                                    ),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        if (!hasCoverImage)
+                                          Center(
                                             child: Icon(
-                                              file.icon!,
-                                              size: 72,
-                                              color: Colors.white
-                                                  .withOpacity(0.18),
+                                              file.icon ?? Icons.menu_book,
+                                              size: 36,
+                                              color: Colors.white60,
+                                            ),
+                                          ),
+                                        if (hasCoverImage &&
+                                            hasExplicitIcon &&
+                                            file.icon != null)
+                                          IgnorePointer(
+                                            child: Center(
+                                              child: Icon(
+                                                file.icon!,
+                                                size: 72,
+                                                color: Colors.white
+                                                    .withOpacity(0.18),
+                                              ),
+                                            ),
+                                          ),
+                                        Positioned(
+                                          top: 8,
+                                          right: 8,
+                                          child: InkWell(
+                                            onTap: toggleFavorite,
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            child: Container(
+                                              padding: const EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                color: Colors.transparent,
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                              ),
+                                              child: Icon(
+                                                Icons.bookmark,
+                                                size: 20,
+                                                color: isFav
+                                                    ? Colors.amber
+                                                    : Colors.white70,
+                                              ),
                                             ),
                                           ),
                                         ),
-                                      Positioned(
-                                        top: 8,
-                                        right: 8,
-                                        child: InkWell(
-                                          onTap: toggleFavorite,
-                                          borderRadius:
-                                              BorderRadius.circular(16),
+                                        Positioned(
+                                          bottom: 8,
+                                          left: 8,
+                                          right: 48,
+                                          child: Row(
+                                            children: [
+                                              _SmallLinkButtonPill(
+                                                file: file,
+                                                kind: 'ans',
+                                                currentGrade: currentGrade,
+                                                overlay: true,
+                                              ),
+                                              const SizedBox(width: 6),
+                                              _SmallLinkButtonPill(
+                                                file: file,
+                                                kind: 'sol',
+                                                currentGrade: currentGrade,
+                                                overlay: true,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Positioned(
+                                          bottom: 8,
+                                          right: 8,
                                           child: Container(
-                                            padding: const EdgeInsets.all(6),
+                                            width: 32,
+                                            height: 32,
                                             decoration: BoxDecoration(
-                                              color: Colors.transparent,
-                                              borderRadius:
-                                                  BorderRadius.circular(16),
+                                              color: Colors.black
+                                                  .withOpacity(0.45),
+                                              shape: BoxShape.circle,
                                             ),
-                                            child: Icon(
-                                              Icons.bookmark,
-                                              size: 20,
-                                              color: isFav
-                                                  ? Colors.amber
-                                                  : Colors.white70,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      Positioned(
-                                        bottom: 8,
-                                        left: 8,
-                                        right: 48,
-                                        child: Row(
-                                          children: [
-                                            _SmallLinkButtonPill(
+                                            alignment: Alignment.center,
+                                            child: _MoreMenuButton(
                                               file: file,
-                                              kind: 'ans',
-                                              currentGrade: currentGrade,
-                                              overlay: true,
+                                              compact: true,
+                                              hitSize: 32,
                                             ),
-                                            const SizedBox(width: 6),
-                                            _SmallLinkButtonPill(
-                                              file: file,
-                                              kind: 'sol',
-                                              currentGrade: currentGrade,
-                                              overlay: true,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Positioned(
-                                        bottom: 8,
-                                        right: 8,
-                                        child: Container(
-                                          width: 32,
-                                          height: 32,
-                                          decoration: BoxDecoration(
-                                            color:
-                                                Colors.black.withOpacity(0.45),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: _MoreMenuButton(
-                                            file: file,
-                                            compact: true,
-                                            hitSize: 32,
                                           ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
+                              ),
                             ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                            Expanded(
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 6, 12, 2),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: LatexTextRenderer(
-                                        file.name,
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: LatexTextRenderer(
+                                            file.name,
+                                            maxLines: 1,
+                                            softWrap: false,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                                color:
+                                                    file.textColor ?? _rsText,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w800,
+                                                letterSpacing: -0.2),
+                                          ),
+                                        ),
+                                        if (displayGrade != null) ...[
+                                          const SizedBox(width: 6),
+                                          _MiniPill(
+                                              text: displayGrade,
+                                              fontSize: 13,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 5)),
+                                        ],
+                                      ],
+                                    ),
+                                    if ((file.description ?? '')
+                                        .isNotEmpty) ...[
+                                      const SizedBox(height: 1),
+                                      LatexTextRenderer(
+                                        file.description!,
                                         maxLines: 1,
                                         softWrap: false,
                                         overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                            color: file.textColor ?? _rsText,
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: -0.2),
+                                        style: const TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: 14.5),
                                       ),
-                                    ),
-                                    if (displayGrade != null) ...[
-                                      const SizedBox(width: 6),
-                                      _MiniPill(
-                                          text: displayGrade,
-                                          fontSize: 13,
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 10, vertical: 5)),
                                     ],
+                                    const Spacer(),
+                                    const SizedBox(height: 10),
                                   ],
                                 ),
-                                if ((file.description ?? '').isNotEmpty) ...[
-                                  const SizedBox(height: 1),
-                                  LatexTextRenderer(
-                                    file.description!,
-                                    maxLines: 1,
-                                    softWrap: false,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        color: Colors.white60, fontSize: 14.5),
-                                  ),
-                                ],
-                                const Spacer(),
-                                const SizedBox(height: 10),
-                              ],
+                              ),
                             ),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
+                          ],
+                        );
+                      },
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
         ],
       ),
     );
@@ -6973,8 +7175,7 @@ class _MiniPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
-    final panelStyle =
-        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     return Container(
       padding:
           padding ?? const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

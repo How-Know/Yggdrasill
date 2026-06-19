@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
+import '../../../widgets/shared_folder_tree.dart';
 
 /// 왼쪽 패널: 내신 기출(`school_past`)은 학교 → 연도 → 문서, 그 외 출처는 평면 목록.
 class ProblemBankSchoolSheet extends StatefulWidget {
@@ -146,6 +147,10 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.selectedSourceTypeCode != 'private_material') {
+      return _buildDocumentTreePanel();
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: _panelBg,
@@ -212,6 +217,108 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
         ],
       ),
     );
+  }
+
+  Widget _buildDocumentTreePanel() {
+    final isSchoolPast = widget.selectedSourceTypeCode == 'school_past';
+    return SharedFolderTreePanel(
+      title: '추출 문서',
+      subtitle: isSchoolPast ? null : '학교·연도 폴더는 내신 기출 출처에서만 사용됩니다.',
+      nodes: isSchoolPast
+          ? _buildSchoolPastSharedTreeNodes()
+          : _buildFlatDocumentSharedTreeNodes(),
+      selectedNodeId: widget.selectedDocumentId,
+      expandedNodeIds: _sharedExpandedNodeIds(),
+      onNodeTap: _handleSharedTreeNodeTap,
+      onToggleExpanded: _toggleSharedTreeNode,
+      isLoading: widget.isLoading,
+      listBottomPadding: 116,
+      emptyMessage: '조건에 맞는 추출 문서가 없습니다.',
+    );
+  }
+
+  Set<String> _sharedExpandedNodeIds() {
+    return {
+      for (final school in _expandedSchools) 'school:$school',
+      for (final yearKey in _expandedYearBuckets) 'year:$yearKey',
+    };
+  }
+
+  List<SharedFolderTreeNode> _buildFlatDocumentSharedTreeNodes() {
+    return [
+      for (final doc in widget.documents)
+        SharedFolderTreeNode(
+          id: doc.id,
+          label: doc.displayTitle,
+          icon: Icons.description_outlined,
+          selectedIcon: Icons.picture_as_pdf_outlined,
+          data: _ProblemBankTreeNodeMeta.document(doc),
+        ),
+    ];
+  }
+
+  List<SharedFolderTreeNode> _buildSchoolPastSharedTreeNodes() {
+    final grouped = _groupBySchoolThenYear(widget.documents);
+    final schools = _sortedSchools(grouped.keys);
+    return [
+      for (final school in schools)
+        SharedFolderTreeNode(
+          id: 'school:$school',
+          label: school,
+          rowStyle: SharedFolderTreeRowStyle.section,
+          data: _ProblemBankTreeNodeMeta.school(school),
+          children: [
+            for (final year in _sortedYears(grouped[school]!.keys))
+              SharedFolderTreeNode(
+                id: 'year:$school|$year',
+                label: year == '미지정' ? '연도 미지정' : '$year년',
+                icon: Icons.folder_outlined,
+                selectedIcon: Icons.folder,
+                data: _ProblemBankTreeNodeMeta.year(school, year),
+                children: [
+                  for (final doc in grouped[school]![year]!)
+                    SharedFolderTreeNode(
+                      id: doc.id,
+                      label: doc.displayTitle,
+                      icon: Icons.description_outlined,
+                      selectedIcon: Icons.picture_as_pdf_outlined,
+                      data: _ProblemBankTreeNodeMeta.document(doc),
+                    ),
+                ],
+              ),
+          ],
+        ),
+    ];
+  }
+
+  void _handleSharedTreeNodeTap(SharedFolderTreeNode node) {
+    final meta = node.data;
+    if (meta is _ProblemBankTreeNodeMeta && meta.document != null) {
+      widget.onDocumentSelected(meta.document!.id);
+      return;
+    }
+    _toggleSharedTreeNode(node);
+  }
+
+  void _toggleSharedTreeNode(SharedFolderTreeNode node) {
+    final meta = node.data;
+    if (meta is! _ProblemBankTreeNodeMeta) return;
+    setState(() {
+      if (meta.kind == _ProblemBankTreeNodeKind.school) {
+        if (_expandedSchools.contains(meta.school)) {
+          _expandedSchools.remove(meta.school);
+        } else {
+          _expandedSchools.add(meta.school);
+        }
+      } else if (meta.kind == _ProblemBankTreeNodeKind.year) {
+        final yearKey = '${meta.school}|${meta.year}';
+        if (_expandedYearBuckets.contains(yearKey)) {
+          _expandedYearBuckets.remove(yearKey);
+        } else {
+          _expandedYearBuckets.add(yearKey);
+        }
+      }
+    });
   }
 
   Widget _buildBody(BuildContext context) {
@@ -742,6 +849,50 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       ),
     );
   }
+}
+
+enum _ProblemBankTreeNodeKind {
+  school,
+  year,
+  document,
+}
+
+class _ProblemBankTreeNodeMeta {
+  const _ProblemBankTreeNodeMeta._({
+    required this.kind,
+    this.school = '',
+    this.year = '',
+    this.document,
+  });
+
+  factory _ProblemBankTreeNodeMeta.school(String school) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.school,
+      school: school,
+    );
+  }
+
+  factory _ProblemBankTreeNodeMeta.year(String school, String year) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.year,
+      school: school,
+      year: year,
+    );
+  }
+
+  factory _ProblemBankTreeNodeMeta.document(
+    LearningProblemDocumentSummary document,
+  ) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.document,
+      document: document,
+    );
+  }
+
+  final _ProblemBankTreeNodeKind kind;
+  final String school;
+  final String year;
+  final LearningProblemDocumentSummary? document;
 }
 
 class ProblemBankPrivateMaterialBigNode {

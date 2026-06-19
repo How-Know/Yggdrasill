@@ -3,13 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../app_overlays.dart';
 import '../../models/behavior_card_drag_payload.dart';
 import '../../services/learning_behavior_card_service.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../resources/exam_preset_card.dart';
 
 const List<IconData> _behaviorIconPack = [
   Icons.directions_run,
@@ -24,19 +25,6 @@ const List<IconData> _behaviorIconPack = [
   Icons.lightbulb_outline_rounded,
 ];
 
-const List<Color> _behaviorColorPack = [
-  Color(0xFF1E2A36),
-  Color(0xFF20313B),
-  Color(0xFF222C44),
-  Color(0xFF2B2A3B),
-  Color(0xFF2C2437),
-  Color(0xFF1E3234),
-  Color(0xFF24312A),
-  Color(0xFF2E2A24),
-  Color(0xFF2A2E3C),
-  Color(0xFF2F2B35),
-];
-
 class CurriculumActionsView extends StatefulWidget {
   const CurriculumActionsView({super.key});
 
@@ -47,7 +35,6 @@ class CurriculumActionsView extends StatefulWidget {
 class _CurriculumActionsViewState extends State<CurriculumActionsView> {
   final List<_BehaviorCard> _cards = [];
   final ScrollController _gridScrollCtrl = ScrollController();
-  final Uuid _uuid = const Uuid();
 
   bool _loading = true;
   bool _saving = false;
@@ -72,9 +59,6 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
     list.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
     return list;
   }
-
-  Color _colorForIndex(int index) =>
-      _behaviorColorPack[index % _behaviorColorPack.length];
 
   LearningBehaviorCardRecord _toRecord(_BehaviorCard card) {
     return LearningBehaviorCardRecord(
@@ -165,11 +149,11 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
 
   void _setBehaviorCardDragPayload(_BehaviorCard card) {
     final int levelIndex = card.selectedLevelIndex
-        .clamp(0, card.levelContents.isEmpty ? 0 : card.levelContents.length - 1)
+        .clamp(
+            0, card.levelContents.isEmpty ? 0 : card.levelContents.length - 1)
         .toInt();
-    final String levelText = card.levelContents.isEmpty
-        ? ''
-        : card.levelContents[levelIndex];
+    final String levelText =
+        card.levelContents.isEmpty ? '' : card.levelContents[levelIndex];
     activeBehaviorCardDragPayload.value = BehaviorCardDragPayload(
       cardId: card.id,
       name: card.name,
@@ -268,9 +252,8 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
       valueListenable: isBehaviorDraggingOverLeftSideSheet,
       builder: (context, hoveringSideSheet, _) {
         final payload = activeBehaviorCardDragPayload.value;
-        final bool compact = hoveringSideSheet &&
-            payload != null &&
-            payload.cardId == card.id;
+        final bool compact =
+            hoveringSideSheet && payload != null && payload.cardId == card.id;
         if (!compact) return normal;
         return Align(
           alignment: Alignment.topLeft,
@@ -322,31 +305,6 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
     _requestSave();
   }
 
-  Future<void> _openCreateDialog() async {
-    final draft = await showDialog<_BehaviorCardDraft>(
-      context: context,
-      builder: (context) => const _BehaviorCardEditorDialog(),
-    );
-    if (!mounted || draft == null) return;
-    setState(() {
-      final insertIndex = _cards.length;
-      _cards.add(
-        _BehaviorCard(
-          id: _uuid.v4(),
-          name: draft.name,
-          repeatDays: draft.repeatDays,
-          isIrregular: draft.isIrregular,
-          levelContents: draft.levelContents,
-          selectedLevelIndex: 0,
-          icon: draft.icon,
-          color: _colorForIndex(insertIndex),
-          orderIndex: insertIndex,
-        ),
-      );
-    });
-    _requestSave();
-  }
-
   Future<void> _openEditDialog(_BehaviorCard card) async {
     final draft = await showDialog<_BehaviorCardDraft>(
       context: context,
@@ -372,139 +330,159 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
     _requestSave();
   }
 
+  Widget _buildBehaviorSectionHeader(PreviewAcademyPanelStyle panelStyle) {
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 2, 2, 14),
+      child: Row(
+        children: [
+          Text(
+            '행동',
+            style: TextStyle(
+              color: panelStyle.title,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              fontFamily: FabTabBarTokens.previewHeadlineFontFamily,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: isLight
+                  ? FabTabBarTokens.previewAcademyInfoPanelFor(Brightness.light)
+                  : const Color(0xFF1C2528),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isLight ? panelStyle.border : Colors.white12,
+              ),
+            ),
+            child: Text(
+              '레벨별 행동 카드',
+              style: TextStyle(
+                color: isLight ? panelStyle.label : Colors.white60,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const Spacer(),
+          if (_saving)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(
+                '저장 중...',
+                style: TextStyle(
+                  color: panelStyle.hint,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final orderedCards = _orderedCards();
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          const double gridCardWidth = 290.0;
-          const double gridCardHeight = 182.0;
-          const double spacing = 16.0;
-          final int cols = (constraints.maxWidth / (gridCardWidth + spacing))
-              .floor()
-              .clamp(1, 999)
-              .toInt();
-          final double gridWidth =
-              (cols * gridCardWidth) + ((cols - 1) * spacing);
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const FabStyleScreenMainTitle(
+            title: '커리큘럼',
+            bottomSpacing: 12,
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const double gridCardWidth = 290.0;
+                const double gridCardHeight = 182.0;
+                const double spacing = 16.0;
+                final int cols =
+                    (constraints.maxWidth / (gridCardWidth + spacing))
+                        .floor()
+                        .clamp(1, 999)
+                        .toInt();
+                final double gridWidth =
+                    (cols * gridCardWidth) + ((cols - 1) * spacing);
 
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(2, 2, 2, 14),
-                child: Row(
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      '행동',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C2528),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: const Text(
-                        '레벨별 행동 카드',
-                        style: TextStyle(
-                          color: Colors.white60,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    if (_saving)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 8),
-                        child: Text(
-                          '저장 중...',
-                          style: TextStyle(
-                            color: Colors.white54,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    Tooltip(
-                      message: '행동 카드 추가',
-                      child: IconButton(
-                        onPressed: _loading ? null : _openCreateDialog,
-                        style: IconButton.styleFrom(
-                          backgroundColor: const Color(0xFF1D2C31),
-                          foregroundColor: Colors.white,
-                          side: const BorderSide(color: Colors.white12),
-                        ),
-                        icon: const Icon(Icons.add_rounded, size: 22),
+                    _buildBehaviorSectionHeader(panelStyle),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: _loading
+                            ? const Center(
+                                child: CircularProgressIndicator(
+                                  color: kDlgTextSub,
+                                ),
+                              )
+                            : orderedCards.isEmpty
+                                ? _EmptyActionCardPanel(panelStyle: panelStyle)
+                                : SizedBox(
+                                    width: gridWidth,
+                                    child: AnimatedReorderableGrid<_BehaviorCard>(
+                                      items: orderedCards,
+                                      itemId: (card) => card.id,
+                                      itemBuilder: (context, card) =>
+                                          _BehaviorCardTile(
+                                        card: card,
+                                        onTap: () => _openEditDialog(card),
+                                        onLevelDelta: (delta) {
+                                          _changeLevel(
+                                            id: card.id,
+                                            delta: delta,
+                                          );
+                                        },
+                                      ),
+                                      feedbackBuilder: (context, card) =>
+                                          _buildBehaviorDragFeedbackCell(
+                                        card,
+                                        maxWidth: gridCardWidth,
+                                      ),
+                                      cardWidth: gridCardWidth,
+                                      cardHeight: gridCardHeight,
+                                      spacing: spacing,
+                                      columns: cols,
+                                      dragAnchorStrategy:
+                                          pointerDragAnchorStrategy,
+                                      scrollController: _gridScrollCtrl,
+                                      scrollBottomPadding: FabTabBarTokens
+                                          .fabStyleScreenTabBarBottomPadding,
+                                      animationDuration:
+                                          const Duration(milliseconds: 180),
+                                      animationCurve: Curves.easeOutCubic,
+                                      onDragStarted: _setBehaviorCardDragPayload,
+                                      onDragEnded: (_) =>
+                                          _clearBehaviorCardDragPayload(),
+                                      onReorder: (card, targetIndex) {
+                                        setState(() {
+                                          _commitCardReorder(
+                                            id: card.id,
+                                            targetIndex: targetIndex,
+                                          );
+                                        });
+                                        _requestSave();
+                                      },
+                                    ),
+                                  ),
                       ),
                     ),
                   ],
-                ),
-              ),
-              Expanded(
-                child: Align(
-                  alignment: Alignment.topLeft,
-                  child: _loading
-                      ? const Center(
-                          child: CircularProgressIndicator(color: kDlgTextSub),
-                        )
-                      : orderedCards.isEmpty
-                      ? _EmptyActionCardPanel(onCreate: _openCreateDialog)
-                      : SizedBox(
-                          width: gridWidth,
-                          child: AnimatedReorderableGrid<_BehaviorCard>(
-                            items: orderedCards,
-                            itemId: (card) => card.id,
-                            itemBuilder: (context, card) => _BehaviorCardTile(
-                              card: card,
-                              onTap: () => _openEditDialog(card),
-                              onLevelDelta: (delta) {
-                                _changeLevel(id: card.id, delta: delta);
-                              },
-                            ),
-                            feedbackBuilder: (context, card) =>
-                                _buildBehaviorDragFeedbackCell(
-                              card,
-                              maxWidth: gridCardWidth,
-                            ),
-                            cardWidth: gridCardWidth,
-                            cardHeight: gridCardHeight,
-                            spacing: spacing,
-                            columns: cols,
-                            dragAnchorStrategy: pointerDragAnchorStrategy,
-                            scrollController: _gridScrollCtrl,
-                            animationDuration:
-                                const Duration(milliseconds: 180),
-                            animationCurve: Curves.easeOutCubic,
-                            onDragStarted: _setBehaviorCardDragPayload,
-                            onDragEnded: (_) => _clearBehaviorCardDragPayload(),
-                            onReorder: (card, targetIndex) {
-                              setState(() {
-                                _commitCardReorder(
-                                  id: card.id,
-                                  targetIndex: targetIndex,
-                                );
-                              });
-                              _requestSave();
-                            },
-                          ),
-                        ),
-                ),
-              ),
-            ],
-          );
-        },
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -600,185 +578,210 @@ class _BehaviorCardTileState extends State<_BehaviorCardTile> {
   @override
   Widget build(BuildContext context) {
     final card = widget.card;
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final cardRadius = FabTabBarTokens.previewAcademyGroupedCardRadius;
+    final cardBackground = panelStyle.groupedCardBackground;
+    final textColor = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final subColor = isDark ? Colors.white70 : const Color(0xFF666666);
+
     return MouseRegion(
       cursor: SystemMouseCursors.grab,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Material(
-          color: Colors.transparent,
-          child: Listener(
-            behavior: HitTestBehavior.opaque,
-            onPointerSignal: _handlePointerSignal,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: (_) => _levelDragDx = 0.0,
-              onHorizontalDragUpdate: _handleLevelDragUpdate,
-              onHorizontalDragEnd: (_) => _levelDragDx = 0.0,
-              onHorizontalDragCancel: () => _levelDragDx = 0.0,
-              child: InkWell(
-                onTap: widget.onTap,
-                splashColor: Colors.white.withOpacity(0.06),
-                highlightColor: Colors.white.withOpacity(0.03),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: card.color,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.06),
-                      width: 0.8,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.35),
-                        blurRadius: 16,
-                        offset: const Offset(0, 10),
-                      ),
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.04),
-                        blurRadius: 2,
-                        offset: const Offset(0, 1),
-                      ),
-                    ],
-                  ),
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.25),
-                              borderRadius: BorderRadius.circular(11),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(cardRadius),
+                  boxShadow: examPresetCardBoxShadows(),
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(cardRadius),
+              child: Material(
+                color: cardBackground,
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerSignal: _handlePointerSignal,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragStart: (_) => _levelDragDx = 0.0,
+                    onHorizontalDragUpdate: _handleLevelDragUpdate,
+                    onHorizontalDragEnd: (_) => _levelDragDx = 0.0,
+                    onHorizontalDragCancel: () => _levelDragDx = 0.0,
+                    child: InkWell(
+                      onTap: widget.onTap,
+                      splashColor: isDark
+                          ? Colors.white.withOpacity(0.06)
+                          : Colors.black.withOpacity(0.04),
+                      highlightColor: isDark
+                          ? Colors.white.withOpacity(0.03)
+                          : Colors.black.withOpacity(0.02),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: card.color.withOpacity(
+                                      isDark ? 0.38 : 0.18,
+                                    ),
+                                    borderRadius: BorderRadius.circular(11),
+                                  ),
+                                  child: Icon(
+                                    card.icon,
+                                    color: isDark
+                                        ? Colors.white70
+                                        : card.color.withOpacity(0.95),
+                                    size: 22,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isDark
+                                        ? Colors.black.withOpacity(0.22)
+                                        : Colors.black.withOpacity(0.06),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: isDark
+                                          ? Colors.white12
+                                          : panelStyle.border,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '레벨 ${card.selectedLevelIndex + 1}',
+                                    style: TextStyle(
+                                      color: subColor,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            child:
-                                Icon(card.icon, color: Colors.white70, size: 22),
-                          ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    card.name,
+                                    style: TextStyle(
+                                      color: textColor,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  card.isIrregular
+                                      ? '반복: 비정기'
+                                      : '반복: ${card.repeatDays}일마다',
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(
+                                    color: card.isIrregular
+                                        ? const Color(0xFFFBC47D)
+                                        : subColor,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
                             ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.22),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: Colors.white12),
-                            ),
-                            child: Text(
-                              '레벨 ${card.selectedLevelIndex + 1}',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: Text(
+                                card.selectedLevelText,
+                                style: TextStyle(
+                                  color: subColor,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.4,
+                                ),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              card.name,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            card.isIrregular
-                                ? '반복: 비정기'
-                                : '반복: ${card.repeatDays}일마다',
-                            textAlign: TextAlign.right,
-                            style: TextStyle(
-                              color: card.isIrregular
-                                  ? const Color(0xFFFBC47D)
-                                  : Colors.white70,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: Text(
-                          card.selectedLevelText,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            height: 1.4,
-                          ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
+                          ],
                         ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
 class _EmptyActionCardPanel extends StatelessWidget {
-  final VoidCallback onCreate;
+  final PreviewAcademyPanelStyle panelStyle;
 
-  const _EmptyActionCardPanel({required this.onCreate});
+  const _EmptyActionCardPanel({required this.panelStyle});
 
   @override
   Widget build(BuildContext context) {
+    final isLight = Theme.of(context).brightness == Brightness.light;
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFF121A1D),
+        color: isLight
+            ? FabTabBarTokens.previewAcademyInfoPanelFor(Brightness.light)
+            : const Color(0xFF121A1D),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(
+          color: isLight ? panelStyle.border : Colors.white10,
+        ),
       ),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.view_carousel_rounded, color: Colors.white38, size: 30),
+            Icon(
+              Icons.view_carousel_rounded,
+              color: panelStyle.hint,
+              size: 30,
+            ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               '행동 카드가 없습니다.',
               style: TextStyle(
-                color: Colors.white70,
+                color: panelStyle.title,
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 4),
-            const Text(
-              '+ 버튼으로 첫 행동 카드를 만들어보세요.',
+            Text(
+              '매니저앱의 스킬 탭에서 행동 카드를 먼저 만들어 주세요.',
               style: TextStyle(
-                color: Colors.white38,
+                color: panelStyle.hint,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
-            ),
-            const SizedBox(height: 14),
-            FilledButton.icon(
-              onPressed: onCreate,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('행동 카드 만들기'),
             ),
           ],
         ),
@@ -1086,7 +1089,8 @@ class _BehaviorCardEditorDialogState extends State<_BehaviorCardEditorDialog> {
                                 child: Text(
                                   '비정기',
                                   style: TextStyle(
-                                    color: _isIrregular ? kDlgText : kDlgTextSub,
+                                    color:
+                                        _isIrregular ? kDlgText : kDlgTextSub,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -1121,10 +1125,9 @@ class _BehaviorCardEditorDialogState extends State<_BehaviorCardEditorDialog> {
                                 color: _selectedIcon.codePoint == icon.codePoint
                                     ? kDlgAccent
                                     : kDlgBorder,
-                                width:
-                                    _selectedIcon.codePoint == icon.codePoint
-                                        ? 1.4
-                                        : 1.0,
+                                width: _selectedIcon.codePoint == icon.codePoint
+                                    ? 1.4
+                                    : 1.0,
                               ),
                             ),
                             child: Icon(
