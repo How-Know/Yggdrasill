@@ -1773,6 +1773,22 @@ function setBuilderMacroLines() {
 //     같은 수식의 다른 array/cases 나 표 조판에 누설되지 않는다.
 //   - amsmath `matrix` 의 선행 `\hskip -\arraycolsep` 가 새 \arraycolsep 값으로 좌측
 //     패딩을 정확히 상쇄하므로, 괄호 옆 여백은 우리가 넣는 \mkern 만 남는다.
+// [V3 실험] 수식 구분자(괄호/대괄호/중괄호/세로바)만 다른 OpenType 수식 폰트로 교체.
+//   - 본문 수식 글리프(숫자/연산자/문자)는 Latin Modern Math(=현재 CM과 사실상 동일)로
+//     유지하고, 구분자 코드포인트 범위만 STIX Two Math 로 덮어써 행렬 괄호 벽을 더 얇고
+//     균일하게(가운데 불룩함·위아래 삐져나감 완화) 만든다.
+//   - amsmath 뒤에 로드해야 한다. amssymb 와 함께 쓰면 redefining 경고가 다수 뜨지만
+//     컴파일에는 문제 없다.
+//   - 적용 범위: ( ) [ ] { } | ‖
+function unicodeMathDelimiterLines() {
+  const range = '"0028,"0029,"005B,"005D,"007B,"007D,"007C,"2016';
+  return [
+    '\\usepackage{unicode-math}',
+    '\\setmathfont{Latin Modern Math}',
+    `\\setmathfont[range={${range}}]{STIX Two Math}`,
+  ];
+}
+
 function koreanMatrixMacroLines() {
   const setup = '\\setlength{\\arraycolsep}{7pt}\\renewcommand{\\arraystretch}{1.2}';
   const gap = '\\mkern4mu';
@@ -3825,6 +3841,7 @@ function buildPreamble({
   lines.push('\\newcommand{\\YggRestoreGeometryNoClear}{\\let\\YggSavedClearpage\\clearpage\\let\\clearpage\\relax\\restoregeometry\\let\\clearpage\\YggSavedClearpage}');
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
+  lines.push(...unicodeMathDelimiterLines());
   lines.push(...koreanMatrixMacroLines());
   lines.push(...boxMathVisualCenterMacroLines());
   lines.push(...setBuilderMacroLines());
@@ -6262,6 +6279,7 @@ export function buildTexSource(question, options = {}) {
     '\\documentclass[12pt,varwidth=16cm]{standalone}',
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
+    ...unicodeMathDelimiterLines(),
     ...koreanMatrixMacroLines(),
     '\\usepackage{array}',
     '\\usepackage{kotex}',
@@ -6420,6 +6438,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     `\\documentclass[12pt,varwidth=${safeWidth}cm]{standalone}`,
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
+    ...unicodeMathDelimiterLines(),
     ...koreanMatrixMacroLines(),
     '\\usepackage{array}',
     '\\usepackage{kotex}',
