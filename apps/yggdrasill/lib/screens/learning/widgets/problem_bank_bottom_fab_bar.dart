@@ -2,115 +2,274 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+
 class ProblemBankBottomFabBar extends StatelessWidget {
   const ProblemBankBottomFabBar({
     super.key,
     required this.cartCount,
     required this.cartActive,
     required this.allVisibleSelected,
-    required this.filterActive,
     required this.isBusy,
-    required this.typeFilterOptions,
-    required this.difficultyFilterOptions,
-    required this.selectedTypeFilters,
-    required this.selectedDifficultyFilters,
     required this.onToggleSelectAll,
     required this.onToggleCart,
     required this.onClearCart,
     required this.onAddToCart,
     required this.onCreate,
-    required this.onPreset,
-    required this.onToggleTypeFilter,
-    required this.onToggleDifficultyFilter,
-    required this.onClearFilters,
   });
 
   final int cartCount;
   final bool cartActive;
   final bool allVisibleSelected;
-  final bool filterActive;
   final bool isBusy;
-  final List<String> typeFilterOptions;
-  final List<String> difficultyFilterOptions;
-  final Set<String> selectedTypeFilters;
-  final Set<String> selectedDifficultyFilters;
   final VoidCallback onToggleSelectAll;
   final VoidCallback onToggleCart;
   final VoidCallback onClearCart;
   final VoidCallback onAddToCart;
   final VoidCallback onCreate;
-  final VoidCallback onPreset;
-  final ValueChanged<String> onToggleTypeFilter;
-  final ValueChanged<String> onToggleDifficultyFilter;
-  final VoidCallback onClearFilters;
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final radius = BorderRadius.circular(FabTabBarTokens.fabBarHeight / 2);
     final disabled = isBusy;
     return Center(
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(999),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF111A1D).withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: const Color(0xFF355056).withValues(alpha: 0.6),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: palette.boxShadows,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            ),
+            child: Container(
+              height: FabTabBarTokens.fabBarHeight,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: radius,
+              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _BottomActionPill(
+                      onPressed: disabled ? null : onToggleSelectAll,
+                      icon: allVisibleSelected
+                          ? Icons.remove_done
+                          : Icons.done_all,
+                      label: allVisibleSelected ? '해제' : '전체',
+                      selected: allVisibleSelected,
+                    ),
+                    _BottomActionPill(
+                      onPressed: disabled ? null : onCreate,
+                      icon: Icons.preview,
+                      label: '만들기',
+                    ),
+                    _BottomActionPill(
+                      onPressed: disabled ? null : onAddToCart,
+                      icon: Icons.add_shopping_cart_outlined,
+                      label: '추가',
+                    ),
+                    _CartCountPill(
+                      count: cartCount,
+                      active: cartActive,
+                      onTap: disabled ? null : onToggleCart,
+                    ),
+                    _ClearCartPill(
+                      enabled: !disabled && cartCount > 0,
+                      onTap: onClearCart,
+                    ),
+                  ],
+                ),
               ),
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomActionPill extends StatelessWidget {
+  const _BottomActionPill({
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+    this.selected = false,
+  });
+
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final String label;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final enabled = onPressed != null;
+    final bg = selected ? palette.highlight : Colors.transparent;
+    final fg = !enabled
+        ? palette.labelUnselected.withValues(alpha: 0.45)
+        : (selected ? palette.labelSelected : palette.labelUnselected);
+
+    return Tooltip(
+      message: label,
+      waitDuration: const Duration(milliseconds: 450),
+      child: SizedBox(
+        width: 112,
+        height: double.infinity,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onPressed,
+              borderRadius: BorderRadius.circular(999),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 20, color: fg),
+                    const SizedBox(width: 7),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                        color: fg,
+                        fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 장바구니 개수 + 탭 시 장바구니 문항만 그리드에 표시 토글.
+class _CartCountPill extends StatelessWidget {
+  const _CartCountPill({
+    required this.count,
+    required this.active,
+    required this.onTap,
+  });
+
+  final int count;
+  final bool active;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final enabled = onTap != null;
+    final fg = !enabled
+        ? palette.labelUnselected.withValues(alpha: 0.45)
+        : (active ? palette.labelSelected : palette.labelUnselected);
+
+    return Tooltip(
+      message: active ? '전체 문항 보기' : '장바구니 문항 보기',
+      waitDuration: const Duration(milliseconds: 450),
+      child: SizedBox(
+        width: 144,
+        height: double.infinity,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: active ? palette.highlight : Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(999),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shopping_cart_outlined, size: 20, color: fg),
+                    const SizedBox(width: 7),
+                    Text(
+                      '장바구니 $count',
+                      style: TextStyle(
+                        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                        fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                        fontWeight: FontWeight.w600,
+                        color: fg,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ClearCartPill extends StatelessWidget {
+  const _ClearCartPill({
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final fg = enabled
+        ? palette.labelUnselected
+        : palette.labelUnselected.withValues(alpha: 0.42);
+
+    return Tooltip(
+      message: '장바구니 비우기',
+      waitDuration: const Duration(milliseconds: 450),
+      child: SizedBox(
+        width: 112,
+        height: double.infinity,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: enabled ? onTap : null,
+            borderRadius: BorderRadius.circular(999),
+            child: Center(
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  _fab(
-                    onPressed: disabled ? null : onToggleSelectAll,
-                    icon:
-                        allVisibleSelected ? Icons.remove_done : Icons.done_all,
-                    label: allVisibleSelected ? '해제' : '전체',
-                  ),
-                  const SizedBox(width: 8),
-                  _ProblemBankFilterMenuButton(
-                    disabled: disabled,
-                    filterActive: filterActive,
-                    typeFilterOptions: typeFilterOptions,
-                    difficultyFilterOptions: difficultyFilterOptions,
-                    selectedTypeFilters: selectedTypeFilters,
-                    selectedDifficultyFilters: selectedDifficultyFilters,
-                    onToggleTypeFilter: onToggleTypeFilter,
-                    onToggleDifficultyFilter: onToggleDifficultyFilter,
-                    onClearFilters: onClearFilters,
-                  ),
-                  const SizedBox(width: 8),
-                  _fab(
-                    onPressed: disabled ? null : onCreate,
-                    icon: Icons.preview,
-                    label: '만들기',
-                  ),
-                  const SizedBox(width: 8),
-                  _fab(
-                    onPressed: disabled ? null : onAddToCart,
-                    icon: Icons.add_shopping_cart_outlined,
-                    label: '추가',
-                  ),
-                  const SizedBox(width: 8),
-                  _fab(
-                    onPressed: disabled ? null : onPreset,
-                    icon: Icons.bookmark_outline,
-                    label: '프리셋',
-                  ),
-                  const SizedBox(width: 10),
-                  _selectionCartChip(
-                    count: cartCount,
-                    active: cartActive,
-                    onTap: disabled ? null : onToggleCart,
-                  ),
-                  const SizedBox(width: 6),
-                  _clearCartChip(
-                    enabled: !disabled && cartCount > 0,
-                    onTap: onClearCart,
+                  Icon(Icons.delete_outline, size: 20, color: fg),
+                  const SizedBox(width: 7),
+                  Text(
+                    '비우기',
+                    style: TextStyle(
+                      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                      fontWeight: FontWeight.w600,
+                      color: fg,
+                    ),
                   ),
                 ],
               ),
@@ -120,124 +279,11 @@ class ProblemBankBottomFabBar extends StatelessWidget {
       ),
     );
   }
-
-  /// 장바구니 개수 + 탭 시 장바구니 문항만 그리드에 표시 토글.
-  static Widget _selectionCartChip({
-    required int count,
-    required bool active,
-    required VoidCallback? onTap,
-  }) {
-    final borderColor = active
-        ? const Color(0xFF2B6B61)
-        : const Color(0xFF223131).withValues(alpha: 0.9);
-    final fg = active ? const Color(0xFFBEE7D2) : const Color(0xFF9FB3B3);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Ink(
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-          decoration: BoxDecoration(
-            color: active ? const Color(0x66173C36) : const Color(0x9910171A),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: borderColor),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.shopping_cart_outlined,
-                size: 22,
-                color: fg,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '$count',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: fg,
-                  height: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  static Widget _clearCartChip({
-    required bool enabled,
-    required VoidCallback onTap,
-  }) {
-    final fg = enabled ? const Color(0xFF9FB3B3) : const Color(0xFF536464);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(14),
-        child: Ink(
-          padding: const EdgeInsets.fromLTRB(9, 6, 9, 6),
-          decoration: BoxDecoration(
-            color: const Color(0x9910171A),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFF223131)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.delete_outline,
-                size: 20,
-                color: fg,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '비우기',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: fg,
-                  height: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _fab({
-    required VoidCallback? onPressed,
-    required IconData icon,
-    required String label,
-    Color? backgroundColor,
-    Color? foregroundColor,
-  }) {
-    return FloatingActionButton.extended(
-      heroTag: null,
-      elevation: 0,
-      backgroundColor: backgroundColor ?? const Color(0xE610171A),
-      foregroundColor: foregroundColor ?? const Color(0xFF9FB3B3),
-      extendedPadding: const EdgeInsets.symmetric(horizontal: 14),
-      onPressed: onPressed,
-      icon: Icon(icon, size: 18),
-      label: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
 }
 
-class _ProblemBankFilterMenuButton extends StatefulWidget {
-  const _ProblemBankFilterMenuButton({
+class ProblemBankFilterMenuButton extends StatefulWidget {
+  const ProblemBankFilterMenuButton({
+    super.key,
     required this.disabled,
     required this.filterActive,
     required this.typeFilterOptions,
@@ -260,19 +306,19 @@ class _ProblemBankFilterMenuButton extends StatefulWidget {
   final VoidCallback onClearFilters;
 
   @override
-  State<_ProblemBankFilterMenuButton> createState() =>
+  State<ProblemBankFilterMenuButton> createState() =>
       _ProblemBankFilterMenuButtonState();
 }
 
 class _ProblemBankFilterMenuButtonState
-    extends State<_ProblemBankFilterMenuButton> {
+    extends State<ProblemBankFilterMenuButton> {
   final LayerLink _layerLink = LayerLink();
   OverlayEntry? _overlayEntry;
 
   bool get _isOpen => _overlayEntry != null;
 
   @override
-  void didUpdateWidget(covariant _ProblemBankFilterMenuButton oldWidget) {
+  void didUpdateWidget(covariant ProblemBankFilterMenuButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_overlayEntry == null) return;
     if (oldWidget.filterActive == widget.filterActive &&
@@ -347,21 +393,21 @@ class _ProblemBankFilterMenuButtonState
             CompositedTransformFollower(
               link: _layerLink,
               showWhenUnlinked: false,
-              targetAnchor: Alignment.topCenter,
-              followerAnchor: Alignment.bottomCenter,
-              offset: const Offset(0, -10),
+              targetAnchor: Alignment.bottomCenter,
+              followerAnchor: Alignment.topCenter,
+              offset: const Offset(0, 10),
               child: Material(
                 color: Colors.transparent,
                 child: _ProblemBankFilterPanel(
-                filterActive: widget.filterActive,
-                typeFilterOptions: widget.typeFilterOptions,
-                difficultyFilterOptions: widget.difficultyFilterOptions,
-                selectedTypeFilters: widget.selectedTypeFilters,
-                selectedDifficultyFilters: widget.selectedDifficultyFilters,
-                onToggleTypeFilter: widget.onToggleTypeFilter,
-                onToggleDifficultyFilter: widget.onToggleDifficultyFilter,
-                onClearFilters: widget.onClearFilters,
-                onClose: _removeOverlay,
+                  filterActive: widget.filterActive,
+                  typeFilterOptions: widget.typeFilterOptions,
+                  difficultyFilterOptions: widget.difficultyFilterOptions,
+                  selectedTypeFilters: widget.selectedTypeFilters,
+                  selectedDifficultyFilters: widget.selectedDifficultyFilters,
+                  onToggleTypeFilter: widget.onToggleTypeFilter,
+                  onToggleDifficultyFilter: widget.onToggleDifficultyFilter,
+                  onClearFilters: widget.onClearFilters,
+                  onClose: _removeOverlay,
                 ),
               ),
             ),
@@ -373,12 +419,11 @@ class _ProblemBankFilterMenuButtonState
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
     final fg = widget.filterActive || _isOpen
-        ? const Color(0xFFBEE7D2)
-        : const Color(0xFF9FB3B3);
-    final bg = widget.filterActive || _isOpen
-        ? const Color(0xE6173C36)
-        : const Color(0xE610171A);
+        ? (isDark ? const Color(0xFFBEE7D2) : const Color(0xFF1A6B5E))
+        : (isDark ? const Color(0xFF9FB3B3) : Colors.black);
 
     return CompositedTransformTarget(
       link: _layerLink,
@@ -387,28 +432,10 @@ class _ProblemBankFilterMenuButtonState
         child: InkWell(
           onTap: _toggleOverlay,
           borderRadius: BorderRadius.circular(999),
-          child: Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.filter_list, size: 18, color: fg),
-                const SizedBox(width: 8),
-                Text(
-                  '필터',
-                  style: TextStyle(
-                    color: fg,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Icon(Icons.filter_list_rounded, size: 25, color: fg),
           ),
         ),
       ),
@@ -444,22 +471,40 @@ class _ProblemBankFilterPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final panelColor = isDark ? const Color(0xFF111A1D) : Colors.white;
+    final borderColor = isDark
+        ? const Color(0xFF355056).withValues(alpha: 0.8)
+        : Colors.black.withValues(alpha: 0.08);
+    final titleColor =
+        isDark ? const Color(0xFFEAF2F2) : const Color(0xFF111A1D);
+    final sectionColor =
+        isDark ? const Color(0xFFD6ECEA) : const Color(0xFF1F2A2D);
+    final mutedColor =
+        isDark ? const Color(0xFF8FAAAA) : const Color(0xFF5F6B70);
+    final faintColor =
+        isDark ? const Color(0xFF6F8585) : const Color(0xFF8A9499);
+    final dividerColor =
+        isDark ? const Color(0xFF2A3A3A) : const Color(0xFFE7ECEC);
+    final resetColor = filterActive
+        ? (isDark ? const Color(0xFFBEE7D2) : const Color(0xFF1A6B5E))
+        : faintColor;
+
     return Material(
       color: Colors.transparent,
       child: Container(
         width: 420,
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF111A1D),
+          color: panelColor,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: const Color(0xFF355056).withValues(alpha: 0.8),
-          ),
-          boxShadow: const [
+          border: Border.all(color: borderColor),
+          boxShadow: [
             BoxShadow(
-              color: Color(0x66000000),
+              color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.1),
               blurRadius: 18,
-              offset: Offset(0, 8),
+              offset: const Offset(0, 8),
             ),
           ],
         ),
@@ -469,11 +514,11 @@ class _ProblemBankFilterPanel extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     '문항 필터',
                     style: TextStyle(
-                      color: Color(0xFFEAF2F2),
+                      color: titleColor,
                       fontSize: 13,
                       fontWeight: FontWeight.w900,
                     ),
@@ -482,9 +527,7 @@ class _ProblemBankFilterPanel extends StatelessWidget {
                 TextButton(
                   onPressed: filterActive ? onClearFilters : null,
                   style: TextButton.styleFrom(
-                    foregroundColor: filterActive
-                        ? const Color(0xFFBEE7D2)
-                        : const Color(0xFF7A8F8F),
+                    foregroundColor: resetColor,
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     minimumSize: const Size(0, 30),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -501,13 +544,13 @@ class _ProblemBankFilterPanel extends StatelessWidget {
                   onPressed: onClose,
                   visualDensity: VisualDensity.compact,
                   iconSize: 18,
-                  color: const Color(0xFF9FB3B3),
+                  color: mutedColor,
                   tooltip: '닫기',
                   icon: const Icon(Icons.close_rounded),
                 ),
               ],
             ),
-            const Divider(color: Color(0xFF2A3A3A), height: 1),
+            Divider(color: dividerColor, height: 1),
             const SizedBox(height: 10),
             IntrinsicHeight(
               child: Row(
@@ -520,12 +563,16 @@ class _ProblemBankFilterPanel extends StatelessWidget {
                       options: typeFilterOptions,
                       selected: selectedTypeFilters,
                       onToggle: onToggleTypeFilter,
+                      titleColor: sectionColor,
+                      emptyColor: faintColor,
+                      selectedTextColor: sectionColor,
+                      textColor: mutedColor,
                     ),
                   ),
                   const SizedBox(width: 14),
                   Container(
                     width: 1,
-                    color: const Color(0xFF2A3A3A),
+                    color: dividerColor,
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -535,6 +582,10 @@ class _ProblemBankFilterPanel extends StatelessWidget {
                       options: difficultyFilterOptions,
                       selected: selectedDifficultyFilters,
                       onToggle: onToggleDifficultyFilter,
+                      titleColor: sectionColor,
+                      emptyColor: faintColor,
+                      selectedTextColor: sectionColor,
+                      textColor: mutedColor,
                     ),
                   ),
                 ],
@@ -552,6 +603,10 @@ class _ProblemBankFilterPanel extends StatelessWidget {
     required List<String> options,
     required Set<String> selected,
     required ValueChanged<String> onToggle,
+    required Color titleColor,
+    required Color emptyColor,
+    required Color selectedTextColor,
+    required Color textColor,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -559,8 +614,8 @@ class _ProblemBankFilterPanel extends StatelessWidget {
       children: [
         Text(
           title,
-          style: const TextStyle(
-            color: Color(0xFFD6ECEA),
+          style: TextStyle(
+            color: titleColor,
             fontSize: 12,
             fontWeight: FontWeight.w800,
           ),
@@ -569,8 +624,8 @@ class _ProblemBankFilterPanel extends StatelessWidget {
         if (options.isEmpty)
           Text(
             emptyMessage,
-            style: const TextStyle(
-              color: Color(0xFF6F8585),
+            style: TextStyle(
+              color: emptyColor,
               fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
@@ -581,6 +636,8 @@ class _ProblemBankFilterPanel extends StatelessWidget {
               label: option,
               checked: selected.contains(option),
               onChanged: () => onToggle(option),
+              selectedTextColor: selectedTextColor,
+              textColor: textColor,
             ),
       ],
     );
@@ -590,6 +647,8 @@ class _ProblemBankFilterPanel extends StatelessWidget {
     required String label,
     required bool checked,
     required VoidCallback onChanged,
+    required Color selectedTextColor,
+    required Color textColor,
   }) {
     return InkWell(
       onTap: onChanged,
@@ -617,9 +676,7 @@ class _ProblemBankFilterPanel extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: checked
-                      ? const Color(0xFFD6ECEA)
-                      : const Color(0xFF8FAAAA),
+                  color: checked ? selectedTextColor : textColor,
                   fontSize: 12,
                   fontWeight: checked ? FontWeight.w800 : FontWeight.w700,
                   height: 1.25,

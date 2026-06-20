@@ -3270,6 +3270,156 @@ class ProblemBankService {
       return {};
     }
   }
+
+  Future<List<ProblemBankExportPreset>> listExportPresets({
+    required String academyId,
+    int limit = 300,
+    int offset = 0,
+    String presetKind = 'settings',
+  }) async {
+    final safeLimit = limit.clamp(1, 500).toInt();
+    final safeOffset = offset < 0 ? 0 : offset;
+    final safePresetKind = presetKind.trim().isEmpty ? 'settings' : presetKind;
+    if (!hasGateway) {
+      throw Exception('프리셋 목록은 gateway 연결이 필요합니다.');
+    }
+    final json = await _gatewayGet(
+      '/pb/export-presets',
+      query: <String, String>{
+        'academyId': academyId,
+        'limit': '$safeLimit',
+        'offset': '$safeOffset',
+        'presetKind': safePresetKind,
+      },
+    );
+    final presetsRaw = json['presets'];
+    if (presetsRaw is! List) return const <ProblemBankExportPreset>[];
+    return presetsRaw
+        .map((e) => ProblemBankExportPreset.fromMap(
+              e is Map<String, dynamic>
+                  ? e
+                  : Map<String, dynamic>.from(e as Map),
+            ))
+        .where((e) => e.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<ProblemBankExportPreset?> renameExportPreset({
+    required String academyId,
+    required String presetId,
+    required String displayName,
+  }) async {
+    final safeDisplayName = displayName.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (safeDisplayName.isEmpty) {
+      throw Exception('프리셋 이름을 입력해 주세요.');
+    }
+    if (!hasGateway) {
+      throw Exception('프리셋 수정은 gateway 연결이 필요합니다.');
+    }
+    final json = await _gatewayPost(
+      '/pb/export-presets/$presetId/rename',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'displayName': safeDisplayName,
+      },
+    );
+    final presetMap = json['preset'];
+    if (presetMap is! Map) return null;
+    return ProblemBankExportPreset.fromMap(
+      presetMap is Map<String, dynamic>
+          ? presetMap
+          : Map<String, dynamic>.from(presetMap),
+    );
+  }
+
+  Future<ProblemBankExportPreset?> updateExportPresetNaesinLink({
+    required String academyId,
+    required String presetId,
+    String? naesinLinkKey,
+    String? naesinCellLabel,
+    String? naesinCurriculumCode,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safePresetId = presetId.trim();
+    if (safeAcademyId.isEmpty || safePresetId.isEmpty) return null;
+    final existing = await _client
+        .from('pb_export_presets')
+        .select('*')
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId)
+        .maybeSingle();
+    if (existing == null) return null;
+    final current = Map<String, dynamic>.from(existing as Map);
+    final currentRenderConfigRaw = current['render_config'];
+    final nextRenderConfig = currentRenderConfigRaw is Map
+        ? Map<String, dynamic>.from(currentRenderConfigRaw)
+        : <String, dynamic>{};
+    final safeLinkKey = (naesinLinkKey ?? '').trim();
+    final safeCellLabel = (naesinCellLabel ?? '')
+        .replaceAll('|', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (safeLinkKey.isEmpty) {
+      nextRenderConfig.remove('naesinLinkKey');
+      nextRenderConfig.remove('naesinCellLabel');
+      nextRenderConfig.remove('naesinCurriculumCode');
+    } else {
+      nextRenderConfig['naesinLinkKey'] = safeLinkKey;
+      nextRenderConfig['naesinCurriculumCode'] =
+          (naesinCurriculumCode ?? '').trim() == 'rev_2015'
+              ? 'rev_2015'
+              : 'rev_2022';
+      if (safeCellLabel.isEmpty) {
+        nextRenderConfig.remove('naesinCellLabel');
+      } else {
+        nextRenderConfig['naesinCellLabel'] = safeCellLabel;
+      }
+    }
+    final updated = await _client
+        .from('pb_export_presets')
+        .update(<String, dynamic>{
+          'render_config': nextRenderConfig,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId)
+        .select('*')
+        .maybeSingle();
+    if (updated == null) return null;
+    return ProblemBankExportPreset.fromMap(updated);
+  }
+
+  Future<void> deleteExportPreset({
+    required String academyId,
+    required String presetId,
+  }) async {
+    if (!hasGateway) {
+      throw Exception('프리셋 삭제는 gateway 연결이 필요합니다.');
+    }
+    await _gatewayPost(
+      '/pb/export-presets/$presetId/delete',
+      body: <String, dynamic>{'academyId': academyId},
+    );
+  }
+
+  Future<Map<String, dynamic>> cleanupLegacySavedSettingsClones({
+    required String academyId,
+    bool dryRun = true,
+    int limit = 300,
+  }) async {
+    if (!hasGateway) {
+      throw Exception('레거시 정리는 gateway 연결이 필요합니다.');
+    }
+    final json = await _gatewayPost(
+      '/pb/admin/cleanup-legacy-saved-settings',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'dryRun': dryRun,
+        'limit': limit.clamp(1, 5000),
+      },
+    );
+    return json;
+  }
 }
 
 /// 학습앱 `pbSourceTypeCodesForLearningUi`와 동일한 매핑.

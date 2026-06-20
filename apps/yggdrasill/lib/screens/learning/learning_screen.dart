@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../app_overlays.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../services/exam_mode.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
@@ -19,8 +20,7 @@ class _LearningScreenState extends State<LearningScreen> {
   @override
   void initState() {
     super.initState();
-    ExamModeService.instance.suppressExamActionCluster.value =
-        _selectedTab == 1;
+    _syncProblemBankOverlayVisibility();
   }
 
   @override
@@ -35,14 +35,21 @@ class _LearningScreenState extends State<LearningScreen> {
   void dispose() {
     _tabOverlay.dispose();
     ExamModeService.instance.suppressExamActionCluster.value = false;
+    hideGlobalMemoFloatingBanners.value = false;
     super.dispose();
+  }
+
+  void _syncProblemBankOverlayVisibility() {
+    final isProblemBankTab = _selectedTab == 1;
+    ExamModeService.instance.suppressExamActionCluster.value = isProblemBankTab;
+    hideGlobalMemoFloatingBanners.value = isProblemBankTab;
   }
 
   void _onLearningTabSelected(int i) {
     setState(() {
       _selectedTab = i;
     });
-    ExamModeService.instance.suppressExamActionCluster.value = i == 1;
+    _syncProblemBankOverlayVisibility();
     _syncTabOverlay();
   }
 

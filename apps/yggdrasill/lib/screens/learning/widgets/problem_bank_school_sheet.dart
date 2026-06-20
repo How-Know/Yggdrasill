@@ -59,75 +59,14 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
   final Set<String> _privatePageDragKeys = <String>{};
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _expandForSelectedDocument();
-        _expandDefaultPrivateMaterialNodes();
-      }
-    });
-  }
-
-  @override
   void didUpdateWidget(covariant ProblemBankSchoolSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.sidebarRevision != widget.sidebarRevision) {
-      _expandedTreeNodeIds.clear();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _expandForSelectedDocument();
-          _expandDefaultPrivateMaterialNodes();
-        }
-      });
-    } else if (oldWidget.selectedDocumentId != widget.selectedDocumentId ||
-        oldWidget.documents != widget.documents ||
-        oldWidget.privateMaterialUnits != widget.privateMaterialUnits ||
+    if (oldWidget.sidebarRevision != widget.sidebarRevision ||
         oldWidget.selectedSourceTypeCode != widget.selectedSourceTypeCode ||
+        oldWidget.privateMaterialUnits != widget.privateMaterialUnits ||
         oldWidget.privateMaterialTreeEnabled !=
             widget.privateMaterialTreeEnabled) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _expandForSelectedDocument();
-          if (oldWidget.privateMaterialUnits != widget.privateMaterialUnits ||
-              oldWidget.selectedSourceTypeCode !=
-                  widget.selectedSourceTypeCode) {
-            _expandDefaultPrivateMaterialNodes();
-          }
-        }
-      });
-    }
-  }
-
-  void _expandDefaultPrivateMaterialNodes() {
-    if (widget.selectedSourceTypeCode != 'private_material') return;
-    if (!widget.privateMaterialTreeEnabled) return;
-    if (widget.privateMaterialUnits.isEmpty) return;
-    final big = widget.privateMaterialUnits.first;
-    setState(() {
-      _expandedTreeNodeIds.add(_privateBigId(big, 0));
-      for (final mid in big.mids) {
-        _expandedTreeNodeIds.add(_privateMidId(mid));
-        for (final small in mid.smalls) {
-          _expandedTreeNodeIds.add(_privateSmallId(small));
-        }
-      }
-    });
-  }
-
-  void _expandForSelectedDocument() {
-    final id = widget.selectedDocumentId?.trim();
-    if (id == null || id.isEmpty) return;
-    for (final doc in widget.documents) {
-      if (doc.id != id) continue;
-      final school = _schoolLabel(doc);
-      final yearLabel = _yearLabel(doc);
-      final yearKey = '$school|$yearLabel';
-      setState(() {
-        _expandedTreeNodeIds.add('school:$school');
-        _expandedTreeNodeIds.add('year:$yearKey');
-      });
-      return;
+      setState(_expandedTreeNodeIds.clear);
     }
   }
 
@@ -216,7 +155,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       titleTrailing: _buildPrivateMaterialTitleChip(context),
       reserveTitleTrailingSlot:
           widget.selectedSourceTypeCode == 'private_material',
-      reserveSubtitleSlot: widget.selectedSourceTypeCode == 'private_material',
+      reserveSubtitleSlot: false,
       nodes: treeEnabled ? _buildTreeNodes() : const <SharedFolderTreeNode>[],
       selectedNodeId: isPrivateMaterial ? null : widget.selectedDocumentId,
       expandedNodeIds: _expandedTreeNodeIds,
@@ -255,8 +194,8 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
 
     return Material(
       color: Colors.transparent,
-      child: SizedBox(
-        width: double.infinity,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 168),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: highlight,
@@ -264,8 +203,9 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
             border: FabTabBarTokens.groupedCardBorderFor(brightness),
           ),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 2, 2, 2),
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
                   child: Text(
@@ -286,7 +226,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                   onTap: widget.onPrivateMaterialCleared,
                   borderRadius: BorderRadius.circular(999),
                   child: Padding(
-                    padding: const EdgeInsets.all(2),
+                    padding: const EdgeInsets.all(1),
                     child: Icon(
                       Icons.close_rounded,
                       size: 16,

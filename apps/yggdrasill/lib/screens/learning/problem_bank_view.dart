@@ -16,6 +16,7 @@ import '../../widgets/animated_reorderable_grid.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/resource_textbook_card.dart';
 import '../../widgets/shared_folder_tree.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'models/problem_bank_curriculum_filter.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
@@ -94,6 +95,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
   final List<String> _cartQuestionIds = <String>[];
+  final Map<String, LearningProblemQuestion> _cartQuestionsById =
+      <String, LearningProblemQuestion>{};
   final Set<String> _activeTypeFilters = <String>{};
   final Set<String> _activeDifficultyFilters = <String>{};
   bool _questionOrderShuffleEnabled = false;
@@ -121,8 +124,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   bool _questionOrderSaveInFlight = false;
 
   static const double _questionCardSpacing = 8;
-  static const int _questionCardTargetColumns = 5;
-  static const double _questionCardCompactMinWidth = 212;
+  static const double _questionCardPreferredWidth = 428;
+  static const double _questionCardMinReadableWidth = 390;
   static const double _questionCardHeight = 304;
 
   @override
@@ -819,6 +822,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       if (!mounted) return;
       final aliveIds = questions.map((e) => e.id).toSet();
       final nextQuestionModes = <String, String>{};
+      for (final id in _cartQuestionIds) {
+        final question = _cartQuestionsById[id];
+        if (question == null) continue;
+        nextQuestionModes[id] = normalizeQuestionModeSelection(
+          question,
+          _selectedQuestionModes[id],
+          fallbackMode: kLearningQuestionModeOriginal,
+        );
+      }
       for (final q in questions) {
         nextQuestionModes[q.id] = normalizeQuestionModeSelection(
           q,
@@ -843,12 +855,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         } else {
           _selectedQuestionIds.removeWhere((id) => !aliveIds.contains(id));
         }
-        _cartQuestionIds.removeWhere((id) => !aliveIds.contains(id));
-        if (_showOnlySelectedQuestions) {
-          if (_cartQuestionIds.isEmpty ||
-              !_questions.any((q) => _cartQuestionIds.contains(q.id))) {
-            _showOnlySelectedQuestions = false;
+        for (final question in questions) {
+          if (_cartQuestionIds.contains(question.id)) {
+            _cartQuestionsById[question.id] = question;
           }
+        }
+        if (_showOnlySelectedQuestions && _cartQuestionIds.isEmpty) {
+          _showOnlySelectedQuestions = false;
         }
       });
       _previewArtifactPollTimer?.cancel();
@@ -1202,7 +1215,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _selectedPrivateMaterialPageKeys = <String>{};
       _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
       _selectedQuestionIds.clear();
-      _cartQuestionIds.clear();
       _showOnlySelectedQuestions = false;
     });
     await _reloadPrivateMaterialPageTree();
@@ -1290,7 +1302,20 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _showSnack('장바구니에 추가된 문항이 없습니다.');
       return;
     }
+    final cartQuestions = _cartQuestionIds
+        .map((id) => _cartQuestionsById[id])
+        .whereType<LearningProblemQuestion>()
+        .toList(growable: false);
     setState(() => _showOnlySelectedQuestions = true);
+    if (cartQuestions.isNotEmpty) {
+      unawaited(
+        _prefetchFigureSignedUrls(
+          cartQuestions,
+          loadVersion: ++_figureLoadVersion,
+        ),
+      );
+      unawaited(_fetchQuestionPreviews(cartQuestions));
+    }
   }
 
   List<LearningProblemQuestion> get _filteredQuestions {
@@ -1315,20 +1340,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   List<LearningProblemQuestion> get _visibleQuestions {
     final source = _filteredQuestions;
     if (!_showOnlySelectedQuestions) return source;
-    final cartIds = _cartQuestionIds.toSet();
-    return source.where((q) => cartIds.contains(q.id)).toList(growable: false)
-      ..sort((a, b) => _cartQuestionIds
-          .indexOf(a.id)
-          .compareTo(_cartQuestionIds.indexOf(b.id)));
+    return _cartQuestionIds
+        .map((id) => _cartQuestionsById[id])
+        .whereType<LearningProblemQuestion>()
+        .toList(growable: false);
   }
 
   List<LearningProblemQuestion> get _makeTargetQuestions {
     if (_cartQuestionIds.isNotEmpty) {
-      final byId = <String, LearningProblemQuestion>{
-        for (final q in _questions) q.id: q,
-      };
       return _cartQuestionIds
-          .map((id) => byId[id])
+          .map((id) => _cartQuestionsById[id])
           .whereType<LearningProblemQuestion>()
           .toList(growable: false);
     }
@@ -1381,6 +1402,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     var added = 0;
     setState(() {
       for (final question in selected) {
+        _cartQuestionsById[question.id] = question;
         if (_cartQuestionIds.contains(question.id)) continue;
         _cartQuestionIds.add(question.id);
         added += 1;
@@ -1395,6 +1417,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (_cartQuestionIds.isEmpty) return;
     setState(() {
       _cartQuestionIds.clear();
+      _cartQuestionsById.clear();
       _showOnlySelectedQuestions = false;
     });
   }
@@ -1404,6 +1427,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     setState(() {
       _selectedQuestionIds.clear();
       _cartQuestionIds.clear();
+      _cartQuestionsById.clear();
       _showOnlySelectedQuestions = false;
     });
   }
@@ -1644,12 +1668,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _questionOrderTypePriorityEnabled = nextTypePriorityEnabled;
       _questionOrderTypePriorityMode = nextTypePriority;
       if (_cartQuestionIds.isNotEmpty) {
-        final byId = <String, LearningProblemQuestion>{
-          for (final q in _questions) q.id: q,
-        };
         final ordered = _orderedByCurrentSortOptions(
           _cartQuestionIds
-              .map((id) => byId[id])
+              .map((id) => _cartQuestionsById[id])
               .whereType<LearningProblemQuestion>()
               .toList(growable: false),
         );
@@ -1687,79 +1708,70 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Widget _buildQuestionStatsFab() {
     final checked = _checkedVisibleQuestions;
     final checkedTotal = checked.length;
+    final visibleTotal = _visibleQuestions.length;
     final objectiveCount =
         _countQuestionsUsingMode(checked, kLearningQuestionModeObjective);
     final subjectiveCount =
         _countQuestionsUsingMode(checked, kLearningQuestionModeSubjective);
     final essayCount =
         _countQuestionsUsingMode(checked, kLearningQuestionModeEssay);
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
-    final bg =
-        isDark ? const Color(0xE610171A) : Colors.white.withValues(alpha: 0.92);
-    final border = isDark
-        ? const Color(0xFF355056).withValues(alpha: 0.6)
-        : const Color(0xFFD6E1DF);
-    final labelColor =
-        isDark ? const Color(0xFF9FB3B3) : const Color(0xFF667774);
-    final valueColor =
-        isDark ? const Color(0xFFEAF2F2) : const Color(0xFF182422);
+    final possibleObjectiveCount =
+        _countQuestionsAllowing(checked, kLearningQuestionModeObjective);
+    final possibleSubjectiveCount =
+        _countQuestionsAllowing(checked, kLearningQuestionModeSubjective);
+    final possibleEssayCount =
+        _countQuestionsAllowing(checked, kLearningQuestionModeEssay);
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    const fontSize = FabTabBarTokens.fabBarLabelFontSize;
 
-    Widget stat(String label, int value) {
+    String countText(int current, int possible) {
+      if (possible > current) return '$current ($possible)';
+      return '$current';
+    }
+
+    Widget stat(String label, int current, int possible) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             label,
             style: TextStyle(
-              color: labelColor,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+              color: panelStyle.hint,
+              fontSize: fontSize,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.1,
             ),
           ),
-          const SizedBox(width: 5),
+          const SizedBox(width: 6),
           Text(
-            '$value',
+            countText(current, possible),
             style: TextStyle(
-              color: valueColor,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
+              color: panelStyle.title,
+              fontSize: fontSize,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.1,
             ),
           ),
         ],
       );
     }
 
-    return Material(
-      color: Colors.transparent,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: border),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
-              blurRadius: 14,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              stat('총', checkedTotal),
-              const SizedBox(width: 14),
-              stat('객관식', objectiveCount),
-              const SizedBox(width: 14),
-              stat('주관식', subjectiveCount),
-              const SizedBox(width: 14),
-              stat('서술형', essayCount),
-            ],
-          ),
-        ),
+    return FabStyleGlassPanel(
+      useGroupedCardBackgroundInLight: true,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          stat('객관식', objectiveCount, possibleObjectiveCount),
+          const SizedBox(width: 18),
+          stat('주관식', subjectiveCount, possibleSubjectiveCount),
+          const SizedBox(width: 18),
+          stat('서술형', essayCount, possibleEssayCount),
+          const SizedBox(width: 18),
+          stat('총', checkedTotal, visibleTotal),
+        ],
       ),
     );
   }
@@ -3314,6 +3326,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return (gradeKey: 'M1', courseKey: 'M1-$semester');
   }
 
+  // ignore: unused_element
   Future<void> _openExportPresetManagerDialog() async {
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) {
@@ -4577,10 +4590,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               children: [
                 Expanded(
                   child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
                       Positioned.fill(
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 62, 12, 0),
+                          padding: const EdgeInsets.fromLTRB(8, 0, 12, 0),
                           child: _buildQuestionPanel(),
                         ),
                       ),
@@ -4595,6 +4609,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                         child: ProblemBankExportOptionsFab(
                           isBusy: exportBusy,
                           panel: _buildExportOptionsPanel(),
+                          filterButton: ProblemBankFilterMenuButton(
+                            disabled: exportBusy,
+                            filterActive: _questionFilterActive,
+                            typeFilterOptions: _typeFilterOptions,
+                            difficultyFilterOptions: _difficultyFilterOptions,
+                            selectedTypeFilters: _activeTypeFilters,
+                            selectedDifficultyFilters: _activeDifficultyFilters,
+                            onToggleTypeFilter: _toggleTypeFilter,
+                            onToggleDifficultyFilter: _toggleDifficultyFilter,
+                            onClearFilters: _clearQuestionFilters,
+                          ),
                         ),
                       ),
                       Positioned(
@@ -4605,21 +4630,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           cartCount: _cartQuestionIds.length,
                           cartActive: _showOnlySelectedQuestions,
                           allVisibleSelected: _allVisibleQuestionsSelected,
-                          filterActive: _questionFilterActive,
                           isBusy: exportBusy,
-                          typeFilterOptions: _typeFilterOptions,
-                          difficultyFilterOptions: _difficultyFilterOptions,
-                          selectedTypeFilters: _activeTypeFilters,
-                          selectedDifficultyFilters: _activeDifficultyFilters,
                           onToggleSelectAll: _toggleSelectAllVisibleQuestions,
                           onToggleCart: _onToggleShowOnlySelectedFilter,
                           onClearCart: _clearCartQuestions,
                           onAddToCart: _addSelectedQuestionsToCart,
                           onCreate: _openExportLayoutPreviewDialog,
-                          onPreset: _openExportPresetManagerDialog,
-                          onToggleTypeFilter: _toggleTypeFilter,
-                          onToggleDifficultyFilter: _toggleDifficultyFilter,
-                          onClearFilters: _clearQuestionFilters,
                         ),
                       ),
                     ],
@@ -4760,23 +4776,57 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     BoxConstraints constraints,
   ) {
     const fallbackWidth =
-        _questionCardCompactMinWidth * _questionCardTargetColumns +
-            (_questionCardTargetColumns - 1) * _questionCardSpacing;
+        _questionCardPreferredWidth * 6 + 5 * _questionCardSpacing;
     final availableWidth =
         constraints.maxWidth.isFinite ? constraints.maxWidth : fallbackWidth;
-    var columns = _questionCardTargetColumns;
-    while (columns > 1) {
-      final width =
-          (availableWidth - (columns - 1) * _questionCardSpacing) / columns;
-      if (width >= _questionCardCompactMinWidth) break;
-      columns -= 1;
-    }
-    final cardWidth =
+    final idealColumns =
+        ((availableWidth + _questionCardSpacing) /
+                (_questionCardPreferredWidth + _questionCardSpacing))
+            .round();
+    var columns = idealColumns.clamp(1, 99).toInt();
+    var cardWidth =
         (availableWidth - (columns - 1) * _questionCardSpacing) / columns;
+    while (columns > 1 && cardWidth < _questionCardMinReadableWidth) {
+      columns -= 1;
+      cardWidth =
+          (availableWidth - (columns - 1) * _questionCardSpacing) / columns;
+    }
     return (
       availableWidth: availableWidth,
       columns: columns,
       cardWidth: cardWidth,
+    );
+  }
+
+  Widget _buildFixedQuestionGrid({
+    required List<LearningProblemQuestion> questions,
+    required int columns,
+    required double cardWidth,
+  }) {
+    if (questions.isEmpty) return const SizedBox.shrink();
+    final rowCount = (questions.length / columns).ceil();
+    final gridWidth =
+        (columns * cardWidth) + ((columns - 1) * _questionCardSpacing);
+    final gridHeight = (rowCount * _questionCardHeight) +
+        ((rowCount - 1) * _questionCardSpacing);
+
+    return SizedBox(
+      width: gridWidth,
+      height: gridHeight,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (var i = 0; i < questions.length; i++)
+            Positioned(
+              left: (i % columns) * (cardWidth + _questionCardSpacing),
+              top:
+                  (i ~/ columns) * (_questionCardHeight + _questionCardSpacing),
+              width: cardWidth,
+              height: _questionCardHeight,
+              child: _buildQuestionCardTile(questions[i]),
+            ),
+        ],
+      ),
     );
   }
 
@@ -4821,84 +4871,83 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               );
         }
         final keys = grouped.keys.toList(growable: false);
-        return ListView.builder(
-          controller: _questionGridScrollCtrl,
-          padding: const EdgeInsets.only(top: 2, right: 6, bottom: 126),
-          itemCount: keys.length,
-          itemBuilder: (context, index) {
-            final key = keys[index];
-            final questions = grouped[key] ?? const <LearningProblemQuestion>[];
-            final allSelected = questions.isNotEmpty &&
-                questions.every((q) => _selectedQuestionIds.contains(q.id));
-            final anySelected =
-                questions.any((q) => _selectedQuestionIds.contains(q.id));
-            return Padding(
-              padding:
-                  EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111A1D),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF223131)),
-                    ),
-                    child: Row(
-                      children: [
-                        Checkbox(
-                          value:
-                              allSelected ? true : (anySelected ? null : false),
-                          tristate: true,
-                          visualDensity: VisualDensity.compact,
-                          side: const BorderSide(color: Color(0xFF5E7777)),
-                          activeColor: const Color(0xFF1A6B5E),
-                          onChanged: (_) =>
-                              _toggleTypeGroupSelection(questions),
-                        ),
-                        const SizedBox(width: 2),
-                        Expanded(
-                          child: Text(
-                            _privateMaterialTypeGroupTitle(key),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Color(0xFFD6ECEA),
-                              fontWeight: FontWeight.w800,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '${questions.length}문항',
-                          style: const TextStyle(
-                            color: Color(0xFF8AA5A5),
-                            fontWeight: FontWeight.w700,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
-                    ),
+        return Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: metrics.availableWidth,
+            child: ListView.builder(
+              controller: _questionGridScrollCtrl,
+              padding: const EdgeInsets.only(right: 6, bottom: 126),
+              itemCount: keys.length,
+              itemBuilder: (context, index) {
+                final key = keys[index];
+                final questions =
+                    grouped[key] ?? const <LearningProblemQuestion>[];
+                final allSelected = questions.isNotEmpty &&
+                    questions.every((q) => _selectedQuestionIds.contains(q.id));
+                final anySelected = questions
+                    .any((q) => _selectedQuestionIds.contains(q.id));
+                final brightness = Theme.of(context).brightness;
+                final panelStyle =
+                    FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == keys.length - 1 ? 0 : 14,
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: _questionCardSpacing,
-                    runSpacing: _questionCardSpacing,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final question in questions)
-                        SizedBox(
-                          width: metrics.cardWidth,
-                          height: _questionCardHeight,
-                          child: _buildQuestionCardTile(question),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Checkbox(
+                              value: allSelected
+                                  ? true
+                                  : (anySelected ? null : false),
+                              tristate: true,
+                              visualDensity: VisualDensity.compact,
+                              side: BorderSide(color: panelStyle.border),
+                              activeColor: const Color(0xFF33A373),
+                              onChanged: (_) =>
+                                  _toggleTypeGroupSelection(questions),
+                            ),
+                            const SizedBox(width: 2),
+                            Expanded(
+                              child: Text(
+                                _privateMaterialTypeGroupTitle(key),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: panelStyle.title,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 20,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '${questions.length}문항',
+                              style: TextStyle(
+                                color: panelStyle.hint,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
                         ),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildFixedQuestionGrid(
+                        questions: questions,
+                        columns: metrics.columns,
+                        cardWidth: metrics.cardWidth,
+                      ),
                     ],
                   ),
-                ],
-              ),
-            );
-          },
+                );
+              },
+            ),
+          ),
         );
       },
     );
@@ -4934,7 +4983,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         return Align(
           alignment: Alignment.topLeft,
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(0, 4, 12, 120),
+            padding: const EdgeInsets.fromLTRB(0, 0, 12, 120),
             child: SizedBox(
               width: gridWidth,
               child: Wrap(

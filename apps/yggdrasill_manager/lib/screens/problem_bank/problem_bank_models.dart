@@ -1410,3 +1410,86 @@ class ProblemBankIssueSummary {
     return '';
   }
 }
+
+class ProblemBankExportPreset {
+  const ProblemBankExportPreset({
+    required this.id,
+    required this.academyId,
+    required this.displayName,
+    required this.presetKind,
+    required this.storedPaperSize,
+    required this.renderConfig,
+    required this.selectedQuestionUids,
+    required this.selectedQuestionCount,
+    this.createdAt,
+  });
+
+  final String id;
+  final String academyId;
+  final String displayName;
+  final String presetKind;
+  final String storedPaperSize;
+  final Map<String, dynamic> renderConfig;
+  final List<String> selectedQuestionUids;
+  final int selectedQuestionCount;
+  final DateTime? createdAt;
+
+  String get templateProfile =>
+      '${renderConfig['templateProfile'] ?? ''}'.trim();
+  String get paperSize {
+    final fromConfig = '${renderConfig['paperSize'] ?? ''}'.trim();
+    return fromConfig.isNotEmpty ? fromConfig : storedPaperSize.trim();
+  }
+
+  String get naesinLinkKey => '${renderConfig['naesinLinkKey'] ?? ''}'.trim();
+  String get naesinCellLabel =>
+      '${renderConfig['naesinCellLabel'] ?? ''}'.trim();
+  String get naesinCurriculumCode {
+    final raw =
+        '${renderConfig['naesinCurriculumCode'] ?? renderConfig['curriculumCode'] ?? ''}'
+            .trim();
+    return raw == 'rev_2015' ? 'rev_2015' : 'rev_2022';
+  }
+
+  factory ProblemBankExportPreset.fromMap(Map<String, dynamic> map) {
+    final renderConfigRaw = map['render_config'] ?? map['renderConfig'];
+    final renderConfig = renderConfigRaw is Map
+        ? Map<String, dynamic>.from(renderConfigRaw)
+        : <String, dynamic>{};
+    final selectedRaw = map['selected_question_uids'] is List
+        ? map['selected_question_uids']
+        : (map['selectedQuestionUids'] is List
+            ? map['selectedQuestionUids']
+            : (map['selected_question_ids'] is List
+                ? map['selected_question_ids']
+                : map['selectedQuestionIds']));
+    final selectedQuestionUids = selectedRaw is List
+        ? selectedRaw
+            .map((e) => '$e'.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(growable: false)
+        : const <String>[];
+    final countRaw = map['selected_question_count'] ?? map['selectedQuestionCount'];
+    final selectedQuestionCount = countRaw is int
+        ? countRaw
+        : (countRaw is num
+            ? countRaw.toInt()
+            : (selectedQuestionUids.isNotEmpty
+                ? selectedQuestionUids.length
+                : int.tryParse('$countRaw') ?? 0));
+
+    return ProblemBankExportPreset(
+      id: '${map['id'] ?? ''}'.trim(),
+      academyId: '${map['academy_id'] ?? map['academyId'] ?? ''}'.trim(),
+      displayName: '${map['display_name'] ?? map['displayName'] ?? ''}'.trim(),
+      presetKind:
+          '${map['preset_kind'] ?? map['presetKind'] ?? 'settings'}'.trim(),
+      storedPaperSize:
+          '${map['paper_size'] ?? map['paperSize'] ?? ''}'.trim(),
+      renderConfig: renderConfig,
+      selectedQuestionUids: selectedQuestionUids,
+      selectedQuestionCount: selectedQuestionCount,
+      createdAt: _dateTimeOrNull(map['created_at'] ?? map['createdAt']),
+    );
+  }
+}

@@ -13,6 +13,7 @@ import 'problem_bank_models.dart';
 import 'widgets/figure_compare_dialog.dart';
 import 'widgets/figure_horizontal_groups_editor.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
+import 'widgets/problem_bank_export_preset_dialog.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
 import 'widgets/problem_bank_synced_list_dialog.dart';
 import 'widgets/question_revision_reason_dialog.dart';
@@ -14375,6 +14376,21 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     await _loadDocumentContext(doc.id);
   }
 
+  Future<void> _openExportPresetDialog() async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.trim().isEmpty) {
+      _showSnack('아카데미 정보를 불러오지 못했습니다.', error: true);
+      return;
+    }
+    if (!mounted) return;
+    await showProblemBankExportPresetDialog(
+      context: context,
+      service: _service,
+      academyId: academyId,
+      showSnack: _showSnack,
+    );
+  }
+
   Future<void> _openSyncedListDialog() async {
     final academyId = _academyId;
     if (academyId == null || academyId.trim().isEmpty) {
@@ -15319,6 +15335,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       onPressed: _openMarkerSyntaxDialog,
                       icon: const Icon(Icons.code_rounded, size: 16),
                       label: const Text('마커 목록'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: (_isResetting || _academyId == null)
+                          ? null
+                          : () => unawaited(_openExportPresetDialog()),
+                      icon: const Icon(Icons.bookmark_outline, size: 16),
+                      label: const Text('프리셋'),
                     ),
                     const SizedBox(width: 8),
                     FilledButton.icon(

@@ -1,7 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../models/problem_bank_export_models.dart';
+
+const double _kPreviewHorizontalInset = 8;
+const double _kPreviewBorderRadius = 10;
+const double _kPreviewBorderWidth = 1.4;
+const double _kPreviewHeight = 222;
+// 헤더↔썸네일 간격: 12 → 9.6 → 추가 20% 축소 ≈ 7.68
+const double _kHeaderTopPadding = 6;
+const double _kHeaderPreviewGapHalf = 3.84;
+const double _kContentBottomPadding = 4;
+// 썸네일↔메타 간격: 기존 4의 2배 (줄간격 2배는 이 여백으로 표현)
+const double _kMetaTopGap = 8;
+const double _kMetaLineHeight = 1.3;
+const double _kMetaLeftInset = _kPreviewHorizontalInset + 2;
 
 class ProblemBankQuestionCard extends StatelessWidget {
   const ProblemBankQuestionCard({
@@ -37,39 +51,47 @@ class ProblemBankQuestionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = _palette(paperStyle: paperStyle, selected: selected);
+    final color = _palette(context, paperStyle: paperStyle);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       decoration: BoxDecoration(
-        color: color.cardBg,
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(14),
         // 선택 시에도 테두리 두께를 동일하게 유지해 안쪽 레이아웃이 밀리지 않게 함
-        border: Border.all(color: color.border, width: 2),
-        boxShadow: color.boxShadow,
+        border: Border.all(color: Colors.transparent, width: 2),
       ),
       child: Column(
         children: [
-          _buildHeader(color),
-          Divider(height: 1, color: color.divider),
+          _buildHeader(context, color),
           Padding(
-            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            padding: EdgeInsets.fromLTRB(
+              _kPreviewHorizontalInset,
+              _kHeaderPreviewGapHalf,
+              _kPreviewHorizontalInset,
+              _kContentBottomPadding,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(
-                  height: 222,
+                  height: _kPreviewHeight,
                   child: _buildPreviewContent(),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  _metaSummaryText(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color.textMuted,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    height: 1.3,
+                Padding(
+                  padding: EdgeInsets.only(
+                    left: _kMetaLeftInset - _kPreviewHorizontalInset,
+                    top: _kMetaTopGap,
+                  ),
+                  child: Text(
+                    _metaSummaryText(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: color.textMuted,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      height: _kMetaLineHeight,
+                    ),
                   ),
                 ),
               ],
@@ -81,16 +103,49 @@ class ProblemBankQuestionCard extends StatelessWidget {
   }
 
   Widget _buildPreviewContent() {
-    final wrapper = Container(
+    final borderColor =
+        selected ? const Color(0xFF33A373) : Colors.grey.shade200;
+
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(_kPreviewBorderRadius),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: selected ? 0.18 : 0.10),
+            blurRadius: selected ? 16 : 12,
+            offset: const Offset(0, 5),
+          ),
+        ],
       ),
-      clipBehavior: Clip.antiAlias,
-      child: _buildPreviewInner(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(_kPreviewBorderRadius),
+            child: ColoredBox(
+              color: Colors.white,
+              child: _buildPreviewInner(),
+            ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 140),
+                curve: Curves.easeOut,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(_kPreviewBorderRadius),
+                  border: Border.all(
+                    color: borderColor,
+                    width: _kPreviewBorderWidth,
+                    strokeAlign: BorderSide.strokeAlignInside,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
-    return wrapper;
   }
 
   Widget _buildPreviewInner() {
@@ -194,15 +249,19 @@ class ProblemBankQuestionCard extends StatelessWidget {
     );
   }
 
-  Widget _buildHeader(_CardPalette color) {
+  Widget _buildHeader(BuildContext context, _CardPalette color) {
     final availableModes = selectableQuestionModesOf(question);
-    final originalMode = originalQuestionModeOf(question);
     final effectiveSelected = normalizeQuestionModeSelection(
       question,
       selectedMode,
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+      padding: EdgeInsets.fromLTRB(
+        6,
+        _kHeaderTopPadding,
+        6,
+        _kHeaderPreviewGapHalf,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -225,32 +284,53 @@ class ProblemBankQuestionCard extends StatelessWidget {
             child: _buildQuestionTitle(color),
           ),
           const SizedBox(width: 4),
-          SizedBox(
-            width: 104,
-            height: 28,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerRight,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (var i = 0; i < availableModes.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 3),
-                      _buildModeChip(
-                        availableModes[i],
-                        color: color,
-                        isOriginal: availableModes[i] == originalMode,
-                        isSelected: availableModes[i] == effectiveSelected,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+          Flexible(
+            flex: 0,
+            child: _buildModeChipBar(
+              context,
+              availableModes: availableModes,
+              effectiveSelected: effectiveSelected,
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildModeChipBar(
+    BuildContext context, {
+    required List<String> availableModes,
+    required String effectiveSelected,
+  }) {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final enabled = onModeSelected != null && !paperStyle;
+
+    return Container(
+      height: 28,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: panelStyle.dropdownBackground,
+        borderRadius: BorderRadius.circular(999),
+        border: FabTabBarTokens.groupedCardBorderFor(brightness),
+      ),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerRight,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < availableModes.length; i++) ...[
+              if (i > 0) const SizedBox(width: 2),
+              _buildModeChip(
+                context,
+                availableModes[i],
+                isSelected: availableModes[i] == effectiveSelected,
+                enabled: enabled,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -347,62 +427,63 @@ class ProblemBankQuestionCard extends StatelessWidget {
   }
 
   Widget _buildModeChip(
+    BuildContext context,
     String mode, {
-    required _CardPalette color,
-    required bool isOriginal,
     required bool isSelected,
+    required bool enabled,
   }) {
-    final label = questionModeLabelOf(mode);
-    final enabled = onModeSelected != null && !paperStyle;
-    final bg = isOriginal ? color.badgeBg : Colors.transparent;
-    final borderColor = isSelected
-        ? color.accent
-        : (isOriginal ? color.badgeBorder : color.metaChipBorder);
-    final textColor = isOriginal ? color.badgeText : color.textMuted;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: enabled ? () => onModeSelected?.call(mode) : null,
-        child: SizedBox(
-          width: 48,
-          height: 24,
-          child: Container(
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: borderColor),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                SizedBox(
-                  width: 12,
-                  child: isSelected
-                      ? Icon(
-                          Icons.check_rounded,
-                          size: 12,
-                          color: isOriginal ? color.badgeText : color.accent,
-                        )
-                      : const SizedBox.shrink(),
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final highlight = FabTabBarTokens.fabHighlightPillFill(brightness);
+    final label = _modeChipLabel(mode);
+    final tooltip = questionModeLabelOf(mode);
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 450),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: isSelected ? highlight : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: enabled ? () => onModeSelected?.call(mode) : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? panelStyle.title : panelStyle.hint,
+                  fontSize: 10.5,
+                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                  letterSpacing: 0.1,
+                  height: 1,
                 ),
-                const SizedBox(width: 1),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: textColor,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  static String _modeChipLabel(String mode) {
+    switch (mode.trim()) {
+      case kLearningQuestionModeObjective:
+        return '객';
+      case kLearningQuestionModeSubjective:
+        return '주';
+      case kLearningQuestionModeEssay:
+        return '서';
+      case kLearningQuestionModeOriginal:
+      default:
+        return '기본';
+    }
   }
 }
 
@@ -512,76 +593,36 @@ class _DifficultyDot extends StatelessWidget {
 
 class _CardPalette {
   const _CardPalette({
-    required this.cardBg,
-    required this.border,
-    required this.divider,
     required this.textPrimary,
     required this.textMuted,
-    required this.badgeBg,
-    required this.badgeBorder,
-    required this.badgeText,
-    required this.metaChipBg,
-    required this.metaChipBorder,
     required this.checkBorder,
     required this.accent,
-    required this.boxShadow,
   });
 
-  final Color cardBg;
-  final Color border;
-  final Color divider;
   final Color textPrimary;
   final Color textMuted;
-  final Color badgeBg;
-  final Color badgeBorder;
-  final Color badgeText;
-  final Color metaChipBg;
-  final Color metaChipBorder;
   final Color checkBorder;
   final Color accent;
-  final List<BoxShadow> boxShadow;
 }
 
-_CardPalette _palette({
+_CardPalette _palette(
+  BuildContext context, {
   required bool paperStyle,
-  required bool selected,
 }) {
   if (paperStyle) {
-    return _CardPalette(
-      cardBg: Colors.white,
-      border: selected ? const Color(0xFF9EC5AF) : const Color(0xFFE0E0E0),
-      divider: const Color(0xFFEDEDED),
-      textPrimary: const Color(0xFF232323),
-      textMuted: const Color(0xFF66727A),
-      badgeBg: const Color(0xFFE8F1EC),
-      badgeBorder: const Color(0xFFC8DDD0),
-      badgeText: const Color(0xFF2F6D4E),
-      metaChipBg: const Color(0xFFF6F6F6),
-      metaChipBorder: const Color(0xFFE7E7E7),
-      checkBorder: const Color(0xFF9E9E9E),
-      accent: const Color(0xFF1B6B63),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x11000000),
-          blurRadius: 8,
-          offset: Offset(0, 3),
-        ),
-      ],
+    return const _CardPalette(
+      textPrimary: Color(0xFF232323),
+      textMuted: Color(0xFF66727A),
+      checkBorder: Color(0xFF9E9E9E),
+      accent: Color(0xFF1B6B63),
     );
   }
+  final brightness = Theme.of(context).brightness;
+  final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
   return _CardPalette(
-    cardBg: const Color(0xFF15171C),
-    border: selected ? const Color(0xFF2F786B) : const Color(0xFF223131),
-    divider: const Color(0xFF223131),
-    textPrimary: const Color(0xFFEAF2F2),
-    textMuted: const Color(0xFF9FB3B3),
-    badgeBg: const Color(0xFF173C36),
-    badgeBorder: const Color(0xFF2B6B61),
-    badgeText: const Color(0xFFBEE7D2),
-    metaChipBg: const Color(0xFF151E24),
-    metaChipBorder: const Color(0xFF223131),
-    checkBorder: const Color(0xFF5C7272),
-    accent: const Color(0xFF1B6B63),
-    boxShadow: const [],
+    textPrimary: panelStyle.title,
+    textMuted: panelStyle.hint,
+    checkBorder: panelStyle.border,
+    accent: const Color(0xFF33A373),
   );
 }
