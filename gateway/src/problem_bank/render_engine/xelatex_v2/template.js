@@ -1780,13 +1780,13 @@ function setBuilderMacroLines() {
 //   - amsmath 뒤에 로드해야 한다. amssymb 와 함께 쓰면 redefining 경고가 다수 뜨지만
 //     컴파일에는 문제 없다.
 //   - 적용 범위: ( ) [ ] { } | ‖
-//   - 구분자 폰트: TeX Gyre Termes Math (얇고 곡선이 살아있는 세리프 괄호 → 한국 교과서식).
+//   - 구분자 폰트: Cambria Math (곡률이 뚜렷한 둥근 괄호 → 한국 교과서식). 곡선 강조.
 function unicodeMathDelimiterLines() {
   const range = '"0028,"0029,"005B,"005D,"007B,"007D,"007C,"2016';
   return [
     '\\usepackage{unicode-math}',
     '\\setmathfont{Latin Modern Math}',
-    `\\setmathfont[range={${range}}]{TeX Gyre Termes Math}`,
+    `\\setmathfont[range={${range}}]{Cambria Math}`,
   ];
 }
 
