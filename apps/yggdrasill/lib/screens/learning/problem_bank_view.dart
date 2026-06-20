@@ -13,15 +13,18 @@ import '../../services/tenant_service.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
+import '../../widgets/app_snackbar.dart';
+import '../../widgets/resource_textbook_card.dart';
 import '../../widgets/shared_folder_tree.dart';
 import 'models/problem_bank_curriculum_filter.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
+import 'widgets/problem_bank_export_options_fab.dart';
 import 'widgets/problem_bank_export_options_panel.dart';
 import 'widgets/problem_bank_export_server_preview_dialog.dart';
-import 'widgets/problem_bank_filter_bar.dart';
 import 'widgets/problem_bank_question_card.dart';
 import 'widgets/problem_bank_school_sheet.dart';
+import 'widgets/problem_bank_sidebar_range_section.dart';
 
 class ProblemBankView extends StatefulWidget {
   const ProblemBankView({super.key});
@@ -80,6 +83,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   List<_PrivateMaterialOption> _privateMaterialOptions =
       const <_PrivateMaterialOption>[];
   String _selectedPrivateMaterialKey = '';
+  Map<String, _PrivateMaterialBookCardData> _privateMaterialBookCards =
+      const <String, _PrivateMaterialBookCardData>{};
+  bool _isLoadingPrivateMaterialBookCards = false;
   List<ProblemBankPrivateMaterialBigNode> _privateMaterialUnits =
       const <ProblemBankPrivateMaterialBigNode>[];
   Set<String> _selectedPrivateMaterialPageKeys = <String>{};
@@ -294,15 +300,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return null;
   }
 
-  String _selectedPrivateMaterialDropdownValue() {
-    if (_privateMaterialOptions.isEmpty) return '';
-    if (_privateMaterialOptions
-        .any((m) => m.key == _selectedPrivateMaterialKey)) {
-      return _selectedPrivateMaterialKey;
-    }
-    return _privateMaterialOptions.first.key;
-  }
-
   List<_PrivateMaterialOption> _buildPrivateMaterialOptions(
     List<LearningProblemDocumentSummary> docs,
   ) {
@@ -359,9 +356,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final options = _buildPrivateMaterialOptions(docs);
           final previousMaterialKey = _selectedPrivateMaterialKey;
           _privateMaterialOptions = options;
-          if (!options.any((m) => m.key == _selectedPrivateMaterialKey)) {
-            _selectedPrivateMaterialKey =
-                options.isNotEmpty ? options.first.key : '';
+          if (_selectedPrivateMaterialKey.isNotEmpty &&
+              !options.any((m) => m.key == _selectedPrivateMaterialKey)) {
+            _selectedPrivateMaterialKey = '';
           }
           if (previousMaterialKey != _selectedPrivateMaterialKey) {
             _selectedPrivateMaterialPageKeys = <String>{};
@@ -371,6 +368,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         } else {
           _privateMaterialOptions = const <_PrivateMaterialOption>[];
           _selectedPrivateMaterialKey = '';
+          _privateMaterialBookCards =
+              const <String, _PrivateMaterialBookCardData>{};
           _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
           _selectedPrivateMaterialPageKeys = <String>{};
           if (_selectedDocumentId == null ||
@@ -379,6 +378,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
         }
       });
+      if (_isPrivateMaterialSource) {
+        unawaited(_reloadPrivateMaterialBookCards());
+      }
     } catch (e) {
       _showSnack('문서 목록 조회 실패: $e');
     } finally {
@@ -388,6 +390,84 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         });
       }
     }
+  }
+
+  Future<void> _reloadPrivateMaterialBookCards() async {
+    if (!_isPrivateMaterialSource) return;
+    if (mounted) {
+      setState(() => _isLoadingPrivateMaterialBookCards = true);
+    }
+    try {
+      final rows =
+          await DataManager.instance.loadResourceFilesForCategory('textbook');
+      final byId = <String, Map<String, dynamic>>{
+        for (final row in rows)
+          if ('${row['id'] ?? ''}'.trim().isNotEmpty)
+            '${row['id']}'.trim(): row,
+      };
+      final next = <String, _PrivateMaterialBookCardData>{};
+      for (final option in _privateMaterialOptions) {
+        final data = _buildPrivateMaterialBookCardData(option, byId);
+        final coverPath = await _loadPrivateMaterialCoverPath(
+          bookId: option.bookId.trim(),
+          gradeLabel: option.gradeLabel.trim(),
+        );
+        next[option.key] = data.copyWith(coverPath: coverPath);
+      }
+      if (!mounted) return;
+      setState(() {
+        _privateMaterialBookCards = next;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _privateMaterialBookCards = {
+          for (final option in _privateMaterialOptions)
+            option.key: _buildPrivateMaterialBookCardData(option, const {}),
+        };
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingPrivateMaterialBookCards = false);
+      }
+    }
+  }
+
+  _PrivateMaterialBookCardData _buildPrivateMaterialBookCardData(
+    _PrivateMaterialOption option,
+    Map<String, Map<String, dynamic>> textbookRowsById,
+  ) {
+    final bookId = option.bookId.trim();
+    final row = bookId.isNotEmpty ? textbookRowsById[bookId] : null;
+    final name = (row?['name'] as String?)?.trim();
+    final description = (row?['description'] as String?)?.trim();
+    final colorValue = row?['color'] as int?;
+    return _PrivateMaterialBookCardData(
+      title: (name != null && name.isNotEmpty) ? name : option.label,
+      description: description,
+      gradeLabel: option.gradeLabel.trim(),
+      backgroundColor: colorValue != null ? Color(colorValue) : null,
+    );
+  }
+
+  Future<String?> _loadPrivateMaterialCoverPath({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    try {
+      final links = await DataManager.instance.loadResourceFileLinks(bookId);
+      final grade = gradeLabel.trim();
+      if (grade.isNotEmpty) {
+        final cover = links['$grade#cover']?.trim();
+        if (cover != null && cover.isNotEmpty) return cover;
+      }
+      for (final entry in links.entries) {
+        if (!entry.key.endsWith('#cover')) continue;
+        final value = entry.value.trim();
+        if (value.isNotEmpty) return value;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> _reloadPrivateMaterialPageTree() async {
@@ -1103,8 +1183,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _selectedPrivateMaterialKey = '';
       _selectedPrivateMaterialPageKeys = <String>{};
       _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
+      _privateMaterialBookCards =
+          const <String, _PrivateMaterialBookCardData>{};
     });
     await _reloadSchoolsAndQuestions(resetSelection: true);
+  }
+
+  Future<void> _onPrivateMaterialCleared() async {
+    if (_selectedPrivateMaterialKey.trim().isEmpty) return;
+    await _onPrivateMaterialChanged('');
   }
 
   Future<void> _onPrivateMaterialChanged(String? value) async {
@@ -1597,52 +1684,100 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         .length;
   }
 
-  Widget _buildRangeSummaryControls({required bool isBusy}) {
-    final visible = _visibleQuestions;
+  Widget _buildQuestionStatsFab() {
     final checked = _checkedVisibleQuestions;
     final checkedTotal = checked.length;
-    final visibleTotal = visible.length;
     final objectiveCount =
         _countQuestionsUsingMode(checked, kLearningQuestionModeObjective);
     final subjectiveCount =
         _countQuestionsUsingMode(checked, kLearningQuestionModeSubjective);
     final essayCount =
         _countQuestionsUsingMode(checked, kLearningQuestionModeEssay);
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final bg =
+        isDark ? const Color(0xE610171A) : Colors.white.withValues(alpha: 0.92);
+    final border = isDark
+        ? const Color(0xFF355056).withValues(alpha: 0.6)
+        : const Color(0xFFD6E1DF);
+    final labelColor =
+        isDark ? const Color(0xFF9FB3B3) : const Color(0xFF667774);
+    final valueColor =
+        isDark ? const Color(0xFFEAF2F2) : const Color(0xFF182422);
+
+    Widget stat(String label, int value) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: labelColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            '$value',
+            style: TextStyle(
+              color: valueColor,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              stat('총', checkedTotal),
+              const SizedBox(width: 14),
+              stat('객관식', objectiveCount),
+              const SizedBox(width: 14),
+              stat('주관식', subjectiveCount),
+              const SizedBox(width: 14),
+              stat('서술형', essayCount),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuestionSelectionOptionsPanel({required bool isBusy}) {
+    final checked = _checkedVisibleQuestions;
     final possibleObjectiveCount =
         _countQuestionsAllowing(checked, kLearningQuestionModeObjective);
     final possibleSubjectiveCount =
         _countQuestionsAllowing(checked, kLearningQuestionModeSubjective);
-    final possibleEssayCount =
-        _countQuestionsAllowing(checked, kLearningQuestionModeEssay);
-    const labelStyle = TextStyle(
-      color: Color(0xFF9FB3B3),
-      fontSize: 11,
-      fontWeight: FontWeight.w700,
-    );
-    const valueStyle = TextStyle(
-      color: Color(0xFFEAF2F2),
-      fontSize: 12,
-      fontWeight: FontWeight.w800,
-    );
-
-    Widget stat(String label, String value) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xFF10171A),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF333333)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label, style: labelStyle),
-            const SizedBox(width: 5),
-            Text(value, style: valueStyle),
-          ],
-        ),
-      );
-    }
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final panelBg = isDark ? const Color(0xFF222222) : Colors.white;
+    final border = isDark ? const Color(0xFF333333) : const Color(0xFFD6E1DF);
+    final muted = isDark ? const Color(0xFF9FB3B3) : const Color(0xFF667774);
+    final primary = isDark ? const Color(0xFFEAF2F2) : const Color(0xFF182422);
+    final controlBg =
+        isDark ? const Color(0xFF10171A) : const Color(0xFFF4F8F7);
 
     Widget actionButton({
       required String label,
@@ -1653,8 +1788,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         child: OutlinedButton(
           onPressed: isBusy ? null : onPressed,
           style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFFBEE7D2),
-            side: const BorderSide(color: Color(0xFF2B6B61)),
+            foregroundColor: primary,
+            side: BorderSide(color: border),
             padding: const EdgeInsets.symmetric(horizontal: 12),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(999),
@@ -1680,17 +1815,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           height: 34,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFF10171A),
+            color: controlBg,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFF333333)),
+            border: Border.all(color: border),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: value,
-              dropdownColor: const Color(0xFF151C21),
-              iconEnabledColor: const Color(0xFF9FB3B3),
-              style: const TextStyle(
-                color: Color(0xFFEAF2F2),
+              dropdownColor: isDark ? const Color(0xFF151C21) : Colors.white,
+              iconEnabledColor: muted,
+              style: TextStyle(
+                color: primary,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
@@ -1724,11 +1859,18 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             value: checked,
             visualDensity: VisualDensity.compact,
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            side: const BorderSide(color: Color(0xFF5E7777)),
+            side: BorderSide(color: border),
             activeColor: const Color(0xFF1A6B5E),
             onChanged: isBusy ? null : (v) => onChecked(v == true),
           ),
-          Text(label, style: labelStyle),
+          Text(
+            label,
+            style: TextStyle(
+              color: muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(width: 6),
           dropdown(
             value: value,
@@ -1743,19 +1885,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF222222),
+        color: panelBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF333333)),
+        border: Border.all(color: border),
       ),
       child: Wrap(
         spacing: 8,
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          stat('총 문항', '$checkedTotal (가능 $visibleTotal)'),
-          stat('객관식', '$objectiveCount (가능 $possibleObjectiveCount)'),
-          stat('주관식', '$subjectiveCount (가능 $possibleSubjectiveCount)'),
-          stat('서술형', '$essayCount (가능 $possibleEssayCount)'),
           actionButton(
             label: '가능 문항 객관식',
             onPressed: possibleObjectiveCount == 0
@@ -1771,7 +1909,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     _setVisibleQuestionsMode(kLearningQuestionModeSubjective),
           ),
           const SizedBox(width: 2),
-          const Text('문항순서', style: labelStyle),
+          Text(
+            '문항순서',
+            style: TextStyle(
+              color: muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           checkDropdown(
             label: '섞기/난이도',
             checked: _questionOrderShuffleEnabled,
@@ -4198,25 +4343,215 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   void _showSnack(String message) {
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message);
   }
 
-  Widget _buildProblemBankSidebar() {
-    return ProblemBankSchoolSheet(
-      sidebarRevision: _sidebarRevision,
-      selectedSourceTypeCode: _selectedSourceTypeCode,
-      documents: _sidebarDocuments,
-      selectedDocumentId: _selectedDocumentId,
-      onDocumentSelected: _onSidebarDocumentSelected,
-      isLoading: _isLoadingSchools || _isLoadingPrivateMaterialPages,
-      privateMaterialUnits: _privateMaterialUnits,
-      selectedPrivateMaterialPageKeys: _selectedPrivateMaterialPageKeys,
-      onPrivateMaterialPageToggled: _onPrivateMaterialPageToggled,
-      onPrivateMaterialPageKeysToggled: _onPrivateMaterialPageKeysToggled,
-      privateMaterialTitle: _selectedPrivateMaterialOption?.label ?? '',
-      privateMaterialEmptyMessage: _privateMaterialEmptyMessage,
+  Widget _buildExportOptionsPanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ProblemBankExportOptionsPanel(
+          settings: _exportSettings,
+          selectedCount: _makeTargetQuestions.length,
+          isBusy: _isExporting,
+          isSavingLocally: _isSavingExportLocally,
+          activeJob: _activeExportJob,
+          onTemplateChanged: (value) {
+            setState(() {
+              if (value == '과제형') {
+                _exportSettings = _exportSettings.copyWith(
+                  templateLabel: value,
+                  paperLabel: 'A4',
+                  layoutColumnLabel: '2단',
+                  maxQuestionsPerPageLabel: '4',
+                );
+              } else if (value == '모의고사형' || value == '수능형') {
+                _exportSettings = _exportSettings.copyWith(
+                  templateLabel: value,
+                  paperLabel: 'B4',
+                  layoutColumnLabel: '2단',
+                  maxQuestionsPerPageLabel: '4',
+                );
+              } else {
+                _exportSettings = _exportSettings.copyWith(
+                  templateLabel: value,
+                );
+              }
+            });
+          },
+          onPaperChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(paperLabel: value);
+            });
+          },
+          onQuestionModeChanged: (value) {
+            setState(() {
+              _exportSettings =
+                  _exportSettings.copyWith(questionModeLabel: value);
+            });
+          },
+          onLayoutColumnsChanged: _setExportLayoutColumns,
+          onMaxQuestionsPerPageChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                maxQuestionsPerPageLabel: value,
+              );
+            });
+          },
+          onFontFamilyChanged: (value) {
+            setState(() {
+              _exportSettings =
+                  _exportSettings.copyWith(fontFamilyLabel: value);
+            });
+          },
+          onFontSizeChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(fontSizeLabel: value);
+            });
+          },
+          onIncludeAnswerSheetChanged: (value) {
+            setState(() {
+              _exportSettings =
+                  _exportSettings.copyWith(includeAnswerSheet: value);
+            });
+          },
+          onIncludeExplanationChanged: (value) {
+            setState(() {
+              _exportSettings =
+                  _exportSettings.copyWith(includeExplanation: value);
+            });
+          },
+          onPageMarginChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  pageMargin: value,
+                ),
+              );
+            });
+          },
+          onColumnGapChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  columnGap: value,
+                ),
+              );
+            });
+          },
+          onQuestionGapChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  questionGap: value,
+                ),
+              );
+            });
+          },
+          onNumberLaneWidthChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  numberLaneWidth: value,
+                ),
+              );
+            });
+          },
+          onNumberGapChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  numberGap: value,
+                ),
+              );
+            });
+          },
+          onHangingIndentChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  hangingIndent: value,
+                ),
+              );
+            });
+          },
+          onLineHeightChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  lineHeight: value,
+                ),
+              );
+            });
+          },
+          onChoiceSpacingChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                layoutTuning: _exportSettings.layoutTuning.copyWith(
+                  choiceSpacing: value,
+                ),
+              );
+            });
+          },
+          onTargetDpiChanged: (value) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                figureQuality: _exportSettings.figureQuality.copyWith(
+                  targetDpi: value,
+                  minDpi: math.min(_exportSettings.figureQuality.minDpi, value),
+                ),
+              );
+            });
+          },
+        ),
+        const SizedBox(height: 8),
+        _buildQuestionSelectionOptionsPanel(isBusy: _isExporting),
+      ],
+    );
+  }
+
+  Widget _buildProblemBankSidebar({required bool isBusy}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ProblemBankSidebarRangeSection(
+          selectedLevel: _selectedSchoolLevel,
+          levelOptions: _levelOptions,
+          onLevelChanged: _onSchoolLevelChanged,
+          selectedSourceTypeCode: _selectedSourceTypeCode,
+          sourceTypeLabels: _sourceTypeLabels,
+          onSourceTypeChanged: _onSourceTypeChanged,
+          curriculumFilter: _curriculumFilter,
+          onCurriculumFilterChanged: (next) =>
+              unawaited(_onCurriculumFilterChanged(next)),
+          selectedCourse: _selectedDetailedCourse,
+          courseOptions: _courseOptions,
+          onCourseChanged: _onDetailedCourseChanged,
+          isBusy: isBusy,
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ProblemBankSchoolSheet(
+            sidebarRevision: _sidebarRevision,
+            selectedSourceTypeCode: _selectedSourceTypeCode,
+            documents: _sidebarDocuments,
+            selectedDocumentId: _selectedDocumentId,
+            onDocumentSelected: _onSidebarDocumentSelected,
+            isLoading: _isLoadingSchools || _isLoadingPrivateMaterialPages,
+            privateMaterialUnits: _privateMaterialUnits,
+            selectedPrivateMaterialPageKeys: _selectedPrivateMaterialPageKeys,
+            onPrivateMaterialPageToggled: _onPrivateMaterialPageToggled,
+            onPrivateMaterialPageKeysToggled: _onPrivateMaterialPageKeysToggled,
+            privateMaterialTitle: _selectedPrivateMaterialOption?.label ?? '',
+            privateMaterialEmptyMessage: _privateMaterialEmptyMessage,
+            privateMaterialTreeEnabled:
+                _selectedPrivateMaterialKey.trim().isNotEmpty,
+            onPrivateMaterialCleared: () =>
+                unawaited(_onPrivateMaterialCleared()),
+          ),
+        ),
+      ],
     );
   }
 
@@ -4234,247 +4569,32 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             top: 12,
             bottom: 12,
             width: sidebarWidth,
-            child: _buildProblemBankSidebar(),
+            child: _buildProblemBankSidebar(isBusy: busy || exportBusy),
           ),
           Padding(
             padding: EdgeInsets.only(left: sidebarWidth + 30),
             child: Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(0, 12, 12, 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 13,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            ProblemBankFilterBar(
-                              curriculumFilter: _curriculumFilter,
-                              onCurriculumFilterChanged: (next) =>
-                                  unawaited(_onCurriculumFilterChanged(next)),
-                              selectedLevel: _selectedSchoolLevel,
-                              levelOptions: _levelOptions,
-                              onLevelChanged: _onSchoolLevelChanged,
-                              selectedCourse: _selectedDetailedCourse,
-                              courseOptions: _courseOptions,
-                              onCourseChanged: _onDetailedCourseChanged,
-                              selectedSourceTypeCode: _selectedSourceTypeCode,
-                              sourceTypeLabels: _sourceTypeLabels,
-                              onSourceTypeChanged: _onSourceTypeChanged,
-                              selectedPrivateMaterialKey:
-                                  _selectedPrivateMaterialDropdownValue(),
-                              privateMaterialOptions: _privateMaterialOptions
-                                  .map(
-                                    (m) => DropdownMenuItem<String>(
-                                      value: m.key,
-                                      child: Text(
-                                        m.label,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(growable: false),
-                              onPrivateMaterialChanged:
-                                  _onPrivateMaterialChanged,
-                              isBusy: busy || exportBusy,
-                            ),
-                            const SizedBox(height: 8),
-                            _buildRangeSummaryControls(
-                              isBusy: busy || exportBusy,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        flex: 12,
-                        child: ProblemBankExportOptionsPanel(
-                          settings: _exportSettings,
-                          selectedCount: _makeTargetQuestions.length,
-                          isBusy: _isExporting,
-                          isSavingLocally: _isSavingExportLocally,
-                          activeJob: _activeExportJob,
-                          onTemplateChanged: (value) {
-                            setState(() {
-                              if (value == '과제형') {
-                                _exportSettings = _exportSettings.copyWith(
-                                  templateLabel: value,
-                                  paperLabel: 'A4',
-                                  layoutColumnLabel: '2단',
-                                  maxQuestionsPerPageLabel: '4',
-                                );
-                              } else if (value == '모의고사형' || value == '수능형') {
-                                _exportSettings = _exportSettings.copyWith(
-                                  templateLabel: value,
-                                  paperLabel: 'B4',
-                                  layoutColumnLabel: '2단',
-                                  maxQuestionsPerPageLabel: '4',
-                                );
-                              } else {
-                                _exportSettings = _exportSettings.copyWith(
-                                  templateLabel: value,
-                                );
-                              }
-                            });
-                          },
-                          onPaperChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                paperLabel: value,
-                              );
-                            });
-                          },
-                          onQuestionModeChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                questionModeLabel: value,
-                              );
-                            });
-                          },
-                          onLayoutColumnsChanged: _setExportLayoutColumns,
-                          onMaxQuestionsPerPageChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                maxQuestionsPerPageLabel: value,
-                              );
-                            });
-                          },
-                          onFontFamilyChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                fontFamilyLabel: value,
-                              );
-                            });
-                          },
-                          onFontSizeChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                fontSizeLabel: value,
-                              );
-                            });
-                          },
-                          onIncludeAnswerSheetChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                includeAnswerSheet: value,
-                              );
-                            });
-                          },
-                          onIncludeExplanationChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                includeExplanation: value,
-                              );
-                            });
-                          },
-                          onPageMarginChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  pageMargin: value,
-                                ),
-                              );
-                            });
-                          },
-                          onColumnGapChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  columnGap: value,
-                                ),
-                              );
-                            });
-                          },
-                          onQuestionGapChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  questionGap: value,
-                                ),
-                              );
-                            });
-                          },
-                          onNumberLaneWidthChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  numberLaneWidth: value,
-                                ),
-                              );
-                            });
-                          },
-                          onNumberGapChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  numberGap: value,
-                                ),
-                              );
-                            });
-                          },
-                          onHangingIndentChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  hangingIndent: value,
-                                ),
-                              );
-                            });
-                          },
-                          onLineHeightChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  lineHeight: value,
-                                ),
-                              );
-                            });
-                          },
-                          onChoiceSpacingChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                layoutTuning:
-                                    _exportSettings.layoutTuning.copyWith(
-                                  choiceSpacing: value,
-                                ),
-                              );
-                            });
-                          },
-                          onTargetDpiChanged: (value) {
-                            setState(() {
-                              _exportSettings = _exportSettings.copyWith(
-                                figureQuality:
-                                    _exportSettings.figureQuality.copyWith(
-                                  targetDpi: value,
-                                  minDpi: math.min(
-                                    _exportSettings.figureQuality.minDpi,
-                                    value,
-                                  ),
-                                ),
-                              );
-                            });
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 Expanded(
                   child: Stack(
                     children: [
                       Positioned.fill(
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 0, 12, 0),
+                          padding: const EdgeInsets.fromLTRB(8, 62, 12, 0),
                           child: _buildQuestionPanel(),
+                        ),
+                      ),
+                      Positioned(
+                        top: 12,
+                        left: 8,
+                        child: _buildQuestionStatsFab(),
+                      ),
+                      Positioned(
+                        top: 12,
+                        right: 12,
+                        child: ProblemBankExportOptionsFab(
+                          isBusy: exportBusy,
+                          panel: _buildExportOptionsPanel(),
                         ),
                       ),
                       Positioned(
@@ -4784,7 +4904,76 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
+  Widget _buildPrivateMaterialBookPicker() {
+    if (_isLoadingSchools || _isLoadingPrivateMaterialBookCards) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    if (_privateMaterialOptions.isEmpty) {
+      return const Center(
+        child: Text(
+          '조건에 맞는 사설 교재가 없습니다.\n범위 선택을 변경해 주세요.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _rsTextMuted,
+            fontWeight: FontWeight.w700,
+            height: 1.5,
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const cardWidth = resourceTextbookCardDefaultWidth;
+        const spacing = 22.4;
+        final cols = (constraints.maxWidth / (cardWidth + spacing))
+            .floor()
+            .clamp(1, 999);
+        final gridWidth = (cols * cardWidth) + ((cols - 1) * spacing);
+
+        return Align(
+          alignment: Alignment.topLeft,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 4, 12, 120),
+            child: SizedBox(
+              width: gridWidth,
+              child: Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (final option in _privateMaterialOptions)
+                    ResourceTextbookCard(
+                      title: _privateMaterialBookCards[option.key]?.title ??
+                          option.label,
+                      description:
+                          _privateMaterialBookCards[option.key]?.description,
+                      gradeLabel:
+                          _privateMaterialBookCards[option.key]?.gradeLabel ??
+                              option.gradeLabel,
+                      coverPath:
+                          _privateMaterialBookCards[option.key]?.coverPath,
+                      backgroundColor: _privateMaterialBookCards[option.key]
+                          ?.backgroundColor,
+                      selected: false,
+                      width: cardWidth,
+                      onTap: () => unawaited(
+                        _onPrivateMaterialChanged(option.key),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildQuestionBody() {
+    if (_isPrivateMaterialSource &&
+        _selectedPrivateMaterialKey.trim().isEmpty) {
+      return _buildPrivateMaterialBookPicker();
+    }
     if (_isInitializing || _isLoadingQuestions) {
       return const Center(
         child: CircularProgressIndicator(strokeWidth: 2),
@@ -4933,7 +5122,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       return '조건에 맞는 사설 교재가 없습니다.\n필터를 변경해 주세요.';
     }
     if (_selectedPrivateMaterialOption == null) {
-      return '교재명을 선택해 주세요.';
+      return '교재를 선택해 주세요.';
     }
     if (_privateMaterialUnits.isEmpty) {
       return _privateMaterialEmptyMessage;
@@ -4961,6 +5150,38 @@ class _NaesinLinkSelection {
   final String school;
   final int year;
   final String cellLabel;
+}
+
+class _PrivateMaterialBookCardData {
+  const _PrivateMaterialBookCardData({
+    required this.title,
+    this.description,
+    this.gradeLabel = '',
+    this.coverPath,
+    this.backgroundColor,
+  });
+
+  final String title;
+  final String? description;
+  final String gradeLabel;
+  final String? coverPath;
+  final Color? backgroundColor;
+
+  _PrivateMaterialBookCardData copyWith({
+    String? title,
+    String? description,
+    String? gradeLabel,
+    String? coverPath,
+    Color? backgroundColor,
+  }) {
+    return _PrivateMaterialBookCardData(
+      title: title ?? this.title,
+      description: description ?? this.description,
+      gradeLabel: gradeLabel ?? this.gradeLabel,
+      coverPath: coverPath ?? this.coverPath,
+      backgroundColor: backgroundColor ?? this.backgroundColor,
+    );
+  }
 }
 
 class _PrivateMaterialOption {

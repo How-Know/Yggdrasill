@@ -2591,7 +2591,17 @@ function renderTableLatex(
   const tabColSepPt = resolveTableTabColSepPt(tableScale);
   // 표 전체 폭 분수. 1.0(=\linewidth) 이 상한.
   const effWidthFrac = tableWidthFraction(rows, tableScale, renderOptions);
-  const cellHeightEm = (2.2 * heightScale).toFixed(2);
+  const baseCellHeightEm = 2.2 * heightScale;
+  const rowScales = Array.isArray(tableScale?.rowScales)
+    ? tableScale.rowScales
+    : Array.isArray(tableScale?.rows)
+      ? tableScale.rows
+      : [];
+  const rowHeightEm = (rowIndex) => {
+    const raw = Number(rowScales[rowIndex]);
+    const rowScale = Number.isFinite(raw) && raw > 0 ? clampTableScale(raw) : 1.0;
+    return (baseCellHeightEm * rowScale).toFixed(2);
+  };
 
   // 컬럼별 상대 가중치. meta.table_scales[...].columnScales 가 있으면 그것을,
   // 없거나 길이가 다르면 전부 1.0 (균등) 으로.
@@ -2623,7 +2633,8 @@ function renderTableLatex(
   // 균일 축소(adjustbox)한다. → 줄바꿈 없이, 모든 셀 폰트 크기는 동일하게 유지된다.
   const cellMeasureByCol = Array.from({ length: maxCols }, () => []);
 
-  const latexRows = rows.map((row) => {
+  const latexRows = rows.map((row, rowIndex) => {
+    const cellHeightEm = rowHeightEm(rowIndex);
     const singleRawCell = row.length === 1 && Array.isArray(row[0]) && row[0].length === 1
       ? String(row[0][0] || '').trim()
       : '';
@@ -2640,23 +2651,27 @@ function renderTableLatex(
       // struct 경로에서는 평문 셀이므로 smartTexLine 을 적용. 두 경로 모두 안전하도록
       // "이미 수식 구분자로 감싸진 셀은 smartTexLine 을 건너뛴다" 로직이 필요하지만
       // smartTexLine 은 이중 감싸기를 방어하므로 그대로 통과시켜도 동작함.
-      const content = cellLines.length > 0
+      const renderedCellLines = cellLines.length > 0
         ? cellLines
+          // 표 셀 내부 강제 줄바꿈: raw tabular 의 \text{...} 안에 [문단] 을 넣는
+          // 경우가 많으므로 먼저 text wrapper 를 벗긴 뒤 마커 기준으로 나눈다.
+          // 출력은 \par 로 이어 셀 안 줄바꿈을 만들고, 폭 측정은 아래에서 줄별로 한다.
+          .flatMap((l) => unwrapLatexTextCommandsForTextMode(l).split(PARAGRAPH_MARKER_RE))
           .map((l) => renderCellContent(l, equations))
           .filter((s) => s && s.trim())
-          .join(' ')
-        : '';
+        : [];
+      const content = renderedCellLines.join('\\par ');
       // 세로·가로 정가운데 배치 (LaTeX 관용구):
       //   - \parbox[c][h][c]{w} : 외부 baseline c, 고정 높이 h, 내부 수직 정렬 c
       //   - \vspace*{\fill} 위아래 : 남는 세로 공간을 균등 분배 → 한 줄/여러 줄 모두 정확히 중앙
       //       (* 는 페이지 끝에서도 공간 흡수되지 않게 강제)
       //   - \centering : paragraph-level 가로 중앙 (content 가 길어 줄바꿈 돼도 중앙)
       //   - vphantom 사용 X : baseline 에 붙은 phantom 이 시각적 하향 쏠림 유발.
-      if (content && content.trim()) {
-        cellMeasureByCol[i].push(content);
+      if (renderedCellLines.length > 0) {
+        cellMeasureByCol[i].push(...renderedCellLines);
       }
       cells.push(
-        `\\parbox[c][\\tblcellht][c]{${colWidthVar(i)}}{\\vspace*{\\fill}\\centering ${content}\\par\\vspace*{\\fill}}`,
+        `\\parbox[c][${cellHeightEm}em][c]{${colWidthVar(i)}}{\\vspace*{\\fill}\\centering ${content}\\par\\vspace*{\\fill}}`,
       );
     }
     return cells.join(' & ') + ' \\\\';
@@ -2740,7 +2755,6 @@ function renderTableLatex(
   return [
     ...lengthDefs,
     ...measureLines,
-    `\\setlength{\\tblcellht}{${cellHeightEm}em}`,
     renderOptions.omitOuterPar
       ? `\\noindent ${alignedTable}`
       : `\\par\\noindent ${alignedTable}\\par`,
@@ -2888,6 +2902,19 @@ function resolveTableScale(question, type, index) {
     }
     return out.length ? out : null;
   };
+  const toRowScales = (raw) => {
+    if (!Array.isArray(raw)) return null;
+    const out = [];
+    for (const v of raw) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) {
+        out.push(clampTableScale(n));
+      } else {
+        out.push(1.0);
+      }
+    }
+    return out.length ? out : null;
+  };
 
   for (const k of keys) {
     const hit = lookup(k);
@@ -2902,6 +2929,7 @@ function resolveTableScale(question, type, index) {
         : null,
       tabColSepPt: resolveTableTabColSepPt(hit),
       columnScales: toColumnScales(hit.columnScales ?? hit.cols ?? null),
+      rowScales: toRowScales(hit.rowScales ?? hit.rows ?? null),
     };
   }
   if (def) return {
@@ -2915,6 +2943,7 @@ function resolveTableScale(question, type, index) {
       : null,
     tabColSepPt: resolveTableTabColSepPt(def),
     columnScales: toColumnScales(def.columnScales ?? def.cols ?? null),
+    rowScales: toRowScales(def.rowScales ?? def.rows ?? null),
   };
   return {
     widthScale: 1.0,
@@ -2923,6 +2952,7 @@ function resolveTableScale(question, type, index) {
     fontSizePt: null,
     tabColSepPt: 6,
     columnScales: null,
+    rowScales: null,
   };
 }
 

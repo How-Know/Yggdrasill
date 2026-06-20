@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../../../services/learning_problem_bank_service.dart';
 import '../../../widgets/shared_folder_tree.dart';
 
@@ -20,6 +21,8 @@ class ProblemBankSchoolSheet extends StatefulWidget {
     this.onPrivateMaterialPageKeysToggled,
     this.privateMaterialTitle = '',
     this.privateMaterialEmptyMessage = '교재를 선택한 뒤 페이지를 체크해 주세요.',
+    this.privateMaterialTreeEnabled = true,
+    this.onPrivateMaterialCleared,
   });
 
   /// 필터 등으로 문서 목록이 갱신될 때마다 증가 — 펼침 상태 초기화용.
@@ -37,21 +40,18 @@ class ProblemBankSchoolSheet extends StatefulWidget {
       onPrivateMaterialPageKeysToggled;
   final String privateMaterialTitle;
   final String privateMaterialEmptyMessage;
+  final bool privateMaterialTreeEnabled;
+  final VoidCallback? onPrivateMaterialCleared;
 
   @override
   State<ProblemBankSchoolSheet> createState() => _ProblemBankSchoolSheetState();
 }
 
 class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
-  static const _panelBg = Color(0xFF222222);
-  static const _border = Color(0xFF333333);
-  static const _selectedBg = Color(0xFF173C36);
-  static const _text = Color(0xFFEAF2F2);
-
   static const _unspecifiedSchool = '학교 미지정';
+  static const Color _checkboxActive = Color(0xFF33A373);
 
-  final Set<String> _expandedSchools = <String>{};
-  final Set<String> _expandedYearBuckets = <String>{};
+  final Set<String> _expandedTreeNodeIds = <String>{};
   bool _privatePageDragActive = false;
   bool _privatePageDragSelectMode = true;
   bool _privatePageSuppressNextTap = false;
@@ -62,7 +62,10 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _expandForSelectedDocument();
+      if (mounted) {
+        _expandForSelectedDocument();
+        _expandDefaultPrivateMaterialNodes();
+      }
     });
   }
 
@@ -70,17 +73,46 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
   void didUpdateWidget(covariant ProblemBankSchoolSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sidebarRevision != widget.sidebarRevision) {
-      _expandedSchools.clear();
-      _expandedYearBuckets.clear();
+      _expandedTreeNodeIds.clear();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _expandForSelectedDocument();
+        if (mounted) {
+          _expandForSelectedDocument();
+          _expandDefaultPrivateMaterialNodes();
+        }
       });
     } else if (oldWidget.selectedDocumentId != widget.selectedDocumentId ||
-        oldWidget.documents != widget.documents) {
+        oldWidget.documents != widget.documents ||
+        oldWidget.privateMaterialUnits != widget.privateMaterialUnits ||
+        oldWidget.selectedSourceTypeCode != widget.selectedSourceTypeCode ||
+        oldWidget.privateMaterialTreeEnabled !=
+            widget.privateMaterialTreeEnabled) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _expandForSelectedDocument();
+        if (mounted) {
+          _expandForSelectedDocument();
+          if (oldWidget.privateMaterialUnits != widget.privateMaterialUnits ||
+              oldWidget.selectedSourceTypeCode !=
+                  widget.selectedSourceTypeCode) {
+            _expandDefaultPrivateMaterialNodes();
+          }
+        }
       });
     }
+  }
+
+  void _expandDefaultPrivateMaterialNodes() {
+    if (widget.selectedSourceTypeCode != 'private_material') return;
+    if (!widget.privateMaterialTreeEnabled) return;
+    if (widget.privateMaterialUnits.isEmpty) return;
+    final big = widget.privateMaterialUnits.first;
+    setState(() {
+      _expandedTreeNodeIds.add(_privateBigId(big, 0));
+      for (final mid in big.mids) {
+        _expandedTreeNodeIds.add(_privateMidId(mid));
+        for (final small in mid.smalls) {
+          _expandedTreeNodeIds.add(_privateSmallId(small));
+        }
+      }
+    });
   }
 
   void _expandForSelectedDocument() {
@@ -92,8 +124,8 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       final yearLabel = _yearLabel(doc);
       final yearKey = '$school|$yearLabel';
       setState(() {
-        _expandedSchools.add(school);
-        _expandedYearBuckets.add(yearKey);
+        _expandedTreeNodeIds.add('school:$school');
+        _expandedTreeNodeIds.add('year:$yearKey');
       });
       return;
     }
@@ -147,101 +179,138 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.selectedSourceTypeCode != 'private_material') {
-      return _buildDocumentTreePanel();
-    }
+    return _buildTreePanel(context);
+  }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: _panelBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: _border),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+  String _treePanelTitle() {
+    switch (widget.selectedSourceTypeCode) {
+      case 'school_past':
+        return '내신 기출';
+      case 'private_material':
+        return '사설 교재';
+      default:
+        return '추출 문서';
+    }
+  }
+
+  String? _treePanelSubtitle() {
+    if (widget.selectedSourceTypeCode == 'private_material') {
+      if (!widget.privateMaterialTreeEnabled) {
+        return '오른쪽에서 교재를 선택해 주세요.';
+      }
+      return null;
+    }
+    if (widget.selectedSourceTypeCode == 'school_past') {
+      return null;
+    }
+    return '학교·연도 폴더는 내신 기출 출처에서만 사용됩니다.';
+  }
+
+  Widget _buildTreePanel(BuildContext context) {
+    final isPrivateMaterial =
+        widget.selectedSourceTypeCode == 'private_material';
+    final treeEnabled = !isPrivateMaterial || widget.privateMaterialTreeEnabled;
+    final panel = SharedFolderTreePanel(
+      title: _treePanelTitle(),
+      subtitle: _treePanelSubtitle(),
+      titleTrailing: _buildPrivateMaterialTitleChip(context),
+      reserveTitleTrailingSlot:
+          widget.selectedSourceTypeCode == 'private_material',
+      reserveSubtitleSlot: widget.selectedSourceTypeCode == 'private_material',
+      nodes: treeEnabled ? _buildTreeNodes() : const <SharedFolderTreeNode>[],
+      selectedNodeId: isPrivateMaterial ? null : widget.selectedDocumentId,
+      expandedNodeIds: _expandedTreeNodeIds,
+      onNodeTap: _handleSharedTreeNodeTap,
+      onToggleExpanded: _toggleSharedTreeNode,
+      isLoading: treeEnabled && widget.isLoading,
+      listBottomPadding: 116,
+      emptyMessage: isPrivateMaterial
+          ? (treeEnabled
+              ? widget.privateMaterialEmptyMessage
+              : '오른쪽에서 교재를 선택해 주세요.')
+          : '조건에 맞는 추출 문서가 없습니다.',
+      wrapNodeRow:
+          isPrivateMaterial && treeEnabled ? _wrapPrivateMaterialNodeRow : null,
+    );
+
+    if (!isPrivateMaterial || !treeEnabled) return panel;
+
+    return Listener(
+      onPointerUp: (_) => _finishPrivatePageDrag(),
+      onPointerCancel: (_) => _cancelPrivatePageDrag(),
+      child: panel,
+    );
+  }
+
+  Widget? _buildPrivateMaterialTitleChip(BuildContext context) {
+    if (widget.selectedSourceTypeCode != 'private_material') return null;
+    if (!widget.privateMaterialTreeEnabled) return null;
+    final label = widget.privateMaterialTitle.trim();
+    if (label.isEmpty) return null;
+    if (widget.onPrivateMaterialCleared == null) return null;
+
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final highlight = FabTabBarTokens.fabHighlightPillFill(brightness);
+
+    return Material(
+      color: Colors.transparent,
+      child: SizedBox(
+        width: double.infinity,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: highlight,
+            borderRadius: BorderRadius.circular(999),
+            border: FabTabBarTokens.groupedCardBorderFor(brightness),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 2, 2, 2),
+            child: Row(
               children: [
-                Text(
-                  widget.selectedSourceTypeCode == 'private_material'
-                      ? '교재 단원'
-                      : '추출 문서',
-                  style: const TextStyle(
-                    color: _text,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                  ),
-                ),
-                if (widget.selectedSourceTypeCode == 'private_material') ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    widget.privateMaterialTitle.trim().isNotEmpty
-                        ? widget.privateMaterialTitle.trim()
-                        : '교재명 드롭다운에서 교재를 선택하세요.',
-                    maxLines: 2,
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: const Color(0xFF9FB3B3).withValues(alpha: 0.95),
-                      fontSize: 11,
+                      color: panelStyle.title,
+                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
                       fontWeight: FontWeight.w600,
-                      height: 1.35,
+                      height: 1.25,
+                      letterSpacing: -0.1,
                     ),
                   ),
-                ] else if (widget.selectedSourceTypeCode != 'school_past') ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    '학교·연도 폴더는 내신 기출 출처에서만 사용됩니다.',
-                    style: TextStyle(
-                      color: const Color(0xFF9FB3B3).withValues(alpha: 0.95),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      height: 1.35,
+                ),
+                const SizedBox(width: 2),
+                InkWell(
+                  onTap: widget.onPrivateMaterialCleared,
+                  borderRadius: BorderRadius.circular(999),
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: panelStyle.icon,
                     ),
                   ),
-                ],
+                ),
               ],
             ),
           ),
-          Expanded(
-            child: _buildBody(context),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildDocumentTreePanel() {
-    final isSchoolPast = widget.selectedSourceTypeCode == 'school_past';
-    return SharedFolderTreePanel(
-      title: '추출 문서',
-      subtitle: isSchoolPast ? null : '학교·연도 폴더는 내신 기출 출처에서만 사용됩니다.',
-      nodes: isSchoolPast
-          ? _buildSchoolPastSharedTreeNodes()
-          : _buildFlatDocumentSharedTreeNodes(),
-      selectedNodeId: widget.selectedDocumentId,
-      expandedNodeIds: _sharedExpandedNodeIds(),
-      onNodeTap: _handleSharedTreeNodeTap,
-      onToggleExpanded: _toggleSharedTreeNode,
-      isLoading: widget.isLoading,
-      listBottomPadding: 116,
-      emptyMessage: '조건에 맞는 추출 문서가 없습니다.',
-    );
-  }
-
-  Set<String> _sharedExpandedNodeIds() {
-    return {
-      for (final school in _expandedSchools) 'school:$school',
-      for (final yearKey in _expandedYearBuckets) 'year:$yearKey',
-    };
+  List<SharedFolderTreeNode> _buildTreeNodes() {
+    switch (widget.selectedSourceTypeCode) {
+      case 'school_past':
+        return _buildSchoolPastSharedTreeNodes();
+      case 'private_material':
+        return _buildPrivateMaterialSharedTreeNodes();
+      default:
+        return _buildFlatDocumentSharedTreeNodes();
+    }
   }
 
   List<SharedFolderTreeNode> _buildFlatDocumentSharedTreeNodes() {
@@ -293,113 +362,319 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
 
   void _handleSharedTreeNodeTap(SharedFolderTreeNode node) {
     final meta = node.data;
-    if (meta is _ProblemBankTreeNodeMeta && meta.document != null) {
-      widget.onDocumentSelected(meta.document!.id);
-      return;
+    if (meta is _ProblemBankTreeNodeMeta) {
+      if (meta.kind == _ProblemBankTreeNodeKind.document &&
+          meta.document != null) {
+        widget.onDocumentSelected(meta.document!.id);
+        return;
+      }
+      if (meta.kind == _ProblemBankTreeNodeKind.privatePage &&
+          meta.page != null) {
+        if (_privatePageSuppressNextTap) {
+          setState(() => _privatePageSuppressNextTap = false);
+          return;
+        }
+        final page = meta.page!;
+        final selected = _isEffectivePrivatePageSelected(page.key);
+        widget.onPrivateMaterialPageToggled?.call(page.key, !selected);
+        return;
+      }
+      if (meta.kind == _ProblemBankTreeNodeKind.privateSmall &&
+          meta.small != null) {
+        final pageKeys =
+            meta.small!.pages.map((page) => page.key).toList(growable: false);
+        final allSelected = pageKeys.isNotEmpty &&
+            pageKeys.every(widget.selectedPrivateMaterialPageKeys.contains);
+        widget.onPrivateMaterialPageKeysToggled?.call(pageKeys, !allSelected);
+        return;
+      }
     }
     _toggleSharedTreeNode(node);
   }
 
   void _toggleSharedTreeNode(SharedFolderTreeNode node) {
-    final meta = node.data;
-    if (meta is! _ProblemBankTreeNodeMeta) return;
     setState(() {
-      if (meta.kind == _ProblemBankTreeNodeKind.school) {
-        if (_expandedSchools.contains(meta.school)) {
-          _expandedSchools.remove(meta.school);
-        } else {
-          _expandedSchools.add(meta.school);
-        }
-      } else if (meta.kind == _ProblemBankTreeNodeKind.year) {
-        final yearKey = '${meta.school}|${meta.year}';
-        if (_expandedYearBuckets.contains(yearKey)) {
-          _expandedYearBuckets.remove(yearKey);
-        } else {
-          _expandedYearBuckets.add(yearKey);
-        }
+      if (_expandedTreeNodeIds.contains(node.id)) {
+        _expandedTreeNodeIds.remove(node.id);
+      } else {
+        _expandedTreeNodeIds.add(node.id);
       }
     });
   }
 
-  Widget _buildBody(BuildContext context) {
-    if (widget.isLoading) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
-    }
-    if (widget.selectedSourceTypeCode == 'private_material') {
-      return _buildPrivateMaterialPageTree();
-    }
-    if (widget.documents.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(12),
-          child: Text(
-            '조건에 맞는 추출 문서가 없습니다.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFF9FB3B3),
-              fontWeight: FontWeight.w600,
-              height: 1.35,
-            ),
+  String _privateBigId(ProblemBankPrivateMaterialBigNode big, int index) =>
+      'pm-big:${big.order}:$index:${big.title}';
+
+  String _privateMidId(ProblemBankPrivateMaterialMidNode mid) =>
+      'pm-mid:${mid.order}:${mid.title}';
+
+  String _privateSmallId(ProblemBankPrivateMaterialSmallNode small) =>
+      'pm-small:${small.key}';
+
+  List<SharedFolderTreeNode> _buildPrivateMaterialSharedTreeNodes() {
+    return [
+      for (var bi = 0; bi < widget.privateMaterialUnits.length; bi++)
+        SharedFolderTreeNode(
+          id: _privateBigId(widget.privateMaterialUnits[bi], bi),
+          label: widget.privateMaterialUnits[bi].title,
+          rowStyle: SharedFolderTreeRowStyle.section,
+          data: _ProblemBankTreeNodeMeta.privateBig(
+            widget.privateMaterialUnits[bi],
           ),
+          children: [
+            for (final mid in widget.privateMaterialUnits[bi].mids)
+              SharedFolderTreeNode(
+                id: _privateMidId(mid),
+                label: mid.title,
+                icon: Icons.folder_outlined,
+                selectedIcon: Icons.folder,
+                data: _ProblemBankTreeNodeMeta.privateMid(mid),
+                children: [
+                  for (final small in mid.smalls)
+                    SharedFolderTreeNode(
+                      id: _privateSmallId(small),
+                      label: small.title,
+                      icon: Icons.folder_outlined,
+                      selectedIcon: Icons.folder,
+                      data: _ProblemBankTreeNodeMeta.privateSmall(small),
+                      children: [
+                        for (final page in small.pages)
+                          SharedFolderTreeNode(
+                            id: 'pm-page:${page.key}',
+                            label:
+                                '${page.displayPage}쪽 · ${page.questionCount}문항',
+                            icon: Icons.description_outlined,
+                            selectedIcon: Icons.check_circle_outline,
+                            data: _ProblemBankTreeNodeMeta.privatePage(page),
+                          ),
+                      ],
+                    ),
+                ],
+              ),
+          ],
         ),
-      );
-    }
-    if (widget.selectedSourceTypeCode == 'school_past') {
-      return _buildSchoolPastTree(context);
-    }
-    return _buildFlatList(context);
+    ];
   }
 
-  Widget _buildPrivateMaterialPageTree() {
-    if (widget.privateMaterialUnits.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Text(
-            widget.privateMaterialEmptyMessage,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF9FB3B3),
-              fontWeight: FontWeight.w600,
-              height: 1.35,
+  Widget _wrapPrivateMaterialNodeRow(
+    BuildContext context,
+    SharedFolderTreeNode node,
+    int depth,
+    Widget row,
+  ) {
+    final meta = node.data;
+    if (meta is! _ProblemBankTreeNodeMeta) return row;
+    if (meta.kind == _ProblemBankTreeNodeKind.privateSmall &&
+        meta.small != null) {
+      return _buildPrivateSmallTreeRow(context, node, depth, meta.small!);
+    }
+    if (meta.kind == _ProblemBankTreeNodeKind.privatePage &&
+        meta.page != null) {
+      return _buildPrivatePageTreeRow(context, node, depth, meta.page!);
+    }
+    return row;
+  }
+
+  double _treeRowOuterPaddingLeft(int depth) {
+    return FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal -
+        18 +
+        depth * 10.0;
+  }
+
+  Widget _buildPrivateSmallTreeRow(
+    BuildContext context,
+    SharedFolderTreeNode node,
+    int depth,
+    ProblemBankPrivateMaterialSmallNode small,
+  ) {
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final pageKeys =
+        small.pages.map((page) => page.key).toList(growable: false);
+    final selected = pageKeys.isNotEmpty &&
+        pageKeys.every(widget.selectedPrivateMaterialPageKeys.contains);
+    final partiallySelected = !selected &&
+        pageKeys.any(widget.selectedPrivateMaterialPageKeys.contains);
+    final hasChildren = node.children.isNotEmpty;
+    final isExpanded = _expandedTreeNodeIds.contains(node.id);
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        _treeRowOuterPaddingLeft(depth),
+        0,
+        12,
+        sharedFolderTreeItemSpacing,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: widget.onPrivateMaterialPageKeysToggled == null
+              ? null
+              : () => widget.onPrivateMaterialPageKeysToggled!(
+                    pageKeys,
+                    !selected,
+                  ),
+          borderRadius: BorderRadius.circular(999),
+          hoverColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: sharedFolderTreeNavRowPaddingVertical,
+            ),
+            child: Row(
+              children: [
+                if (hasChildren)
+                  InkWell(
+                    onTap: () => _toggleSharedTreeNode(node),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(
+                        isExpanded ? Icons.expand_more : Icons.chevron_right,
+                        size: 16,
+                        color: panelStyle.icon,
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox(width: sharedFolderTreeLeadingWidth),
+                const SizedBox(width: 2),
+                Checkbox(
+                  value: selected ? true : (partiallySelected ? null : false),
+                  tristate: true,
+                  visualDensity: VisualDensity.compact,
+                  side: BorderSide(color: panelStyle.border),
+                  activeColor: _checkboxActive,
+                  onChanged: widget.onPrivateMaterialPageKeysToggled == null
+                      ? null
+                      : (value) => widget.onPrivateMaterialPageKeysToggled!(
+                            pageKeys,
+                            value == true,
+                          ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    small.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? panelStyle.title : panelStyle.hint,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${small.pages.length}쪽',
+                  style: TextStyle(
+                    color: panelStyle.label,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-      );
-    }
-    return Listener(
-      onPointerUp: (_) => _finishPrivatePageDrag(),
-      onPointerCancel: (_) => _cancelPrivatePageDrag(),
-      child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
-        itemCount: widget.privateMaterialUnits.length,
-        itemBuilder: (context, bigIndex) {
-          final big = widget.privateMaterialUnits[bigIndex];
-          return Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              initiallyExpanded: bigIndex == 0,
-              tilePadding: const EdgeInsets.symmetric(horizontal: 6),
-              childrenPadding: const EdgeInsets.only(left: 8, bottom: 6),
-              iconColor: const Color(0xFF8AA5A5),
-              collapsedIconColor: const Color(0xFF8AA5A5),
-              title: Text(
-                big.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFB8C9C9),
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13.2,
-                  height: 1.2,
+      ),
+    );
+  }
+
+  Widget _buildPrivatePageTreeRow(
+    BuildContext context,
+    SharedFolderTreeNode node,
+    int depth,
+    ProblemBankPrivateMaterialPageNode page,
+  ) {
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final brightness = Theme.of(context).brightness;
+    final selected = _isEffectivePrivatePageSelected(page.key);
+    final highlighted = selected;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        _treeRowOuterPaddingLeft(depth),
+        0,
+        12,
+        sharedFolderTreeItemSpacing,
+      ),
+      child: MouseRegion(
+        onEnter: (_) => _enterPrivatePageDrag(page.key),
+        child: Listener(
+          onPointerDown: (event) {
+            if (event.buttons == kPrimaryMouseButton) {
+              _startPrivatePageDrag(page.key);
+            }
+          },
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onPrivateMaterialPageToggled == null
+                  ? null
+                  : () => _handleSharedTreeNodeTap(node),
+              borderRadius: BorderRadius.circular(999),
+              hoverColor: Colors.transparent,
+              splashColor: Colors.transparent,
+              child: Ink(
+                decoration: BoxDecoration(
+                  color: highlighted
+                      ? FabTabBarTokens.fabHighlightPillFill(brightness)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: sharedFolderTreeNavRowPaddingVertical,
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: sharedFolderTreeLeadingWidth),
+                    const SizedBox(width: 2),
+                    IgnorePointer(
+                      child: Checkbox(
+                        value: selected,
+                        visualDensity: VisualDensity.compact,
+                        side: BorderSide(color: panelStyle.border),
+                        activeColor: _checkboxActive,
+                        onChanged: widget.onPrivateMaterialPageToggled == null
+                            ? null
+                            : (_) {},
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        '${page.displayPage}쪽',
+                        style: TextStyle(
+                          color:
+                              highlighted ? panelStyle.title : panelStyle.hint,
+                          fontWeight:
+                              highlighted ? FontWeight.w800 : FontWeight.w600,
+                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${page.questionCount}문항',
+                      style: TextStyle(
+                        color: panelStyle.label,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              children: [
-                for (final mid in big.mids) _buildPrivateMidNode(mid),
-              ],
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -463,398 +738,16 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       _privatePageDragBaseKeys = <String>{};
     });
   }
-
-  Widget _buildPrivateMidNode(ProblemBankPrivateMaterialMidNode mid) {
-    return Theme(
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        initiallyExpanded: true,
-        tilePadding: const EdgeInsets.only(left: 8, right: 4),
-        childrenPadding: const EdgeInsets.only(left: 10, bottom: 4),
-        iconColor: const Color(0xFF8AA5A5),
-        collapsedIconColor: const Color(0xFF8AA5A5),
-        title: Text(
-          mid.title,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Color(0xFFAFC2C2),
-            fontWeight: FontWeight.w800,
-            fontSize: 12.4,
-          ),
-        ),
-        children: [
-          for (final small in mid.smalls) _buildPrivateSmallNode(small),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPrivateSmallNode(ProblemBankPrivateMaterialSmallNode small) {
-    final pageKeys = small.pages.map((p) => p.key).toList(growable: false);
-    final selected = pageKeys.isNotEmpty &&
-        pageKeys.every(widget.selectedPrivateMaterialPageKeys.contains);
-    final partiallySelected = !selected &&
-        pageKeys.any(widget.selectedPrivateMaterialPageKeys.contains);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: widget.onPrivateMaterialPageKeysToggled == null
-                ? null
-                : () => widget.onPrivateMaterialPageKeysToggled!(
-                      pageKeys,
-                      !selected,
-                    ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
-              child: Row(
-                children: [
-                  Checkbox(
-                    value: selected ? true : (partiallySelected ? null : false),
-                    tristate: true,
-                    visualDensity: VisualDensity.compact,
-                    side: const BorderSide(color: Color(0xFF5E7777)),
-                    activeColor: const Color(0xFF1A6B5E),
-                    onChanged: widget.onPrivateMaterialPageKeysToggled == null
-                        ? null
-                        : (v) => widget.onPrivateMaterialPageKeysToggled!(
-                              pageKeys,
-                              v == true,
-                            ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      small.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: selected
-                            ? const Color(0xFFD6ECEA)
-                            : const Color(0xFF8FAAAA),
-                        fontWeight:
-                            selected ? FontWeight.w800 : FontWeight.w700,
-                        fontSize: 11.6,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '${small.pages.length}쪽',
-                    style: const TextStyle(
-                      color: Color(0xFF6F8585),
-                      fontWeight: FontWeight.w700,
-                      fontSize: 10.8,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final page in small.pages) _buildPrivatePageTile(page),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPrivatePageTile(ProblemBankPrivateMaterialPageNode page) {
-    final selected = _isEffectivePrivatePageSelected(page.key);
-    return MouseRegion(
-      onEnter: (_) => _enterPrivatePageDrag(page.key),
-      child: Listener(
-        onPointerDown: (event) {
-          if (event.buttons == kPrimaryMouseButton) {
-            _startPrivatePageDrag(page.key);
-          }
-        },
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: widget.onPrivateMaterialPageToggled == null
-              ? null
-              : () {
-                  if (_privatePageSuppressNextTap) {
-                    setState(() => _privatePageSuppressNextTap = false);
-                    return;
-                  }
-                  widget.onPrivateMaterialPageToggled!(page.key, !selected);
-                },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Row(
-              children: [
-                IgnorePointer(
-                  child: Checkbox(
-                    value: selected,
-                    visualDensity: VisualDensity.compact,
-                    side: const BorderSide(color: Color(0xFF5E7777)),
-                    activeColor: const Color(0xFF1A6B5E),
-                    onChanged: widget.onPrivateMaterialPageToggled == null
-                        ? null
-                        : (_) {},
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    '${page.displayPage}쪽',
-                    style: TextStyle(
-                      color: selected
-                          ? const Color(0xFFD6ECEA)
-                          : const Color(0xFF9FB3B3),
-                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                      fontSize: 12.2,
-                    ),
-                  ),
-                ),
-                Text(
-                  '${page.questionCount}문항',
-                  style: const TextStyle(
-                    color: Color(0xFF6F8585),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 10.8,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFlatList(BuildContext context) {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
-      itemCount: widget.documents.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
-      itemBuilder: (context, index) {
-        return _buildDocTile(widget.documents[index]);
-      },
-    );
-  }
-
-  Widget _buildSchoolPastTree(BuildContext context) {
-    final grouped = _groupBySchoolThenYear(widget.documents);
-    final schools = _sortedSchools(grouped.keys);
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
-      itemCount: schools.length,
-      itemBuilder: (context, si) {
-        final school = schools[si];
-        final byYear = grouped[school]!;
-        final years = _sortedYears(byYear.keys);
-        final schoolOpen = _expandedSchools.contains(school);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _sectionHeader(
-              title: school,
-              expanded: schoolOpen,
-              onTap: () {
-                setState(() {
-                  if (schoolOpen) {
-                    _expandedSchools.remove(school);
-                  } else {
-                    _expandedSchools.add(school);
-                  }
-                });
-              },
-            ),
-            if (schoolOpen)
-              Padding(
-                padding: const EdgeInsets.only(left: 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (final year in years)
-                      _buildYearSection(
-                        school: school,
-                        yearLabel: year,
-                        docs: byYear[year]!,
-                      ),
-                  ],
-                ),
-              ),
-            if (si < schools.length - 1) const SizedBox(height: 4),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildYearSection({
-    required String school,
-    required String yearLabel,
-    required List<LearningProblemDocumentSummary> docs,
-  }) {
-    final yearKey = '$school|$yearLabel';
-    final yearOpen = _expandedYearBuckets.contains(yearKey);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _sectionHeader(
-          title: yearLabel == '미지정' ? '연도 미지정' : '$yearLabel년',
-          dense: true,
-          expanded: yearOpen,
-          onTap: () {
-            setState(() {
-              if (yearOpen) {
-                _expandedYearBuckets.remove(yearKey);
-              } else {
-                _expandedYearBuckets.add(yearKey);
-              }
-            });
-          },
-        ),
-        if (yearOpen)
-          Padding(
-            padding: const EdgeInsets.only(left: 8, bottom: 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final doc in docs)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: _buildDocTile(doc),
-                  ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _sectionHeader({
-    required String title,
-    required bool expanded,
-    required VoidCallback onTap,
-    bool dense = false,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: 8,
-            vertical: dense ? 6 : 8,
-          ),
-          child: Row(
-            children: [
-              Icon(
-                expanded ? Icons.expand_more : Icons.chevron_right,
-                size: dense ? 18 : 20,
-                color: const Color(0xFF8AA5A5),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFFB8C9C9),
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                    height: 1.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDocTile(LearningProblemDocumentSummary doc) {
-    final selected = doc.id == widget.selectedDocumentId;
-    final subtitle = doc.displaySubtitle;
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: () => widget.onDocumentSelected(doc.id),
-      child: Ink(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? _selectedBg : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: selected ? const Color(0xFF2B6B61) : Colors.transparent,
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Icon(
-                selected
-                    ? Icons.picture_as_pdf_outlined
-                    : Icons.description_outlined,
-                color: selected
-                    ? const Color(0xFFBEE7D2)
-                    : const Color(0xFF8AA5A5),
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    doc.displayTitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: selected
-                          ? const Color(0xFFD6ECEA)
-                          : const Color(0xFF9FB3B3),
-                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                      fontSize: 13,
-                      height: 1.25,
-                    ),
-                  ),
-                  if (subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: selected
-                            ? const Color(0xFF8FB8B5)
-                            : const Color(0xFF7A8F8F),
-                        fontWeight: FontWeight.w600,
-                        fontSize: 11,
-                        height: 1.25,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 enum _ProblemBankTreeNodeKind {
   school,
   year,
   document,
+  privateBig,
+  privateMid,
+  privateSmall,
+  privatePage,
 }
 
 class _ProblemBankTreeNodeMeta {
@@ -863,6 +756,10 @@ class _ProblemBankTreeNodeMeta {
     this.school = '',
     this.year = '',
     this.document,
+    this.big,
+    this.mid,
+    this.small,
+    this.page,
   });
 
   factory _ProblemBankTreeNodeMeta.school(String school) {
@@ -889,10 +786,50 @@ class _ProblemBankTreeNodeMeta {
     );
   }
 
+  factory _ProblemBankTreeNodeMeta.privateBig(
+    ProblemBankPrivateMaterialBigNode big,
+  ) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.privateBig,
+      big: big,
+    );
+  }
+
+  factory _ProblemBankTreeNodeMeta.privateMid(
+    ProblemBankPrivateMaterialMidNode mid,
+  ) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.privateMid,
+      mid: mid,
+    );
+  }
+
+  factory _ProblemBankTreeNodeMeta.privateSmall(
+    ProblemBankPrivateMaterialSmallNode small,
+  ) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.privateSmall,
+      small: small,
+    );
+  }
+
+  factory _ProblemBankTreeNodeMeta.privatePage(
+    ProblemBankPrivateMaterialPageNode page,
+  ) {
+    return _ProblemBankTreeNodeMeta._(
+      kind: _ProblemBankTreeNodeKind.privatePage,
+      page: page,
+    );
+  }
+
   final _ProblemBankTreeNodeKind kind;
   final String school;
   final String year;
   final LearningProblemDocumentSummary? document;
+  final ProblemBankPrivateMaterialBigNode? big;
+  final ProblemBankPrivateMaterialMidNode? mid;
+  final ProblemBankPrivateMaterialSmallNode? small;
+  final ProblemBankPrivateMaterialPageNode? page;
 }
 
 class ProblemBankPrivateMaterialBigNode {

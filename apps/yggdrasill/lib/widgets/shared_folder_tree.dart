@@ -76,10 +76,18 @@ class SharedFolderTreePanel extends StatelessWidget {
     this.accentColor = const Color(0xFF33A373),
     this.listBottomPadding = 8,
     this.wrapNodeRow,
+    this.titleTrailing,
+    this.reserveTitleTrailingSlot = false,
+    this.reserveSubtitleSlot = false,
+    this.titleTrailingSlotFraction = 0.58,
   });
 
   final String title;
   final String? subtitle;
+  final Widget? titleTrailing;
+  final bool reserveTitleTrailingSlot;
+  final bool reserveSubtitleSlot;
+  final double titleTrailingSlotFraction;
   final List<SharedFolderTreeNode> nodes;
   final List<SharedFolderTreeNode> trailingNodes;
   final String? selectedNodeId;
@@ -91,6 +99,11 @@ class SharedFolderTreePanel extends StatelessWidget {
   final Color accentColor;
   final double listBottomPadding;
   final SharedFolderTreeNodeBuilder? wrapNodeRow;
+
+  static const double _subtitleFontSize = 11;
+  static const double _subtitleLineHeight = 1.35;
+  static const double _subtitleSlotHeight =
+      _subtitleFontSize * _subtitleLineHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -114,31 +127,34 @@ class SharedFolderTreePanel extends StatelessWidget {
                 FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal - 6,
                 20,
                 FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
-                subtitle == null ? sharedFolderTreeTitleListGap : 12,
+                (subtitle != null || reserveSubtitleSlot)
+                    ? 12
+                    : sharedFolderTreeTitleListGap,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: panelStyle.title,
-                      fontWeight: FontWeight.w600,
-                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                    ),
-                  ),
-                  if (subtitle != null) ...[
+                  _buildTitleRow(panelStyle),
+                  if (subtitle != null || reserveSubtitleSlot) ...[
                     const SizedBox(height: 6),
-                    Text(
-                      subtitle!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: panelStyle.hint,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        height: 1.35,
-                      ),
+                    SizedBox(
+                      height: _subtitleSlotHeight,
+                      child: subtitle == null
+                          ? const SizedBox.shrink()
+                          : Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                subtitle!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: panelStyle.hint,
+                                  fontSize: _subtitleFontSize,
+                                  fontWeight: FontWeight.w600,
+                                  height: _subtitleLineHeight,
+                                ),
+                              ),
+                            ),
                     ),
                     const SizedBox(height: 8),
                   ],
@@ -151,6 +167,48 @@ class SharedFolderTreePanel extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildTitleRow(PreviewAcademyPanelStyle panelStyle) {
+    final titleStyle = TextStyle(
+      color: panelStyle.title,
+      fontWeight: FontWeight.w600,
+      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+      height: 1.25,
+    );
+    final showTrailingSlot = titleTrailing != null || reserveTitleTrailingSlot;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final slotWidth = showTrailingSlot
+            ? constraints.maxWidth * titleTrailingSlotFraction
+            : 0.0;
+
+        return SizedBox(
+          height: 28,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: titleStyle,
+              ),
+              const Spacer(),
+              if (slotWidth > 0)
+                SizedBox(
+                  width: slotWidth,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: titleTrailing ?? const SizedBox.shrink(),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 

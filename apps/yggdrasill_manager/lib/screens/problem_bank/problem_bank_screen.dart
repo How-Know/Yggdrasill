@@ -11796,7 +11796,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         onSettingChanged: onSettingChanged,
                         drafts: drafts,
                       ),
-                    if (t.type == 'blank_choice' && t.maxRows >= 2)
+                    if (t.maxRows >= 2)
                       _buildRowScalesRow(
                         entry: t,
                         draft: drafts[t.key] ?? const TableScaleValue(),
@@ -12496,6 +12496,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     var currentRowCells = 0;
     // 현재 struct 표의 최대 컬럼 수.
     var currentStructMaxCols = 0;
+    // 현재 struct 표의 행 수.
+    var currentStructRows = 0;
     // 현재 struct 표의 entries 내 index.
     var currentStructEntryIdx = -1;
 
@@ -12507,10 +12509,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           key: e.key,
           type: e.type,
           maxCols: currentStructMaxCols,
+          maxRows: currentStructRows,
         );
       }
       inStructTable = false;
       currentStructMaxCols = 0;
+      currentStructRows = 0;
       currentStructEntryIdx = -1;
       currentRowCells = 0;
     }
@@ -12529,6 +12533,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           key: e.key,
           type: e.type,
           maxCols: cols,
+          maxRows: _rawTabularRowCount(body),
         );
       }
       inRawTable = false;
@@ -12546,6 +12551,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           key: 'raw:$rawIdx',
           type: 'raw',
           maxCols: 0,
+          maxRows: 0,
         ));
         currentRawEntryIdx = entries.length - 1;
         rawBodyBuf.clear();
@@ -12582,6 +12588,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             key: 'struct:$structIdx',
             type: 'struct',
             maxCols: 0,
+            maxRows: 0,
           ));
           currentStructEntryIdx = entries.length - 1;
         } else {
@@ -12590,6 +12597,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             currentStructMaxCols = currentRowCells;
           }
         }
+        currentStructRows += 1;
         currentRowCells = 0;
       } else if (line == '[표셀]') {
         if (inStructTable) currentRowCells += 1;
@@ -12707,6 +12715,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       return amp + 1;
     }
     return 0;
+  }
+
+  /// raw tabular 본문에서 데이터 행 수를 추정한다.
+  int _rawTabularRowCount(String body) {
+    final bodyMatch =
+        RegExp(r'\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}')
+            .firstMatch(body);
+    final inside = bodyMatch?.group(1) ?? body;
+    var count = 0;
+    for (final rawRow in inside.split(r'\\')) {
+      var row = rawRow.trim();
+      if (row.isEmpty) continue;
+      row = row.replaceFirst(RegExp(r'^(?:\\hline\s*)+'), '').trim();
+      if (row.isEmpty) continue;
+      if (RegExp(r'^(?:\\hline\s*)+$').hasMatch(row)) continue;
+      count += 1;
+    }
+    return count;
   }
 
   Map<String, TableScaleValue> _readTableScaleMap(ProblemBankQuestion q) {
@@ -15422,7 +15448,8 @@ class _PartialTableEntry {
     required this.key,
     required this.type,
     required this.maxCols,
-  }) : maxRows = 0;
+    required this.maxRows,
+  });
 
   final String key;
   final String type;
