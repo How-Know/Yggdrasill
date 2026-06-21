@@ -52,6 +52,7 @@ import '../widgets/naesin_preset_homework_drop_action.dart';
 import 'student/student_profile_page.dart';
 import '../models/behavior_card_drag_payload.dart';
 import '../widgets/top_glass_snack_bar.dart';
+import 'dart:ui' as ui;
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -61,6 +62,238 @@ class MainScreen extends StatefulWidget {
 }
 
 enum _SideSheetBottomView { waiting, allStudents, favoriteTemplates }
+
+enum _UtilityTool { print, fileShortcut, pdfEdit, memo }
+
+class _UtilityToolbarPanel extends StatelessWidget {
+  const _UtilityToolbarPanel({
+    super.key,
+    required this.width,
+    required this.onPressed,
+  });
+
+  final double width;
+  final ValueChanged<_UtilityTool> onPressed;
+
+  static const Color _glassTint = Color(0xB31C1C1E);
+  static const Color _borderColor = Color(0x33FFFFFF);
+  static const Color _iconColor = Color(0xFFF5F5F7);
+  static const double _panelWidth = 248;
+  static const double _snackBarHeight = FabTabBarTokens.fabBarHeight;
+  static const double _horizontalPadding = 6;
+  static const double _buttonSize = FabTabBarTokens.fabBarHeight;
+  static const double _iconSize = FabTabBarTokens.previewAcademyBaseFontSize + 8;
+  static const double _largeIconSize = _iconSize * 1.1;
+
+  @override
+  Widget build(BuildContext context) {
+    final panelWidth = width < _panelWidth ? width : _panelWidth;
+    final blurSigma = FabTabBarTokens.previewAcademyMenuGlassBlurSigma;
+    final radius = BorderRadius.circular(22);
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, top: 12),
+      child: SizedBox(
+        width: panelWidth,
+        height: _snackBarHeight,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0x40000000).withValues(alpha: 0.25),
+                blurRadius: 19.2,
+                offset: Offset(0, 6.4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: radius,
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              fit: StackFit.passthrough,
+              children: [
+                Positioned.fill(
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(
+                      sigmaX: blurSigma,
+                      sigmaY: blurSigma,
+                    ),
+                    child: const ColoredBox(color: Colors.transparent),
+                  ),
+                ),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _glassTint,
+                    border: Border.all(color: _borderColor, width: 0.5),
+                    borderRadius: radius,
+                  ),
+                  child: SizedBox(
+                    height: _snackBarHeight,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: _horizontalPadding,
+                      ),
+                      child: Center(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _UtilityToolButton(
+                              icon: const Icon(
+                                Icons.print_outlined,
+                                color: _iconColor,
+                                size: _largeIconSize,
+                              ),
+                              tooltip: '인쇄',
+                              onPressed: () => onPressed(_UtilityTool.print),
+                            ),
+                            const SizedBox(width: 4),
+                            _UtilityToolButton(
+                              icon: const Icon(
+                                Icons.attach_file_rounded,
+                                color: _iconColor,
+                                size: _largeIconSize,
+                              ),
+                              tooltip: '파일 바로가기',
+                              onPressed: () =>
+                                  onPressed(_UtilityTool.fileShortcut),
+                            ),
+                            const SizedBox(width: 4),
+                            _UtilityToolButton(
+                              icon: const Icon(
+                                Icons.picture_as_pdf_outlined,
+                                color: _iconColor,
+                                size: _largeIconSize,
+                              ),
+                              tooltip: 'PDF편집',
+                              onPressed: () => onPressed(_UtilityTool.pdfEdit),
+                            ),
+                            const SizedBox(width: 4),
+                            _UtilityToolButton(
+                              icon: const _UtilityMemoIcon(
+                                color: _iconColor,
+                                size: _iconSize,
+                              ),
+                              tooltip: '메모',
+                              onPressed: () => onPressed(_UtilityTool.memo),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UtilityToolButton extends StatelessWidget {
+  const _UtilityToolButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final Widget icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 450),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(
+            _UtilityToolbarPanel._buttonSize / 2,
+          ),
+          child: SizedBox(
+            width: _UtilityToolbarPanel._buttonSize,
+            height: _UtilityToolbarPanel._buttonSize,
+            child: Center(child: icon),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UtilityMemoIcon extends StatelessWidget {
+  const _UtilityMemoIcon({
+    required this.color,
+    required this.size,
+  });
+
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _UtilityMemoIconPainter(color),
+    );
+  }
+}
+
+class _UtilityMemoIconPainter extends CustomPainter {
+  const _UtilityMemoIconPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = size.width * 0.11;
+    final radius = size.width * 0.14;
+    final fold = size.width * 0.33;
+    final rect = Rect.fromLTWH(
+      stroke / 2,
+      stroke / 2,
+      size.width - stroke,
+      size.height - stroke,
+    );
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final path = Path()
+      ..moveTo(rect.left + radius, rect.top)
+      ..lineTo(rect.right - radius, rect.top)
+      ..quadraticBezierTo(rect.right, rect.top, rect.right, rect.top + radius)
+      ..lineTo(rect.right, rect.bottom - fold)
+      ..lineTo(rect.right - fold, rect.bottom)
+      ..lineTo(rect.left + radius, rect.bottom)
+      ..quadraticBezierTo(rect.left, rect.bottom, rect.left, rect.bottom - radius)
+      ..lineTo(rect.left, rect.top + radius)
+      ..quadraticBezierTo(rect.left, rect.top, rect.left + radius, rect.top)
+      ..moveTo(rect.right, rect.bottom - fold)
+      ..lineTo(rect.right - fold, rect.bottom);
+    canvas.drawPath(path, paint);
+
+    final lineStart = rect.left + size.width * 0.22;
+    final lineEnd = rect.right - size.width * 0.2;
+    final firstY = rect.top + size.height * 0.32;
+    final secondY = rect.top + size.height * 0.52;
+    canvas.drawLine(Offset(lineStart, firstY), Offset(lineEnd, firstY), paint);
+    canvas.drawLine(Offset(lineStart, secondY), Offset(lineEnd, secondY), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _UtilityMemoIconPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 디버그 로그 스위치 (사이드 시트 출석 분류)
@@ -128,6 +361,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   int _selectedIndex = 0; // 0~5 (5는 설정)
   bool _isSideSheetOpen = false;
+  bool _isUtilityToolbarOpen = false;
   late AnimationController _rotationAnimation;
   late Animation<double> _sideSheetAnimation;
   bool _isFabExpanded = false;
@@ -1493,6 +1727,70 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return math.max(ratioWidth, _sideSheetMinWidth).clamp(0.0, available);
   }
 
+  void _setUtilityToolbarOpen(bool open) {
+    if (_isUtilityToolbarOpen == open) return;
+    setState(() {
+      _isUtilityToolbarOpen = open;
+    });
+  }
+
+  Widget _buildUtilityToolbarOverlay(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final toolbarWidth = _resolveSideSheetMaxWidth(screenWidth);
+    const panelOuterWidth = _UtilityToolbarPanel._panelWidth + 24;
+    const closedHitHeight = navSideSheetDateHeaderTopInset;
+    const openHitHeight =
+        12 + _UtilityToolbarPanel._snackBarHeight + 18;
+    final hitHeight = _isUtilityToolbarOpen ? openHitHeight : closedHitHeight;
+
+    return Positioned(
+      left: navRailMinWidth,
+      top: 0,
+      width: panelOuterWidth,
+      height: hitHeight,
+      child: MouseRegion(
+        onEnter: (_) => _setUtilityToolbarOpen(true),
+        onExit: (_) => _setUtilityToolbarOpen(false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragEnd: (details) {
+            final velocity = details.primaryVelocity ?? 0;
+            if (velocity > 260) {
+              _setUtilityToolbarOpen(true);
+            }
+          },
+          child: TweenAnimationBuilder<double>(
+            duration: const Duration(milliseconds: 180),
+            curve: _isUtilityToolbarOpen
+                ? Curves.easeOutCubic
+                : Curves.easeInCubic,
+            tween: Tween<double>(
+              begin: 0.0,
+              end: _isUtilityToolbarOpen ? 1.0 : 0.0,
+            ),
+            child: _UtilityToolbarPanel(
+              width: toolbarWidth,
+              onPressed: _handleUtilityToolbarButtonPressed,
+            ),
+            builder: (context, value, child) {
+              return Transform.translate(
+                offset: Offset(0, -56 * (1 - value)),
+                child: Opacity(
+                  opacity: value,
+                  child: child,
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _handleUtilityToolbarButtonPressed(_UtilityTool tool) {
+    // 기능은 추후 기존 액션에서 이관 예정. 지금은 도구모음 UI만 노출한다.
+  }
+
   double _resolveSideSheetScale(double containerWidth) {
     final fullWidth = _sideSheetDesignScreenWidth * _sideSheetWidthRatio;
     final span = fullWidth - _sideSheetMinWidth;
@@ -2490,15 +2788,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
     return Scaffold(
       backgroundColor: context.yggSurfaceBase,
-      body: Row(
+      body: Stack(
         children: [
-          CustomNavigationRail(
-            selectedIndex: _railSelectedIndex,
-            onDestinationSelected: selectDestination,
-            rotationAnimation: _rotationAnimation,
-            onMenuPressed: _toggleSideSheet,
-          ),
-          AnimatedBuilder(
+          Row(
+            children: [
+              CustomNavigationRail(
+                selectedIndex: _railSelectedIndex,
+                onDestinationSelected: selectDestination,
+                rotationAnimation: _rotationAnimation,
+                onMenuPressed: _toggleSideSheet,
+              ),
+              AnimatedBuilder(
             animation: _sideSheetAnimation,
             builder: (context, child) {
               final progress = _sideSheetAnimation.value;
@@ -3288,7 +3588,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               );
             },
           ),
-          Expanded(child: _buildContent()),
+              Expanded(child: _buildContent()),
+            ],
+          ),
+          _buildUtilityToolbarOverlay(context),
         ],
       ),
       floatingActionButtonLocation:

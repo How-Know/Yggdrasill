@@ -55,11 +55,11 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_23';
+const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_25';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_cambriadelim_01';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_choicecasesfit_01';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,

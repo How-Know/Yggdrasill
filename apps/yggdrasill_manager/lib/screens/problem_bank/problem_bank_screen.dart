@@ -8310,6 +8310,36 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   static final _boxMarkerEndRegex = RegExp(r'\[박스끝\]');
   static final _paragraphMarkerRegex = RegExp(r'\[문단\]');
 
+  // stem 의 조건제시박스(deco) / 보기박스(bogi) 존재 여부 감지.
+  //   - 보기박스: [보기시작] 마커, 또는 [박스시작]..[박스끝] 블록 안에 <보기>/<보 기> 가 있는 경우.
+  //   - 조건박스: <보기> 가 없는 [박스시작]..[박스끝] 블록.
+  static final _bogiStartRegex = RegExp(r'\[보기시작\]');
+  static final _bogiAngleRegex = RegExp(r'<\s*보\s*기\s*>');
+  static final _boxBlockRegex = RegExp(r'\[박스시작\]([\s\S]*?)\[박스끝\]');
+
+  static List<String> _boxBlockContents(String stem) {
+    final out = <String>[];
+    for (final m in _boxBlockRegex.allMatches(stem)) {
+      out.add(m.group(1) ?? '');
+    }
+    return out;
+  }
+
+  static bool _stemHasBogiBox(String stem) {
+    if (_bogiStartRegex.hasMatch(stem)) return true;
+    for (final block in _boxBlockContents(stem)) {
+      if (_bogiAngleRegex.hasMatch(block)) return true;
+    }
+    return false;
+  }
+
+  static bool _stemHasDecoBox(String stem) {
+    for (final block in _boxBlockContents(stem)) {
+      if (!_bogiAngleRegex.hasMatch(block)) return true;
+    }
+    return false;
+  }
+
   List<Widget> _buildStemPreviewBlocks(
     ProblemBankQuestion q,
     String stemPreview, {
@@ -9994,11 +10024,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final hasTables = tableEntries.isNotEmpty;
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);
     final hasAnswerFigures = answerFigureAssets.isNotEmpty;
+    final hasBoxColumnControlsForSidebar =
+        _stemHasDecoBox(q.stem) || _stemHasBogiBox(q.stem);
     final hasSidebar = hasFigures ||
         hasTables ||
         hasAnswerFigures ||
         isImageChoice ||
-        hasFigureMarker;
+        hasFigureMarker ||
+        hasBoxColumnControlsForSidebar;
 
     // 다이얼로그 사이즈:
     // - 세로는 화면 높이의 최대 92% 까지 확보하되, 문항 세로 높이 필요에 따라 유연.
@@ -10050,6 +10083,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     };
     var imageChoiceRowsDraft = _imageChoiceRowsOf(q);
     var figureGroupGap = _figureGroupGapOf(q);
+    // 조건제시박스(deco)/보기박스(bogi) 2단 배치 토글 상태.
+    final hasDecoBox = _stemHasDecoBox(q.stem);
+    final hasBogiBox = _stemHasBogiBox(q.stem);
+    final hasBoxColumnControls = hasDecoBox || hasBogiBox;
+    var decoBoxTwoCol = (q.meta['deco_box_columns'] as num?)?.toInt() == 2;
+    var bogiBoxTwoCol = (q.meta['bogi_box_columns'] as num?)?.toInt() == 2;
     var refreshing = false;
     var dialogQ = q;
     final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
@@ -10086,10 +10125,25 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               draftMeta['answer_figure_layout'] =
                   _buildAnswerFigureLayoutPayload(answerFigureWidthDrafts);
             }
-            final previewQ =
-                (hasFigures || hasTables || hasAnswerFigures || isImageChoice)
-                    ? baseQ.copyWith(meta: draftMeta)
-                    : baseQ;
+            if (hasBoxColumnControls) {
+              if (decoBoxTwoCol) {
+                draftMeta['deco_box_columns'] = 2;
+              } else {
+                draftMeta.remove('deco_box_columns');
+              }
+              if (bogiBoxTwoCol) {
+                draftMeta['bogi_box_columns'] = 2;
+              } else {
+                draftMeta.remove('bogi_box_columns');
+              }
+            }
+            final previewQ = (hasFigures ||
+                    hasTables ||
+                    hasAnswerFigures ||
+                    isImageChoice ||
+                    hasBoxColumnControls)
+                ? baseQ.copyWith(meta: draftMeta)
+                : baseQ;
 
             // 그림 편집 변경사항을 _questions 에 반영한다. 표 편집 결과는 이어지는
             // _applyTableScalesLocal 호출에서 같이 반영돼야 한다.
@@ -10159,12 +10213,39 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               });
             }
 
+            void persistBoxColumnChanges() {
+              if (!hasBoxColumnControls) return;
+              final idx = _questions.indexWhere((item) => item.id == q.id);
+              if (idx < 0) return;
+              final current = _questions[idx];
+              final updatedMeta = Map<String, dynamic>.from(current.meta);
+              if (decoBoxTwoCol) {
+                updatedMeta['deco_box_columns'] = 2;
+              } else {
+                updatedMeta.remove('deco_box_columns');
+              }
+              if (bogiBoxTwoCol) {
+                updatedMeta['bogi_box_columns'] = 2;
+              } else {
+                updatedMeta.remove('bogi_box_columns');
+              }
+              final updatedQ = current.copyWith(meta: updatedMeta);
+              setState(() {
+                _questions = <ProblemBankQuestion>[
+                  for (var i = 0; i < _questions.length; i += 1)
+                    i == idx ? updatedQ : _questions[i],
+                ];
+                _dirtyQuestionIds.add(updatedQ.id);
+              });
+            }
+
             // 그림/표 편집 양쪽 모두 반영 후 서버 미리보기를 재발급한다.
             void applyAndRefresh() {
               persistFigureChanges();
               persistTableChanges();
               persistAnswerFigureChanges();
               persistImageChoiceChanges();
+              persistBoxColumnChanges();
               setLocalState(() {
                 refreshing = true;
               });
@@ -10319,6 +10400,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         offsetXMap: tableOffsetXMap,
                         setLocalState: setLocalState,
                         onSettingChanged: applyAndRefresh,
+                      ),
+                    if (hasBoxColumnControls && hasTables)
+                      const SizedBox(height: 12),
+                    if (hasBoxColumnControls)
+                      _buildBoxColumnEditSection(
+                        hasDecoBox: hasDecoBox,
+                        hasBogiBox: hasBogiBox,
+                        decoTwoCol: decoBoxTwoCol,
+                        bogiTwoCol: bogiBoxTwoCol,
+                        onDecoChanged: (v) {
+                          setLocalState(() => decoBoxTwoCol = v);
+                          applyAndRefresh();
+                        },
+                        onBogiChanged: (v) {
+                          setLocalState(() => bogiBoxTwoCol = v);
+                          applyAndRefresh();
+                        },
                       ),
                   ],
                 ),
@@ -11541,6 +11639,75 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   /// 확대 미리보기 다이얼로그용 "표 크기 조절" 인라인 편집 섹션.
+  // 조건제시박스 / <보기>박스 2단 배치 토글 섹션.
+  //   - 체크 시 해당 박스 항목을 좌·우 2열로 배치(자동 아님, 수동 토글).
+  //   - 항목이 많고 짧은 조건박스의 세로 공간 낭비를 줄이는 용도.
+  Widget _buildBoxColumnEditSection({
+    required bool hasDecoBox,
+    required bool hasBogiBox,
+    required bool decoTwoCol,
+    required bool bogiTwoCol,
+    required ValueChanged<bool> onDecoChanged,
+    required ValueChanged<bool> onBogiChanged,
+  }) {
+    Widget toggleRow(String label, bool value, ValueChanged<bool> onChanged) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(color: _text, fontSize: 12.0),
+              ),
+            ),
+            Switch(
+              value: value,
+              onChanged: onChanged,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.view_column_outlined, color: _textSub, size: 15),
+              SizedBox(width: 6),
+              Text(
+                '박스 2단 배치',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 12.6,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            '항목을 좌·우 2열로 배치합니다.',
+            style: TextStyle(color: _textSub, fontSize: 11.0),
+          ),
+          const SizedBox(height: 4),
+          if (hasDecoBox) toggleRow('조건제시박스 2단', decoTwoCol, onDecoChanged),
+          if (hasBogiBox) toggleRow('<보기>박스 2단', bogiTwoCol, onBogiChanged),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTableEditSection({
     required List<TableScaleEntry> entries,
     required Map<String, TableScaleValue> drafts,

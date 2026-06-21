@@ -43,6 +43,7 @@ import 'widgets/memo_dialogs.dart';
 import 'app_overlays.dart';
 import 'screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'screens/learning/past_exam_papers_dialog.dart';
+import 'widgets/top_glass_snack_bar.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus =
@@ -862,21 +863,13 @@ void main() async {
   runApp(MyApp(startFullscreen: fullscreen, startMaximized: maximizeFlag));
   if (showUpdateSnack) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      rootScaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: const Text(
-            '업데이트가 완료되어 새로 시작했어요.',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-          ),
-          backgroundColor: const Color(0xFF232326),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: Color(0xFF1976D2), width: 1.1),
-          ),
-          duration: const Duration(seconds: 3),
-        ),
+      final ctx = rootNavigatorKey.currentContext;
+      if (ctx == null) return;
+      TopGlassSnackBar.show(
+        ctx,
+        message: '업데이트가 완료되어 새로 시작했어요.',
+        icon: Icons.check_circle_outline_rounded,
+        duration: const Duration(seconds: 3),
       );
     });
   }
@@ -1251,7 +1244,8 @@ class _MyAppState extends State<MyApp>
                 OverlayEntry(builder: (ctx) => const _GlobalMemoOverlay()),
                 OverlayEntry(
                     builder: (ctx) => const _GlobalStartupUpdateCard()),
-                OverlayEntry(builder: (ctx) => const _GlobalUpdateNoticeChip()),
+                OverlayEntry(
+                    builder: (ctx) => const TopGlassUpdateNoticeBridge()),
               ]);
             },
             home: const MainScreen(),
@@ -1434,158 +1428,6 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
                   ],
                 ),
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _GlobalUpdateNoticeChip extends StatefulWidget {
-  const _GlobalUpdateNoticeChip();
-  @override
-  State<_GlobalUpdateNoticeChip> createState() =>
-      _GlobalUpdateNoticeChipState();
-}
-
-class _GlobalUpdateNoticeChipState extends State<_GlobalUpdateNoticeChip> {
-  UpdateNotice? _notice;
-  UpdateInfo _progress = const UpdateInfo(phase: UpdatePhase.idle);
-  bool _updating = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _notice = UpdateService.availableNoticeNotifier.value;
-    _progress = UpdateService.progressNotifier.value;
-    UpdateService.availableNoticeNotifier.addListener(_onNotice);
-    UpdateService.progressNotifier.addListener(_onProgress);
-  }
-
-  void _onNotice() {
-    if (!mounted) return;
-    setState(() {
-      _notice = UpdateService.availableNoticeNotifier.value;
-    });
-  }
-
-  void _onProgress() {
-    if (!mounted) return;
-    setState(() {
-      _progress = UpdateService.progressNotifier.value;
-    });
-  }
-
-  @override
-  void dispose() {
-    UpdateService.availableNoticeNotifier.removeListener(_onNotice);
-    UpdateService.progressNotifier.removeListener(_onProgress);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_notice == null) return const SizedBox.shrink();
-    final busy = _progress.phase == UpdatePhase.checking ||
-        _progress.phase == UpdatePhase.downloading ||
-        _progress.phase == UpdatePhase.readyToApply ||
-        _updating;
-    if (busy) return const SizedBox.shrink();
-
-    // 네비게이션 레일(minWidth 84) 오른쪽에 배치해 프로필 버튼을 가리지 않음
-    const double navRailWidth = 84.0;
-    const double chipLeft = navRailWidth + 12;
-
-    return Positioned(
-      left: chipLeft,
-      bottom: 16,
-      child: SafeArea(
-        minimum: const EdgeInsets.only(left: 4, bottom: 4),
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            width: 320,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF232326),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF2A2A2A)),
-              boxShadow: const [
-                BoxShadow(
-                    color: Colors.black54,
-                    blurRadius: 14,
-                    offset: Offset(0, 6)),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Row(
-                  children: [
-                    Icon(Icons.notifications_active,
-                        color: Color(0xFF1B6B63), size: 18),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        '새 업데이트가 있어요',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 14),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  '${_notice!.tag} 버전을 설치할 수 있어요.',
-                  style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    OutlinedButton(
-                      onPressed: () async {
-                        await UpdateService.snoozeAvailableUpdateNotice();
-                      },
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.white24),
-                        foregroundColor: Colors.white70,
-                      ),
-                      child: const Text('나중에 알림'),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () async {
-                          if (_updating) return;
-                          setState(() {
-                            _updating = true;
-                          });
-                          try {
-                            await UpdateService.oneClickUpdate(context);
-                          } finally {
-                            if (mounted) {
-                              setState(() {
-                                _updating = false;
-                              });
-                            }
-                          }
-                        },
-                        style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1B6B63)),
-                        icon: const Icon(Icons.system_update_alt, size: 17),
-                        label: const Text('업데이트'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ),
           ),
         ),

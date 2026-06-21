@@ -4625,7 +4625,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       Positioned(
                         left: 0,
                         right: 0,
-                        bottom: 16,
+                        bottom: FabTabBarTokens.fabBarBottomInset,
                         child: ProblemBankBottomFabBar(
                           cartCount: _cartQuestionIds.length,
                           cartActive: _showOnlySelectedQuestions,

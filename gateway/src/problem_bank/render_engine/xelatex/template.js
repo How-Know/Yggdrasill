@@ -290,13 +290,17 @@ const BOGI_MARKER_END_RE = /\[보기끝\]/g;
 const RAW_TABLE_START_RE = /\[표시작\]/;
 const RAW_TABLE_END_RE = /\[표끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
+// 원문자(동그라미) 라벨: 동그라미 한글 ㉠–㉭(U+3260–U+326D), 동그라미 숫자 ①–⑳.
+// 조건제시박스에서 `㉠ y=...` 처럼 항목 머리표로 자주 쓰인다. 라벨 뒤 공백이 있어야 항목으로 인식.
 const BOGI_ITEM_SPLIT_RE =
-  /(?=(?:[ㄱ-ㅎ]\.\s*|(?:\(|（)\s*[ㄱ-ㅎ가나다라마바사아자차카타파하]\s*(?:\)|）)\s*))/;
+  /(?=(?:[ㄱ-ㅎ]\.\s*|(?:\(|（)\s*[ㄱ-ㅎ가나다라마바사아자차카타파하]\s*(?:\)|）)\s*|[\u3260-\u326D\u2460-\u2473]\s+))/;
 const BOGI_ITEM_RE =
-  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([ㄱ-ㅎ가나다라마바사아자차카타파하]|\d{1,2})\s*(?:\)|）)\s*)/;
+  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([ㄱ-ㅎ가나다라마바사아자차카타파하]|\d{1,2})\s*(?:\)|）)\s*|([\u3260-\u326D\u2460-\u2473])\s+)/;
 
 function bogiLabelTextFromMatch(match) {
   if (!match) return '';
+  // match[3] = 원문자(㉠/①…) 라벨. 장식 없이 글자 그대로 라벨로 사용.
+  if (match[3]) return match[3];
   const label = match[1] || match[2] || '';
   return match[1] ? `${label}.` : `(${label})`;
 }
@@ -769,6 +773,11 @@ function normalizeMathSegment(mathContent) {
   // ① 7처럼 박스 안에서 동그라미 번호 바로 뒤에 숫자/수식이 오면 해당 조각이
   // math mode 로 감싸져 일반 공백이 사라진다. 라벨 뒤 공백을 명시적 수식 공백으로 고정.
   out = out.replace(/([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])\s+(?=[+\-−]?\d|\\(?:d?frac|text)(?![A-Za-z]))/g, '$1\\;');
+  // 원문자 범위 표기 "㉠~㉧" 의 물결(~)은 math mode 에서 공백으로 사라지므로 ∼(\sim) 으로 고정.
+  out = out.replace(/([\u3260-\u326D\u2460-\u2473])\s*~\s*([\u3260-\u326D\u2460-\u2473])/g, '$1\\sim $2');
+  // 동그라미 한글(㉠–㉭)·동그라미 숫자(①–⑳) 는 수식 폰트에 글리프가 없어 math mode 로 들어가면
+  // 서버 PDF 에서 통째로 누락된다(본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
+  out = out.replace(/[\u3260-\u326D\u2460-\u2473]/g, (ch) => `\\text{${ch}}`);
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
@@ -2083,6 +2092,32 @@ function flattenBoxParagraphLines(lines, { stripBogi = false } = {}) {
   return out;
 }
 
+// 박스(조건/보기) 내부 항목들을 2단으로 배치한다. 항목 수가 적으면 1단 유지.
+//   - 좌/우 minipage 폭 0.48\linewidth. minipage 안에서 \linewidth 가 재정의되므로
+//     항목의 hangindent/\makebox[\wd0] 라벨 정렬은 그대로 유지된다.
+//   - 항목 사이 \par\vspace 구분(BOX_PARAGRAPH_BREAK 변환분)은 분할 기준에서 제외하고
+//     같은 칸에 묶이도록 단순히 앞쪽 절반/뒤쪽 절반으로 나눈다.
+function layoutBoxContentColumns(contentParts, columns) {
+  // 행(row) 우선 배치: 항목을 좌→우 순서로 채우고 다음 줄로 내려간다.
+  //   ㉠ ㉡
+  //   ㉢ ㉣
+  //   ...
+  // 각 줄은 좌/우 minipage 한 쌍이며 [t](상단 정렬)로 두 항목의 윗선을 맞춘다.
+  const all = (contentParts || []).filter((p) => p && String(p).trim());
+  // 문단 구분 sentinel(\par\vspace…) 은 2단 페어링 대상에서 제외(플랫 항목만 배치).
+  const items = all.filter((p) => !/^\\par\\vspace/.test(String(p).trim()));
+  if (Number(columns) !== 2 || items.length < 2) return all.join('\n');
+  const rows = [];
+  for (let i = 0; i < items.length; i += 2) {
+    const left = items[i];
+    const right = items[i + 1] || '';
+    rows.push(
+      `\\noindent\\begin{minipage}[t]{0.48\\linewidth}\n${left}\n\\end{minipage}\\hfill\\begin{minipage}[t]{0.48\\linewidth}\n${right}\n\\end{minipage}`,
+    );
+  }
+  return rows.join('\n\\par\n');
+}
+
 function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
   const cleaned = flattenBoxParagraphLines(lines, { stripBogi: true });
   const items = [];
@@ -2135,18 +2170,23 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
       if (tex.trim()) rendered.push(wrapBoxLineWithTallPad(tex, `\\noindent ${tex}\\par`));
     }
   }
-  return rendered.join('\n');
+  return rendered;
 }
 
-function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
-  let content = renderBogiItems(lines, equations, replaceFigureMarkers);
+function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
+  const columns = Number(options?.columns) === 2 ? 2 : 1;
+  const renderedItems = renderBogiItems(lines, equations, replaceFigureMarkers);
+  let content;
   // 보기박스 본문에 "정렬 힌트가 될 글자" 가 전혀 없으면 가운데 정렬.
   // (예: Q5 보기박스의 `-0.7, -\frac{6}{3}, 0, ...` 처럼 숫자/수식만 있는 케이스)
   if (boxContentIsCenteredOnly(lines)) {
-    const cleaned = content
+    const cleaned = renderedItems
+      .join('\n')
       .replace(/\\noindent\s*/g, '')
       .replace(/\\par\s*$/g, '');
     content = `\\begin{center}${cleaned}\\end{center}`;
+  } else {
+    content = layoutBoxContentColumns(renderedItems, columns);
   }
   // 사용자 요청 27차: "보 기" 사이 공백을 한 글자 폭(≈1em) 으로 확장.
   //   `smartTexLine` 은 기본적으로 Hangul 구간 내 공백을 그대로 넘기기 때문에
@@ -2395,7 +2435,8 @@ function renderRawBoxLatexEnvironment(lines) {
   return `\\begin{center}$\\displaystyle ${raw}$\\end{center}`;
 }
 
-function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
+function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
+  const columns = Number(options?.columns) === 2 ? 2 : 1;
   // 1) 박스 내부의 "본문 라인" 목록을 평탄화하되, [문단] 마커는 간격 sentinel 로 보존한다.
   const rawFlatLines = flattenBoxParagraphLines(lines);
   let forcedAlign = '';
@@ -2473,6 +2514,11 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
     }
   }
 
+  // 2단 배치는 라벨/항목 기반 좌측정렬(가운데 정렬·raw 환경이 아닌 경우)에만 적용.
+  const decoContent = (!centerMode && !rawLatexEnvironment)
+    ? layoutBoxContentColumns(contentParts, columns)
+    : contentParts.join('\n');
+
   return [
     '\\begin{tcolorbox}[',
     '  enhanced,',
@@ -2485,7 +2531,7 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '\\setstretch{1.53}',
     '\\lineskiplimit=0.4em\\lineskip=0.6em',
     '{\\YggBoxMathVisualCenter',
-    contentParts.join('\n'),
+    decoContent,
     '}',
     '\\end{tcolorbox}',
   ].join('\n');
@@ -5210,6 +5256,11 @@ function renderOneQuestion(question, {
     onFigureMarker: probeFigureMarkerDecision,
   });
 
+  // 조건제시박스(deco)/보기박스(bogi) 2단 배치 옵션. 매니저앱 토글이 meta 에 저장.
+  const boxColMeta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const decoBoxColumns = Number(boxColMeta.deco_box_columns) === 2 ? 2 : 1;
+  const bogiBoxColumns = Number(boxColMeta.bogi_box_columns) === 2 ? 2 : 1;
+
   // 문항 내 표 등장 순서 카운터 (meta.table_scales 키: struct:N / raw:N 와 대응).
   let structTableIdx = 0;
   let rawTableIdx = 0;
@@ -5579,9 +5630,13 @@ function renderOneQuestion(question, {
     } else if (seg.type === 'display_math_block') {
       parts.push(renderDisplayMathStemBlock(seg.lines, equations));
     } else if (seg.type === 'bogi') {
-      parts.push(renderBogiBoxLatex(seg.lines, equations, replaceFigureMarkers));
+      parts.push(renderBogiBoxLatex(seg.lines, equations, replaceFigureMarkers, {
+        columns: bogiBoxColumns,
+      }));
     } else if (seg.type === 'deco') {
-      parts.push(renderDecoBoxLatex(seg.lines, equations, replaceFigureMarkers));
+      parts.push(renderDecoBoxLatex(seg.lines, equations, replaceFigureMarkers, {
+        columns: decoBoxColumns,
+      }));
     } else if (seg.type === 'table') {
       structTableIdx += 1;
       const scale = resolveTableScale(question, 'struct', structTableIdx);
