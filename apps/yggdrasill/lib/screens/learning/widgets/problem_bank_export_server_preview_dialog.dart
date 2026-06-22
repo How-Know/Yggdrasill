@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ class ProblemBankPreviewRefreshRequest {
   const ProblemBankPreviewRefreshRequest({
     required this.subjectTitleText,
     required this.titlePageTopText,
+    required this.titlePageGoalText,
     required this.timeLimitText,
     required this.pageColumnQuestionCounts,
     required this.columnLabelAnchors,
@@ -42,6 +44,7 @@ class ProblemBankPreviewRefreshRequest {
 
   final String subjectTitleText;
   final String titlePageTopText;
+  final String titlePageGoalText;
   final String timeLimitText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
@@ -68,6 +71,7 @@ class ProblemBankPreviewRefreshRequest {
   ProblemBankPreviewRefreshRequest copyWith({
     String? subjectTitleText,
     String? titlePageTopText,
+    String? titlePageGoalText,
     String? timeLimitText,
     List<Map<String, dynamic>>? pageColumnQuestionCounts,
     List<Map<String, dynamic>>? columnLabelAnchors,
@@ -89,6 +93,7 @@ class ProblemBankPreviewRefreshRequest {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: subjectTitleText ?? this.subjectTitleText,
       titlePageTopText: titlePageTopText ?? this.titlePageTopText,
+      titlePageGoalText: titlePageGoalText ?? this.titlePageGoalText,
       timeLimitText: timeLimitText ?? this.timeLimitText,
       pageColumnQuestionCounts:
           pageColumnQuestionCounts ?? this.pageColumnQuestionCounts,
@@ -117,6 +122,7 @@ class ProblemBankPreviewRefreshResult {
     required this.pdfUrl,
     this.mathEngine = 'xelatex-v2',
     this.titlePageTopText = '2026학년도 대학수학능력시험 문제지',
+    this.titlePageGoalText = '다시 풀기',
     this.timeLimitText = '',
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
     this.columnLabelAnchors = const <Map<String, dynamic>>[],
@@ -134,6 +140,7 @@ class ProblemBankPreviewRefreshResult {
   final String pdfUrl;
   final String mathEngine;
   final String titlePageTopText;
+  final String titlePageGoalText;
   final String timeLimitText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
@@ -182,6 +189,8 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     required this.titleText,
     this.initialSubjectTitle = '수학 영역',
     this.initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
+    this.initialTitlePageGoalText = '다시 풀기',
+    this.isAssignmentTemplate = false,
     this.initialTimeLimitText = '',
     this.layoutColumns = 1,
     this.maxQuestionsPerPage = 4,
@@ -212,6 +221,8 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final String titleText;
   final String initialSubjectTitle;
   final String initialTitlePageTopText;
+  final String initialTitlePageGoalText;
+  final bool isAssignmentTemplate;
   final String initialTimeLimitText;
   final int layoutColumns;
   final int maxQuestionsPerPage;
@@ -245,6 +256,8 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     String titleText = '서버 PDF 미리보기',
     String initialSubjectTitle = '수학 영역',
     String initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
+    String initialTitlePageGoalText = '다시 풀기',
+    bool isAssignmentTemplate = false,
     String initialTimeLimitText = '',
     int layoutColumns = 1,
     int maxQuestionsPerPage = 4,
@@ -280,48 +293,55 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     final maxHeight = (size.height * 0.8).clamp(640.0, 1280.0).toDouble();
     await showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) {
-        return Dialog(
-          backgroundColor: const Color(0xFF10171A),
-          insetPadding:
-              const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: maxWidth,
-              maxHeight: maxHeight,
-              minWidth: 1040,
-              minHeight: 620,
-            ),
-            child: ProblemBankExportServerPreviewDialog(
-              pdfUrl: pdfUrl,
-              titleText: titleText,
-              initialSubjectTitle: initialSubjectTitle,
-              initialTitlePageTopText: initialTitlePageTopText,
-              initialTimeLimitText: initialTimeLimitText,
-              layoutColumns: layoutColumns,
-              maxQuestionsPerPage: maxQuestionsPerPage,
-              totalQuestionCount: totalQuestionCount,
-              initialPageColumnQuestionCounts: initialPageColumnQuestionCounts,
-              initialColumnLabelAnchors: initialColumnLabelAnchors,
-              initialTitlePageIndices: initialTitlePageIndices,
-              initialTitlePageHeaders: initialTitlePageHeaders,
-              initialCoverPageTexts: initialCoverPageTexts,
-              initialIncludeAcademyLogo: initialIncludeAcademyLogo,
-              initialIncludeCoverPage: initialIncludeCoverPage,
-              initialIncludeAnswerSheet: initialIncludeAnswerSheet,
-              initialIncludeExplanation: initialIncludeExplanation,
-              initialIncludeQuestionScore: initialIncludeQuestionScore,
-              initialMathEngine: initialMathEngine,
-              initialQuestionScoreByQuestionId:
-                  initialQuestionScoreByQuestionId,
-              questionScoreEntries: questionScoreEntries,
-              initialEditingPresetId: initialEditingPresetId,
-              initialEditingPresetName: initialEditingPresetName,
-              assignmentFlowNames: assignmentFlowNames,
-              onRefreshRequested: onRefreshRequested,
-              onGeneratePdfRequested: onGeneratePdfRequested,
-              onSaveSettingsRequested: onSaveSettingsRequested,
-              onCreateAssignmentRequested: onCreateAssignmentRequested,
+        return PopScope(
+          canPop: false,
+          child: Dialog(
+            backgroundColor: const Color(0xFF10171A),
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: maxWidth,
+                maxHeight: maxHeight,
+                minWidth: 1040,
+                minHeight: 620,
+              ),
+              child: ProblemBankExportServerPreviewDialog(
+                pdfUrl: pdfUrl,
+                titleText: titleText,
+                initialSubjectTitle: initialSubjectTitle,
+                initialTitlePageTopText: initialTitlePageTopText,
+                initialTitlePageGoalText: initialTitlePageGoalText,
+                isAssignmentTemplate: isAssignmentTemplate,
+                initialTimeLimitText: initialTimeLimitText,
+                layoutColumns: layoutColumns,
+                maxQuestionsPerPage: maxQuestionsPerPage,
+                totalQuestionCount: totalQuestionCount,
+                initialPageColumnQuestionCounts:
+                    initialPageColumnQuestionCounts,
+                initialColumnLabelAnchors: initialColumnLabelAnchors,
+                initialTitlePageIndices: initialTitlePageIndices,
+                initialTitlePageHeaders: initialTitlePageHeaders,
+                initialCoverPageTexts: initialCoverPageTexts,
+                initialIncludeAcademyLogo: initialIncludeAcademyLogo,
+                initialIncludeCoverPage: initialIncludeCoverPage,
+                initialIncludeAnswerSheet: initialIncludeAnswerSheet,
+                initialIncludeExplanation: initialIncludeExplanation,
+                initialIncludeQuestionScore: initialIncludeQuestionScore,
+                initialMathEngine: initialMathEngine,
+                initialQuestionScoreByQuestionId:
+                    initialQuestionScoreByQuestionId,
+                questionScoreEntries: questionScoreEntries,
+                initialEditingPresetId: initialEditingPresetId,
+                initialEditingPresetName: initialEditingPresetName,
+                assignmentFlowNames: assignmentFlowNames,
+                onRefreshRequested: onRefreshRequested,
+                onGeneratePdfRequested: onGeneratePdfRequested,
+                onSaveSettingsRequested: onSaveSettingsRequested,
+                onCreateAssignmentRequested: onCreateAssignmentRequested,
+              ),
             ),
           ),
         );
@@ -337,6 +357,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
 class _ProblemBankExportServerPreviewDialogState
     extends State<ProblemBankExportServerPreviewDialog> {
   static const String _defaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
+  static const String _defaultTitlePageGoalText = '다시 풀기';
   static const double _minScale = 0.2;
   static const double _maxScale = 8;
   static const Color _panelBg = Color(0xFF151C21);
@@ -353,6 +374,7 @@ class _ProblemBankExportServerPreviewDialogState
   final PdfViewerController _viewerController = PdfViewerController();
   late final TextEditingController _subjectController;
   late final TextEditingController _titlePageTopTextController;
+  late final TextEditingController _titlePageGoalTextController;
   late final TextEditingController _timeLimitController;
   late final TextEditingController _coverTopTitleController;
   late final TextEditingController _coverSubjectTitleController;
@@ -402,6 +424,7 @@ class _ProblemBankExportServerPreviewDialogState
       <int, TextEditingController>{};
   final Map<int, TextEditingController> _subtitleControllers =
       <int, TextEditingController>{};
+  late String _initialStateSignature;
 
   @override
   void initState() {
@@ -424,6 +447,11 @@ class _ProblemBankExportServerPreviewDialogState
       text: widget.initialTitlePageTopText.trim().isNotEmpty
           ? widget.initialTitlePageTopText.trim()
           : _defaultTitlePageTopText,
+    );
+    _titlePageGoalTextController = TextEditingController(
+      text: widget.initialTitlePageGoalText.trim().isNotEmpty
+          ? widget.initialTitlePageGoalText.trim()
+          : _defaultTitlePageGoalText,
     );
     _timeLimitController =
         TextEditingController(text: widget.initialTimeLimitText.trim());
@@ -455,6 +483,7 @@ class _ProblemBankExportServerPreviewDialogState
       ..._titlePageHeaderMap.keys,
     ]);
     _syncPageScopedUiState();
+    _initialStateSignature = _currentStateSignature();
   }
 
   @override
@@ -470,6 +499,7 @@ class _ProblemBankExportServerPreviewDialogState
     }
     _subjectController.dispose();
     _titlePageTopTextController.dispose();
+    _titlePageGoalTextController.dispose();
     _timeLimitController.dispose();
     _coverTopTitleController.dispose();
     _coverSubjectTitleController.dispose();
@@ -1850,6 +1880,7 @@ class _ProblemBankExportServerPreviewDialogState
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: _subjectController.text.trim(),
       titlePageTopText: _titlePageTopTextController.text.trim(),
+      titlePageGoalText: _titlePageGoalTextController.text.trim(),
       timeLimitText: _timeLimitController.text.trim(),
       pageColumnQuestionCounts: _pageColumnPayload(),
       columnLabelAnchors: _columnLabelAnchorsPayload(),
@@ -1869,6 +1900,115 @@ class _ProblemBankExportServerPreviewDialogState
       //   최초 렌더(대화상자 오픈)에는 이 payload 가 쓰이지 않으므로 auto 생성이 정상 동작.
       disableAutoLabels: true,
     );
+  }
+
+  dynamic _stableJsonValue(dynamic value) {
+    if (value is Map) {
+      final keys = value.keys.map((e) => '$e').toList(growable: false)..sort();
+      return <String, dynamic>{
+        for (final key in keys) key: _stableJsonValue(value[key]),
+      };
+    }
+    if (value is List) {
+      return value.map(_stableJsonValue).toList(growable: false);
+    }
+    return value;
+  }
+
+  String _signatureForPayload(ProblemBankPreviewRefreshRequest payload) {
+    return jsonEncode(
+      _stableJsonValue(<String, dynamic>{
+        'subjectTitleText': payload.subjectTitleText,
+        'titlePageTopText': payload.titlePageTopText,
+        'timeLimitText': payload.timeLimitText,
+        'pageColumnQuestionCounts': payload.pageColumnQuestionCounts,
+        'columnLabelAnchors': payload.columnLabelAnchors,
+        'titlePageIndices': payload.titlePageIndices,
+        'titlePageHeaders': payload.titlePageHeaders,
+        'coverPageTexts': payload.coverPageTexts,
+        'includeAcademyLogo': payload.includeAcademyLogo,
+        'includeCoverPage': payload.includeCoverPage,
+        'includeAnswerSheet': payload.includeAnswerSheet,
+        'includeExplanation': payload.includeExplanation,
+        'includeQuestionScore': payload.includeQuestionScore,
+        'questionScoreByQuestionId': payload.questionScoreByQuestionId,
+        'mathEngine': payload.mathEngine,
+      }),
+    );
+  }
+
+  String _currentStateSignature() {
+    return _signatureForPayload(_buildRequestPayload());
+  }
+
+  bool get _hasUnsavedPresetChanges {
+    if (_editingPresetId.trim().isEmpty) return false;
+    return _currentStateSignature() != _initialStateSignature;
+  }
+
+  void _markCurrentStateSaved() {
+    _initialStateSignature = _currentStateSignature();
+  }
+
+  Future<bool> _confirmDiscardUnsavedChanges() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF10171A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _panelBorder),
+          ),
+          title: const Text(
+            '저장하지 않은 수정 내용',
+            style: TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: const Text(
+            '저장된 프리셋을 수정한 내용이 있습니다. 저장하지 않고 닫을까요?',
+            style: TextStyle(
+              color: _textMuted,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              style: TextButton.styleFrom(foregroundColor: _textMuted),
+              child: const Text('계속 편집'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF7A3A3A),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('저장하지 않고 닫기'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
+  }
+
+  Future<void> _attemptClose() async {
+    if (_isRefreshing ||
+        _isGeneratingPdf ||
+        _isSavingSettings ||
+        _isCreatingAssignment) {
+      return;
+    }
+    if (_hasUnsavedPresetChanges) {
+      final discard = await _confirmDiscardUnsavedChanges();
+      if (!discard || !mounted) return;
+    }
+    if (mounted) Navigator.of(context).pop();
   }
 
   PdfPageLayout _layoutTwoPageVertical(
@@ -1991,6 +2131,13 @@ class _ProblemBankExportServerPreviewDialogState
             : _defaultTitlePageTopText;
         if (_titlePageTopTextController.text != nextTopText) {
           _titlePageTopTextController.text = nextTopText;
+        }
+        final refreshedGoalText = refreshed.titlePageGoalText.trim();
+        final nextGoalText = refreshedGoalText.isNotEmpty
+            ? refreshedGoalText
+            : _defaultTitlePageGoalText;
+        if (_titlePageGoalTextController.text != nextGoalText) {
+          _titlePageGoalTextController.text = nextGoalText;
         }
         final refreshedTimeLimitText = refreshed.timeLimitText.trim();
         if (_timeLimitController.text != refreshedTimeLimitText) {
@@ -2283,6 +2430,7 @@ class _ProblemBankExportServerPreviewDialogState
       if (mounted) {
         setState(() {
           _editingPresetName = presetDisplayName;
+          _markCurrentStateSaved();
         });
       }
     } finally {
@@ -3457,7 +3605,7 @@ class _ProblemBankExportServerPreviewDialogState
                     ),
                     IconButton(
                       tooltip: '닫기',
-                      onPressed: () => Navigator.of(context).pop(),
+                      onPressed: _attemptClose,
                       icon: const Icon(Icons.close, color: Color(0xFF9FB3B3)),
                     ),
                   ],
@@ -3714,6 +3862,12 @@ class _ProblemBankExportServerPreviewDialogState
                                   controller: _titlePageTopTextController,
                                   hintText: _defaultTitlePageTopText,
                                 ),
+                                if (widget.isAssignmentTemplate)
+                                  _buildCoverTextField(
+                                    label: '과제목표 (제목 옆 가운데·회색, 기본 "다시 풀기")',
+                                    controller: _titlePageGoalTextController,
+                                    hintText: _defaultTitlePageGoalText,
+                                  ),
                                 _buildTitleSwitchTile(
                                   label: '학원 로고',
                                   description: '모의고사형 제목 페이지에 학원 로고를 표시합니다.',

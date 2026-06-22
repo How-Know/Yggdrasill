@@ -57,6 +57,8 @@ Widget _rsReorderProxyDecorator(
   );
 }
 
+enum FileShortcutPresentation { sideSheet, bottomSheet }
+
 /// 파일 바로가기 탭(폴더(기타) -> 파일(HWP/PDF) 바로가기)
 ///
 /// - 폴더(기타) 선택 후 파일 바로가기를 바로 관리
@@ -65,7 +67,13 @@ Widget _rsReorderProxyDecorator(
 /// - 상단 폴더 선택은 자료탭 기타(category='other')의 폴더를 사용
 class FileShortcutTab extends StatefulWidget {
   final BuildContext? dialogContext;
-  const FileShortcutTab({super.key, this.dialogContext});
+  final FileShortcutPresentation presentation;
+
+  const FileShortcutTab({
+    super.key,
+    this.dialogContext,
+    this.presentation = FileShortcutPresentation.sideSheet,
+  });
 
   @override
   State<FileShortcutTab> createState() => _FileShortcutTabState();
@@ -730,18 +738,22 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
 
     final bootEmpty = _booting && _categories.isEmpty;
     final hasCategory = cat != null;
+    final isBottomSheet =
+        widget.presentation == FileShortcutPresentation.bottomSheet;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+      padding: EdgeInsets.fromLTRB(10, isBottomSheet ? 6 : 12, 10, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            '파일 바로가기',
-            style: TextStyle(
-                color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 12),
+          if (!isBottomSheet) ...[
+            const Text(
+              '파일 바로가기',
+              style: TextStyle(
+                  color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 12),
+          ],
           _CategoryPickerRow(
             label: '폴더',
             valueText: bootEmpty
@@ -1077,10 +1089,11 @@ class _FileCardState extends State<_FileCard> {
   // 셀 선택 학생리스트 액션(수정/삭제)과 동일한 폭/패딩을 사용
   static const double _actionWidth = 140;
   static const String _printTempPrefix = 'fs_print_';
+  static const String _printSettingsPrefix = 'file_shortcut_print_settings.';
   double _dx = 0.0; // negative = reveal actions
   bool _dragging = false;
   bool _printing = false;
-  _FsPaperSize _paperSize = _FsPaperSize.followFile;
+  _FsPaperSize _paperSize = _FsPaperSize.a4;
   late _FsFileKind _activeKind;
   final TextEditingController _pageRangeCtrl = ImeAwareTextEditingController();
   final GlobalKey _paperAnchorKey = GlobalKey();
@@ -1094,6 +1107,7 @@ class _FileCardState extends State<_FileCard> {
   void initState() {
     super.initState();
     _activeKind = widget.file.defaultKind;
+    unawaited(_restorePrintSettings());
   }
 
   @override
@@ -1106,6 +1120,11 @@ class _FileCardState extends State<_FileCard> {
     }
     if (!available.contains(_activeKind)) {
       _activeKind = widget.file.defaultKind;
+    }
+    if (oldWidget.file.id != widget.file.id) {
+      _paperSize = _FsPaperSize.a4;
+      _pageRangeCtrl.clear();
+      unawaited(_restorePrintSettings());
     }
   }
 
@@ -1162,6 +1181,64 @@ class _FileCardState extends State<_FileCard> {
       case _FsPaperSize.k8:
         return '8K';
     }
+  }
+
+  String get _printSettingsKey => '$_printSettingsPrefix${widget.file.id}';
+
+  String _paperToken(_FsPaperSize paper) {
+    switch (paper) {
+      case _FsPaperSize.followFile:
+        return 'followFile';
+      case _FsPaperSize.a4:
+        return 'a4';
+      case _FsPaperSize.b4:
+        return 'b4';
+      case _FsPaperSize.k8:
+        return 'k8';
+    }
+  }
+
+  _FsPaperSize _paperFromToken(String token) {
+    switch (token.trim()) {
+      case 'followFile':
+        return _FsPaperSize.followFile;
+      case 'b4':
+        return _FsPaperSize.b4;
+      case 'k8':
+        return _FsPaperSize.k8;
+      case 'a4':
+      default:
+        return _FsPaperSize.a4;
+    }
+  }
+
+  Future<void> _restorePrintSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_printSettingsKey) ?? '';
+      if (raw.trim().isEmpty) return;
+      final parts = raw.split('\n');
+      final paper = parts.isNotEmpty ? _paperFromToken(parts[0]) : _FsPaperSize.a4;
+      final range = parts.length > 1 ? parts.sublist(1).join('\n').trim() : '';
+      if (!mounted) return;
+      setState(() {
+        _paperSize = paper;
+        _pageRangeCtrl.text = range;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _savePrintSettings({
+    required _FsPaperSize paper,
+    required String pageRange,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _printSettingsKey,
+        '${_paperToken(paper)}\n${pageRange.trim()}',
+      );
+    } catch (_) {}
   }
 
   Future<void> _cleanupOldPrintTemps(
@@ -1310,7 +1387,7 @@ class _FileCardState extends State<_FileCard> {
     setState(() {
       _activeKind = picked;
       _pageRangeCtrl.clear();
-      _paperSize = _FsPaperSize.followFile;
+      _paperSize = _FsPaperSize.a4;
     });
   }
 
@@ -1489,6 +1566,167 @@ class _FileCardState extends State<_FileCard> {
     if (picked == null) return;
     if (!mounted) return;
     setState(() => _paperSize = picked);
+  }
+
+  Future<void> _openPrintSettingsDialog() async {
+    if (_printing) return;
+    var draftPaper = _paperSize;
+    final draftRangeCtrl = TextEditingController(text: _pageRangeCtrl.text);
+    final saved = await showDialog<bool>(
+      context: widget.dialogContext,
+      useRootNavigator: true,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: context.yggSurfaceBase,
+              contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 18),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: const BorderSide(color: _rsBorder),
+              ),
+              title: const Text(
+                '인쇄 설정',
+                style: TextStyle(
+                  color: _rsText,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              content: SizedBox(
+                width: 360,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      '용지',
+                      style: TextStyle(
+                        color: _rsTextSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: _rsPanelBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _rsBorder),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<_FsPaperSize>(
+                          value: draftPaper,
+                          dropdownColor: _rsPanelBg,
+                          iconEnabledColor: _rsTextSub,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          items: const [
+                            DropdownMenuItem(
+                              value: _FsPaperSize.a4,
+                              child: Text('A4'),
+                            ),
+                            DropdownMenuItem(
+                              value: _FsPaperSize.b4,
+                              child: Text('B4'),
+                            ),
+                            DropdownMenuItem(
+                              value: _FsPaperSize.k8,
+                              child: Text('8K'),
+                            ),
+                            DropdownMenuItem(
+                              value: _FsPaperSize.followFile,
+                              child: Text('파일 설정'),
+                            ),
+                          ],
+                          style: const TextStyle(
+                            color: _rsText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setDialogState(() => draftPaper = value);
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '페이지',
+                      style: TextStyle(
+                        color: _rsTextSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: draftRangeCtrl,
+                      minLines: 1,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: _rsText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: '전체 (예: 1-3, 8)',
+                        hintStyle:
+                            const TextStyle(color: _rsTextSub, fontSize: 13),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: _rsBorder),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide:
+                              const BorderSide(color: _rsAccent, width: 1.2),
+                        ),
+                        filled: true,
+                        fillColor: _rsPanelBg,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text(
+                    '취소',
+                    style: TextStyle(color: _rsTextSub),
+                  ),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _rsAccent,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (saved != true) {
+      draftRangeCtrl.dispose();
+      return;
+    }
+    final nextRange = draftRangeCtrl.text.trim();
+    draftRangeCtrl.dispose();
+    await _savePrintSettings(paper: draftPaper, pageRange: nextRange);
+    if (!mounted) return;
+    setState(() {
+      _paperSize = draftPaper;
+      _pageRangeCtrl.text = nextRange;
+    });
   }
 
   void _close() {
@@ -1826,12 +2064,38 @@ class _FileCardState extends State<_FileCard> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 IconButton(
+                  tooltip: '파일 열기',
+                  onPressed: !_hasActiveLink
+                      ? null
+                      : () {
+                          final p = _activePath.trim();
+                          if (p.isEmpty) return;
+                          unawaited(OpenFilex.open(p));
+                        },
+                  icon: const Icon(Icons.open_in_new_rounded,
+                      color: Colors.white70, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+                IconButton(
                   tooltip: (_activeKind == _FsFileKind.hwp) ? '바로 인쇄' : '인쇄',
                   onPressed: (_printing || !_hasActiveLink)
                       ? null
                       : () => unawaited(_printNow()),
                   icon: const Icon(Icons.print_outlined,
                       color: Colors.white70, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+                IconButton(
+                  tooltip: '인쇄 설정',
+                  onPressed: _printing
+                      ? null
+                      : () => unawaited(_openPrintSettingsDialog()),
+                  icon: const Icon(Icons.settings_outlined,
+                      color: Colors.white70, size: 19),
                   padding: EdgeInsets.zero,
                   constraints:
                       const BoxConstraints(minWidth: 40, minHeight: 40),

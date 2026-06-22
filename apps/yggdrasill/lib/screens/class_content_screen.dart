@@ -31,6 +31,7 @@ import 'learning/tag_preset_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'learning/models/problem_bank_export_models.dart'
     show kLearningQuestionModeObjective, previewAnswerForMode;
+import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/dialog_tokens.dart';
 import '../theme/ygg_semantic_colors.dart';
 import '../widgets/homework_assign_dialog.dart';
@@ -40,7 +41,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
-import '../widgets/home_header_weather_icon.dart';
+import '../widgets/fab_style_home_screen_header.dart';
 import '../utils/homework_page_text.dart';
 import 'class_content/grading_mode_page.dart';
 
@@ -120,6 +121,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   final Set<String> _testGradingSavedHomeworkIds = <String>{};
   Timer? _rightSheetPreloadDebounce;
   String _lastRightSheetPreloadKey = '';
+  final FabStyleScreenTabBarOverlay _homeTabOverlay =
+      FabStyleScreenTabBarOverlay();
 
   Map<({String studentId, String itemId}), bool> get _pendingConfirms =>
       _batchConfirmService.pending;
@@ -153,8 +156,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncHomeTabOverlay();
+    });
+  }
+
+  @override
   void dispose() {
     widget.printController?._detach();
+    _homeTabOverlay.dispose();
+    homeGradingHistoryAction = null;
     final testGradingSessionToClear = rightSideSheetTestGradingSession.value;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       homeBatchConfirmFabVisible.value = false;
@@ -172,6 +185,57 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     _uiAnimController.dispose();
     _clockTimer.cancel();
     super.dispose();
+  }
+
+  void _setGradingMode(bool value) {
+    if (_isGradingMode == value) return;
+    setState(() {
+      _isGradingMode = value;
+      if (!value) {
+        _batchConfirmService.clearPending();
+      }
+    });
+    gradingModeActive.value = value;
+    if (value) {
+      blockRightSideSheetOpen.value = false;
+      _scheduleRightSheetAnswerPreload();
+    } else {
+      blockRightSideSheetOpen.value = true;
+      _rightSheetPreloadDebounce?.cancel();
+      _lastRightSheetPreloadKey = '';
+      final closeAction = closeRightSideSheetAction;
+      if (closeAction != null) {
+        unawaited(closeAction());
+      }
+    }
+    _syncHomeTabOverlay();
+  }
+
+  void _syncHomeTabOverlay() {
+    _homeTabOverlay.sync(
+      context,
+      selectedIndex: _isGradingMode ? 1 : 0,
+      tabs: const ['현황', '채점'],
+      onTabSelected: (index) => _setGradingMode(index == 1),
+    );
+  }
+
+  void _syncHomeGradingHistoryAction({
+    required List<String> attendingStudentIds,
+    required Map<String, String> studentNamesById,
+  }) {
+    if (!_isGradingMode) {
+      homeGradingHistoryAction = null;
+      return;
+    }
+    homeGradingHistoryAction = () async {
+      if (!mounted) return;
+      await _showGradingHistoryDialog(
+        context: context,
+        attendingStudentIds: attendingStudentIds,
+        studentNamesById: studentNamesById,
+      );
+    };
   }
 
   void _scheduleHomeBatchConfirmFabSync() {
@@ -632,33 +696,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
-  Widget _buildHeaderPillIconButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onTap,
-    Color iconColor = const Color(0xFFD0DDDD),
+  Widget _buildFloatingHomeHeader({
+    required BuildContext context,
+    required DateTime headerDateTime,
+    required DateTime anchorDate,
+    required int attendingCount,
+    required int submittedCount,
   }) {
-    const double controlHeight = 48;
-    return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: controlHeight,
-          height: controlHeight,
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A2A2A),
-            borderRadius: BorderRadius.circular(controlHeight / 2),
-            border: Border.all(color: Colors.transparent),
-          ),
-          child: Center(
-            child: Icon(
-              icon,
-              color: iconColor,
-              size: 24,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: FabStyleHomeScreenHeader(
+        dateTimeText: _formatDateWithWeekdayAndTime(headerDateTime),
+        statsText: _isGradingMode
+            ? '제출 $submittedCount'
+            : '등원 $attendingCount',
+        gradingStats: _isGradingMode,
+        showAnchorDateHint: !isAttendanceAnchorToday(anchorDate),
+        trailing: [
+          if (!_isGradingMode)
+            Tooltip(
+              message: 'M5 바인딩 이력',
+              child: FabStyleActionButton(
+                size: 48,
+                icon: Icons.link_rounded,
+                onPressed: () => unawaited(
+                  _showM5BindingHistoryDialog(context: context),
+                ),
+              ),
             ),
-          ),
-        ),
+        ],
       ),
     );
   }
@@ -694,399 +760,183 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     final studentNamesById = <String, String>{
                       for (final s in list) s.id: s.name,
                     };
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ValueListenableBuilder<int>(
-                          valueListenable: HomeworkStore.instance.revision,
-                          builder: (context, homeworkRevision, _) {
-                            final submittedCount = _isGradingMode
-                                ? _countSubmittedHomeworkItems(list)
-                                : 0;
-                            return Padding(
-                              padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
-                                  final double controlsReserve =
-                                      _isGradingMode ? 320 : 210;
-                                  final double leftBudget = math.max(
-                                    0.0,
-                                    constraints.maxWidth -
-                                        controlsReserve -
-                                        56, // 좌우 패딩·간격 여유
-                                  );
-                                  final double headerScale =
-                                      (constraints.maxWidth / 1680.0)
-                                          .clamp(0.68, 1.0);
-                                  final double dateTimeFontSize =
-                                      (50 * headerScale).clamp(26.0, 50.0);
-                                  final double statsFontSize =
-                                      (38 * headerScale).clamp(18.0, 40.0);
-                                  final double weatherIconSize =
-                                      dateTimeFontSize * 1.1;
-                                  // 한 줄에 날짜+통계까지 넣기에 부족하면 통계만 2번째 줄.
-                                  final bool statsOnSecondLine =
-                                      leftBudget < 920 * headerScale;
-                                  final Widget dateLine = Wrap(
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    spacing: 12 * headerScale,
-                                    runSpacing: 4,
-                                    children: [
-                                      HomeHeaderWeatherIcon(
-                                        iconSize: weatherIconSize,
-                                        color: Colors.white70,
-                                      ),
-                                      Text(
-                                        _formatDateWithWeekdayAndTime(
-                                            headerDateTime),
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: dateTimeFontSize,
-                                          fontWeight: FontWeight.bold,
-                                          height: 1.0,
-                                        ),
-                                      ),
-                                      if (!isAttendanceAnchorToday(anchorDate))
-                                        Text(
-                                          '슬라이드시트 기준일',
-                                          style: TextStyle(
-                                            color: Colors.white38,
-                                            fontSize: (14 * headerScale)
-                                                .clamp(11.0, 14.0),
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                    ],
-                                  );
-                                  final Widget statsLine = Wrap(
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    spacing: 14 * headerScale,
-                                    runSpacing: 4,
-                                    children: [
-                                      if (!_isGradingMode)
-                                        Text(
-                                          '등원: ${list.length}명',
-                                          style: TextStyle(
-                                            color: Colors.white60,
-                                            fontSize: statsFontSize,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        )
-                                      else
-                                        Text(
-                                          '제출: $submittedCount개',
-                                          style: TextStyle(
-                                            color: const Color(0xFF8FB3FF),
-                                            fontSize: statsFontSize,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                    ],
-                                  );
-                                  final Widget infoBlock = statsOnSecondLine
-                                      ? Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            dateLine,
-                                            SizedBox(height: 6 * headerScale),
-                                            statsLine,
-                                          ],
-                                        )
-                                      : Wrap(
-                                          crossAxisAlignment:
-                                              WrapCrossAlignment.center,
-                                          spacing: 18 * headerScale,
-                                          runSpacing: 6,
-                                          children: [
-                                            HomeHeaderWeatherIcon(
-                                              iconSize: weatherIconSize,
-                                              color: Colors.white70,
-                                            ),
-                                            Text(
-                                              _formatDateWithWeekdayAndTime(
-                                                  headerDateTime),
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: dateTimeFontSize,
-                                                fontWeight: FontWeight.bold,
-                                                height: 1.0,
+                    _syncHomeGradingHistoryAction(
+                      attendingStudentIds: attendingStudentIds,
+                      studentNamesById: studentNamesById,
+                    );
+                    return ValueListenableBuilder<int>(
+                      valueListenable: HomeworkStore.instance.revision,
+                      builder: (context, homeworkRevision, _) {
+                        final submittedCount = _isGradingMode
+                            ? _countSubmittedHomeworkItems(list)
+                            : 0;
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Positioned.fill(
+                              child: _isGradingMode
+                                  ? GradingModePage(
+                                      attendingStudentIds: attendingStudentIds,
+                                      studentNamesById: studentNamesById,
+                                      pendingConfirms: _pendingConfirms,
+                                      onSubmittedCardTap: (studentId, group,
+                                          summary, children) async {
+                                        final submittedChildren = children
+                                            .where(
+                                              (e) =>
+                                                  e.status !=
+                                                      HomeworkStatus
+                                                          .completed &&
+                                                  e.phase == 3 &&
+                                                  e.completedAt == null,
+                                            )
+                                            .toList(growable: false);
+                                        if (submittedChildren.isEmpty) {
+                                          return;
+                                        }
+                                        final pendingKeys = submittedChildren
+                                            .map(
+                                              (e) => (
+                                                studentId: studentId,
+                                                itemId: e.id,
                                               ),
-                                            ),
-                                            if (!_isGradingMode)
-                                              Text(
-                                                '등원: ${list.length}명',
-                                                style: TextStyle(
-                                                  color: Colors.white60,
-                                                  fontSize: statsFontSize,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              )
-                                            else
-                                              Text(
-                                                '제출: $submittedCount개',
-                                                style: TextStyle(
-                                                  color:
-                                                      const Color(0xFF8FB3FF),
-                                                  fontSize: statsFontSize,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                          ],
-                                        );
-                                  final Widget controls = Wrap(
-                                    alignment: WrapAlignment.end,
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    spacing: 12,
-                                    runSpacing: 12,
-                                    children: [
-                                      _buildHeaderPillIconButton(
-                                        icon: Icons.link_rounded,
-                                        tooltip: 'M5 바인딩 이력',
-                                        iconColor: const Color(0xFFD0DDDD),
-                                        onTap: () => unawaited(
-                                          _showM5BindingHistoryDialog(
+                                            )
+                                            .toList(growable: false);
+                                        if (submittedChildren.length == 1) {
+                                          return _handleSubmittedChipTapForPending(
                                             context: context,
-                                          ),
-                                        ),
-                                      ),
-                                      if (_isGradingMode)
-                                        ValueListenableBuilder<bool>(
-                                          valueListenable: rightSideSheetOpen,
-                                          builder: (context, isOpen, _) {
-                                            return _buildHeaderPillIconButton(
-                                              icon: isOpen
-                                                  ? Icons
-                                                      .keyboard_double_arrow_right_rounded
-                                                  : Icons
-                                                      .keyboard_double_arrow_left_rounded,
-                                              tooltip: isOpen
-                                                  ? '오른쪽 시트 닫기'
-                                                  : '오른쪽 시트 열기',
-                                              iconColor:
-                                                  const Color(0xFFD0DDDD),
-                                              onTap: () async {
-                                                blockRightSideSheetOpen.value =
-                                                    false;
-                                                final action =
-                                                    toggleRightSideSheetAction;
-                                                if (action != null) {
-                                                  await action();
-                                                }
-                                              },
-                                            );
-                                          },
-                                        ),
-                                      if (_isGradingMode)
-                                        _buildHeaderPillIconButton(
-                                          icon: Icons.history_rounded,
-                                          tooltip: '채점 이력',
-                                          iconColor: const Color(0xFFD0DDDD),
-                                          onTap: () {
-                                            unawaited(
-                                              _showGradingHistoryDialog(
-                                                context: context,
-                                                attendingStudentIds:
-                                                    attendingStudentIds,
-                                                studentNamesById:
-                                                    studentNamesById,
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Switch(
-                                            value: _isGradingMode,
-                                            onChanged: (value) {
-                                              setState(() {
-                                                _isGradingMode = value;
-                                                if (!value) {
-                                                  _batchConfirmService
-                                                      .clearPending();
-                                                }
-                                              });
-                                              gradingModeActive.value = value;
-                                              if (value) {
-                                                blockRightSideSheetOpen.value =
-                                                    false;
-                                                _scheduleRightSheetAnswerPreload();
-                                              } else {
-                                                blockRightSideSheetOpen.value =
-                                                    true;
-                                                _rightSheetPreloadDebounce
-                                                    ?.cancel();
-                                                _lastRightSheetPreloadKey = '';
-                                                final closeAction =
-                                                    closeRightSideSheetAction;
-                                                if (closeAction != null) {
-                                                  unawaited(closeAction());
-                                                }
-                                              }
-                                            },
-                                            activeColor: kDlgAccent,
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  );
-                                  return Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Expanded(child: infoBlock),
-                                      const SizedBox(width: 20),
-                                      controls,
-                                    ],
-                                  );
-                                },
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        const SizedBox(height: 20),
-                        Expanded(
-                          child: _isGradingMode
-                              ? GradingModePage(
-                                  attendingStudentIds: attendingStudentIds,
-                                  studentNamesById: studentNamesById,
-                                  pendingConfirms: _pendingConfirms,
-                                  onSubmittedCardTap: (studentId, group,
-                                      summary, children) async {
-                                    final submittedChildren = children
-                                        .where(
-                                          (e) =>
-                                              e.status !=
-                                                  HomeworkStatus.completed &&
-                                              e.phase == 3 &&
-                                              e.completedAt == null,
-                                        )
-                                        .toList(growable: false);
-                                    if (submittedChildren.isEmpty) return;
-                                    final pendingKeys = submittedChildren
-                                        .map(
-                                          (e) => (
                                             studentId: studentId,
-                                            itemId: e.id,
-                                          ),
-                                        )
-                                        .toList(growable: false);
-                                    if (submittedChildren.length == 1) {
-                                      return _handleSubmittedChipTapForPending(
-                                        context: context,
-                                        studentId: studentId,
-                                        hw: submittedChildren.first,
-                                        targetKeys: pendingKeys,
-                                      );
-                                    }
-                                    HomeworkItem answerSeed =
-                                        submittedChildren.first;
-                                    for (final child in submittedChildren) {
-                                      if (_hasDirectHomeworkTextbookLink(
-                                          child)) {
-                                        answerSeed = child;
-                                        break;
-                                      }
-                                    }
-                                    return _handleSubmittedChipTapForPending(
-                                      context: context,
-                                      studentId: studentId,
-                                      hw: answerSeed,
-                                      targetKeys: pendingKeys,
-                                    );
-                                  },
-                                  onHomeworkCardTap: (studentId, group, summary,
-                                      children) async {
-                                    if (_printPickMode) {
-                                      if (group != null) {
-                                        return _handleHomeworkGroupPrintPick(
+                                            hw: submittedChildren.first,
+                                            targetKeys: pendingKeys,
+                                          );
+                                        }
+                                        HomeworkItem answerSeed =
+                                            submittedChildren.first;
+                                        for (final child
+                                            in submittedChildren) {
+                                          if (_hasDirectHomeworkTextbookLink(
+                                              child)) {
+                                            answerSeed = child;
+                                            break;
+                                          }
+                                        }
+                                        return _handleSubmittedChipTapForPending(
                                           context: context,
                                           studentId: studentId,
-                                          group: group,
-                                          summary: summary,
-                                          children: children,
+                                          hw: answerSeed,
+                                          targetKeys: pendingKeys,
                                         );
-                                      }
-                                      return _handleHomeworkPrintPick(
-                                        context: context,
-                                        studentId: studentId,
-                                        hw: summary,
-                                      );
-                                    }
-                                    _HomeworkCheckResult? checkResult;
-                                    if (group == null && children.length == 1) {
-                                      checkResult =
-                                          await _runHomeworkCheckDialogOnly(
-                                        context: context,
-                                        studentId: studentId,
-                                        hw: children.first,
-                                      );
-                                    } else {
-                                      checkResult =
-                                          await _runHomeworkCheckDialogForGroup(
-                                        context: context,
-                                        studentId: studentId,
-                                        group: group,
-                                        summary: summary,
-                                        children: children,
-                                      );
-                                    }
-                                    if (!context.mounted) return;
-                                    await _openGradingAfterHomeworkCheck(
-                                      context: context,
-                                      studentId: studentId,
-                                      checkResult: checkResult,
-                                    );
-                                  },
-                                  onTogglePending: (studentId, itemId) {
-                                    setState(() {
-                                      final key = (
-                                        studentId: studentId,
-                                        itemId: itemId
-                                      );
-                                      if (_pendingConfirms.containsKey(key)) {
-                                        _pendingConfirms.remove(key);
-                                      } else {
-                                        _pendingConfirms[key] = false;
-                                      }
-                                    });
-                                  },
-                                )
-                              : ListView.separated(
-                                  scrollDirection: Axis.horizontal,
-                                  padding:
-                                      const EdgeInsets.fromLTRB(24, 0, 24, 0),
-                                  itemCount: list.length,
-                                  separatorBuilder: (_, __) => SizedBox(
-                                    width: 14.4,
-                                    child: Align(
-                                      alignment: Alignment.topCenter,
-                                      child: Container(
-                                        width: 1,
-                                        height: ClassContentScreen
-                                            ._attendingCardHeight,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF223131),
-                                          borderRadius:
-                                              BorderRadius.circular(999),
+                                      },
+                                      onHomeworkCardTap: (studentId, group,
+                                          summary, children) async {
+                                        if (_printPickMode) {
+                                          if (group != null) {
+                                            return _handleHomeworkGroupPrintPick(
+                                              context: context,
+                                              studentId: studentId,
+                                              group: group,
+                                              summary: summary,
+                                              children: children,
+                                            );
+                                          }
+                                          return _handleHomeworkPrintPick(
+                                            context: context,
+                                            studentId: studentId,
+                                            hw: summary,
+                                          );
+                                        }
+                                        _HomeworkCheckResult? checkResult;
+                                        if (group == null &&
+                                            children.length == 1) {
+                                          checkResult =
+                                              await _runHomeworkCheckDialogOnly(
+                                            context: context,
+                                            studentId: studentId,
+                                            hw: children.first,
+                                          );
+                                        } else {
+                                          checkResult =
+                                              await _runHomeworkCheckDialogForGroup(
+                                            context: context,
+                                            studentId: studentId,
+                                            group: group,
+                                            summary: summary,
+                                            children: children,
+                                          );
+                                        }
+                                        if (!context.mounted) return;
+                                        await _openGradingAfterHomeworkCheck(
+                                          context: context,
+                                          studentId: studentId,
+                                          checkResult: checkResult,
+                                        );
+                                      },
+                                      onTogglePending: (studentId, itemId) {
+                                        setState(() {
+                                          final key = (
+                                            studentId: studentId,
+                                            itemId: itemId
+                                          );
+                                          if (_pendingConfirms
+                                              .containsKey(key)) {
+                                            _pendingConfirms.remove(key);
+                                          } else {
+                                            _pendingConfirms[key] = false;
+                                          }
+                                        });
+                                      },
+                                    )
+                                  : ListView.separated(
+                                      scrollDirection: Axis.horizontal,
+                                      padding: const EdgeInsets.fromLTRB(
+                                        24,
+                                        0,
+                                        24,
+                                        0,
+                                      ),
+                                      itemCount: list.length,
+                                      separatorBuilder: (_, __) => SizedBox(
+                                        width: 14.4,
+                                        child: Align(
+                                          alignment: Alignment.topCenter,
+                                          child: Container(
+                                            width: 1,
+                                            height: ClassContentScreen
+                                                ._attendingCardHeight,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF223131),
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                            ),
+                                          ),
                                         ),
                                       ),
+                                      itemBuilder: (ctx, i) {
+                                        return _buildStudentColumn(
+                                          context,
+                                          list[i],
+                                        );
+                                      },
                                     ),
-                                  ),
-                                  itemBuilder: (ctx, i) {
-                                    return _buildStudentColumn(
-                                        context, list[i]);
-                                  },
+                            ),
+                            Positioned(
+                              top: 0,
+                              left: 0,
+                              right: 0,
+                              child: SafeArea(
+                                bottom: false,
+                                child: _buildFloatingHomeHeader(
+                                  context: context,
+                                  headerDateTime: headerDateTime,
+                                  anchorDate: anchorDate,
+                                  attendingCount: list.length,
+                                  submittedCount: submittedCount,
                                 ),
-                        ),
-                      ],
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     );
                   },
                 );
@@ -1095,7 +945,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           ),
           if (_printPickMode)
             Positioned(
-              top: 86,
+              top: MediaQuery.paddingOf(context).top + 72,
               left: 0,
               right: 0,
               child: Center(

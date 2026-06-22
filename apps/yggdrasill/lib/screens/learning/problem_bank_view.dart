@@ -2212,6 +2212,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         ProblemBankPreviewRefreshRequest request,
       ) {
         final topText = request.titlePageTopText.trim();
+        final goalText = request.titlePageGoalText.trim();
         final timeLimitText = request.timeLimitText.trim();
         final patch = <String, dynamic>{
           'subjectTitleText': request.subjectTitleText.trim().isEmpty
@@ -2219,6 +2220,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               : request.subjectTitleText.trim(),
           'titlePageTopText':
               topText.isEmpty ? kLearningDefaultTitlePageTopText : topText,
+          'titlePageGoalText':
+              goalText.isEmpty ? kLearningDefaultTitlePageGoalText : goalText,
           'timeLimitText': timeLimitText,
           'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
@@ -2378,6 +2381,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             '${preset.renderConfig['subjectTitleText'] ?? ''}'.trim();
         final titlePageTopText =
             '${preset.renderConfig['titlePageTopText'] ?? ''}'.trim();
+        final titlePageGoalText =
+            '${preset.renderConfig['titlePageGoalText'] ?? ''}'.trim();
         final timeLimitText =
             '${preset.renderConfig['timeLimitText'] ?? ''}'.trim();
         initialRenderPatch = <String, dynamic>{
@@ -2386,6 +2391,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           'titlePageTopText': titlePageTopText.isEmpty
               ? kLearningDefaultTitlePageTopText
               : titlePageTopText,
+          'titlePageGoalText': titlePageGoalText.isEmpty
+              ? kLearningDefaultTitlePageGoalText
+              : titlePageGoalText,
           'timeLimitText': timeLimitText,
           'mathEngine': presetMathEngine,
           'includeAcademyLogo': readBoolFlag(
@@ -2480,6 +2488,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final initialTitlePageTopText =
           '${initialPrimary('titlePageTopText') ?? initialFallback('titlePageTopText') ?? kLearningDefaultTitlePageTopText}'
               .trim();
+      final initialTitlePageGoalText =
+          '${initialPrimary('titlePageGoalText') ?? initialFallback('titlePageGoalText') ?? kLearningDefaultTitlePageGoalText}'
+              .trim();
       final initialTimeLimitText =
           '${initialPrimary('timeLimitText') ?? initialFallback('timeLimitText') ?? _exportSettings.timeLimitText}'
               .trim();
@@ -2503,6 +2514,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         initialTitlePageTopText: initialTitlePageTopText.isEmpty
             ? kLearningDefaultTitlePageTopText
             : initialTitlePageTopText,
+        initialTitlePageGoalText: initialTitlePageGoalText.isEmpty
+            ? kLearningDefaultTitlePageGoalText
+            : initialTitlePageGoalText,
+        isAssignmentTemplate:
+            _exportSettings.templateProfile == 'assignment',
         initialTimeLimitText: initialTimeLimitText,
         initialIncludeAcademyLogo: readBoolFlag(
           initialPrimary('includeAcademyLogo'),
@@ -2570,6 +2586,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             titlePageTopText: request.titlePageTopText.trim().isEmpty
                 ? kLearningDefaultTitlePageTopText
                 : request.titlePageTopText.trim(),
+            titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+                ? kLearningDefaultTitlePageGoalText
+                : request.titlePageGoalText.trim(),
             includeAnswerSheet: request.includeAnswerSheet,
             includeExplanation: request.includeExplanation,
             includeQuestionScore: request.includeQuestionScore,
@@ -2640,6 +2659,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final titlePageTopText =
               '${refreshed.resultSummary['titlePageTopText'] ?? refreshed.options['titlePageTopText'] ?? request.titlePageTopText}'
                   .trim();
+          final titlePageGoalText =
+              '${refreshed.resultSummary['titlePageGoalText'] ?? refreshed.options['titlePageGoalText'] ?? request.titlePageGoalText}'
+                  .trim();
           final coverPageTexts = readCoverPageTexts(
             refreshed.resultSummary['coverPageTexts'],
             refreshed.options['coverPageTexts'],
@@ -2662,6 +2684,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             titlePageTopText: titlePageTopText.isEmpty
                 ? kLearningDefaultTitlePageTopText
                 : titlePageTopText,
+            titlePageGoalText: titlePageGoalText.isEmpty
+                ? kLearningDefaultTitlePageGoalText
+                : titlePageGoalText,
             timeLimitText: timeLimitText,
             includeAcademyLogo: includeAcademyLogo,
             pageColumnQuestionCounts: readMapRows(
@@ -2695,6 +2720,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             titlePageTopText: request.titlePageTopText.trim().isEmpty
                 ? kLearningDefaultTitlePageTopText
                 : request.titlePageTopText.trim(),
+            titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+                ? kLearningDefaultTitlePageGoalText
+                : request.titlePageGoalText.trim(),
             includeAnswerSheet: request.includeAnswerSheet,
             includeExplanation: request.includeExplanation,
             includeQuestionScore: request.includeQuestionScore,
@@ -2735,6 +2763,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               titlePageTopText: request.titlePageTopText.trim().isEmpty
                   ? kLearningDefaultTitlePageTopText
                   : request.titlePageTopText.trim(),
+              titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+                  ? kLearningDefaultTitlePageGoalText
+                  : request.titlePageGoalText.trim(),
               includeAnswerSheet: request.includeAnswerSheet,
               includeExplanation: request.includeExplanation,
               includeQuestionScore: request.includeQuestionScore,
@@ -2829,6 +2860,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               titlePageTopText: request.titlePageTopText.trim().isEmpty
                   ? kLearningDefaultTitlePageTopText
                   : request.titlePageTopText.trim(),
+              titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+                  ? kLearningDefaultTitlePageGoalText
+                  : request.titlePageGoalText.trim(),
               includeAnswerSheet: request.includeAnswerSheet,
               includeExplanation: request.includeExplanation,
               includeQuestionScore: request.includeQuestionScore,

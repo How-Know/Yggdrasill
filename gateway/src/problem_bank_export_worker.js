@@ -59,7 +59,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_25';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_choicecasesfit_01';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_footerpretendard_02';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -70,6 +70,7 @@ const PREVIEW_THUMB_EXPIRES_SEC = Math.max(
   Number.parseInt(process.env.PB_PREVIEW_THUMB_EXPIRES_SEC || String(60 * 60 * 24 * 7), 10),
 );
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
+const DEFAULT_TITLE_PAGE_GOAL_TEXT = '다시 풀기';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -2474,6 +2475,9 @@ function buildRenderConfigFromJob(job) {
   const titlePageTopText =
     normalizeWhitespace(options.titlePageTopText || DEFAULT_TITLE_PAGE_TOP_TEXT)
       || DEFAULT_TITLE_PAGE_TOP_TEXT;
+  const titlePageGoalText =
+    normalizeWhitespace(options.titlePageGoalText || DEFAULT_TITLE_PAGE_GOAL_TEXT)
+      || DEFAULT_TITLE_PAGE_GOAL_TEXT;
   const timeLimitText =
     normalizeWhitespace(options.timeLimitText || options.examTimeLimitText || '');
   const includeCoverPage = normalizeBool(
@@ -2567,6 +2571,7 @@ function buildRenderConfigFromJob(job) {
     font,
     subjectTitleText,
     titlePageTopText,
+    titlePageGoalText,
     timeLimitText,
     mathEngine: mathEngineFinal,
     reviewPdf: normalizeBool(options.reviewPdf ?? options.review_pdf, false),
@@ -2632,6 +2637,7 @@ function computeRenderHash(renderConfig) {
     font: renderConfig.font,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    titlePageGoalText: renderConfig.titlePageGoalText,
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     mathEngine: renderConfig.mathEngine || undefined,
@@ -4518,6 +4524,10 @@ async function processOneJob(job) {
           rendered.titlePageTopText
           || renderConfig.titlePageTopText
           || DEFAULT_TITLE_PAGE_TOP_TEXT,
+        titlePageGoalText:
+          rendered.titlePageGoalText
+          || renderConfig.titlePageGoalText
+          || DEFAULT_TITLE_PAGE_GOAL_TEXT,
         timeLimitText: String(renderConfig.timeLimitText || '').trim(),
         includeAcademyLogo: rendered.includeAcademyLogo === true,
         includeCoverPage: rendered.includeCoverPage === true,
@@ -4598,6 +4608,10 @@ async function processOneJob(job) {
             rendered.titlePageTopText
             || renderConfig.titlePageTopText
             || DEFAULT_TITLE_PAGE_TOP_TEXT,
+          titlePageGoalText:
+            rendered.titlePageGoalText
+            || renderConfig.titlePageGoalText
+            || DEFAULT_TITLE_PAGE_GOAL_TEXT,
           timeLimitText: String(renderConfig.timeLimitText || '').trim(),
           includeAcademyLogo: rendered.includeAcademyLogo === true,
           includeCoverPage: rendered.includeCoverPage === true,

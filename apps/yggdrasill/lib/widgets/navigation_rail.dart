@@ -71,6 +71,7 @@ class CustomNavigationRail extends StatelessWidget {
     double size = _navIconSize,
     required Color color,
     double strokeWidth = _navMenuIconStrokeWidth,
+    bool filled = false,
   }) {
     return RepaintBoundary(
       child: SizedBox.square(
@@ -80,6 +81,7 @@ class CustomNavigationRail extends StatelessWidget {
             kind: kind,
             color: color,
             strokeWidth: strokeWidth,
+            filled: filled,
           ),
         ),
       ),
@@ -93,9 +95,13 @@ class CustomNavigationRail extends StatelessWidget {
     required bool selected,
     required Brightness brightness,
   }) {
-    final strokeWidth = selected
-        ? _navIconStrokeWidthSelected
-        : _navIconStrokeWidthUnselected;
+    final filled = selected &&
+        (kind == _NavIconKind.home || kind == _NavIconKind.learning);
+    final strokeWidth = filled
+        ? _navIconStrokeWidthUnselected
+        : selected
+            ? _navIconStrokeWidthSelected
+            : _navIconStrokeWidthUnselected;
     final resolvedColor = selected
         ? (brightness == Brightness.light
             ? _navIconColorLightSelected
@@ -106,6 +112,7 @@ class CustomNavigationRail extends StatelessWidget {
         kind,
         color: resolvedColor,
         strokeWidth: strokeWidth,
+        filled: filled,
       ),
     );
 
@@ -304,11 +311,13 @@ class _NavIconPainter extends CustomPainter {
   final _NavIconKind kind;
   final Color color;
   final double strokeWidth;
+  final bool filled;
 
   const _NavIconPainter({
     required this.kind,
     required this.color,
     required this.strokeWidth,
+    this.filled = false,
   });
 
   @override
@@ -326,13 +335,17 @@ class _NavIconPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = true;
+    final fillPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
 
     switch (kind) {
       case _NavIconKind.package:
         _paintPackage(canvas, paint, p);
         break;
       case _NavIconKind.home:
-        _paintHome(canvas, paint, p);
+        _paintHome(canvas, paint, fillPaint, p, filled: filled);
         break;
       case _NavIconKind.student:
         _paintStudent(canvas, paint, p, r);
@@ -341,7 +354,7 @@ class _NavIconPainter extends CustomPainter {
         _paintTime(canvas, paint, p, r);
         break;
       case _NavIconKind.learning:
-        _paintLearning(canvas, paint, ps);
+        _paintLearning(canvas, paint, fillPaint, ps, filled: filled);
         break;
       case _NavIconKind.resources:
         _paintResources(canvas, paint, p);
@@ -384,8 +397,10 @@ class _NavIconPainter extends CustomPainter {
   void _paintHome(
     Canvas canvas,
     Paint paint,
-    Offset Function(double x, double y) p,
-  ) {
+    Paint fillPaint,
+    Offset Function(double x, double y) p, {
+    bool filled = false,
+  }) {
     final path = Path()
       ..moveTo(p(5, 11).dx, p(5, 11).dy)
       ..lineTo(p(12, 5).dx, p(12, 5).dy)
@@ -397,6 +412,9 @@ class _NavIconPainter extends CustomPainter {
       ..lineTo(p(9, 20).dx, p(9, 20).dy)
       ..lineTo(p(5, 20).dx, p(5, 20).dy)
       ..close();
+    if (filled) {
+      canvas.drawPath(path, fillPaint);
+    }
     canvas.drawPath(path, paint);
   }
 
@@ -447,8 +465,10 @@ class _NavIconPainter extends CustomPainter {
   void _paintLearning(
     Canvas canvas,
     Paint paint,
-    Offset Function(double x, double y) ps,
-  ) {
+    Paint fillPaint,
+    Offset Function(double x, double y) ps, {
+    bool filled = false,
+  }) {
     // 좌·우 반구 외곽선 유지, 내부 장식만 제거(굵은 stroke에서도 깔끔).
     final left = Path()
       ..moveTo(ps(10.85, 5).dx, ps(10.85, 5).dy)
@@ -504,6 +524,11 @@ class _NavIconPainter extends CustomPainter {
         ps(13.15, 19).dy,
       )
       ..lineTo(ps(13.15, 5).dx, ps(13.15, 5).dy);
+    if (filled) {
+      canvas
+        ..drawPath(left, fillPaint)
+        ..drawPath(right, fillPaint);
+    }
     canvas
       ..drawPath(left, paint)
       ..drawPath(right, paint);
@@ -590,6 +615,7 @@ class _NavIconPainter extends CustomPainter {
   bool shouldRepaint(covariant _NavIconPainter oldDelegate) {
     return oldDelegate.kind != kind ||
         oldDelegate.color != color ||
-        oldDelegate.strokeWidth != strokeWidth;
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.filled != filled;
   }
 }

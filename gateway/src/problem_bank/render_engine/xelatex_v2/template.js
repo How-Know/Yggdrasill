@@ -3803,6 +3803,7 @@ function buildPreamble({
   academyLogoPath = '',
   academyName = '',
   titlePageTopText = '',
+  titlePageGoalText = '',
   pairAnchorSupport = false,
 }) {
   const isAssignmentForGeometry = profile === 'assignment';
@@ -3866,7 +3867,9 @@ function buildPreamble({
     const m = base.match(/^(.*\/fonts)\//);
     if (!m) {
       return '\\newcommand{\\YggPretendard}{\\YggSubjectDisplay}\n'
-        + '\\newcommand{\\YggPretendardHangul}{}';
+        + '\\newcommand{\\YggPretendardHangul}{}\n'
+        + '\\newcommand{\\YggPretendardRegular}{\\YggSubjectDisplay}\n'
+        + '\\newcommand{\\YggPretendardRegularHangul}{}';
     }
     const dir = `${m[1]}/pretendard/`;
     return `\\newfontfamily\\YggPretendard{Pretendard-Bold.otf}[\n`
@@ -3878,6 +3881,17 @@ function buildPreamble({
       + `  Path = ${dir},\n`
       + `  UprightFont = Pretendard-Bold.otf,\n`
       + `  BoldFont = Pretendard-Bold.otf,\n`
+      + `]\n`
+      // 얇은(Regular) 두께 — 하단 학원명 등 가벼운 표기에 사용.
+      + `\\newfontfamily\\YggPretendardRegular{Pretendard-Regular.otf}[\n`
+      + `  Path = ${dir},\n`
+      + `  UprightFont = Pretendard-Regular.otf,\n`
+      + `  BoldFont = Pretendard-SemiBold.otf,\n`
+      + `]\n`
+      + `\\newhangulfontfamily\\YggPretendardRegularHangul{Pretendard-Regular.otf}[\n`
+      + `  Path = ${dir},\n`
+      + `  UprightFont = Pretendard-Regular.otf,\n`
+      + `  BoldFont = Pretendard-SemiBold.otf,\n`
       + `]`;
   })();
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
@@ -4069,6 +4083,8 @@ function buildPreamble({
   const assignmentTitleRightHeaderSpec = '{}';
   const titleTopScale = isAssignmentProfile ? '1.0692' : '1.1';
   const titleMainScale = isAssignmentProfile ? '1.29375' : '1.452';
+  // 과제목표 라벨: 제목페이지타이틀의 1/3 크기, 회색.
+  const titleGoalScale = (parseFloat(titleMainScale) / 3).toFixed(5);
 
   if (hidePreviewHeader) {
     // 미리보기 헤더를 숨기는 경우에도 로고는 상단에 찍고자 fancy 를 쓰되 테두리 없음.
@@ -4183,6 +4199,8 @@ function buildPreamble({
     // 기본 매크로를 빈 값으로 선언해두기(제목페이지 아닌 경우 참조 오류 방지).
     lines.push('\\providecommand{\\mockTitlePageSubtitle}{}');
     lines.push('\\providecommand{\\mockTitlePageMain}{}');
+    // 과제형 전용: 제목페이지타이틀과 같은 줄 가운데에 표시되는 "과제목표" 텍스트.
+    lines.push('\\providecommand{\\mockTitlePageGoal}{}');
     lines.push('\\fancypagestyle{mocktitle}{%');
     lines.push('  \\fancyhf{}%');
     // 사용자 요청 16차:
@@ -4199,6 +4217,15 @@ function buildPreamble({
     //   parbox[b] 로 마지막 줄 baseline 이 head box 바닥에 align.
     lines.push('  \\fancyhead[C]{%');
     if (isAssignmentProfile) {
+      // 과제목표(가운데): \rlap 으로 폭 0 의 오버레이를 만들어 본문폭 정중앙에 배치한다.
+      //   - 같은 hbox 줄에 놓이므로 baseline 이 제목(parbox[b] 하단)과 자동으로 수평 정렬.
+      //   - 글자 크기는 제목페이지타이틀의 1/3, 색은 회색.
+      lines.push('    \\rlap{\\makebox[\\textwidth][c]{%');
+      lines.push('      \\ifx\\mockTitlePageGoal\\empty\\else%');
+      lines.push(`      \\textcolor[gray]{0.55}{{\\fontsize{\\the\\dimexpr ${titleGoalScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleGoalScale}\\mockTitleLead\\relax}`
+        + '\\selectfont\\mockTitlePageGoal}}%');
+      lines.push('      \\fi%');
+      lines.push('    }}%');
       lines.push('    \\makebox[\\textwidth][l]{%');
       lines.push('      \\parbox[b]{\\dimexpr 0.64\\textwidth\\relax}{%');
       lines.push('        \\raggedright%');
@@ -4462,7 +4489,7 @@ function buildPreamble({
       lines.push('    \\node[anchor=base,inner sep=0pt,font=\\fontsize{12.96pt}{14.5pt}\\selectfont\\bfseries] at ([shift={(\\mockLayCenterX,\\mockLayAssignmentFooterY)}]current page.north west) {\\thepage};%');
       if (logoEnabled) {
         lines.push('    \\ifodd\\value{page}%');
-        lines.push(`      \\node[anchor=base west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayLeftX,\\mockLayAssignmentFooterY)}]current page.north west) {${safeAcademyName}};%`);
+        lines.push(`      \\node[anchor=base west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayLeftX,\\mockLayAssignmentFooterY)}]current page.north west) {{\\YggPretendardRegular\\YggPretendardRegularHangul ${safeAcademyName}}};%`);
         lines.push('    \\else%');
         lines.push(`      \\node[anchor=base east,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayRightX,\\mockLayAssignmentFooterY)}]current page.north west) {${safeAssignmentFooterTitle}};%`);
         lines.push('    \\fi%');
@@ -7887,6 +7914,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     columns = 2,
     subjectTitle = '수학 영역',
     titlePageTopText = '',
+    titlePageGoalText = '',
     profile = '',
     maxQuestionsPerPage = 0,
     hidePreviewHeader = false,
@@ -7948,6 +7976,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     academyLogoPath,
     academyName,
     titlePageTopText,
+    titlePageGoalText,
     pairAnchorSupport: pairAnchorMeasure || pairAnchor2Pass,
   });
 
@@ -8053,6 +8082,7 @@ export function buildDocumentTexSource(questions, options = {}) {
           title: String(row.title ?? row.subjectTitle ?? '').trim(),
           subtitle: String(row.subtitle ?? row.sub ?? '').trim(),
           titleTop: String(row.titleTop ?? row.topTitle ?? '').trim(),
+          goalText: String(row.goalText ?? row.goal ?? '').trim(),
         });
       }
     }
@@ -8064,8 +8094,12 @@ export function buildDocumentTexSource(questions, options = {}) {
       // titleTop 은 첫 제목페이지뿐 아니라 중간에 추가된 제목페이지에서도 동일하게 표시.
       //   (override.titleTop 이 있으면 우선, 없으면 공용 titlePageTopText 폴백.)
       const titleTop = (override.titleTop || titlePageTopText || '').trim();
+      // 과제목표(과제형 전용). override 우선, 없으면 공용 titlePageGoalText 폴백.
+      const goalText = isAssignmentProfile
+        ? (override.goalText || titlePageGoalText || '').trim()
+        : '';
       if (!title && !subtitle && !titleTop) return null;
-      return { titleTop, title, subtitle };
+      return { titleTop, title, subtitle, goalText };
     };
 
     const overrides = parsePageColumnOverrides(pageColumnQuestionCounts);
@@ -8227,6 +8261,7 @@ export function buildDocumentTexSource(questions, options = {}) {
         //   (subtitle 필드는 현재 디자인에서 사용하지 않음 — titleTop=부제, title=메인타이틀.)
         parts.push(`\\gdef\\mockTitlePageSubtitle{${escapeLatexText(titleHeader.titleTop || '')}}`);
         parts.push(`\\gdef\\mockTitlePageMain{${escapeLatexText(titleHeader.title || '')}}`);
+        parts.push(`\\gdef\\mockTitlePageGoal{${escapeLatexText(titleHeader.goalText || '')}}`);
         parts.push('\\thispagestyle{mocktitle}');
         // 이 페이지(ship out 직전)에만 제목페이지 플래그 ON.
         //   \AtBeginShipoutNext 는 '다음 1회의 shipout 직전' 실행되므로

@@ -769,6 +769,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       renderConfig: preset.renderConfig,
     );
     final topText = request.titlePageTopText.trim();
+    final goalText = request.titlePageGoalText.trim();
     final timeLimitText = request.timeLimitText.trim();
     final patch = <String, dynamic>{
       'subjectTitleText': request.subjectTitleText.trim().isEmpty
@@ -776,6 +777,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           : request.subjectTitleText.trim(),
       'titlePageTopText':
           topText.isEmpty ? kLearningDefaultTitlePageTopText : topText,
+      'titlePageGoalText':
+          goalText.isEmpty ? kLearningDefaultTitlePageGoalText : goalText,
       'timeLimitText': timeLimitText,
       'includeAcademyLogo': request.includeAcademyLogo,
       'includeCoverPage': request.includeCoverPage,
@@ -905,6 +908,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final titlePageTopText =
         '${result['titlePageTopText'] ?? options['titlePageTopText'] ?? request.titlePageTopText}'
             .trim();
+    final titlePageGoalText =
+        '${result['titlePageGoalText'] ?? options['titlePageGoalText'] ?? request.titlePageGoalText}'
+            .trim();
     final timeLimitText =
         '${result['timeLimitText'] ?? options['timeLimitText'] ?? request.timeLimitText}'
             .trim();
@@ -922,6 +928,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       titlePageTopText: titlePageTopText.isEmpty
           ? kLearningDefaultTitlePageTopText
           : titlePageTopText,
+      titlePageGoalText: titlePageGoalText.isEmpty
+          ? kLearningDefaultTitlePageGoalText
+          : titlePageGoalText,
       timeLimitText: timeLimitText,
       pageColumnQuestionCounts: _readMapRows(
         result['pageColumnQuestionCounts'],
@@ -1175,6 +1184,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       final subjectTitle = '${renderConfig['subjectTitleText'] ?? ''}'.trim();
       final titlePageTopText =
           '${renderConfig['titlePageTopText'] ?? ''}'.trim();
+      final titlePageGoalText =
+          '${renderConfig['titlePageGoalText'] ?? ''}'.trim();
       final timeLimitText = '${renderConfig['timeLimitText'] ?? ''}'.trim();
       final initialMathEngine = _normalizeMathEngineValue(
         renderConfig['mathEngine'] ?? completed.resultSummary['mathEngine'],
@@ -1187,6 +1198,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         initialTitlePageTopText: titlePageTopText.isEmpty
             ? kLearningDefaultTitlePageTopText
             : titlePageTopText,
+        initialTitlePageGoalText: titlePageGoalText.isEmpty
+            ? kLearningDefaultTitlePageGoalText
+            : titlePageGoalText,
+        isAssignmentTemplate: settings.templateProfile == 'assignment',
         initialTimeLimitText: timeLimitText,
         layoutColumns: settings.layoutColumnCount,
         maxQuestionsPerPage: settings.maxQuestionsPerPageCount,

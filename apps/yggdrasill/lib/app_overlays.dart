@@ -176,6 +176,9 @@ final ValueNotifier<int> homeBatchConfirmPendingCount = ValueNotifier<int>(0);
 /// 홈(수업 내용) 일괄 확인 실행 액션.
 AsyncUiAction? homeBatchConfirmAction;
 
+/// 홈 채점 모드 — 채점 이력 다이얼로그 실행 액션.
+AsyncUiAction? homeGradingHistoryAction;
+
 /// 왼쪽 출석 슬라이드시트·홈(수업 내용)이 함께 보는 기준일 (date-only, 로컬).
 final ValueNotifier<DateTime> attendanceAnchorDateNotifier = ValueNotifier<DateTime>(
   DateTime(
@@ -243,6 +246,9 @@ RightSheetGradingSearchOpenAction? rightSheetGradingSearchOpenAction;
 
 /// 전역 오른쪽 사이드시트 토글 액션.
 AsyncUiAction? toggleRightSideSheetAction;
+
+/// 전역 오른쪽 사이드시트 채점 전용 열기 액션.
+AsyncUiAction? openRightSideSheetGradingAction;
 
 /// 전역 오른쪽 사이드시트 닫기 액션.
 AsyncUiAction? closeRightSideSheetAction;

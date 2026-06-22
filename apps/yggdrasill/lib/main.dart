@@ -1573,9 +1573,16 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
     super.initState();
     _isOpen.addListener(_syncRightSideSheetOpenState);
     _syncRightSideSheetOpenState();
+    // 오른쪽 시트는 도구모음 채점 버튼 또는 실제 채점 세션 진입 시에만 열린다.
     toggleRightSideSheetAction = () async {
-      if (blockRightSideSheetOpen.value) return;
+      if (rightSideSheetTestGradingSession.value == null) return;
       _isOpen.value = !_isOpen.value;
+    };
+    openRightSideSheetGradingAction = () async {
+      if (blockRightSideSheetOpen.value) {
+        blockRightSideSheetOpen.value = false;
+      }
+      _isOpen.value = true;
     };
     closeRightSideSheetAction = () async {
       if (_isOpen.value) {
@@ -1658,6 +1665,7 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
   void dispose() {
     _isOpen.removeListener(_syncRightSideSheetOpenState);
     toggleRightSideSheetAction = null;
+    openRightSideSheetGradingAction = null;
     closeRightSideSheetAction = null;
     rightSideSheetOpen.value = false;
     _isOpen.dispose();
@@ -1669,8 +1677,9 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
   const _GlobalRightSheetPdfPanel();
 
   static const double _navRailInset = 86.0;
-  static const double _rightSheetBaseWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155;
-  static const double _rightSheetGradingWidthMultiplier = 1.26;
+  // 오른쪽 시트는 채점 전용이므로 이전 채점 확장 폭을 기본 폭으로 사용한다.
+  static const double _rightSheetBaseWidth =
+      238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26;
 
   void _closePanelAndRightSheet() {
     rightSideSheetPdfPanelSession.value = null;
@@ -1693,61 +1702,51 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
         return ValueListenableBuilder<bool>(
           valueListenable: rightSideSheetOpen,
           builder: (context, sheetOpen, __) {
-            return ValueListenableBuilder<bool>(
-              valueListenable: rightSideSheetGradingTabActive,
-              builder: (context, gradingTabActive, ___) {
-                final rightInset = sheetOpen
-                    ? _rightSheetBaseWidth *
-                        (gradingTabActive
-                            ? _rightSheetGradingWidthMultiplier
-                            : 1.0)
-                    : 0.0;
-                final overlayEntries = session.overlayEntries
-                    .map(
-                      (entry) => HomeworkAnswerOverlayEntry(
-                        title: entry['title'] ?? '',
-                        page: entry['page'] ?? '',
-                        memo: entry['memo'] ?? '',
-                      ),
-                    )
-                    .toList(growable: false);
-                return AnimatedPositioned(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeInOut,
-                  left: _navRailInset,
-                  right: rightInset,
-                  top: 0,
-                  bottom: 0,
-                  child: Material(
-                    color: const Color(0xFF101415),
-                    elevation: 10,
-                    child: HomeworkAnswerViewerPage(
-                      key: ValueKey<String>(
-                        'right-sheet-pdf:${session.sessionId}|${session.answerPath}|${session.solutionPath}',
-                      ),
-                      filePath: answerPath,
-                      title: session.title.trim().isEmpty
-                          ? '정답 PDF'
-                          : session.title.trim(),
-                      solutionFilePath: session.solutionPath.trim().isEmpty
-                          ? null
-                          : session.solutionPath.trim(),
-                      cacheKey: session.cacheKey.trim().isEmpty
-                          ? 'right-sheet-pdf:${session.sessionId}'
-                          : session.cacheKey.trim(),
-                      enableConfirm: false,
-                      overlayEntries: overlayEntries,
-                      gradingPages: const <HomeworkAnswerGradingPage>[],
-                      hideSourceDocument: true,
-                      initialShowSolution: session.showSolution,
-                      focusPageNumber: session.focusPageNumber,
-                      focusRequestId: session.focusRequestId,
-                      focusRect1k: session.focusRect1k,
-                      onClose: _closePanelAndRightSheet,
-                    ),
+            final rightInset = sheetOpen ? _rightSheetBaseWidth : 0.0;
+            final overlayEntries = session.overlayEntries
+                .map(
+                  (entry) => HomeworkAnswerOverlayEntry(
+                    title: entry['title'] ?? '',
+                    page: entry['page'] ?? '',
+                    memo: entry['memo'] ?? '',
                   ),
-                );
-              },
+                )
+                .toList(growable: false);
+            return AnimatedPositioned(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeInOut,
+              left: _navRailInset,
+              right: rightInset,
+              top: 0,
+              bottom: 0,
+              child: Material(
+                color: const Color(0xFF101415),
+                elevation: 10,
+                child: HomeworkAnswerViewerPage(
+                  key: ValueKey<String>(
+                    'right-sheet-pdf:${session.sessionId}|${session.answerPath}|${session.solutionPath}',
+                  ),
+                  filePath: answerPath,
+                  title: session.title.trim().isEmpty
+                      ? '정답 PDF'
+                      : session.title.trim(),
+                  solutionFilePath: session.solutionPath.trim().isEmpty
+                      ? null
+                      : session.solutionPath.trim(),
+                  cacheKey: session.cacheKey.trim().isEmpty
+                      ? 'right-sheet-pdf:${session.sessionId}'
+                      : session.cacheKey.trim(),
+                  enableConfirm: false,
+                  overlayEntries: overlayEntries,
+                  gradingPages: const <HomeworkAnswerGradingPage>[],
+                  hideSourceDocument: true,
+                  initialShowSolution: session.showSolution,
+                  focusPageNumber: session.focusPageNumber,
+                  focusRequestId: session.focusRequestId,
+                  focusRect1k: session.focusRect1k,
+                  onClose: _closePanelAndRightSheet,
+                ),
+              ),
             );
           },
         );
@@ -6425,9 +6424,8 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double baseWidth =
-          238 * 1.2 * 1.2 * 1.1 * 1.155; // 기본 너비 (직전 너비 대비 +10%)
-      const double gradingWidthMultiplier = 1.26; // 채점 세션일 때 기본 대비 +26%
+      // 오른쪽 시트는 채점 전용이므로 이전 채점 확장 폭을 항상 사용한다.
+      const double panelWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26;
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,
@@ -6452,7 +6450,8 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
                 _edgeTouchActive = false;
                 _edgeDragStart = null;
               }
-              final canOpenByEdge = !blockOpen && edgeOpenEnabled;
+              // 오른쪽 시트는 도구모음의 채점 버튼으로만 연다.
+              final canOpenByEdge = false && !blockOpen && edgeOpenEnabled;
               return Stack(children: [
                 if (canOpenByEdge)
                   Positioned(
@@ -6516,33 +6515,24 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
                 ValueListenableBuilder<bool>(
                   valueListenable: widget.isOpenListenable,
                   builder: (context, open, _) {
-                    return ValueListenableBuilder<bool>(
-                      valueListenable: rightSideSheetGradingTabActive,
-                      builder: (context, gradingTabActive, __) {
-                        final double panelWidth = gradingTabActive
-                            ? baseWidth * gradingWidthMultiplier
-                            : baseWidth;
-                        return AnimatedPositioned(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeInOut,
-                          right: open ? 0 : -panelWidth,
-                          top: 0,
-                          bottom: 0,
-                          width: panelWidth,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              _MemoPanel(
-                                memosListenable: widget.memosListenable,
-                                onAddMemo: () => widget.onAddMemo(context),
-                                onEditMemo: (m) =>
-                                    widget.onEditMemo(context, m),
-                                onRequestClose: () => _setOpen(false),
-                              ),
-                            ],
+                    return AnimatedPositioned(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeInOut,
+                      right: open ? 0 : -panelWidth,
+                      top: 0,
+                      bottom: 0,
+                      width: panelWidth,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _MemoPanel(
+                            memosListenable: widget.memosListenable,
+                            onAddMemo: () => widget.onAddMemo(context),
+                            onEditMemo: (m) => widget.onEditMemo(context, m),
+                            onRequestClose: () => _setOpen(false),
                           ),
-                        );
-                      },
+                        ],
+                      ),
                     );
                   },
                 ),
@@ -6939,8 +6929,8 @@ class _MemoBanner extends StatelessWidget {
                     if (when.isNotEmpty) const SizedBox(height: 4),
                     Text(
                       memo.summary.isNotEmpty ? memo.summary : memo.original,
-                      style: FabTabBarTokens.fabMenuLabelStyle(palette)
-                          .copyWith(
+                      style:
+                          FabTabBarTokens.fabMenuLabelStyle(palette).copyWith(
                         fontSize: bannerFontSize,
                         fontWeight: FontWeight.w500,
                         height: 1.35,

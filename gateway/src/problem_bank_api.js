@@ -711,8 +711,9 @@ const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_25';
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_choicecasesfit_01';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_footerpretendard_02';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
+const DEFAULT_TITLE_PAGE_GOAL_TEXT = '다시 풀기';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
   'id',
@@ -823,6 +824,11 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
   )
     .replace(/\s+/g, ' ')
     .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
+  const titlePageGoalText = String(
+    src.titlePageGoalText || defaults.titlePageGoalText || DEFAULT_TITLE_PAGE_GOAL_TEXT,
+  )
+    .replace(/\s+/g, ' ')
+    .trim() || DEFAULT_TITLE_PAGE_GOAL_TEXT;
   const timeLimitText = String(
     src.timeLimitText || src.examTimeLimitText || defaults.timeLimitText || '',
   )
@@ -907,6 +913,7 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     figureQuality: normalizeFigureQuality(src.figureQuality, src),
     subjectTitleText,
     titlePageTopText,
+    titlePageGoalText,
     timeLimitText,
     includeAcademyLogo,
     includeQuestionScore,
@@ -1062,6 +1069,7 @@ function buildRenderHashPayload({
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    titlePageGoalText: renderConfig.titlePageGoalText,
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     questionMode: renderConfig.questionMode,
@@ -1124,6 +1132,7 @@ function buildExportOptions({
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    titlePageGoalText: renderConfig.titlePageGoalText,
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     questionMode: renderConfig.questionMode,
@@ -2010,6 +2019,7 @@ async function createExportJob(body, res) {
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    titlePageGoalText: renderConfig.titlePageGoalText,
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     questionMode: renderConfig.questionMode,
@@ -2049,6 +2059,7 @@ async function createExportJob(body, res) {
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    titlePageGoalText: renderConfig.titlePageGoalText,
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     questionMode: renderConfig.questionMode,
@@ -2701,6 +2712,9 @@ async function saveSettingsAsDocument(body, res) {
         titlePageTopText:
           String(rawRenderConfig.titlePageTopText || '').replace(/\s+/g, ' ').trim()
             || DEFAULT_TITLE_PAGE_TOP_TEXT,
+        titlePageGoalText:
+          String(rawRenderConfig.titlePageGoalText || '').replace(/\s+/g, ' ').trim()
+            || DEFAULT_TITLE_PAGE_GOAL_TEXT,
         timeLimitText:
           String(rawRenderConfig.timeLimitText || rawRenderConfig.examTimeLimitText || '')
             .replace(/\s+/g, ' ')

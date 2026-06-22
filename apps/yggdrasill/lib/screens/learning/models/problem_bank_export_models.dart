@@ -59,6 +59,7 @@ const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
+const String kLearningDefaultTitlePageGoalText = '다시 풀기';
 const String kLearningRenderConfigVersion =
     'pb_render_v103_stable_01';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. 서버 측
@@ -187,6 +188,7 @@ class LearningProblemExportSettings {
     required this.includeAcademyLogo,
     required this.timeLimitText,
     required this.titlePageTopText,
+    required this.titlePageGoalText,
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
   });
@@ -207,6 +209,7 @@ class LearningProblemExportSettings {
       includeAcademyLogo: false,
       timeLimitText: '',
       titlePageTopText: kLearningDefaultTitlePageTopText,
+      titlePageGoalText: kLearningDefaultTitlePageGoalText,
       includeQuestionScore: false,
       questionScoreByQuestionId: const <String, double>{},
     );
@@ -238,6 +241,9 @@ class LearningProblemExportSettings {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     final titlePageTopText = '${renderConfig['titlePageTopText'] ?? ''}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final titlePageGoalText = '${renderConfig['titlePageGoalText'] ?? ''}'
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     final includeQuestionScore = renderConfig['includeQuestionScore'] is bool
@@ -363,6 +369,8 @@ class LearningProblemExportSettings {
       timeLimitText: timeLimitText,
       titlePageTopText:
           titlePageTopText.isEmpty ? base.titlePageTopText : titlePageTopText,
+      titlePageGoalText:
+          titlePageGoalText.isEmpty ? base.titlePageGoalText : titlePageGoalText,
       includeQuestionScore: includeQuestionScore,
       questionScoreByQuestionId: questionScoreByQuestionId,
     );
@@ -435,6 +443,7 @@ class LearningProblemExportSettings {
   final bool includeAcademyLogo;
   final String timeLimitText;
   final String titlePageTopText;
+  final String titlePageGoalText;
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionId;
 
@@ -516,6 +525,9 @@ class LearningProblemExportSettings {
       'titlePageTopText': titlePageTopText.trim().isEmpty
           ? kLearningDefaultTitlePageTopText
           : titlePageTopText.trim(),
+      'titlePageGoalText': titlePageGoalText.trim().isEmpty
+          ? kLearningDefaultTitlePageGoalText
+          : titlePageGoalText.trim(),
       'includeAcademyLogo': includeAcademyLogo,
       'timeLimitText': timeLimitText.trim(),
       'alignPolicy': const <String, dynamic>{
@@ -559,6 +571,7 @@ class LearningProblemExportSettings {
     bool? includeAcademyLogo,
     String? timeLimitText,
     String? titlePageTopText,
+    String? titlePageGoalText,
     bool? includeQuestionScore,
     Map<String, double>? questionScoreByQuestionId,
   }) {
@@ -578,6 +591,7 @@ class LearningProblemExportSettings {
       includeAcademyLogo: includeAcademyLogo ?? this.includeAcademyLogo,
       timeLimitText: timeLimitText ?? this.timeLimitText,
       titlePageTopText: titlePageTopText ?? this.titlePageTopText,
+      titlePageGoalText: titlePageGoalText ?? this.titlePageGoalText,
       includeQuestionScore: includeQuestionScore ?? this.includeQuestionScore,
       questionScoreByQuestionId:
           questionScoreByQuestionId ?? this.questionScoreByQuestionId,

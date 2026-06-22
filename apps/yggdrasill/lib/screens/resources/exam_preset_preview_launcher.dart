@@ -45,6 +45,7 @@ class ExamPresetPreviewLauncher {
         .where((u) => u.isNotEmpty)
         .toList(growable: false);
     if (presetUids.isEmpty) {
+      if (!context.mounted) return;
       _showSnack(context, '프리셋에 저장된 문항이 없습니다.');
       return;
     }
@@ -56,10 +57,12 @@ class ExamPresetPreviewLauncher {
         questionUids: presetUids,
       );
     } catch (e) {
+      if (!context.mounted) return;
       _showSnack(context, '프리셋 문항 로드 실패: $e');
       return;
     }
     if (fetched.isEmpty) {
+      if (!context.mounted) return;
       _showSnack(context, '프리셋에 연결된 문항을 찾을 수 없습니다.');
       return;
     }
@@ -102,11 +105,6 @@ class ExamPresetPreviewLauncher {
       context: context,
       completed: completed,
     );
-    if (!context.mounted) return;
-    _showSnack(
-      context,
-      '프리셋 적용: ${effectivePreset.displayName} (${ordered.length}문항)',
-    );
   }
 
   void _showSnack(BuildContext context, String message) {
@@ -129,9 +127,9 @@ class _PresetPreviewSession {
       preset.renderConfig['mathEngine'],
     );
     for (final question in questions) {
-      final rawMode = preset.questionModeByQuestionUid[
-              question.stableQuestionKey] ??
-          preset.questionModeByQuestionUid[question.id];
+      final rawMode =
+          preset.questionModeByQuestionUid[question.stableQuestionKey] ??
+              preset.questionModeByQuestionUid[question.id];
       if (rawMode == null || rawMode.trim().isEmpty) continue;
       modes[question.id] = normalizeQuestionModeSelection(
         question,
@@ -160,20 +158,31 @@ class _PresetPreviewSession {
     Map<String, dynamic> patch = const <String, dynamic>{},
   }) {
     final link = naesinLinkKeyOfPreset(preset);
+    final orderedUids = _orderedUids();
+    final modeMap = {
+      for (final q in questions)
+        if (modes[q.id]?.trim().isNotEmpty ?? false)
+          q.stableQuestionKey: modes[q.id]!.trim(),
+    };
     final base = settings.toRenderConfig(
-      selectedQuestionUidsOrdered: _orderedUids(),
-      questionModeByQuestionUid: {
-        for (final q in questions)
-          if (modes[q.id]?.trim().isNotEmpty ?? false)
-            q.stableQuestionKey: modes[q.id]!.trim(),
-      },
+      selectedQuestionUidsOrdered: orderedUids,
+      questionModeByQuestionUid: modeMap,
     );
+    final config = <String, dynamic>{
+      ...base,
+      ...preset.renderConfig,
+      ...patch,
+      'selectedQuestionUidsOrdered': orderedUids,
+      'selectedQuestionIdsOrdered': orderedUids,
+      'questionModeByQuestionUid': modeMap,
+      'questionModeByQuestionId': modeMap,
+    };
     if (link.isNotEmpty) {
-      base[kExamPresetNaesinLinkConfigKey] = link;
+      config[kExamPresetNaesinLinkConfigKey] = link;
     }
-    base['mathEngine'] = mathEngine;
-    base['disableAutoLabels'] = true;
-    return {...base, ...patch};
+    config['mathEngine'] = mathEngine;
+    config['disableAutoLabels'] = true;
+    return config;
   }
 
   Future<LearningProblemExportJob?> createPreviewExport({
@@ -227,6 +236,7 @@ class _PresetPreviewSession {
   }) async {
     final presetRenderConfig = preset.renderConfig;
     dynamic initialPrimary(String key) => presetRenderConfig[key];
+    dynamic initialFallback(String key) => completed.resultSummary[key];
 
     final scoreEntries = <ProblemBankPreviewQuestionScoreEntry>[];
     final seen = <String>{};
@@ -260,10 +270,17 @@ class _PresetPreviewSession {
               : '${initialPrimary('subjectTitleText')}'.trim(),
       initialTitlePageTopText:
           '${initialPrimary('titlePageTopText') ?? kLearningDefaultTitlePageTopText}'
-              .trim()
-              .isEmpty
+                  .trim()
+                  .isEmpty
               ? kLearningDefaultTitlePageTopText
               : '${initialPrimary('titlePageTopText')}'.trim(),
+      initialTitlePageGoalText:
+          '${initialPrimary('titlePageGoalText') ?? kLearningDefaultTitlePageGoalText}'
+                  .trim()
+                  .isEmpty
+              ? kLearningDefaultTitlePageGoalText
+              : '${initialPrimary('titlePageGoalText')}'.trim(),
+      isAssignmentTemplate: settings.templateProfile == 'assignment',
       initialTimeLimitText: '${initialPrimary('timeLimitText') ?? ''}'.trim(),
       initialIncludeAcademyLogo: settings.includeAcademyLogo,
       layoutColumns: settings.layoutColumnCount,
@@ -271,15 +288,19 @@ class _PresetPreviewSession {
       totalQuestionCount: questions.length,
       initialPageColumnQuestionCounts: _readMapRows(
         initialPrimary('pageColumnQuestionCounts'),
+        initialFallback('pageColumnQuestionCounts'),
       ),
       initialColumnLabelAnchors: _readMapRows(
         initialPrimary('columnLabelAnchors'),
+        initialFallback('columnLabelAnchors'),
       ),
       initialTitlePageIndices: _readPositiveIntList(
         initialPrimary('titlePageIndices'),
+        initialFallback('titlePageIndices'),
       ),
       initialTitlePageHeaders: _readMapRows(
         initialPrimary('titlePageHeaders'),
+        initialFallback('titlePageHeaders'),
       ),
       initialIncludeCoverPage: _readBool(
         initialPrimary('includeCoverPage'),
@@ -293,6 +314,7 @@ class _PresetPreviewSession {
       questionScoreEntries: scoreEntries,
       initialCoverPageTexts: _readCoverPageTexts(
         initialPrimary('coverPageTexts'),
+        initialFallback('coverPageTexts'),
       ),
       initialEditingPresetId: preset.id,
       initialEditingPresetName: preset.displayName,
@@ -303,6 +325,9 @@ class _PresetPreviewSession {
           titlePageTopText: request.titlePageTopText.trim().isEmpty
               ? kLearningDefaultTitlePageTopText
               : request.titlePageTopText.trim(),
+          titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+              ? kLearningDefaultTitlePageGoalText
+              : request.titlePageGoalText.trim(),
           includeAnswerSheet: request.includeAnswerSheet,
           includeExplanation: request.includeExplanation,
           includeQuestionScore: request.includeQuestionScore,
@@ -318,6 +343,9 @@ class _PresetPreviewSession {
           'titlePageTopText': request.titlePageTopText.trim().isEmpty
               ? kLearningDefaultTitlePageTopText
               : request.titlePageTopText.trim(),
+          'titlePageGoalText': request.titlePageGoalText.trim().isEmpty
+              ? kLearningDefaultTitlePageGoalText
+              : request.titlePageGoalText.trim(),
           'timeLimitText': request.timeLimitText.trim(),
           'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
@@ -349,6 +377,7 @@ class _PresetPreviewSession {
           pdfUrl: refreshed.outputUrl.trim(),
           mathEngine: mathEngine,
           titlePageTopText: settings.titlePageTopText,
+          titlePageGoalText: settings.titlePageGoalText,
           timeLimitText: settings.timeLimitText,
           includeAcademyLogo: settings.includeAcademyLogo,
           pageColumnQuestionCounts: _readMapRows(
@@ -383,6 +412,9 @@ class _PresetPreviewSession {
           titlePageTopText: request.titlePageTopText.trim().isEmpty
               ? kLearningDefaultTitlePageTopText
               : request.titlePageTopText.trim(),
+          titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+              ? kLearningDefaultTitlePageGoalText
+              : request.titlePageGoalText.trim(),
           includeAnswerSheet: request.includeAnswerSheet,
           includeExplanation: request.includeExplanation,
           includeQuestionScore: request.includeQuestionScore,
@@ -398,6 +430,9 @@ class _PresetPreviewSession {
           'titlePageTopText': request.titlePageTopText.trim().isEmpty
               ? kLearningDefaultTitlePageTopText
               : request.titlePageTopText.trim(),
+          'titlePageGoalText': request.titlePageGoalText.trim().isEmpty
+              ? kLearningDefaultTitlePageGoalText
+              : request.titlePageGoalText.trim(),
           'timeLimitText': request.timeLimitText.trim(),
           'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
@@ -456,17 +491,25 @@ class _PresetPreviewSession {
     return fallback;
   }
 
-  static List<Map<String, dynamic>> _readMapRows(dynamic raw) {
-    if (raw is! List) return const <Map<String, dynamic>>[];
-    return raw
+  static List<Map<String, dynamic>> _readMapRows(
+    dynamic raw, [
+    dynamic fallback,
+  ]) {
+    final source = raw is List ? raw : fallback;
+    if (source is! List) return const <Map<String, dynamic>>[];
+    return source
         .whereType<Map>()
         .map((e) => e.map((key, value) => MapEntry('$key', value)))
         .toList(growable: false);
   }
 
-  static List<int> _readPositiveIntList(dynamic raw) {
-    if (raw is! List) return const <int>[1];
-    final out = raw
+  static List<int> _readPositiveIntList(
+    dynamic raw, [
+    dynamic fallback,
+  ]) {
+    final source = raw is List ? raw : fallback;
+    if (source is! List) return const <int>[1];
+    final out = source
         .map((e) => int.tryParse('$e'))
         .whereType<int>()
         .where((e) => e > 0)
@@ -474,8 +517,12 @@ class _PresetPreviewSession {
     return out.isEmpty ? const <int>[1] : out;
   }
 
-  static Map<String, dynamic> _readCoverPageTexts(dynamic raw) {
-    if (raw is! Map) return const <String, dynamic>{};
-    return raw.map((key, value) => MapEntry('$key', value));
+  static Map<String, dynamic> _readCoverPageTexts(
+    dynamic raw, [
+    dynamic fallback,
+  ]) {
+    final source = raw is Map ? raw : fallback;
+    if (source is! Map) return const <String, dynamic>{};
+    return source.map((key, value) => MapEntry('$key', value));
   }
 }

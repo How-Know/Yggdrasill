@@ -12,9 +12,11 @@ import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
 import '../../utils/homework_page_text.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/resource_textbook_card.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 const double _kGradingBaseCardWidth = 288.0;
-const double _kGradingBaseCardMetaHeight = 128.0;
+const double _kGradingBaseCardMetaHeight = 140.0;
 const double _kGradingBaseCardHeight =
     _kGradingBaseCardWidth * 1.414 * 0.9 + _kGradingBaseCardMetaHeight;
 const double _kGradingWidthScale = 0.9;
@@ -29,7 +31,8 @@ const double _kGradingCardMinWidth = 108.0;
 const double _kGradingCardMaxWidth = 396.0;
 const double _kGradingSectionGapTop = 22.0;
 const double _kGradingSectionGapBottom = 18.0;
-const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
+const double _kGradingHomeworkRowTopInset = 24.0;
+const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(12, 0, 24, 24);
 const String _kGradingAnswerBookCategory = 'textbook';
 const List<String> _kGradingAnswerGradeOrder = [
   '초1',
@@ -172,14 +175,23 @@ class _GradingModePageState extends State<GradingModePage> {
                                       child: Align(
                                         alignment: Alignment.centerLeft,
                                         child: homeworkEntries.isNotEmpty
-                                            ? SizedBox(
-                                                height: cardLayout.height,
-                                                child:
-                                                    _buildHorizontalEntryStrip(
-                                                  homeworkEntries,
-                                                  cardLayout: cardLayout,
-                                                  onCardTap:
-                                                      widget.onHomeworkCardTap,
+                                            ? Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: _kGradingHomeworkRowTopInset,
+                                                ),
+                                                child: SizedBox(
+                                                  height: cardLayout.height -
+                                                      _kGradingHomeworkRowTopInset,
+                                                  child:
+                                                      _buildHorizontalEntryStrip(
+                                                    homeworkEntries,
+                                                    cardLayout:
+                                                        _homeworkCardLayout(
+                                                      cardLayout,
+                                                    ),
+                                                    onCardTap:
+                                                        widget.onHomeworkCardTap,
+                                                  ),
                                                 ),
                                               )
                                             : _buildEmptyRowSpacer(
@@ -492,6 +504,25 @@ class _GradingModePageState extends State<GradingModePage> {
       answerPath: answerPath,
       solutionPath: grade.solutionPath,
       cacheKey: cacheKey,
+    );
+  }
+
+  _GradingCardLayout _homeworkCardLayout(_GradingCardLayout base) {
+    final height =
+        (base.height - _kGradingHomeworkRowTopInset).clamp(_kGradingCardMinHeight, base.height);
+    final maxMetaHeight = math.min(
+      height * 0.55,
+      math.max(64.0, height * 0.42),
+    );
+    final minMetaHeight = math.min(90.0, maxMetaHeight);
+    final metaHeight = (height * _kGradingCardMetaRatio)
+        .clamp(minMetaHeight, maxMetaHeight)
+        .toDouble();
+    return _GradingCardLayout(
+      width: base.width,
+      height: height,
+      metaHeight: metaHeight,
+      spacing: base.spacing,
     );
   }
 
@@ -1215,7 +1246,7 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(0, 8, 8, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1686,181 +1717,160 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     final assignmentNumText = _gradingCardAssignmentNumberLabel(hw);
     final scale =
         (cardHeight / _kGradingBaseCardHeight).clamp(0.5, 1.15).toDouble();
-    final radius = (14.0 * scale).clamp(10.0, 14.0).toDouble();
-    final contentPadH = (16.0 * scale).clamp(8.0, 16.0).toDouble();
-    final contentPadTop = (12.0 * scale).clamp(6.0, 12.0).toDouble();
-    final contentPadBottom = (14.0 * scale).clamp(7.0, 14.0).toDouble();
+    final cardRadius = FabTabBarTokens.previewAcademyGroupedCardRadius;
+    final coverMetaGap =
+        (resourceTextbookCardCoverMetaGap * scale).clamp(8.0, 14.0).toDouble();
+    final contentPadH = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
     final pageLines = _buildOverlayPageLines(entry);
     final childCountText = '하위 ${entry.children.length}개';
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final coverHeight = (cardHeight - metaHeight).clamp(0.0, cardHeight);
+    final metaContentHeight = math.max(0.0, metaHeight - coverMetaGap);
 
-    final card = Container(
-      decoration: BoxDecoration(
-        color: kDlgBg,
-        borderRadius: BorderRadius.circular(radius),
-        border:
-            Border.all(color: Colors.white.withValues(alpha: 0.06), width: 0.8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: (18.0 * scale).clamp(9.0, 18.0).toDouble(),
-            offset: Offset(0, (12.0 * scale).clamp(5.0, 12.0).toDouble()),
-          ),
-          BoxShadow(
-            color: Colors.white.withValues(alpha: 0.03),
-            blurRadius: (2.0 * scale).clamp(1.0, 2.0).toDouble(),
-            offset: Offset(0, (1.0 * scale).clamp(0.6, 1.0).toDouble()),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final coverHeight = (constraints.maxHeight - metaHeight)
-                .clamp(0.0, constraints.maxHeight);
-            return Stack(
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: coverHeight,
-                      width: double.infinity,
-                      child: _buildCoverArea(
-                        scale,
-                        line4: line4,
-                        pageLines: pageLines,
-                        childCountText: childCountText,
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          contentPadH,
-                          contentPadTop,
-                          contentPadH,
-                          contentPadBottom,
-                        ),
-                        child: LayoutBuilder(
-                          builder: (context, _) {
-                            final metaScale =
-                                (metaHeight / _kGradingBaseCardMetaHeight)
-                                    .clamp(0.5, 1.2)
-                                    .toDouble();
-                            final cellFontSize =
-                                (14.0 * metaScale).clamp(9.0, 17.0).toDouble();
-                            final line1FontSize = (cellFontSize * 2.0)
-                                .clamp(18.0, 34.0)
-                                .toDouble();
-                            final line23FontSize = (cellFontSize * 1.2)
-                                .clamp(10.8, 20.4)
-                                .toDouble();
-                            final line1Text = bookStr == '-' && courseStr == '-'
-                                ? (line2.trim().isEmpty ? '-' : line2)
-                                : (bookStr != '-' && courseStr != '-'
-                                    ? '$bookStr · $courseStr'
-                                    : (bookStr != '-' ? bookStr : courseStr));
-
-                            final cellStyle1 = TextStyle(
-                              color: kDlgText,
-                              fontSize: line1FontSize,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.2,
-                            );
-                            final cellStyle2 = TextStyle(
-                              color: kDlgTextSub,
-                              fontSize: line23FontSize,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.1,
-                            );
-                            final cellStyle3 = TextStyle(
-                              color: const Color(0xFF7F8C8C),
-                              fontSize: line23FontSize,
-                              fontWeight: FontWeight.w700,
-                            );
-                            return SizedBox.expand(
-                              child: Column(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    line1Text,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: cellStyle1,
-                                  ),
-                                  Text(
-                                    line2,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: cellStyle2,
-                                  ),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          assignmentNumText,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          textAlign: TextAlign.right,
-                                          style: cellStyle3,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
+    Widget buildCoverStack() {
+      return Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(cardRadius),
+                  boxShadow: resourceTextbookCoverBoxShadows(),
                 ),
-                if (isPendingConfirm)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: Container(
-                        color: const Color(0xCC0B1112),
-                        child: Center(
-                          child: Icon(
-                            isCompleteCheckbox
-                                ? Icons.check_circle
-                                : Icons.check_circle_outline,
-                            color: isCompleteCheckbox
-                                ? const Color(0xFF4CAF50)
-                                : const Color(0xFF1B6B63),
-                            size: (67.0 * scale).clamp(38.0, 67.0),
-                          ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(cardRadius),
+              child: _buildCoverArea(
+                scale,
+                line4: line4,
+                pageLines: pageLines,
+                childCountText: childCountText,
+              ),
+            ),
+          ),
+          if (isPendingConfirm)
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(cardRadius),
+                child: IgnorePointer(
+                  child: Container(
+                    color: const Color(0xCC0B1112),
+                    child: Center(
+                      child: Icon(
+                        isCompleteCheckbox
+                            ? Icons.check_circle
+                            : Icons.check_circle_outline,
+                        color: isCompleteCheckbox
+                            ? const Color(0xFF4CAF50)
+                            : const Color(0xFF1B6B63),
+                        size: (67.0 * scale).clamp(38.0, 67.0),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (_opening)
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(cardRadius),
+                child: IgnorePointer(
+                  child: Container(
+                    color: const Color(0x990B1112),
+                    child: Center(
+                      child: SizedBox(
+                        width: (34.0 * scale).clamp(24.0, 38.0),
+                        height: (34.0 * scale).clamp(24.0, 38.0),
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2.6,
+                          color: kDlgAccent,
                         ),
                       ),
                     ),
                   ),
-                if (_opening)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: Container(
-                        color: const Color(0x990B1112),
-                        child: Center(
-                          child: SizedBox(
-                            width: (34.0 * scale).clamp(24.0, 38.0),
-                            height: (34.0 * scale).clamp(24.0, 38.0),
-                            child: const CircularProgressIndicator(
-                              strokeWidth: 2.6,
-                              color: kDlgAccent,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            );
-          },
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+
+    Widget buildMetaSection() {
+      const metaFontSize = FabTabBarTokens.previewAcademyMainTitleFontSize;
+      final line1Text = bookStr == '-' && courseStr == '-'
+          ? (line2.trim().isEmpty ? '-' : line2)
+          : (bookStr != '-' && courseStr != '-'
+              ? '$bookStr · $courseStr'
+              : (bookStr != '-' ? bookStr : courseStr));
+
+      return SizedBox(
+        height: metaContentHeight,
+        width: double.infinity,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: contentPadH),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                line1Text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: panelStyle.title,
+                  fontSize: metaFontSize,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.2,
+                  height: 1.1,
+                ),
+              ),
+              Text(
+                line2,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: panelStyle.hint,
+                  fontSize: metaFontSize,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+              ),
+              Text(
+                assignmentNumText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: panelStyle.label,
+                  fontSize: metaFontSize,
+                  fontWeight: FontWeight.w700,
+                  height: 1.1,
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
+      );
+    }
+
+    final card = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: coverHeight,
+          width: double.infinity,
+          child: buildCoverStack(),
+        ),
+        SizedBox(height: coverMetaGap),
+        buildMetaSection(),
+      ],
     );
 
     if (onTap == null) return card;

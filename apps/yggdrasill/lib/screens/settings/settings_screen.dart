@@ -37,6 +37,38 @@ enum _GeneralLaunchMode {
   maximize,
 }
 
+class _AcademyBouncyScrollBehavior extends MaterialScrollBehavior {
+  const _AcademyBouncyScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    return const BouncingScrollPhysics(
+      parent: AlwaysScrollableScrollPhysics(),
+    );
+  }
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return StretchingOverscrollIndicator(
+      axisDirection: details.direction,
+      child: child,
+    );
+  }
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+}
+
 enum DayOfWeek {
   monday,
   tuesday,
@@ -93,7 +125,8 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with SingleTickerProviderStateMixin {
   static const Color _kSignatureGreen = Color(0xFF33A373);
   static const String _kSystemDefaultPrinterValue = '__system_default__';
 
@@ -190,10 +223,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _generalPrinterValue = _kSystemDefaultPrinterValue;
   String _todoPrinterValue = _kSystemDefaultPrinterValue;
   List<String> _installedPrinters = const <String>[];
+  late final AnimationController _academyBounceController;
+  late Animation<double> _academyBounceAnimation;
+  double _academyBounceOffset = 0;
 
   @override
   void initState() {
     super.initState();
+    _academyBounceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    );
+    _academyBounceAnimation = Tween<double>(begin: 0, end: 0).animate(
+      CurvedAnimation(
+        parent: _academyBounceController,
+        curve: Curves.easeOutCubic,
+      ),
+    );
+    _academyBounceController.addListener(() {
+      if (!mounted) return;
+      setState(() {
+        _academyBounceOffset = _academyBounceAnimation.value;
+      });
+    });
     _selectedThemeMode = AppThemeController.mode.value;
     _loadSettings();
     _loadFullscreenSetting();
@@ -349,6 +401,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _fabTabBarOverlay.dispose();
+    _academyBounceController.dispose();
     _academyNameController.dispose();
     _academyAddressController.dispose();
     _sloganController.dispose();
@@ -3506,30 +3559,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  bool _handleAcademyScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is OverscrollNotification) {
+      final overscroll = notification.overscroll;
+      if (overscroll == 0) return false;
+      final nextOffset = (_academyBounceOffset - overscroll * 0.45)
+          .clamp(-34.0, 34.0)
+          .toDouble();
+      _academyBounceController.stop();
+      setState(() {
+        _academyBounceOffset = nextOffset;
+      });
+      return false;
+    }
+    if (notification is ScrollUpdateNotification) {
+      final delta = notification.scrollDelta ?? 0;
+      final metrics = notification.metrics;
+      final atTop = metrics.pixels <= metrics.minScrollExtent && delta < 0;
+      final atBottom = metrics.pixels >= metrics.maxScrollExtent && delta > 0;
+      if (atTop || atBottom) {
+        final nextOffset = (_academyBounceOffset - delta * 0.45)
+            .clamp(-34.0, 34.0)
+            .toDouble();
+        _academyBounceController.stop();
+        setState(() {
+          _academyBounceOffset = nextOffset;
+        });
+        return false;
+      }
+    }
+    if (notification is ScrollEndNotification ||
+        notification is UserScrollNotification) {
+      if (_academyBounceOffset == 0) return false;
+      _academyBounceAnimation = Tween<double>(
+        begin: _academyBounceOffset,
+        end: 0,
+      ).animate(
+        CurvedAnimation(
+          parent: _academyBounceController,
+          curve: Curves.easeOutBack,
+        ),
+      );
+      _academyBounceController
+        ..reset()
+        ..forward();
+      return false;
+    }
+    return false;
+  }
+
   // 각 내용 위젯을 배경색 컨테이너로 감싸는 래퍼 추가
   Widget _buildAcademySettingsContainer() {
     return Container(
       color: context.yggSurfaceBase,
       child: ScrollConfiguration(
-        behavior: const ScrollBehavior(),
-        child: Scrollbar(
-          controller: _academyScrollController,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            controller: _academyScrollController,
-            padding: EdgeInsets.only(
-              bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+        behavior: const _AcademyBouncyScrollBehavior(),
+        child: ScrollbarTheme(
+          data: ScrollbarThemeData(
+            thumbColor: WidgetStateProperty.all(
+              Colors.white.withValues(alpha: 0.72),
             ),
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: _buildAcademySettings(),
+            radius: const Radius.circular(999),
+            thickness: WidgetStateProperty.all(5),
+            trackVisibility: WidgetStateProperty.all(false),
+          ),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: _handleAcademyScrollNotification,
+            child: Scrollbar(
+              controller: _academyScrollController,
+              thumbVisibility: true,
+              child: Transform.translate(
+                offset: Offset(0, _academyBounceOffset),
+                child: SingleChildScrollView(
+                  controller: _academyScrollController,
+                  padding: EdgeInsets.only(
+                    bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+                  ),
+                  physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Align(
+                        alignment: Alignment.topCenter,
+                        child: _buildAcademySettings(),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
+              ),
             ),
           ),
         ),

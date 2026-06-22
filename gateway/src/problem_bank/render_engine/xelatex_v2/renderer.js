@@ -753,6 +753,7 @@ export async function renderPdfWithXeLatex({
 
   const subjectTitle = renderConfig?.subjectTitleText || '수학 영역';
   const titlePageTopText = renderConfig?.titlePageTopText || '';
+  const titlePageGoalText = renderConfig?.titlePageGoalText || '';
   const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
     || renderConfig?.hideDocumentHeader === true;
   const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
@@ -809,6 +810,7 @@ export async function renderPdfWithXeLatex({
       columns: cols,
       subjectTitle,
       titlePageTopText,
+      titlePageGoalText,
       profile: profile || '',
       maxQuestionsPerPage: maxQuestionsPerPage || 0,
       hidePreviewHeader,

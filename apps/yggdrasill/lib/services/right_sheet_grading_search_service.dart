@@ -6,7 +6,6 @@ import '../app_overlays.dart';
 import '../screens/learning/models/problem_bank_export_models.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'data_manager.dart';
-import 'homework_assignment_store.dart';
 import 'homework_batch_confirm_service.dart';
 import 'homework_test_grading_result_service.dart';
 import 'homework_store.dart';
@@ -54,7 +53,6 @@ class RightSheetGradingSearchService {
           row.student.name.trim().isEmpty ? '학생' : row.student.name.trim();
       final items = homeworkStore.items(studentId);
       for (final hw in items) {
-        if (hw.status == HomeworkStatus.completed) continue;
         final uniqueKey = '$studentId:${hw.id}';
         if (!seen.add(uniqueKey)) continue;
 
@@ -117,13 +115,13 @@ class RightSheetGradingSearchService {
 
   Future<List<RightSheetGradingSearchResult>> suggest(String query) async {
     final token = _normalizeAssignmentSearchToken(query.trim());
-    final fourDigits = RegExp(r'^[0-9]{4}$');
-    if (!fourDigits.hasMatch(token)) {
+    if (token.length < 2) {
       return const <RightSheetGradingSearchResult>[];
     }
+    final lowerQuery = query.trim().toLowerCase();
 
     final candidates =
-        <({RightSheetGradingSearchResult result, DateTime at})>[];
+        <({RightSheetGradingSearchResult result, int score, DateTime at})>[];
     final seen = <String>{};
     final homeworkStore = HomeworkStore.instance;
     for (final row in DataManager.instance.students) {
@@ -142,12 +140,32 @@ class RightSheetGradingSearchService {
         );
         if (assignmentCode.isEmpty) continue;
         final normalizedCode = _normalizeAssignmentSearchToken(assignmentCode);
-        if (!normalizedCode.endsWith(token)) continue;
         final resolvedGroupTitle = _resolveGroupHomeworkTitle(
           studentId: studentId,
           hw: hw,
         );
         final homeworkTitle = hw.title.trim().isEmpty ? '과제' : hw.title.trim();
+        final lowerStudentName = studentName.toLowerCase();
+        final lowerGroupTitle = resolvedGroupTitle.toLowerCase();
+        final lowerHomeworkTitle = homeworkTitle.toLowerCase();
+
+        int? score;
+        if (normalizedCode.startsWith(token)) {
+          score = 0;
+        } else if (RegExp(r'^[0-9]{1,4}$').hasMatch(token) &&
+            normalizedCode.endsWith(token)) {
+          score = 1;
+        } else if (normalizedCode.contains(token)) {
+          score = 2;
+        } else if (lowerStudentName.startsWith(lowerQuery)) {
+          score = 3;
+        } else if (lowerGroupTitle.startsWith(lowerQuery) ||
+            lowerHomeworkTitle.startsWith(lowerQuery)) {
+          score = 4;
+        } else {
+          continue;
+        }
+
         candidates.add(
           (
             result: RightSheetGradingSearchResult(
@@ -161,6 +179,7 @@ class RightSheetGradingSearchService {
               isTestHomework: _hasProblemBankPreset(hw),
               isSubmitted: _isSubmittedHomeworkForGradingSearch(hw),
             ),
+            score: score,
             at: hw.updatedAt ?? hw.createdAt ?? DateTime(1970),
           ),
         );
@@ -168,11 +187,13 @@ class RightSheetGradingSearchService {
     }
 
     candidates.sort((a, b) {
+      final scoreCmp = a.score.compareTo(b.score);
+      if (scoreCmp != 0) return scoreCmp;
       final updatedCmp = b.at.compareTo(a.at);
       if (updatedCmp != 0) return updatedCmp;
       return a.result.assignmentCode.compareTo(b.result.assignmentCode);
     });
-    const maxSuggestions = 10;
+    const maxSuggestions = 6;
     return candidates
         .take(maxSuggestions)
         .map((entry) => entry.result)
@@ -200,22 +221,11 @@ class RightSheetGradingSearchService {
     }
 
     if (_hasProblemBankPreset(hw)) {
-      if (!_isSubmittedHomeworkForGradingSearch(hw)) {
-        await homeworkStore.submit(studentId, hw.id);
-        await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-          studentId,
-          [hw.id],
-        );
-        if (!context.mounted) return;
-        final refreshed = homeworkStore.getById(studentId, hw.id);
-        if (refreshed != null) {
-          hw = refreshed;
-        }
-      }
       final opened = await _openTestHomeworkInGradingSheet(
         context: context,
         studentId: studentId,
         hw: hw,
+        readOnly: !_isSubmittedHomeworkForGradingSearch(hw),
       );
       if (opened) return;
     }
@@ -235,6 +245,7 @@ class RightSheetGradingSearchService {
     required BuildContext context,
     required String studentId,
     required HomeworkItem hw,
+    bool readOnly = false,
   }) async {
     final keys = <({String studentId, String itemId})>[
       (studentId: studentId, itemId: hw.id),
@@ -266,6 +277,7 @@ class RightSheetGradingSearchService {
         : cachedStates;
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
+    final lockGrading = readOnly || hasSavedGrading;
     final baselineStates = _retryBaselineStates(baselineSession);
     final studentName = _resolveHomeworkPrintStudentName(studentId);
     final groupHomeworkTitle = _resolveGroupHomeworkTitle(
@@ -304,82 +316,91 @@ class RightSheetGradingSearchService {
       baselineAttemptId: baselineSession?.attempt.id ?? '',
       baselineStates: _toRightSheetStateMap(baselineStates),
       wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
-      gradingLocked: hasSavedGrading,
-      onRequestEditReset: () async {
-        final reset = await _gradingResultService.resetAttemptsForHomework(
-          homeworkItemId: payload.homeworkId,
-        );
-        if (!context.mounted) return false;
-        if (!reset) {
-          _showSnackBar(context, '기존 채점 결과 리셋에 실패했습니다.');
-          return false;
-        }
-        _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
-        _testGradingSerializedDraftByHomeworkId.remove(payload.homeworkId);
-        _testGradingSavedHomeworkIds.remove(payload.homeworkId);
-        _showSnackBar(context, '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.');
-        return true;
-      },
+      gradingLocked: lockGrading,
+      onRequestEditReset: readOnly
+          ? null
+          : () async {
+              final reset =
+                  await _gradingResultService.resetAttemptsForHomework(
+                homeworkItemId: payload.homeworkId,
+              );
+              if (!context.mounted) return false;
+              if (!reset) {
+                _showSnackBar(context, '기존 채점 결과 리셋에 실패했습니다.');
+                return false;
+              }
+              _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
+              _testGradingSerializedDraftByHomeworkId
+                  .remove(payload.homeworkId);
+              _testGradingSavedHomeworkIds.remove(payload.homeworkId);
+              _showSnackBar(context, '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.');
+              return true;
+            },
       closeSheetOnAction: false,
-      onStatesChanged: (states) {
-        final decoded = _fromRightSheetStateMap(states);
-        _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
-            Map<String, HomeworkAnswerCellState>.from(decoded);
-        _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
-            _serializeTestGradingDraftRows(
-          homeworkId: payload.homeworkId,
-          gradingPages: payload.gradingPages,
-          states: decoded,
-        );
-      },
-      onAction: (action, states, correctionStates) async {
-        final decoded = _fromRightSheetStateMap(states);
-        _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
-            Map<String, HomeworkAnswerCellState>.from(decoded);
-        _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
-            _serializeTestGradingDraftRows(
-          homeworkId: payload.homeworkId,
-          gradingPages: payload.gradingPages,
-          states: decoded,
-        );
-        if (action == 'complete' || action == 'confirm') {
-          final targetItem = HomeworkStore.instance.getById(
-                studentId,
-                payload.homeworkId,
-              ) ??
-              hw;
-          final saved = await _gradingResultService.saveAttemptFromSession(
-            studentId: studentId,
-            homeworkItem: targetItem,
-            action: action,
-            states: decoded,
-            gradingPages: payload.gradingPages,
-            scoreByQuestionKey: payload.scoreByQuestionKey,
-            groupHomeworkTitleSnapshot: groupHomeworkTitle,
-            baselineAttemptId: baselineSession?.attempt.id ?? '',
-            baselineStates: baselineStates,
-            correctionStates: correctionStates,
-          );
-          if (!saved) {
-            if (context.mounted) {
-              _showSnackBar(context, '채점 결과 저장에 실패했습니다.');
-            }
-            return;
-          }
-          _testGradingSavedHomeworkIds.add(payload.homeworkId);
-          final pending = <HomeworkBatchConfirmKey, bool>{
-            for (final key in keys) key: action == 'complete',
-          };
-          await _batchConfirmService.executeBatchConfirmNow(
-            context: context,
-            pending: pending,
-          );
-          for (final key in keys) {
-            _batchConfirmService.pending.remove(key);
-          }
-          _batchConfirmService.syncPendingCount();
-        }
-      },
+      onStatesChanged: readOnly
+          ? null
+          : (states) {
+              final decoded = _fromRightSheetStateMap(states);
+              _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                  Map<String, HomeworkAnswerCellState>.from(decoded);
+              _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                  _serializeTestGradingDraftRows(
+                homeworkId: payload.homeworkId,
+                gradingPages: payload.gradingPages,
+                states: decoded,
+              );
+            },
+      onAction: readOnly
+          ? null
+          : (action, states, correctionStates) async {
+              final decoded = _fromRightSheetStateMap(states);
+              _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                  Map<String, HomeworkAnswerCellState>.from(decoded);
+              _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                  _serializeTestGradingDraftRows(
+                homeworkId: payload.homeworkId,
+                gradingPages: payload.gradingPages,
+                states: decoded,
+              );
+              if (action == 'complete' || action == 'confirm') {
+                final targetItem = HomeworkStore.instance.getById(
+                      studentId,
+                      payload.homeworkId,
+                    ) ??
+                    hw;
+                final saved =
+                    await _gradingResultService.saveAttemptFromSession(
+                  studentId: studentId,
+                  homeworkItem: targetItem,
+                  action: action,
+                  states: decoded,
+                  gradingPages: payload.gradingPages,
+                  scoreByQuestionKey: payload.scoreByQuestionKey,
+                  groupHomeworkTitleSnapshot: groupHomeworkTitle,
+                  baselineAttemptId: baselineSession?.attempt.id ?? '',
+                  baselineStates: baselineStates,
+                  correctionStates: correctionStates,
+                );
+                if (!saved) {
+                  if (context.mounted) {
+                    _showSnackBar(context, '채점 결과 저장에 실패했습니다.');
+                  }
+                  return;
+                }
+                _testGradingSavedHomeworkIds.add(payload.homeworkId);
+                final pending = <HomeworkBatchConfirmKey, bool>{
+                  for (final key in keys) key: action == 'complete',
+                };
+                await _batchConfirmService.executeBatchConfirmNow(
+                  context: context,
+                  pending: pending,
+                );
+                for (final key in keys) {
+                  _batchConfirmService.pending.remove(key);
+                }
+                _batchConfirmService.syncPendingCount();
+              }
+            },
     );
     blockRightSideSheetOpen.value = false;
     if (!rightSideSheetOpen.value) {
