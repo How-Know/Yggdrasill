@@ -26,8 +26,21 @@ const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv89_box_math_line_break';
+const PREVIEW_STYLE_VERSION = 'pv90_independent_set_common_stem';
 const DEBUG_MATH_DOTS = process.env.PB_DEBUG_MATH_DOTS === '1';
+
+function effectivePreviewRenderConfig(renderConfig = {}) {
+  const cfg = renderConfig && typeof renderConfig === 'object' ? renderConfig : {};
+  const explicitlyDisabled =
+    cfg.previewIndependentSetCommonStem === false
+    || cfg.preview_independent_set_common_stem === false;
+  return {
+    ...cfg,
+    // 단일 문항 서버 미리보기에서는 독립형 세트의 공통발문을 함께 보여줘야
+    // stem 이 비어 있는 세트 항목(예: 쎈 2-1 27~31)이 번호만 렌더되지 않는다.
+    previewIndependentSetCommonStem: !explicitlyDisabled,
+  };
+}
 
 function repoAssetPath(...segments) {
   return path.resolve(REPO_ROOT, ...segments);
@@ -129,6 +142,7 @@ export async function generateQuestionPreviews({
   await ensureBucketExists(supabaseClient);
 
   const fontPaths = getDefaultFontPaths();
+  const effectiveRenderConfig = effectivePreviewRenderConfig(renderConfig || {});
   const results = [];
 
   for (const question of questions) {
@@ -138,7 +152,7 @@ export async function generateQuestionPreviews({
       continue;
     }
 
-    const hash = questionContentHash(question, mathEngine, renderConfig || {});
+    const hash = questionContentHash(question, mathEngine, effectiveRenderConfig);
     const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
 
     if (!force) {
@@ -163,7 +177,7 @@ export async function generateQuestionPreviews({
         boldPath: fontPaths.boldPath,
         qnumFontPath: fontPaths.qnumFontPath,
         layout: layout || {},
-        renderConfig: renderConfig || {},
+        renderConfig: effectiveRenderConfig,
         supabaseClient,
         viewportWidth: PREVIEW_VIEWPORT_WIDTH,
         deviceScaleFactor: PREVIEW_DPR,
@@ -208,13 +222,15 @@ export async function getStoredPreviewUrls({
   academyId,
   supabaseClient,
   mathEngine = 'xelatex',
+  renderConfig = {},
 }) {
   if (!supabaseClient || !Array.isArray(questions) || questions.length === 0) return [];
+  const effectiveRenderConfig = effectivePreviewRenderConfig(renderConfig || {});
   const results = [];
   for (const question of questions) {
     const qId = String(question?.id || question?.question_id || '');
     if (!qId) { results.push({ questionId: qId, imageUrl: null }); continue; }
-    const hash = questionContentHash(question, mathEngine);
+    const hash = questionContentHash(question, mathEngine, effectiveRenderConfig);
     const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
     try {
       const { data } = await supabaseClient.storage

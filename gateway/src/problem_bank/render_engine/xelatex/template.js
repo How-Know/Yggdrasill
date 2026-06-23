@@ -788,8 +788,11 @@ function normalizeMathSegment(mathContent) {
   // math mode 안에서 한글이 깨지지 않도록 \text{}로 감싼다.
   out = out.replace(/(?<![\\A-Za-z])box\{([^}]+)\}/g, (_match, inner) => {
     const content = String(inner || '');
+    if (/^\s*(?:\(|（)\s*[ㄱ-ㅎ가나다라마바사아자차카타파하]\s*(?:\)|）)\s*$/.test(content)) {
+      return `\\boxed{\\text{\\hspace{0.5em}${escapeLatexText(content.trim())}\\hspace{0.5em}}}`;
+    }
     if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(content)) {
-      return `\\boxed{\\text{${content}}}`;
+      return `\\boxed{\\text{${escapeLatexText(content)}}}`;
     }
     return `\\boxed{${content}}`;
   });
@@ -877,6 +880,8 @@ function normalizeBlankParenthesisSpaceMarkers(input) {
 
 function normalizeBlankBoxNotation(input) {
   return String(input || '')
+    // `\text{box{(가)}}` 처럼 추출된 라벨 박스는 \text{} 래퍼를 벗겨 box{} 변환 경로를 타게 한다.
+    .replace(/\\text\s*\{\s*(box\s*\{[^{}]*\})\s*\}/gi, '$1')
     // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
     //   \timesbox{(나)} 처럼 들어오는 경우가 있다. 이 단계(한글 기준 math 분할 및
     //   protectLatexBoxBlocks 보호 이전)에서 먼저 분리해 두어야 box{} 가 정상적으로
@@ -2423,16 +2428,16 @@ function renderDecoContinuationLine(
 }
 
 function renderRawBoxLatexEnvironment(lines) {
-  const raw = (lines || [])
+  const raw = normalizeLiteralEscapedNewlines((lines || [])
     .filter((line) => line !== BOX_PARAGRAPH_BREAK)
     .map((line) => String(line || '').trim())
     .filter(Boolean)
     .join('\n')
-    .trim();
+    .trim());
   if (!raw) return '';
   const envMatch = raw.match(/^\\begin\{(array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}[\s\S]*\\end\{\1\}$/);
   if (!envMatch) return '';
-  return `\\begin{center}$\\displaystyle ${raw}$\\end{center}`;
+  return `\\begin{center}$\\displaystyle ${normalizeMathSegment(raw)}$\\end{center}`;
 }
 
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
@@ -4434,6 +4439,13 @@ function renderIndependentSetGroupLatex(group, {
   lines.push('\\vspace{\\baselineskip}');
   for (let itemIdx = 0; itemIdx < items.length; itemIdx += 1) {
     const item = items[itemIdx];
+    const hasItemDisplayContent =
+      String(item?.stem || '').trim().length > 0
+      || (Array.isArray(item?.choices) && item.choices.length > 0)
+      || (Array.isArray(item?.objective_choices) && item.objective_choices.length > 0)
+      || (Array.isArray(item?.equations) && item.equations.length > 0)
+      || (Array.isArray(item?.figure_refs) && item.figure_refs.length > 0);
+    if (items.length === 1 && !hasItemDisplayContent) continue;
     if (itemIdx > 0) lines.push('\\vspace{\\baselineskip}');
     // 하위 독립 문항도 표/그림/보기 마커를 가질 수 있으므로 일반 문항 렌더 경로를 탄다.
     // 단순 smartTexLine 으로 처리하면 raw tabular preamble 이 수식 정규화되어 깨진다.
@@ -5918,6 +5930,7 @@ export function buildTexSource(question, options = {}) {
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
+    '\\providecommand{\\questionnumber}[1]{\\textbf{#1}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
     `  BoldFont = ${fontBold},`,
@@ -6069,6 +6082,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
+    '\\providecommand{\\questionnumber}[1]{\\textbf{#1}}',
     // 정답 단답 렌더는 standalone(varwidth)로 콘텐츠 박스에 딱 맞춰 페이지를
     // 자른다. 그런데 \mtsymmathbox(=\YggInlineMathBox)는 인라인 수식의 ht/dp 를
     // (ht+dp)/2 로 줄여 줄 높이를 안정화하는데, 분수처럼 분자가 큰 수식은

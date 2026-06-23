@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -29,10 +30,9 @@ const double _kGradingCardMinHeight = 140.0;
 const double _kGradingCardMaxHeight = 620.0;
 const double _kGradingCardMinWidth = 108.0;
 const double _kGradingCardMaxWidth = 396.0;
-const double _kGradingSectionGapTop = 22.0;
-const double _kGradingSectionGapBottom = 18.0;
 const double _kGradingHomeworkRowTopInset = 24.0;
-const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(12, 0, 24, 24);
+const double _kGradingAnswerRailHorizontalPadding = 24.0;
+const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(0, 24, 24, 24);
 const String _kGradingAnswerBookCategory = 'textbook';
 const List<String> _kGradingAnswerGradeOrder = [
   '초1',
@@ -123,89 +123,87 @@ class _GradingModePageState extends State<GradingModePage> {
                 return LayoutBuilder(
                   builder: (context, constraints) {
                     final railWidth = _resolveAnswerRailWidth(constraints);
-                    return Padding(
-                      padding: _kGradingPagePadding,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SizedBox(
-                            width: railWidth,
-                            child: _buildAnswerBookRail(),
-                          ),
-                          const SizedBox(width: 22),
-                          Expanded(
-                            child: LayoutBuilder(
-                              builder: (context, contentConstraints) {
-                                final cardLayout = _resolveCardLayoutHorizontal(
-                                  contentConstraints,
-                                  MediaQuery.of(context).size.height,
-                                );
-                                return Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: submittedEntries.isNotEmpty
-                                            ? SizedBox(
-                                                height: cardLayout.height,
-                                                child:
-                                                    _buildHorizontalEntryStrip(
-                                                  submittedEntries,
-                                                  cardLayout: cardLayout,
-                                                  onCardTap:
-                                                      widget.onSubmittedCardTap,
-                                                  canTapEntry: (entry) =>
-                                                      entry.hasSubmittedChild,
-                                                ),
-                                              )
-                                            : _buildEmptyRowSpacer(
-                                                cardLayout: cardLayout,
-                                              ),
-                                      ),
-                                    ),
-                                    const SizedBox(
-                                        height: _kGradingSectionGapTop),
-                                    const Divider(
-                                        height: 1, color: Color(0xFF2A3A3A)),
-                                    const SizedBox(
-                                        height: _kGradingSectionGapBottom),
-                                    Expanded(
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: homeworkEntries.isNotEmpty
-                                            ? Padding(
-                                                padding: const EdgeInsets.only(
-                                                  top: _kGradingHomeworkRowTopInset,
-                                                ),
-                                                child: SizedBox(
-                                                  height: cardLayout.height -
-                                                      _kGradingHomeworkRowTopInset,
-                                                  child:
-                                                      _buildHorizontalEntryStrip(
-                                                    homeworkEntries,
-                                                    cardLayout:
-                                                        _homeworkCardLayout(
-                                                      cardLayout,
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Padding(
+                          padding: _kGradingPagePadding,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              SizedBox(width: railWidth + 22),
+                              Expanded(
+                                child: LayoutBuilder(
+                                  builder: (context, contentConstraints) {
+                                    final cardLayout =
+                                        _resolveCardLayoutHorizontal(
+                                      contentConstraints,
+                                      MediaQuery.of(context).size.height,
+                                    );
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        Expanded(
+                                          child: Align(
+                                            alignment: Alignment.topLeft,
+                                            child: submittedEntries.isNotEmpty
+                                                ? SizedBox(
+                                                    height: cardLayout.height,
+                                                    child:
+                                                        _buildHorizontalEntryStrip(
+                                                      submittedEntries,
+                                                      cardLayout: cardLayout,
+                                                      onCardTap: widget
+                                                          .onSubmittedCardTap,
+                                                      canTapEntry: (entry) =>
+                                                          entry
+                                                              .hasSubmittedChild,
                                                     ),
-                                                    onCardTap:
-                                                        widget.onHomeworkCardTap,
+                                                  )
+                                                : _buildEmptyRowSpacer(
+                                                    cardLayout: cardLayout,
                                                   ),
-                                                ),
-                                              )
-                                            : _buildEmptyRowSpacer(
-                                                cardLayout: cardLayout,
-                                              ),
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
-                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(
+                                          height: _kGradingHomeworkRowTopInset,
+                                        ),
+                                        Expanded(
+                                          child: Align(
+                                            alignment: Alignment.topLeft,
+                                            child: homeworkEntries.isNotEmpty
+                                                ? SizedBox(
+                                                    height: cardLayout.height,
+                                                    child:
+                                                        _buildHorizontalEntryStrip(
+                                                      homeworkEntries,
+                                                      cardLayout: cardLayout,
+                                                      onCardTap: widget
+                                                          .onHomeworkCardTap,
+                                                    ),
+                                                  )
+                                                : _buildEmptyRowSpacer(
+                                                    cardLayout: cardLayout,
+                                                  ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: railWidth,
+                          child: _buildAnswerBookRail(),
+                        ),
+                      ],
                     );
                   },
                 );
@@ -223,7 +221,7 @@ class _GradingModePageState extends State<GradingModePage> {
     return (width * 0.2).clamp(190.0, 280.0).toDouble();
   }
 
-  /// 세로 스크롤 없이, 제출 행·숙제 행에 동일한 카드 높이를 배분한다.
+  /// 세로 공간을 반씩 나눠 제출(상단)·숙제(하단) 행 카드 높이를 계산한다.
   _GradingCardLayout _resolveCardLayoutHorizontal(
     BoxConstraints constraints,
     double fallbackViewportHeight,
@@ -232,11 +230,12 @@ class _GradingModePageState extends State<GradingModePage> {
         constraints.maxHeight.isFinite && constraints.maxHeight > 0
             ? constraints.maxHeight
             : fallbackViewportHeight;
-    final inner = math.max(_kGradingCardMinHeight, viewportHeight);
+    final inner = math.max(
+      _kGradingCardMinHeight * 2 + _kGradingHomeworkRowTopInset,
+      viewportHeight,
+    );
 
-    const middleOverhead =
-        _kGradingSectionGapTop + 1 + _kGradingSectionGapBottom;
-    final rowHeight = ((inner - middleOverhead) / 2)
+    final rowHeight = ((inner - _kGradingHomeworkRowTopInset) / 2)
         .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
         .toDouble();
 
@@ -507,25 +506,6 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  _GradingCardLayout _homeworkCardLayout(_GradingCardLayout base) {
-    final height =
-        (base.height - _kGradingHomeworkRowTopInset).clamp(_kGradingCardMinHeight, base.height);
-    final maxMetaHeight = math.min(
-      height * 0.55,
-      math.max(64.0, height * 0.42),
-    );
-    final minMetaHeight = math.min(90.0, maxMetaHeight);
-    final metaHeight = (height * _kGradingCardMetaRatio)
-        .clamp(minMetaHeight, maxMetaHeight)
-        .toDouble();
-    return _GradingCardLayout(
-      width: base.width,
-      height: height,
-      metaHeight: metaHeight,
-      spacing: base.spacing,
-    );
-  }
-
   Widget _buildHorizontalEntryStrip(
     List<_GradingGroupEntry> entries, {
     required _GradingCardLayout cardLayout,
@@ -536,6 +516,7 @@ class _GradingModePageState extends State<GradingModePage> {
       scrollDirection: Axis.horizontal,
       reverse: true,
       physics: const BouncingScrollPhysics(),
+      clipBehavior: Clip.none,
       padding: EdgeInsets.zero,
       itemCount: entries.length,
       separatorBuilder: (_, __) => SizedBox(width: cardLayout.spacing),
@@ -1245,58 +1226,60 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 8, 8, 8),
+    return FabStyleGlassPanel(
+      padding: const EdgeInsets.symmetric(
+        horizontal: _kGradingAnswerRailHorizontalPadding,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: widget.isLoading && widget.books.isEmpty
-                ? const Center(
-                    child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : widget.books.isEmpty
-                    ? const Center(
-                        child: Text(
-                          '연결된 정답 PDF가 없습니다.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Color(0xFF7F8C8C),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            height: 1.3,
-                          ),
-                        ),
-                      )
-                    : Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerSignal: (signal) {
-                          if (signal is PointerScrollEvent) {
-                            final dx = signal.scrollDelta.dx;
-                            final dy = signal.scrollDelta.dy;
-                            if (dy != 0 && dy.abs() > dx.abs()) {
-                              _changeBookBy(dy > 0 ? 1 : -1);
-                            }
-                          }
-                        },
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onVerticalDragStart: _handleBookDragStart,
-                          onVerticalDragUpdate: _handleBookDragUpdate,
-                          onVerticalDragEnd: _handleBookDragEnd,
-                          onVerticalDragCancel: _resetBookDrag,
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              return _buildRevolvingStack(constraints);
-                            },
-                          ),
-                        ),
+              child: widget.isLoading && widget.books.isEmpty
+                  ? const Center(
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-          ),
+                    )
+                  : widget.books.isEmpty
+                      ? const Center(
+                          child: Text(
+                            '연결된 정답 PDF가 없습니다.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Color(0xFF7F8C8C),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              height: 1.3,
+                            ),
+                          ),
+                        )
+                      : Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerSignal: (signal) {
+                            if (signal is PointerScrollEvent) {
+                              final dx = signal.scrollDelta.dx;
+                              final dy = signal.scrollDelta.dy;
+                              if (dy != 0 && dy.abs() > dx.abs()) {
+                                _changeBookBy(dy > 0 ? 1 : -1);
+                              }
+                            }
+                          },
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onVerticalDragStart: _handleBookDragStart,
+                            onVerticalDragUpdate: _handleBookDragUpdate,
+                            onVerticalDragEnd: _handleBookDragEnd,
+                            onVerticalDragCancel: _resetBookDrag,
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                return _buildRevolvingStack(constraints);
+                              },
+                            ),
+                          ),
+                        ),
+            ),
         ],
       ),
     );
@@ -1310,19 +1293,17 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
     final slotGap = cardHeight * 0.31;
     final visibleSlots = _visibleBookSlots();
 
-    return ClipRect(
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (final entry in visibleSlots)
-            _buildRevolvingSlot(
-              slot: entry.slot,
-              bookIndex: entry.bookIndex,
-              cardHeight: cardHeight,
-              top: centerTop + entry.slot * slotGap,
-            ),
-        ],
-      ),
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        for (final entry in visibleSlots)
+          _buildRevolvingSlot(
+            slot: entry.slot,
+            bookIndex: entry.bookIndex,
+            cardHeight: cardHeight,
+            top: centerTop + entry.slot * slotGap,
+          ),
+      ],
     );
   }
 
@@ -1496,7 +1477,7 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
           }
         },
         child: Material(
-          color: const Color(0xFF10171A),
+          color: Colors.transparent,
           borderRadius: BorderRadius.circular(14),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -1512,93 +1493,110 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
               onHorizontalDragCancel: _resetGradeDrag,
               child: AspectRatio(
                 aspectRatio: 0.72,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFF223131)),
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1D2A2D),
-                          image: provider == null
-                              ? null
-                              : DecorationImage(
-                                  image: provider,
-                                  fit: BoxFit.cover,
-                                ),
-                        ),
-                        child: provider == null
-                            ? const Center(
-                                child: Icon(
-                                  Icons.auto_stories_outlined,
-                                  color: Colors.white30,
-                                  size: 52,
-                                ),
-                              )
-                            : null,
-                      ),
-                      Positioned.fill(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  fit: StackFit.expand,
+                  children: [
+                    Positioned.fill(
+                      child: IgnorePointer(
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.black.withValues(alpha: 0.10),
-                                Colors.black.withValues(alpha: 0.12),
-                                Colors.black.withValues(alpha: 0.72),
-                              ],
-                              stops: const [0.0, 0.46, 1.0],
-                            ),
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: resourceTextbookCoverBoxShadows(),
                           ),
                         ),
                       ),
-                      Positioned(
-                        right: 12,
-                        top: 12,
-                        child:
-                            _GradingAnswerGradeBadge(label: grade.displayLabel),
-                      ),
-                      Positioned(
-                        left: 14,
-                        right: 14,
-                        bottom: 16,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              widget.book.displayName,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w900,
-                                height: 1.05,
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text(
-                              widget.book.displayDescription,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.86),
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                height: 1.18,
-                              ),
-                            ),
-                          ],
+                    ),
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1D2A2D),
+                            image: provider == null
+                                ? null
+                                : DecorationImage(
+                                    image: provider,
+                                    fit: BoxFit.cover,
+                                  ),
+                          ),
+                          child: provider == null
+                              ? const Center(
+                                  child: Icon(
+                                    Icons.auto_stories_outlined,
+                                    color: Colors.white30,
+                                    size: 52,
+                                  ),
+                                )
+                              : null,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.10),
+                              Colors.black.withValues(alpha: 0.12),
+                              Colors.black.withValues(alpha: 0.72),
+                            ],
+                            stops: const [0.0, 0.46, 1.0],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 12,
+                      top: 12,
+                      child:
+                          _GradingAnswerGradeBadge(label: grade.displayLabel),
+                    ),
+                    Positioned(
+                      left: 14,
+                      right: 14,
+                      bottom: 16,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            widget.book.displayName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily:
+                                  FabTabBarTokens.previewHeadlineFontFamily,
+                              color: Colors.white,
+                              fontSize:
+                                  FabTabBarTokens.previewAcademyMainTitleFontSize,
+                              fontWeight:
+                                  FabTabBarTokens.previewHeadlineFontWeight,
+                              height: 1.15,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            widget.book.displayDescription,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily:
+                                  FabTabBarTokens.previewAcademyLabelFontFamily,
+                              color: Colors.white.withValues(alpha: 0.86),
+                              fontSize: 20,
+                              fontWeight:
+                                  FabTabBarTokens.previewAcademyLabelFontWeight,
+                              height: 1.18,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1616,22 +1614,50 @@ class _GradingAnswerGradeBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final isDark = brightness == Brightness.dark;
+    final capsuleColor = isDark
+        ? const Color(0xE610171A)
+        : Colors.white.withValues(alpha: 0.92);
+    final borderColor = isDark
+        ? const Color(0xFF355056).withValues(alpha: 0.62)
+        : Colors.black.withValues(alpha: 0.04);
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xDD0B1112),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+          ),
+        ],
       ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: Color(0xFFEAF2F2),
-          fontSize: 20,
-          fontWeight: FontWeight.w900,
-          letterSpacing: -0.2,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: capsuleColor,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: borderColor),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                fontSize: 20,
+                fontWeight: FabTabBarTokens.previewAcademyLabelFontWeight,
+                height: 1.0,
+                color: palette.labelSelected,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1803,12 +1829,39 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     }
 
     Widget buildMetaSection() {
-      const metaFontSize = FabTabBarTokens.previewAcademyMainTitleFontSize;
+      const subFontSize = 20.0;
+      const lineHeight = 1.1;
+      final titleStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle)
+          .copyWith(
+        height: lineHeight,
+        letterSpacing: -0.2,
+      );
+      final subtitleStyle = TextStyle(
+        color: panelStyle.hint,
+        fontSize: subFontSize,
+        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+        fontWeight: FontWeight.w600,
+        height: lineHeight,
+      );
+      final assignmentStyle = TextStyle(
+        color: panelStyle.label,
+        fontSize: subFontSize,
+        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+        fontWeight: FontWeight.w700,
+        height: lineHeight,
+      );
       final line1Text = bookStr == '-' && courseStr == '-'
           ? (line2.trim().isEmpty ? '-' : line2)
           : (bookStr != '-' && courseStr != '-'
               ? '$bookStr · $courseStr'
               : (bookStr != '-' ? bookStr : courseStr));
+      final totalTextHeight =
+          (FabTabBarTokens.previewAcademyMainTitleFontSize * lineHeight) +
+              (subFontSize * lineHeight) * 2;
+      final slack = math.max(0.0, metaContentHeight - totalTextHeight);
+      final baseGap = slack > 0 ? slack / 2 : 0.0;
+      final gap12 = baseGap * 0.7;
+      final gap23 = baseGap * 0.7;
 
       return SizedBox(
         height: metaContentHeight,
@@ -1816,42 +1869,32 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: contentPadH),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 line1Text,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: panelStyle.title,
-                  fontSize: metaFontSize,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.2,
-                  height: 1.1,
-                ),
+                textScaler: TextScaler.noScaling,
+                style: titleStyle,
               ),
+              SizedBox(height: gap12),
               Text(
                 line2,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: panelStyle.hint,
-                  fontSize: metaFontSize,
-                  fontWeight: FontWeight.w600,
-                  height: 1.1,
-                ),
+                textScaler: TextScaler.noScaling,
+                style: subtitleStyle,
               ),
-              Text(
-                assignmentNumText,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  color: panelStyle.label,
-                  fontSize: metaFontSize,
-                  fontWeight: FontWeight.w700,
-                  height: 1.1,
+              SizedBox(height: gap23),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  assignmentNumText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textScaler: TextScaler.noScaling,
+                  style: assignmentStyle,
                 ),
               ),
             ],
@@ -1904,13 +1947,13 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         final useDarkOverlayText = !isProblemBankSource &&
             (isPrintCover ||
                 (!hasImage && fallbackCoverColor.computeLuminance() > 0.6));
-        final overlayNameSize = (41.0 * scale).clamp(22.0, 41.0).toDouble();
+        const overlayNameSize = FabTabBarTokens.previewAcademyMainTitleFontSize;
+        const overlayDetailSize = 20.0;
         final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
         final overlayNameColor = useDarkOverlayText
             ? Colors.black.withValues(alpha: 0.82)
             : Colors.white;
         final overlayTimeGap = (6.0 * scale).clamp(3.0, 6.0).toDouble();
-        final overlayTimeSize = (overlayNameSize * 0.7).clamp(10.0, 29.0);
         final overlayTextShadows = useDarkOverlayText
             ? const <Shadow>[]
             : <Shadow>[
@@ -1995,7 +2038,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: overlayNameColor,
-                            fontSize: overlayTimeSize.toDouble(),
+                            fontSize: overlayDetailSize,
                             fontWeight: FontWeight.w700,
                             shadows: overlayTextShadows,
                           ),
@@ -2011,7 +2054,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                             textAlign: TextAlign.left,
                             style: TextStyle(
                               color: overlayNameColor,
-                              fontSize: overlayTimeSize.toDouble(),
+                              fontSize: overlayDetailSize,
                               fontWeight: FontWeight.w700,
                               shadows: overlayTextShadows,
                             ),
@@ -2044,7 +2087,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                     textAlign: TextAlign.left,
                     style: TextStyle(
                       color: overlayNameColor,
-                      fontSize: overlayTimeSize.toDouble(),
+                      fontSize: overlayDetailSize,
                       fontWeight: FontWeight.w700,
                       shadows: overlayTextShadows,
                     ),

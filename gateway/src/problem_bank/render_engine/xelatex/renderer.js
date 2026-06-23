@@ -613,15 +613,15 @@ export async function renderQuestionWithXeLatex({
       throw new Error('XeLaTeX produced no PDF output.');
     }
 
-    const { renderHtmlToImageBuffer } = await import('../chrome/render_pdf.js');
-    const pdfData = fs.readFileSync(pdfPath);
-    const base64 = pdfData.toString('base64');
-    const html = `<!DOCTYPE html><html><head>
-<style>*{margin:0;padding:0}body{width:${viewportWidth}px;background:white}</style>
-</head><body>
-<embed src="data:application/pdf;base64,${base64}" type="application/pdf" width="100%">
-</body></html>`;
-    const pngBuffer = await renderHtmlToImageBuffer(html, viewportWidth, deviceScaleFactor);
+    const pagePng = await renderPdfPageWithPdftoppm(pdfPath, workDir, {
+      dpi: Math.max(150, Math.round(110 * Number(deviceScaleFactor || 3))),
+      baseName: 'question-page',
+    });
+    const { pngBuffer } = await cropOpaqueBackground(pagePng, {
+      paddingPx: 0,
+      topPaddingPx: 0,
+      bottomPaddingPx: 0,
+    });
     return { pngBuffer, texSource };
   } finally {
     // 디버그 모드: PB_XELATEX_KEEP_WORKDIR=1 이면 workDir 을 삭제하지 않고 보존.

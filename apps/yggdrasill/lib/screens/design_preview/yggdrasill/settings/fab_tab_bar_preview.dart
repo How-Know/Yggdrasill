@@ -3314,18 +3314,59 @@ class FabStyleGlassPanel extends StatelessWidget {
   /// 라이트 모드에서 FAB 글래스 대신 공용 그룹 카드 배경(#F1F1F1)을 쓴다.
   final bool useGroupedCardBackgroundInLight;
 
+  /// 문제은행 우측 상단 양식·출력/필터 버튼을 감싸는 캡슐 배경.
+  final bool useTopButtonCapsuleBackground;
+
   const FabStyleGlassPanel({
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
     this.border,
     this.useGroupedCardBackgroundInLight = false,
+    this.useTopButtonCapsuleBackground = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final brightness = Theme.of(context).brightness;
+    if (useTopButtonCapsuleBackground) {
+      final isDark = brightness == Brightness.dark;
+      final capsuleColor = isDark
+          ? const Color(0xE610171A)
+          : Colors.white.withValues(alpha: 0.92);
+      final borderColor = isDark
+          ? const Color(0xFF355056).withValues(alpha: 0.62)
+          : Colors.black.withValues(alpha: 0.04);
+      final radius = BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius);
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
+              blurRadius: 28,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: capsuleColor,
+                borderRadius: radius,
+                border: Border.all(color: borderColor),
+              ),
+              padding: padding,
+              child: child,
+            ),
+          ),
+        ),
+      );
+    }
     final useGroupedCard =
         useGroupedCardBackgroundInLight && brightness == Brightness.light;
     final radius = BorderRadius.circular(

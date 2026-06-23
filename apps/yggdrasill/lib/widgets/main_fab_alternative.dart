@@ -10,7 +10,7 @@ import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 /// 홈 하단 **확인** FAB·M5 **질문 칩**이 같은 레이아웃 경로(`GestureDetector` → 고정 `SizedBox` → `Container`)를 쓰도록 통일.
 /// Scaffold FAB 슬롯과 본문 하단은 배치만 다를 뿐, 픽셀 치수는 동일해야 한다.
 class HomeBottomActionPill extends StatelessWidget {
-  static const double pillWidth = 140;
+  static const double pillWidth = 120;
   static const double pillHeight = 56;
   static const double pillRadius = 28;
 
@@ -296,10 +296,12 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
 
   Widget _buildPrimaryFabButton() {
     if (gradingModeActive.value) {
-      final action = homeGradingHistoryAction;
       return FabStyleActionButton(
         icon: Icons.history_rounded,
-        onPressed: action == null ? null : () => unawaited(action()),
+        onPressed: () {
+          final action = homeGradingHistoryAction;
+          if (action != null) unawaited(action());
+        },
       );
     }
     return AnimatedBuilder(
@@ -328,77 +330,74 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: gradingModeActive,
-      builder: (context, isGradingMode, _) {
+      builder: (context, _, __) {
         return ValueListenableBuilder<bool>(
           valueListenable: homeBatchConfirmFabVisible,
           builder: (context, showBatchConfirmFab, __) {
             return ValueListenableBuilder<int>(
               valueListenable: homeBatchConfirmPendingCount,
               builder: (context, pendingConfirmCount, ___) {
-                final shouldShowBatchConfirmFab =
-                    widget.showHomeBatchConfirmFab && showBatchConfirmFab;
-                final canRunBatchConfirm = shouldShowBatchConfirmFab &&
-                    pendingConfirmCount > 0 &&
-                    homeBatchConfirmAction != null;
-                final batchConfirmColor = isGradingMode
-                    ? FabTabBarTokens.previewConfirmActionColor
-                    : const Color(0xFF1B6B63);
-                final batchConfirmLabel = isGradingMode ? '반환' : '확인';
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (shouldShowBatchConfirmFab) ...[
-                      Opacity(
-                        opacity: canRunBatchConfirm ? 1.0 : 0.45,
-                        child: IgnorePointer(
-                          ignoring: !canRunBatchConfirm,
-                          child: HomeBottomActionPill(
-                            backgroundColor: batchConfirmColor,
-                            onTap: () async {
-                              final action = homeBatchConfirmAction;
-                              if (action == null) return;
-                              await action();
-                            },
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.check_rounded,
-                                  size: 21,
-                                  color: Colors.white,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  batchConfirmLabel,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                    ],
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.end,
+                    final shouldShowBatchConfirmFab =
+                        widget.showHomeBatchConfirmFab && showBatchConfirmFab;
+                    final canRunBatchConfirm = shouldShowBatchConfirmFab &&
+                        pendingConfirmCount > 0 &&
+                        homeBatchConfirmAction != null;
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        _buildPrimaryFabButton(),
+                        if (shouldShowBatchConfirmFab) ...[
+                          Opacity(
+                            opacity: canRunBatchConfirm ? 1.0 : 0.45,
+                            child: IgnorePointer(
+                              ignoring: !canRunBatchConfirm,
+                              child: HomeBottomActionPill(
+                                backgroundColor:
+                                    FabTabBarTokens.previewConfirmActionColor,
+                                onTap: () async {
+                                  final action = homeBatchConfirmAction;
+                                  if (action == null) return;
+                                  await action();
+                                },
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.check_rounded,
+                                      size: 21,
+                                      color: Colors.white,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '반환',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            _buildPrimaryFabButton(),
+                          ],
+                        ),
                       ],
-                    ),
-                  ],
+                    );
+                  },
                 );
               },
             );
           },
         );
-      },
-    );
   }
 
   Future<void> _openMemoAddDialog(BuildContext context) async {

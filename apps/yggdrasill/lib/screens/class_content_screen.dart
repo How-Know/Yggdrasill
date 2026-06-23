@@ -121,6 +121,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   final Set<String> _testGradingSavedHomeworkIds = <String>{};
   Timer? _rightSheetPreloadDebounce;
   String _lastRightSheetPreloadKey = '';
+  bool? _memoFloatingHiddenBeforeGrading;
   final FabStyleScreenTabBarOverlay _homeTabOverlay =
       FabStyleScreenTabBarOverlay();
 
@@ -168,6 +169,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     widget.printController?._detach();
     _homeTabOverlay.dispose();
     homeGradingHistoryAction = null;
+    _restoreMemoFloatingAfterGrading();
     final testGradingSessionToClear = rightSideSheetTestGradingSession.value;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       homeBatchConfirmFabVisible.value = false;
@@ -187,6 +189,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     super.dispose();
   }
 
+  void _syncMemoFloatingForGradingMode(bool active) {
+    if (active) {
+      _memoFloatingHiddenBeforeGrading ??= hideGlobalMemoFloatingBanners.value;
+      hideGlobalMemoFloatingBanners.value = true;
+      return;
+    }
+    _restoreMemoFloatingAfterGrading();
+  }
+
+  void _restoreMemoFloatingAfterGrading() {
+    final previous = _memoFloatingHiddenBeforeGrading;
+    if (previous == null) return;
+    hideGlobalMemoFloatingBanners.value = previous;
+    _memoFloatingHiddenBeforeGrading = null;
+  }
+
   void _setGradingMode(bool value) {
     if (_isGradingMode == value) return;
     setState(() {
@@ -196,6 +214,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     });
     gradingModeActive.value = value;
+    _syncMemoFloatingForGradingMode(value);
     if (value) {
       blockRightSideSheetOpen.value = false;
       _scheduleRightSheetAnswerPreload();
@@ -706,10 +725,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: FabStyleHomeScreenHeader(
-        dateTimeText: _formatDateWithWeekdayAndTime(headerDateTime),
+        dateTimeText: _isGradingMode
+            ? _formatDateWithWeekdayShort(headerDateTime)
+            : _formatDateWithWeekdayAndTime(headerDateTime),
         statsText: _isGradingMode
             ? '제출 $submittedCount'
             : '등원 $attendingCount',
+        secondaryText:
+            _isGradingMode ? _formatHourMinute(headerDateTime) : null,
         gradingStats: _isGradingMode,
         showAnchorDateHint: !isAttendanceAnchorToday(anchorDate),
         trailing: [
@@ -727,6 +750,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         ],
       ),
     );
+  }
+
+  double _homeStatusContentTopPadding(BuildContext context) {
+    const headerTopPadding = 8.0;
+    const headerPanelVerticalPadding = 12.0 * 2;
+    const headerBottomGap = 16.0;
+    const headerLineHeight =
+        FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+    return MediaQuery.paddingOf(context).top +
+        headerTopPadding +
+        headerPanelVerticalPadding +
+        headerLineHeight +
+        headerBottomGap;
   }
 
   @override
@@ -888,9 +924,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     )
                                   : ListView.separated(
                                       scrollDirection: Axis.horizontal,
-                                      padding: const EdgeInsets.fromLTRB(
+                                      padding: EdgeInsets.fromLTRB(
                                         24,
-                                        0,
+                                        _homeStatusContentTopPadding(context),
                                         24,
                                         0,
                                       ),
@@ -904,7 +940,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             height: ClassContentScreen
                                                 ._attendingCardHeight,
                                             decoration: BoxDecoration(
-                                              color: const Color(0xFF223131),
+                                              color: Theme.of(context)
+                                                          .brightness ==
+                                                      Brightness.dark
+                                                  ? const Color(0xFF223131)
+                                                  : const Color(0xFFE3E6E6),
                                               borderRadius:
                                                   BorderRadius.circular(999),
                                             ),
@@ -1214,6 +1254,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Widget _buildStudentColumn(BuildContext context, _AttendingStudent student) {
     final isReservedExpanded = _expandedReservedStudentId == student.id;
     const panelWidth = ClassContentScreen._studentColumnContentWidth;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final studentActionIconColor = panelStyle.icon;
     void toggleReservedPanel() {
       setState(() {
         _expandedReservedStudentId = isReservedExpanded ? null : student.id;
@@ -1259,7 +1303,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                 _onAddHomework(context, student.id),
                             icon: const Icon(Icons.add_rounded),
                             iconSize: 28,
-                            color: kDlgTextSub,
+                            color: studentActionIconColor,
                             splashRadius: 29,
                           ),
                         ),
@@ -1278,8 +1322,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     : Icons.inventory_2_outlined,
                               ),
                               iconSize: 25,
-                              color:
-                                  isReservedExpanded ? kDlgAccent : kDlgTextSub,
+                              color: isReservedExpanded
+                                  ? kDlgAccent
+                                  : studentActionIconColor,
                               splashRadius: 29,
                             ),
                           ),
@@ -1297,7 +1342,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               ),
                               icon: const Icon(Icons.assignment_rounded),
                               iconSize: 25,
-                              color: kDlgTextSub,
+                              color: studentActionIconColor,
                               splashRadius: 29,
                             ),
                           ),
@@ -5817,6 +5862,11 @@ String _formatDateShort(DateTime dt) {
 String _formatDateWithWeekdayShort(DateTime dt) {
   const week = ['월', '화', '수', '목', '금', '토', '일'];
   return '${_formatDateShort(dt)} (${week[dt.weekday - 1]})';
+}
+
+String _formatHourMinute(DateTime dt) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(dt.hour)}:${two(dt.minute)}';
 }
 
 String _formatDateRange(DateTime start, DateTime? end) {
@@ -15926,6 +15976,18 @@ class _AttendingButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final primaryTextColor = panelStyle.title;
+    final secondaryTextColor = panelStyle.label;
+    final tertiaryTextColor =
+        isDark ? Colors.white54 : const Color(0xFF8E8E93);
+    final deviceBadgeBackground = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : Colors.black.withValues(alpha: 0.05);
+    final deviceBadgeTextColor =
+        isDark ? Colors.white38 : const Color(0xFF6B6B6B);
     return MouseRegion(
       cursor:
           onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
@@ -15987,7 +16049,7 @@ class _AttendingButton extends StatelessWidget {
                               : null;
 
                           final nameStyle = TextStyle(
-                            color: isResting ? Colors.white54 : Colors.white,
+                            color: isResting ? tertiaryTextColor : primaryTextColor,
                             fontSize: 38,
                             fontWeight: FontWeight.w600,
                             height: 1.0,
@@ -16032,8 +16094,8 @@ class _AttendingButton extends StatelessWidget {
                                           children: [
                                             Text(
                                               infoLine.isEmpty ? '-' : infoLine,
-                                              style: const TextStyle(
-                                                color: Colors.white70,
+                                              style: TextStyle(
+                                                color: secondaryTextColor,
                                                 fontSize: 16,
                                                 height: 1.2,
                                                 fontWeight: FontWeight.w600,
@@ -16043,8 +16105,8 @@ class _AttendingButton extends StatelessWidget {
                                             ),
                                             Text(
                                               '등원 $arrivalText',
-                                              style: const TextStyle(
-                                                color: Colors.white54,
+                                              style: TextStyle(
+                                                color: tertiaryTextColor,
                                                 fontSize: 14,
                                                 height: 1.2,
                                                 fontWeight: FontWeight.w600,
@@ -16127,15 +16189,14 @@ class _AttendingButton extends StatelessWidget {
                                           padding: const EdgeInsets.symmetric(
                                               horizontal: 10, vertical: 4),
                                           decoration: BoxDecoration(
-                                            color:
-                                                Colors.white.withOpacity(0.12),
+                                            color: deviceBadgeBackground,
                                             borderRadius:
                                                 BorderRadius.circular(999),
                                           ),
                                           child: Text(
                                             '기기 $deviceLabel',
-                                            style: const TextStyle(
-                                              color: Colors.white38,
+                                            style: TextStyle(
+                                              color: deviceBadgeTextColor,
                                               fontSize: 12,
                                               height: 1.2,
                                               fontWeight: FontWeight.w500,

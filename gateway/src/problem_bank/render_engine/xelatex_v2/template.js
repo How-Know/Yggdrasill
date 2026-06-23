@@ -2745,12 +2745,12 @@ function renderDecoContinuationLine(
 }
 
 function renderRawBoxLatexEnvironment(lines) {
-  const raw = (lines || [])
+  const raw = normalizeLiteralEscapedNewlines((lines || [])
     .filter((line) => line !== BOX_PARAGRAPH_BREAK)
     .map((line) => String(line || '').trim())
     .filter(Boolean)
     .join('\n')
-    .trim();
+    .trim());
   if (!raw) return '';
   const envMatch = raw.match(/^\\begin\{(array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}[\s\S]*\\end\{\1\}$/);
   if (!envMatch) return '';
@@ -2759,7 +2759,7 @@ function renderRawBoxLatexEnvironment(lines) {
   //   - adjustbox 의 `max width` 는 자연폭이 \linewidth 보다 넓을 때만 비례 축소하므로,
   //     넘치지 않는 일반 수식은 손대지 않는다(표 오버플로우 처리와 동일 메커니즘).
   //   - 수동 줄바꿈/마커가 필요 없어 정렬 흔들림이 발생하지 않는다.
-  return `\\begin{center}\\adjustbox{max width=\\dimexpr\\linewidth-0.6em\\relax}{$\\displaystyle ${raw}$}\\end{center}`;
+  return `\\begin{center}\\adjustbox{max width=\\dimexpr\\linewidth-0.6em\\relax}{$\\displaystyle ${normalizeMathSegment(raw)}$}\\end{center}`;
 }
 
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
@@ -4812,6 +4812,13 @@ function renderIndependentSetGroupLatex(group, {
   lines.push('\\vspace{\\baselineskip}');
   for (let itemIdx = 0; itemIdx < items.length; itemIdx += 1) {
     const item = items[itemIdx];
+    const hasItemDisplayContent =
+      String(item?.stem || '').trim().length > 0
+      || (Array.isArray(item?.choices) && item.choices.length > 0)
+      || (Array.isArray(item?.objective_choices) && item.objective_choices.length > 0)
+      || (Array.isArray(item?.equations) && item.equations.length > 0)
+      || (Array.isArray(item?.figure_refs) && item.figure_refs.length > 0);
+    if (items.length === 1 && !hasItemDisplayContent) continue;
     if (itemIdx > 0) lines.push('\\vspace{\\baselineskip}');
     // 하위 독립 문항도 표/그림/보기 마커를 가질 수 있으므로 일반 문항 렌더 경로를 탄다.
     // 단순 smartTexLine 으로 처리하면 raw tabular preamble 이 수식 정규화되어 깨진다.
@@ -6406,6 +6413,7 @@ export function buildTexSource(question, options = {}) {
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
+    '\\providecommand{\\questionnumber}[1]{\\textbf{#1}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
     `  BoldFont = ${fontBold},`,
@@ -6555,6 +6563,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
+    '\\providecommand{\\questionnumber}[1]{\\textbf{#1}}',
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
     hangulFontDirective(fontRegularPath, fontFamily, fontBold),
