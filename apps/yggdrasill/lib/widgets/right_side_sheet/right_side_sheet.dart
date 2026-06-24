@@ -3166,6 +3166,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   final TextEditingController _searchCtrl = ImeAwareTextEditingController();
   final FocusNode _searchFocus = FocusNode();
   final GlobalKey _searchHeaderFieldKey = GlobalKey();
+  final GlobalKey _gradingSearchOverlayKey = GlobalKey();
+  double _gradingSearchOverlayHeight =
+      _topBarTopInset + _searchFieldHeight + 24;
   Timer? _searchSuggestDebounce;
   Timer? _searchBlurHideTimer;
   OverlayEntry? _searchSuggestionOverlayEntry;
@@ -3207,6 +3210,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _searchFocus.addListener(_handleSearchFocusChanged);
     _hydrateSessionState(force: true);
     unawaited(_loadRecentSearches().then((_) => _hydrateRecentSearchLabels()));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncGradingSearchOverlayHeight();
+    });
   }
 
   @override
@@ -5097,6 +5103,44 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
+  void _syncGradingSearchOverlayHeight() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box = _gradingSearchOverlayKey.currentContext?.findRenderObject()
+          as RenderBox?;
+      if (box == null || !box.hasSize) return;
+      final next = box.size.height;
+      if (next <= 0 || (next - _gradingSearchOverlayHeight).abs() < 0.5) {
+        return;
+      }
+      setState(() => _gradingSearchOverlayHeight = next);
+    });
+  }
+
+  Widget _buildGradingSearchOverlay() {
+    final fabStyle = _rightSheetFabColors(context);
+    return NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: (_) {
+        _syncGradingSearchOverlayHeight();
+        return false;
+      },
+      child: SizeChangedLayoutNotifier(
+        child: DecoratedBox(
+          key: _gradingSearchOverlayKey,
+          decoration: BoxDecoration(color: fabStyle.surface),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildSearchHeader(),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   String _actionLabel(RightSheetGradingSearchResult result) {
     if (result.isTestHomework) {
       return result.isSubmitted ? '채점 진입' : '제출 후 채점';
@@ -6753,7 +6797,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         child: OutlinedButton(
           onPressed: _actionBusy ? null : onTap,
           style: OutlinedButton.styleFrom(
-            backgroundColor: filled ? _rsAccent : fabStyle.panel,
+            backgroundColor: filled ? _rsAccent : Colors.transparent,
             side: BorderSide(color: filled ? _rsAccent : fabStyle.border),
             foregroundColor: filled ? Colors.white : fabStyle.text,
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 0),
@@ -6788,14 +6832,18 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
+  static const double _gradingBottomBarHeight = 75;
+  static const double _gradingAnswerListBottomInset = 4;
+  static const double _gradingBottomBarScrollPadding =
+      _gradingBottomBarHeight + _gradingAnswerListBottomInset;
+  static const double _gradingSheetHorizontalInset = 10;
+
   Widget _buildGradingBottomBar(RightSideSheetTestGradingSession session) {
     if (_answerListReadOnly) return const SizedBox.shrink();
-    final fabStyle = _rightSheetFabColors(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(4, 12, 0, 0),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: fabStyle.border)),
-      ),
+    return FabStyleGlassPanel(
+      useFabTabBarBackground: true,
+      borderRadius: BorderRadius.zero,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -6807,75 +6855,115 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
+  Widget _buildGradingAnswerBody({
+    required RightSideSheetTestGradingSession session,
+    required List<_RightSheetGradingPageVm> pages,
+    required double topScrollPadding,
+  }) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.only(
+              top: topScrollPadding,
+              bottom: _gradingBottomBarScrollPadding,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSessionHeader(session),
+                const SizedBox(height: 22),
+                if (pages.isNotEmpty) _buildAnswerList(pages),
+                if (pages.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Text(
+                      _wrongOnly && _baselineStates.isNotEmpty
+                          ? '첫 채점에서 틀렸거나 미풀이였던 문항이 없습니다.'
+                          : '검색 결과가 없습니다.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: _rsTextSub,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          left: -_gradingSheetHorizontalInset,
+          right: -_gradingSheetHorizontalInset,
+          bottom: 0,
+          child: _buildGradingBottomBar(session),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     _scheduleSuggestionOverlaySync();
     final fabStyle = _rightSheetFabColors(context);
     final session = widget.session;
     final pages = _visiblePages();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildSearchHeader(),
-          const SizedBox(height: 24),
-          Expanded(
-            child: session == null
-                ? Container(
-                    decoration: BoxDecoration(
-                      color: fabStyle.panel,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: fabStyle.border),
-                    ),
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      '테스트 채점 세션이 없습니다.\n수업 화면에서 테스트 제출 카드를 눌러 채점을 시작하세요.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: fabStyle.subText,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        height: 1.4,
-                      ),
-                    ),
-                  )
-                : Column(
-                    children: [
-                      Expanded(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _buildSessionHeader(session),
-                              const SizedBox(height: 22),
-                              if (pages.isNotEmpty) _buildAnswerList(pages),
-                              if (pages.isEmpty)
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 24),
-                                  child: Text(
-                                    _wrongOnly && _baselineStates.isNotEmpty
-                                        ? '첫 채점에서 틀렸거나 미풀이였던 문항이 없습니다.'
-                                        : '검색 결과가 없습니다.',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: _rsTextSub,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12.5,
-                                    ),
-                                  ),
-                                ),
-                              const SizedBox(height: 12),
-                            ],
-                          ),
-                        ),
-                      ),
-                      _buildGradingBottomBar(session),
-                      const SizedBox(height: 8),
-                    ],
+
+    if (session == null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildSearchHeader(),
+            const SizedBox(height: 24),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: fabStyle.panel,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: fabStyle.border),
+                ),
+                alignment: Alignment.center,
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  '테스트 채점 세션이 없습니다.\n수업 화면에서 테스트 제출 카드를 눌러 채점을 시작하세요.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: fabStyle.subText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    height: 1.4,
                   ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    _syncGradingSearchOverlayHeight();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 0),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: _buildGradingAnswerBody(
+              session: session,
+              pages: pages,
+              topScrollPadding: _gradingSearchOverlayHeight,
+            ),
+          ),
+          Positioned(
+            top: 0,
+            left: -_gradingSheetHorizontalInset,
+            right: -_gradingSheetHorizontalInset,
+            child: _buildGradingSearchOverlay(),
           ),
         ],
       ),

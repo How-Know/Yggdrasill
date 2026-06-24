@@ -179,8 +179,18 @@ AsyncUiAction? homeBatchConfirmAction;
 /// 홈 채점 모드 — 채점 이력 다이얼로그 실행 액션.
 AsyncUiAction? homeGradingHistoryAction;
 
+/// 시험모드 — 하단 FAB 시험 버튼에서 시험일정 다이얼로그 실행.
+AsyncUiAction? examScheduleAction;
+
+/// 시험모드 — 시험일정 다이얼로그 상단 기출 버튼 실행.
+AsyncUiAction? examPastPapersAction;
+
+/// 시험모드 — 시험일정 다이얼로그 상단 설정 버튼 실행.
+AsyncUiAction? examSettingsAction;
+
 /// 왼쪽 출석 슬라이드시트·홈(수업 내용)이 함께 보는 기준일 (date-only, 로컬).
-final ValueNotifier<DateTime> attendanceAnchorDateNotifier = ValueNotifier<DateTime>(
+final ValueNotifier<DateTime> attendanceAnchorDateNotifier =
+    ValueNotifier<DateTime>(
   DateTime(
     DateTime.now().year,
     DateTime.now().month,
@@ -188,8 +198,7 @@ final ValueNotifier<DateTime> attendanceAnchorDateNotifier = ValueNotifier<DateT
   ),
 );
 
-DateTime attendanceDateOnly(DateTime d) =>
-    DateTime(d.year, d.month, d.day);
+DateTime attendanceDateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
 bool isAttendanceAnchorToday(DateTime anchor) {
   final today = attendanceDateOnly(DateTime.now());

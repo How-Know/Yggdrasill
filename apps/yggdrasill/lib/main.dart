@@ -818,7 +818,8 @@ void main() async {
       minimumSize: kMinSize,
       size: (fullscreen || maximizeFlag) ? null : kMinSize,
       center: !(fullscreen || maximizeFlag),
-      backgroundColor: _windowSurfaceForThemeMode(AppThemeController.mode.value),
+      backgroundColor:
+          _windowSurfaceForThemeMode(AppThemeController.mode.value),
     );
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
@@ -2196,9 +2197,49 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _indicatorCtrl;
 
+  Future<void> _openExamScheduleDialog() async {
+    final navCtx = rootNavigatorKey.currentContext;
+    if (navCtx == null) return;
+    final openFlag = ExamModeService.instance.examScheduleDialogOpen;
+    if (openFlag.value) return;
+    openFlag.value = true;
+    try {
+      await showDialog(
+        context: navCtx,
+        barrierDismissible: false,
+        builder: (ctx) => const _ExamScheduleDialog(),
+      );
+    } finally {
+      if (openFlag.value) {
+        openFlag.value = false;
+      }
+    }
+  }
+
+  Future<void> _openPastExamPapersDialog() async {
+    final nav = rootNavigatorKey.currentState;
+    if (nav == null) return;
+    await showDialog<void>(
+      context: nav.context,
+      builder: (ctx) => const PastExamPapersDialog(),
+    );
+  }
+
+  Future<void> _openExamSettingsDialog() async {
+    final navCtx = rootNavigatorKey.currentContext;
+    if (navCtx == null) return;
+    await showDialog(
+      context: navCtx,
+      builder: (ctx) => const _ExamSettingsDialog(),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    examScheduleAction = _openExamScheduleDialog;
+    examPastPapersAction = _openPastExamPapersDialog;
+    examSettingsAction = _openExamSettingsDialog;
     _indicatorCtrl = AnimationController(vsync: this);
     final double v0 = ExamModeService.instance.speed.value.clamp(1.0, 30.0);
     final int sec0 = (31 - v0).clamp(1.0, 30.0).round();
@@ -2213,6 +2254,15 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
 
   @override
   void dispose() {
+    if (identical(examScheduleAction, _openExamScheduleDialog)) {
+      examScheduleAction = null;
+    }
+    if (identical(examPastPapersAction, _openPastExamPapersDialog)) {
+      examPastPapersAction = null;
+    }
+    if (identical(examSettingsAction, _openExamSettingsDialog)) {
+      examSettingsAction = null;
+    }
     _indicatorCtrl.dispose();
     super.dispose();
   }
@@ -2226,377 +2276,57 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
           valueListenable: ExamModeService.instance.isOn,
           builder: (context, isOn, _) {
             if (!isOn) return const SizedBox.shrink();
-            return ValueListenableBuilder<bool>(
-              valueListenable:
-                  ExamModeService.instance.suppressExamActionCluster,
-              builder: (context, suppressFabCluster, _) {
-                return Stack(
-                  children: [
-                    // 하단 전역 인디케이터(직선, 밝기 시퀀셜 애니메이션)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      height: 3,
-                      child: ValueListenableBuilder<Color>(
-                        valueListenable:
-                            ExamModeService.instance.indicatorColor,
-                        builder: (context, color, _) {
-                          return ValueListenableBuilder<String>(
-                            valueListenable: ExamModeService.instance.effect,
-                            builder: (context, effect, __) {
-                              return AnimatedBuilder(
-                                animation: _indicatorCtrl,
-                                builder: (context, _) {
-                                  if (effect == 'breath') {
-                                    final t = (math.sin(_indicatorCtrl.value *
-                                                2 *
-                                                math.pi) +
-                                            1) /
-                                        2; // 0..1
-                                    final opacity = 0.2 + 0.8 * t; // 0.2..1.0
-                                    return Container(
-                                        color: color.withOpacity(opacity));
-                                  }
-                                  if (effect == 'solid') {
-                                    return Container(
-                                        color: color.withOpacity(0.85));
-                                  }
-                                  return RepaintBoundary(
-                                      child: _AnimatedLinearGlow(
-                                    progress: _indicatorCtrl.value,
-                                    baseColor: color,
-                                    dimOpacity: 0.35,
-                                    glowOpacity: 1.0,
-                                    bandFraction: 0.18,
-                                  ));
-                                },
+            return Stack(
+              children: [
+                // 하단 전역 인디케이터(직선, 밝기 시퀀셜 애니메이션)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 3,
+                  child: ValueListenableBuilder<Color>(
+                    valueListenable: ExamModeService.instance.indicatorColor,
+                    builder: (context, color, _) {
+                      return ValueListenableBuilder<String>(
+                        valueListenable: ExamModeService.instance.effect,
+                        builder: (context, effect, __) {
+                          return AnimatedBuilder(
+                            animation: _indicatorCtrl,
+                            builder: (context, _) {
+                              if (effect == 'breath') {
+                                final t = (math.sin(
+                                          _indicatorCtrl.value * 2 * math.pi,
+                                        ) +
+                                        1) /
+                                    2; // 0..1
+                                final opacity = 0.2 + 0.8 * t; // 0.2..1.0
+                                return Container(
+                                  color: color.withOpacity(opacity),
+                                );
+                              }
+                              if (effect == 'solid') {
+                                return Container(
+                                    color: color.withOpacity(0.85));
+                              }
+                              return RepaintBoundary(
+                                child: _AnimatedLinearGlow(
+                                  progress: _indicatorCtrl.value,
+                                  baseColor: color,
+                                  dimOpacity: 0.35,
+                                  glowOpacity: 1.0,
+                                  bandFraction: 0.18,
+                                ),
                               );
                             },
                           );
                         },
-                      ),
-                    ),
-                    // 하단 FAB 클러스터(레일 기준 왼쪽 정렬, 레일과 48 간격)
-                    if (!suppressFabCluster)
-                      Positioned(
-                        left:
-                            (NavigationRailTheme.of(context).minWidth ?? 84.0) +
-                                48,
-                        bottom: 30,
-                        child: _ExamFabCluster(),
-                      ),
-                  ],
-                );
-              },
+                      );
+                    },
+                  ),
+                ),
+              ],
             );
           },
-        ),
-      ),
-    );
-  }
-}
-
-class _ExamFabCluster extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          // 이전 0xCC 대비 알파 낮춤 — 뒤 화면이 더 비치도록
-          color: const Color(0x85202024),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white10),
-          boxShadow: const [
-            BoxShadow(color: Colors.black38, blurRadius: 10, spreadRadius: 2)
-          ],
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ValueListenableBuilder<bool>(
-                valueListenable:
-                    ExamModeService.instance.examScheduleDialogOpen,
-                builder: (context, scheduleDlgOpen, _) {
-                  return Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _ExamActionButton(
-                        icon: Icons.event_note,
-                        label: '일정',
-                        onPressed: scheduleDlgOpen
-                            ? null
-                            : () async {
-                                final navCtx = rootNavigatorKey.currentContext;
-                                if (navCtx == null) return;
-                                final openFlag = ExamModeService
-                                    .instance.examScheduleDialogOpen;
-                                if (openFlag.value) return;
-                                openFlag.value = true;
-                                try {
-                                  await showDialog(
-                                    context: navCtx,
-                                    barrierDismissible: false,
-                                    builder: (ctx) =>
-                                        const _ExamScheduleDialog(),
-                                  );
-                                } finally {
-                                  if (openFlag.value) {
-                                    openFlag.value = false;
-                                  }
-                                }
-                              },
-                      ),
-                      const SizedBox(width: 12),
-                      _ExamActionButton(
-                          icon: Icons.assignment_turned_in,
-                          label: '기출',
-                          onPressed: scheduleDlgOpen
-                              ? null
-                              : () async {
-                                  final nav = rootNavigatorKey.currentState;
-                                  if (nav == null) return;
-                                  await showDialog<void>(
-                                    context: nav.context,
-                                    builder: (ctx) =>
-                                        const PastExamPapersDialog(),
-                                  );
-                                }),
-                      const SizedBox(width: 12),
-                      // 설정 버튼은 아이콘만
-                      _ExamIconOnlyButton(
-                          icon: Icons.settings,
-                          onPressed: scheduleDlgOpen
-                              ? null
-                              : () async {
-                                  await showDialog(
-                                      context: rootNavigatorKey.currentContext!,
-                                      builder: (ctx) =>
-                                          const _ExamSettingsDialog());
-                                }),
-                    ],
-                  );
-                },
-              ),
-              const SizedBox(width: 12),
-              // 전광판: 저장된 시험일정 순환 표시
-              _ExamTickerBoard(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ExamTickerBoard extends StatefulWidget {
-  @override
-  State<_ExamTickerBoard> createState() => _ExamTickerBoardState();
-}
-
-class _ExamTickerBoardState extends State<_ExamTickerBoard> {
-  List<Map<String, dynamic>> _items = [];
-  int _index = 0;
-  Timer? _rotateTimer;
-  Timer? _reloadTimer;
-  final double _fixedWidth = 286; // 고정 너비 (기존 220 대비 ~30% 확대)
-  int? _hoverIndex;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    _rotateTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!mounted || _items.isEmpty) return;
-      setState(() => _index = (_index + 1) % _items.length);
-    });
-    // 주기적 리로드
-    _reloadTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
-      if (!mounted) return;
-      await _load();
-    });
-  }
-
-  Future<void> _load() async {
-    final rows = await AcademyDbService.instance
-        .loadAllExamSchedulesForSeason(DataManager.instance.activeExamSeasonId);
-    final list = List<Map<String, dynamic>>.from(rows);
-    list.sort((a, b) =>
-        ((a['date'] as String?) ?? '').compareTo((b['date'] as String?) ?? ''));
-    if (!mounted) return;
-    setState(() {
-      _items = list;
-      if (_items.isEmpty) {
-        _index = 0;
-      } else if (_index >= _items.length) {
-        _index = _items.length - 1;
-      }
-      if (_hoverIndex != null && _hoverIndex! >= _items.length) {
-        _hoverIndex = null;
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _rotateTimer?.cancel();
-    _reloadTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_items.isEmpty) {
-      return SizedBox(
-        width: _fixedWidth,
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Text('등록된 시험일정 없음', style: TextStyle(color: Colors.white38)),
-        ),
-      );
-    }
-    final safeIndex = _index < _items.length ? _index : 0;
-    final it = _items[safeIndex];
-    final date = DateTime.tryParse(it['date'] as String? ?? '');
-    String names = '';
-    try {
-      final raw = it['names_json'] as String?;
-      if (raw != null && raw.isNotEmpty) {
-        final list =
-            (jsonDecode(raw) as List).map((e) => e.toString()).toList();
-        names = list.join(' / ');
-      }
-    } catch (_) {}
-    final label =
-        '${it['school']} ${it['grade']}학년 · ${date != null ? '${date.month}.${date.day}' : ''}${names.isNotEmpty ? ' · $names' : ''}';
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hoverIndex = safeIndex),
-      onExit: (_) => setState(() => _hoverIndex = null),
-      child: SizedBox(
-        width: _fixedWidth,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: _hoverIndex == safeIndex && names.isNotEmpty
-              ? Text('범위: $names',
-                  style: const TextStyle(color: Colors.white60),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis)
-              : Text(label,
-                  style: const TextStyle(color: Colors.white70),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-        ),
-      ),
-    );
-  }
-}
-
-class _ExamActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-  const _ExamActionButton(
-      {required this.icon, required this.label, required this.onPressed});
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onPressed != null;
-    return SizedBox(
-      height: 49, // 10% 감소
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-        opacity: enabled ? 1.0 : 0.45,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                spreadRadius: 1,
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(24),
-              onTap: onPressed,
-              child: Ink(
-                decoration: const ShapeDecoration(
-                  color: Color(0xFF1B6B63),
-                  shape: StadiumBorder(
-                      side: BorderSide(color: Colors.transparent, width: 0)),
-                ),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, color: Colors.white, size: 22),
-                    const SizedBox(width: 9),
-                    Text(label,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700)),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ExamIconOnlyButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback? onPressed;
-  const _ExamIconOnlyButton({required this.icon, required this.onPressed});
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onPressed != null;
-    return SizedBox(
-      height: 49, // 10% 감소
-      width: 49,
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-        opacity: enabled ? 1.0 : 0.45,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                spreadRadius: 1,
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(24),
-              onTap: onPressed,
-              child: Ink(
-                decoration: const ShapeDecoration(
-                  color: Color(0xFF1B6B63),
-                  shape: StadiumBorder(
-                      side: BorderSide(color: Colors.transparent, width: 0)),
-                ),
-                child: Center(child: Icon(icon, color: Colors.white, size: 22)),
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -3718,6 +3448,24 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    _examScheduleHeaderChip(
+                      icon: Icons.assignment_turned_in,
+                      label: '기출',
+                      onPressed: () {
+                        final action = examPastPapersAction;
+                        if (action != null) unawaited(action());
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    _examScheduleHeaderChip(
+                      icon: Icons.settings,
+                      label: '설정',
+                      onPressed: () {
+                        final action = examSettingsAction;
+                        if (action != null) unawaited(action());
+                      },
+                    ),
+                    const SizedBox(width: 8),
                     _examScheduleHeaderChip(
                       icon: Icons.refresh_rounded,
                       label: '새로고침',

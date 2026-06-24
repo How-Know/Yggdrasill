@@ -3317,6 +3317,12 @@ class FabStyleGlassPanel extends StatelessWidget {
   /// 문제은행 우측 상단 양식·출력/필터 버튼을 감싸는 캡슐 배경.
   final bool useTopButtonCapsuleBackground;
 
+  /// [FabStyleTabBar] 외곽 글래스( surface · blur · shadow )와 동일.
+  final bool useFabTabBarBackground;
+
+  /// null이면 FAB 탭바 기본 알약 radius. 시트 하단 풋바 등은 [BorderRadius.zero].
+  final BorderRadiusGeometry? borderRadius;
+
   const FabStyleGlassPanel({
     super.key,
     required this.child,
@@ -3324,6 +3330,8 @@ class FabStyleGlassPanel extends StatelessWidget {
     this.border,
     this.useGroupedCardBackgroundInLight = false,
     this.useTopButtonCapsuleBackground = false,
+    this.useFabTabBarBackground = false,
+    this.borderRadius,
   });
 
   @override
@@ -3359,6 +3367,34 @@ class FabStyleGlassPanel extends StatelessWidget {
                 color: capsuleColor,
                 borderRadius: radius,
                 border: Border.all(color: borderColor),
+              ),
+              padding: padding,
+              child: child,
+            ),
+          ),
+        ),
+      );
+    }
+    if (useFabTabBarBackground) {
+      final radius =
+          borderRadius ?? BorderRadius.circular(FabTabBarTokens.fabBarHeight / 2);
+      final isFlatFooter = borderRadius == BorderRadius.zero;
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: isFlatFooter ? const [] : palette.boxShadows,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: radius,
               ),
               padding: padding,
               child: child,

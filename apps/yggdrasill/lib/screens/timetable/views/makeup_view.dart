@@ -4,14 +4,14 @@ import '../../../services/data_manager.dart';
 import '../../../models/session_override.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
-import '../../../theme/ygg_semantic_colors.dart';
 import '../../../widgets/dialog_tokens.dart';
+import '../../../widgets/utility_glass_dialog_shell.dart';
 
-const Color _mkFieldBg = Color(0xFF15171C);
-const Color _mkBorder = Color(0xFF223131);
-const Color _mkText = Color(0xFFEAF2F2);
-const Color _mkTextSub = Color(0xFF9FB3B3);
-const Color _mkAccent = Color(0xFF33A373);
+const Color _mkFieldBg = kDlgFieldBg;
+const Color _mkBorder = kDlgBorder;
+const Color _mkText = kDlgText;
+const Color _mkTextSub = kDlgTextSub;
+const Color _mkAccent = kDlgAccent;
 
 /// 시간 행과 동일한 `fontSize`, 라벨·본문 베이스라인 정렬 (`Text.rich`)
 Widget _makeupReasonRichLine(
@@ -54,10 +54,31 @@ Widget _makeupReasonRichLine(
 }
 
 class MakeupView extends StatefulWidget {
-  const MakeupView({super.key});
+  const MakeupView({
+    super.key,
+    this.embeddedInGlassShell = false,
+  });
+
+  /// [UtilityGlassDialogShell] 안에 넣을 때 true — 자체 헤더/배경 생략.
+  final bool embeddedInGlassShell;
 
   @override
   State<MakeupView> createState() => _MakeupViewState();
+}
+
+Future<void> showMakeupManagementDialog(
+  BuildContext context, {
+  double? maxWidth,
+  double? maxHeight,
+}) {
+  return showUtilityGlassBottomSheet(
+    context: context,
+    title: '보강 관리',
+    icon: Icons.event_repeat_rounded,
+    maxWidth: maxWidth,
+    maxHeight: maxHeight,
+    child: MakeupView(embeddedInGlassShell: true),
+  );
 }
 
 class _MakeupViewState extends State<MakeupView> {
@@ -77,19 +98,32 @@ class _MakeupViewState extends State<MakeupView> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: context.yggSurfaceBase,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(26, 26, 26, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    final padding = widget.embeddedInGlassShell
+        ? const EdgeInsets.fromLTRB(18, 12, 18, 16)
+        : const EdgeInsets.fromLTRB(26, 26, 26, 16);
+
+    final body = Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (widget.embeddedInGlassShell)
+            Center(child: _buildModeTabs())
+          else
             _buildHeader(context),
-            const SizedBox(height: 16),
-            Expanded(child: _buildContent()),
-          ],
-        ),
+          SizedBox(height: widget.embeddedInGlassShell ? 12 : 16),
+          Expanded(child: _buildContent()),
+        ],
       ),
+    );
+
+    if (widget.embeddedInGlassShell) {
+      return body;
+    }
+
+    return ColoredBox(
+      color: kDlgBg,
+      child: body,
     );
   }
 
@@ -169,9 +203,9 @@ class _MakeupViewState extends State<MakeupView> {
       width: 180,
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF151C21),
+          color: kDlgFieldBg,
           borderRadius: BorderRadius.circular(height / 2),
-          border: Border.all(color: Colors.transparent),
+          border: Border.all(color: kDlgBorder),
         ),
         padding: const EdgeInsets.all(3),
         child: LayoutBuilder(
@@ -188,11 +222,11 @@ class _MakeupViewState extends State<MakeupView> {
                   width: tabWidth,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1B6B63),
+                      color: kDlgAccent,
                       borderRadius: BorderRadius.circular(14),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.2),
+                          color: Colors.black.withValues(alpha: 0.2),
                           blurRadius: 4,
                           offset: const Offset(0, 2),
                         ),
@@ -214,9 +248,7 @@ class _MakeupViewState extends State<MakeupView> {
                           child: AnimatedDefaultTextStyle(
                             duration: const Duration(milliseconds: 180),
                             style: TextStyle(
-                              color: selected
-                                  ? Colors.white
-                                  : const Color(0xFF7E8A8A),
+                              color: selected ? Colors.white : kDlgTextSub,
                               fontWeight: FontWeight.w600,
                               fontSize: 13,
                             ),
@@ -295,15 +327,15 @@ class _MakeupViewState extends State<MakeupView> {
               ),
             ),
             const SizedBox(width: 12),
-            ElevatedButton.icon(
+            FilledButton.icon(
               onPressed: _onAddMakeupPressed,
-              icon: const Icon(Icons.add, size: 18),
+              icon: const Icon(Icons.add_rounded, size: 18),
               label: const Text(
                 '추가 수업',
-                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1B6B63),
+              style: FilledButton.styleFrom(
+                backgroundColor: kDlgAccent,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -320,10 +352,10 @@ class _MakeupViewState extends State<MakeupView> {
         const SizedBox(height: 16),
         Expanded(
           child: rows.isEmpty
-              ? const Center(
+              ? Center(
                   child: Text(
                     '항목이 없습니다',
-                    style: TextStyle(color: Colors.white38, fontSize: 16),
+                    style: TextStyle(color: kDlgTextSub, fontSize: 15),
                   ),
                 )
               : ListView.separated(
@@ -410,15 +442,15 @@ class _MakeupViewState extends State<MakeupView> {
               ),
             ),
             const SizedBox(width: 12),
-            ElevatedButton.icon(
+            FilledButton.icon(
               onPressed: _onAddMakeupPressed,
-              icon: const Icon(Icons.add, size: 18),
+              icon: const Icon(Icons.add_rounded, size: 18),
               label: const Text(
                 '추가 수업',
-                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1B6B63),
+              style: FilledButton.styleFrom(
+                backgroundColor: kDlgAccent,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -435,10 +467,10 @@ class _MakeupViewState extends State<MakeupView> {
         const SizedBox(height: 14),
         Expanded(
           child: canceled.isEmpty
-              ? const Center(
+              ? Center(
                   child: Text(
                     '삭제된 항목이 없습니다',
-                    style: TextStyle(color: Colors.white38, fontSize: 16),
+                    style: TextStyle(color: kDlgTextSub, fontSize: 15),
                   ),
                 )
               : ListView.separated(
@@ -477,9 +509,9 @@ class _MonthToolbar extends StatelessWidget {
         '${monthStart.year}.${monthStart.month.toString().padLeft(2, '0')}';
 
     final baseTextStyle = TextStyle(
-      color: const Color(0xFFEAF2F2),
-      fontSize: compact ? 18 : 24,
-      fontWeight: FontWeight.bold,
+      color: kDlgText,
+      fontSize: compact ? 16 : 20,
+      fontWeight: FontWeight.w800,
     );
 
     return Row(
@@ -487,7 +519,7 @@ class _MonthToolbar extends StatelessWidget {
       children: [
         IconButton(
           onPressed: onPrev,
-          icon: const Icon(Icons.chevron_left, color: Colors.white70),
+          icon: Icon(Icons.chevron_left, color: kDlgTextSub),
           tooltip: '이전 달',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
@@ -506,7 +538,7 @@ class _MonthToolbar extends StatelessWidget {
         const SizedBox(width: 10),
         IconButton(
           onPressed: onNext,
-          icon: const Icon(Icons.chevron_right, color: Colors.white70),
+          icon: Icon(Icons.chevron_right, color: kDlgTextSub),
           tooltip: '다음 달',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
@@ -531,7 +563,7 @@ class _MonthToolbar extends StatelessWidget {
             );
             if (picked != null) onPickMonth?.call(picked);
           },
-          icon: const Icon(Icons.date_range, size: 20, color: Colors.white54),
+          icon: Icon(Icons.date_range, size: 20, color: kDlgTextSub),
           padding: EdgeInsets.zero,
           tooltip: '달력',
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
@@ -561,9 +593,9 @@ class _PlannedTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(22, 12, 12, 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A2325),
+        color: kDlgPanelBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: kDlgBorder),
       ),
       constraints: const BoxConstraints(minHeight: 96),
       child: Column(
@@ -581,9 +613,9 @@ class _PlannedTile extends StatelessWidget {
                       .student
                       .name,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
+                    color: kDlgText,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -664,8 +696,8 @@ class _PlannedTile extends StatelessWidget {
               Text(
                 makeupText,
                 style: const TextStyle(
-                  color: Color(0xFF33A373),
-                  fontSize: 18,
+                  color: kDlgAccent,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -680,8 +712,8 @@ class _PlannedTile extends StatelessWidget {
                 Text(
                   origText,
                   style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 18,
+                    color: kDlgTextSub,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -689,12 +721,12 @@ class _PlannedTile extends StatelessWidget {
               const Spacer(),
               Text(
                 '기간: ${duration}분',
-                style: const TextStyle(color: Colors.white54, fontSize: 13),
+                style: TextStyle(color: kDlgTextSub, fontSize: 12),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          _makeupReasonRichLine(item.changeReason, fontSize: 18),
+          _makeupReasonRichLine(item.changeReason, fontSize: 15),
         ],
       ),
     );
@@ -711,10 +743,9 @@ class _CompletedTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: context.yggSurfaceBase,
+        color: kDlgFieldBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.transparent),
-        boxShadow: const [],
+        border: Border.all(color: kDlgBorder),
       ),
       constraints: const BoxConstraints(minHeight: 96),
       child: Column(
@@ -737,8 +768,8 @@ class _CompletedTile extends StatelessWidget {
           Text(
             isAbsent ? '결석' : '출석 완료',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
-              fontSize: 15,
+              color: kDlgTextSub,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -896,9 +927,9 @@ class _OverrideTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(22, 12, 12, 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A2325),
+        color: kDlgPanelBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: kDlgBorder),
       ),
       constraints: const BoxConstraints(minHeight: 96),
       child: Column(
@@ -910,9 +941,9 @@ class _OverrideTile extends StatelessWidget {
                 child: Text(
                   studentName,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
+                    color: kDlgText,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
@@ -940,8 +971,8 @@ class _OverrideTile extends StatelessWidget {
               Text(
                 repl != null ? _fmt(repl) : '-',
                 style: const TextStyle(
-                  color: Color(0xFF33A373),
-                  fontSize: 18,
+                  color: kDlgAccent,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -956,8 +987,8 @@ class _OverrideTile extends StatelessWidget {
                 Text(
                   _fmt(original),
                   style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 18,
+                    color: kDlgTextSub,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -966,12 +997,12 @@ class _OverrideTile extends StatelessWidget {
               if (item.durationMinutes != null)
                 Text(
                   '기간: ${item.durationMinutes}분',
-                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                  style: TextStyle(color: kDlgTextSub, fontSize: 12),
                 ),
             ],
           ),
           const SizedBox(height: 8),
-          _makeupReasonRichLine(item.changeReason, fontSize: 18),
+          _makeupReasonRichLine(item.changeReason, fontSize: 15),
         ],
       ),
     );
@@ -1000,7 +1031,7 @@ class _ActionButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         child: Padding(
           padding: const EdgeInsets.all(6.0),
-          child: Icon(icon, size: 18, color: color ?? Colors.white54),
+          child: Icon(icon, size: 18, color: color ?? kDlgTextSub),
         ),
       ),
     );

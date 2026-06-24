@@ -13,6 +13,7 @@ import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
 import '../../utils/homework_page_text.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/home_header_weather_icon.dart';
 import '../../widgets/resource_textbook_card.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
@@ -32,31 +33,32 @@ const double _kGradingCardMinWidth = 108.0;
 const double _kGradingCardMaxWidth = 396.0;
 const double _kGradingHomeworkRowTopInset = 24.0;
 const double _kGradingAnswerRailHorizontalPadding = 24.0;
+const double _kGradingAnswerRailHeaderGap = 12.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(0, 24, 24, 24);
 const String _kGradingAnswerBookCategory = 'textbook';
 const List<String> _kGradingAnswerGradeOrder = [
-  '초1',
-  '초2',
-  '초3',
-  '초4',
-  '초5',
-  '초6',
-  '중1',
-  '중2',
-  '중3',
-  '고1',
-  '고2',
-  '고3',
-  'N수',
+  '\uCD081',
+  '\uCD082',
+  '\uCD083',
+  '\uCD084',
+  '\uCD085',
+  '\uCD086',
+  '\uC9111',
+  '\uC9112',
+  '\uC9113',
+  '\uACE01',
+  '\uACE02',
+  '\uACE03',
+  'N\uC218',
 ];
 
-/// 채점 카드 하단: 과제 코드(ABCD1234) 우선, 없으면 순번(orderIndex+1).
+/// ?? ?? ???: ?? ??(ABCD1234) ???, ????????(orderIndex+1).
 String _gradingCardAssignmentNumberLabel(HomeworkItem hw) {
   final raw = (hw.assignmentCode ?? '').trim().toUpperCase();
   if (RegExp(r'^[A-Z]{4}[0-9]{4}$').hasMatch(raw)) {
     return raw;
   }
-  return '과제 ${hw.orderIndex + 1}';
+  return '\uACFC\uC81C ${hw.orderIndex + 1}';
 }
 
 typedef GradingGroupTapCallback = Future<void> Function(
@@ -73,11 +75,19 @@ class GradingModePage extends StatefulWidget {
   final GradingGroupTapCallback? onHomeworkCardTap;
   final Map<({String studentId, String itemId}), bool> pendingConfirms;
   final void Function(String studentId, String itemId)? onTogglePending;
+  final String headerDateText;
+  final String headerTimeText;
+  final String headerSubmittedText;
+  final bool showAnchorDateHint;
 
   const GradingModePage({
     super.key,
     required this.attendingStudentIds,
     required this.studentNamesById,
+    required this.headerDateText,
+    required this.headerTimeText,
+    required this.headerSubmittedText,
+    this.showAnchorDateHint = false,
     this.onSubmittedCardTap,
     this.onHomeworkCardTap,
     this.pendingConfirms = const <({String studentId, String itemId}), bool>{},
@@ -201,7 +211,21 @@ class _GradingModePageState extends State<GradingModePage> {
                           top: 0,
                           bottom: 0,
                           width: railWidth,
-                          child: _buildAnswerBookRail(),
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              top: MediaQuery.paddingOf(context).top + 8,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _buildGradingRailHeader(),
+                                const SizedBox(
+                                  height: _kGradingAnswerRailHeaderGap,
+                                ),
+                                Expanded(child: _buildAnswerBookRail()),
+                              ],
+                            ),
+                          ),
                         ),
                       ],
                     );
@@ -217,11 +241,11 @@ class _GradingModePageState extends State<GradingModePage> {
 
   double _resolveAnswerRailWidth(BoxConstraints constraints) {
     final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 1200.0;
-    if (width < 820) return 168.0;
-    return (width * 0.2).clamp(190.0, 280.0).toDouble();
+    if (width < 820) return 248.0;
+    return (width * 0.2).clamp(248.0, 280.0).toDouble();
   }
 
-  /// 세로 공간을 반씩 나눠 제출(상단)·숙제(하단) 행 카드 높이를 계산한다.
+  /// ??? ?????? ??? ???(???)????(???) ???? ??????????.
   _GradingCardLayout _resolveCardLayoutHorizontal(
     BoxConstraints constraints,
     double fallbackViewportHeight,
@@ -310,6 +334,116 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
+  Widget _buildGradingRailHeader() {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle);
+    final statsStyle = FabTabBarTokens.previewAcademyLabelStyle(panelStyle)
+        .copyWith(
+      color: brightness == Brightness.light
+          ? const Color(0xFF1976D2)
+          : const Color(0xFF8FB3FF),
+      fontWeight: FontWeight.w700,
+    );
+    const textHeightBehavior = TextHeightBehavior(
+      applyHeightToFirstAscent: false,
+      applyHeightToLastDescent: false,
+    );
+    const titleLineHeight =
+        FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+
+    return FabStyleGlassPanel(
+      useTopButtonCapsuleBackground: brightness == Brightness.light,
+      useFabTabBarBackground: brightness == Brightness.dark,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              SizedBox(
+                width: 58,
+                height: titleLineHeight,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: HomeHeaderWeatherIcon(
+                    iconSize: 30,
+                    color: panelStyle.icon,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: titleLineHeight,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      widget.headerDateText,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
+                      textAlign: TextAlign.right,
+                      style: dateStyle,
+                      textHeightBehavior: textHeightBehavior,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              SizedBox(
+                width: 58,
+                height: titleLineHeight,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    widget.headerSubmittedText,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.clip,
+                    style: statsStyle,
+                    textHeightBehavior: textHeightBehavior,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: titleLineHeight,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      widget.headerTimeText,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
+                      textAlign: TextAlign.right,
+                      style: dateStyle,
+                      textHeightBehavior: textHeightBehavior,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (widget.showAnchorDateHint) ...[
+            const SizedBox(height: 4),
+            Text(
+              '\uC2AC\uB77C\uC774\uB4DC\uC2DC\uD2B8 \uAE30\uC900\uC77C',
+              style: FabTabBarTokens.previewAcademyValueStyle(panelStyle)
+                  .copyWith(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildAnswerBookRail() {
     return FutureBuilder<List<_GradingAnswerBook>>(
       future: _answerBooksFuture,
@@ -372,12 +506,16 @@ class _GradingModePageState extends State<GradingModePage> {
   int _bookTypeRank(_GradingAnswerBook book) {
     final haystack =
         '${book.name} ${book.description}'.replaceAll(RegExp(r'\s+'), '');
-    if (haystack.contains('개념서') || haystack.contains('개념')) return 0;
-    if (haystack.contains('연산서') || haystack.contains('연산')) return 1;
-    if (haystack.contains('기본유형서') || haystack.contains('기본유형')) {
+    if (haystack.contains('\uAC1C\uB150') ||
+        haystack.contains('\uAE30\uBCF8')) return 0;
+    if (haystack.contains('\uC720\uD615') ||
+        haystack.contains('\uC751\uC6A9')) return 1;
+    if (haystack.contains('\uC2EC\uD654') ||
+        haystack.contains('\uCD5C\uC0C1\uC704')) {
       return 2;
     }
-    if (haystack.contains('심화문제집') || haystack.contains('심화')) return 3;
+    if (haystack.contains('\uC2E4\uC804') ||
+        haystack.contains('\uAE30\uCD9C')) return 3;
     return 4;
   }
 
@@ -438,7 +576,7 @@ class _GradingModePageState extends State<GradingModePage> {
 
   String _gradeLabelForKey(String key) {
     final cleaned = key.trim();
-    return cleaned.isEmpty ? '과정' : cleaned;
+    return cleaned.isEmpty ? '\uACFC\uC815' : cleaned;
   }
 
   String _resolveCoverPathFromLinks({
@@ -482,14 +620,18 @@ class _GradingModePageState extends State<GradingModePage> {
     final answerPath = grade.answerPath.trim();
     if (answerPath.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('연결된 PDF가 없습니다.')),
+        const SnackBar(
+          content: Text('\uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.'),
+        ),
       );
       return;
     }
-    final titleBase = book.name.trim().isEmpty ? '답지 확인' : book.name.trim();
+    final titleBase = book.name.trim().isEmpty
+        ? '\uC815\uB2F5 \uBC14\uB85C\uAC00\uAE30'
+        : book.name.trim();
     final title = grade.gradeLabel.trim().isEmpty
         ? titleBase
-        : '$titleBase · ${grade.gradeLabel.trim()}';
+        : '$titleBase \u00B7 ${grade.gradeLabel.trim()}';
     final cacheKey =
         'answerkey|$_kGradingAnswerBookCategory|${book.id}|${grade.gradeKey}|$answerPath';
     RightSheetAnswerPreloadService.instance.putPdfLinks(
@@ -595,7 +737,10 @@ class _GradingModePageState extends State<GradingModePage> {
   }
 
   bool _isPrintCoverEntry(_GradingGroupEntry entry) {
-    const printLikeTypes = <String>{'프린트', '테스트'};
+    const printLikeTypes = <String>{
+      '\uCD9C\uB825\uBB3C',
+      '\uD504\uB9B0\uD2B8',
+    };
     if (printLikeTypes.contains(_normalizedTypeLabel(entry.summary))) {
       return true;
     }
@@ -614,7 +759,7 @@ class _GradingModePageState extends State<GradingModePage> {
   ) {
     final out = <_GradingGroupEntry>[];
     for (final studentId in widget.attendingStudentIds) {
-      final studentName = widget.studentNamesById[studentId] ?? '학생';
+      final studentName = widget.studentNamesById[studentId] ?? '\uD559\uC0DD';
       out.addAll(
         _buildEntriesForStudent(
           studentId: studentId,
@@ -639,7 +784,7 @@ class _GradingModePageState extends State<GradingModePage> {
   ) {
     final out = <_GradingGroupEntry>[];
     for (final studentId in widget.attendingStudentIds) {
-      final studentName = widget.studentNamesById[studentId] ?? '학생';
+      final studentName = widget.studentNamesById[studentId] ?? '\uD559\uC0DD';
       out.addAll(
         _buildEntriesForStudent(
           studentId: studentId,
@@ -814,7 +959,9 @@ class _GradingModePageState extends State<GradingModePage> {
           group: group,
           summary: summary,
           children: children,
-          displayTitle: displayTitle.trim().isEmpty ? '그룹 과제' : displayTitle,
+          displayTitle: displayTitle.trim().isEmpty
+              ? '\uC81C\uBAA9 \uC5C6\uC74C'
+              : displayTitle,
           dueDate: dueDate,
           submittedTime: _submittedSortTimeOfChildren(children),
           homeworkTime: _homeworkSortTimeOfChildren(children),
@@ -854,7 +1001,9 @@ class _GradingModePageState extends State<GradingModePage> {
           group: null,
           summary: item,
           children: <HomeworkItem>[item],
-          displayTitle: displayTitle.isEmpty ? '(제목 없음)' : displayTitle,
+          displayTitle: displayTitle.isEmpty
+              ? '(\uC81C\uBAA9 \uC5C6\uC74C)'
+              : displayTitle,
           dueDate: dueDate,
           submittedTime: _submittedSortTimeOfItem(item),
           homeworkTime: _homeworkSortTimeOfItem(item),
@@ -918,7 +1067,7 @@ class _GradingModePageState extends State<GradingModePage> {
         : (group.title.trim().isNotEmpty ? group.title.trim() : first.title);
     final pageSummary = () {
       if (pages.isEmpty) return (first.page ?? '').trim();
-      // 그룹 페이지는 자식 페이지의 합집합을 연속 구간으로 압축해 표시한다.
+      // ?? ????????? ???????????? ??? ????? ???????????.
       final merged = mergeHomeworkPageRawStrings(pages);
       return merged.isEmpty ? pages.join(', ') : merged;
     }();
@@ -928,13 +1077,13 @@ class _GradingModePageState extends State<GradingModePage> {
     };
     final summaryType = normalizedChildTypes.length == 1
         ? normalizedChildTypes.first
-        : '${children.length}개 과제';
+        : '${children.length}\uAC1C \uACFC\uC81C';
 
     return HomeworkItem(
       id: (runningChild ?? first).id,
       assignmentCode: (runningChild ?? first).assignmentCode,
       learningTrackCode: group.learningTrackCode,
-      title: title.trim().isEmpty ? '(제목 없음)' : title.trim(),
+      title: title.trim().isEmpty ? '(\uC81C\uBAA9 \uC5C6\uC74C)' : title.trim(),
       body: displaySeed.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
@@ -1060,8 +1209,8 @@ class _GradingGroupEntry {
       (child) => child.phase == 3 && child.status != HomeworkStatus.completed);
 }
 
-/// 문제은행 출처(추출 교재) 과제인지 판별한다.
-/// 이 경우 채점 카드 배경에 추출 교재 표지를 쓰지 않고 어두운 회색으로 둔다.
+/// ????????(?? ??) ?????? ??????.
+/// ???? ?? ?? ?????? ?? ?????????? ??? ??????????? ???.
 bool _gradingEntryIsProblemBankSource(_GradingGroupEntry entry) {
   if ((entry.summary.pbPresetId ?? '').trim().isNotEmpty) return true;
   for (final child in entry.children) {
@@ -1099,11 +1248,14 @@ class _GradingAnswerBook {
     required this.sortOrder,
   });
 
-  String get displayName => name.trim().isEmpty ? '제목 없음' : name.trim();
+  String get displayName =>
+      name.trim().isEmpty ? '\uC81C\uBAA9 \uC5C6\uC74C' : name.trim();
 
   String get displayDescription {
     final cleaned = description.trim();
-    return cleaned.isEmpty ? '정답 PDF 바로가기' : cleaned;
+    return cleaned.isEmpty
+        ? '\uC815\uB2F5 PDF \uBC14\uB85C\uAC00\uAE30'
+        : cleaned;
   }
 
   bool get hasGrades => grades.isNotEmpty;
@@ -1127,7 +1279,7 @@ class _GradingAnswerBookGrade {
   String get displayLabel {
     final label =
         gradeLabel.trim().isEmpty ? gradeKey.trim() : gradeLabel.trim();
-    return label.isEmpty ? '과정' : label;
+    return label.isEmpty ? '\uACFC\uC815' : label;
   }
 }
 
@@ -1226,7 +1378,9 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
     return FabStyleGlassPanel(
+      useFabTabBarBackground: brightness == Brightness.dark,
       padding: const EdgeInsets.symmetric(
         horizontal: _kGradingAnswerRailHorizontalPadding,
       ),
@@ -1245,7 +1399,7 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
                   : widget.books.isEmpty
                       ? const Center(
                           child: Text(
-                            '연결된 정답 PDF가 없습니다.',
+                            '\uC5F0\uACB0\uB41C \uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Color(0xFF7F8C8C),
@@ -1735,7 +1889,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   Widget build(BuildContext context) {
     final hw = entry.summary;
     final line2 = entry.displayTitle.trim().isEmpty
-        ? '(제목 없음)'
+        ? '(\uC81C\uBAA9 \uC5C6\uC74C)'
         : entry.displayTitle.trim();
     final bookStr = _extractBookName(hw).isEmpty ? '-' : _extractBookName(hw);
     final courseStr =
@@ -1749,7 +1903,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     final contentPadH = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
     final pageLines = _buildOverlayPageLines(entry);
-    final childCountText = '하위 ${entry.children.length}개';
+    final childCountText = '\uD558\uC704 ${entry.children.length}\uAC1C';
     final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
       Theme.of(context).brightness,
     );
@@ -1831,8 +1985,10 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     Widget buildMetaSection() {
       const subFontSize = 20.0;
       const lineHeight = 1.1;
-      final titleStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle)
+      final titleStyle = FabTabBarTokens.previewAcademyLabelStyle(panelStyle)
           .copyWith(
+        fontSize: subFontSize,
+        fontWeight: FontWeight.w700,
         height: lineHeight,
         letterSpacing: -0.2,
       );
@@ -1853,11 +2009,9 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
       final line1Text = bookStr == '-' && courseStr == '-'
           ? (line2.trim().isEmpty ? '-' : line2)
           : (bookStr != '-' && courseStr != '-'
-              ? '$bookStr · $courseStr'
+              ? '$bookStr \u00B7 $courseStr'
               : (bookStr != '-' ? bookStr : courseStr));
-      final totalTextHeight =
-          (FabTabBarTokens.previewAcademyMainTitleFontSize * lineHeight) +
-              (subFontSize * lineHeight) * 2;
+      final totalTextHeight = (subFontSize * lineHeight) * 3;
       final slack = math.max(0.0, metaContentHeight - totalTextHeight);
       final baseGap = slack > 0 ? slack / 2 : 0.0;
       final gap12 = baseGap * 0.7;
@@ -2105,12 +2259,12 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     if (!entry.hasSubmittedChild) return '-';
     final submitted = entry.submittedTime;
     final totalMinutes = DateTime.now().difference(submitted).inMinutes;
-    if (totalMinutes < 0) return '0분';
-    if (totalMinutes < 60) return '$totalMinutes분';
+    if (totalMinutes < 0) return '0\uBD84';
+    if (totalMinutes < 60) return '$totalMinutes\uBD84';
     final hours = totalMinutes ~/ 60;
     final mins = totalMinutes % 60;
-    if (mins == 0) return '$hours시간';
-    return '$hours시간 $mins분';
+    if (mins == 0) return '$hours\uC2DC\uAC04';
+    return '$hours\uC2DC\uAC04 $mins\uBD84';
   }
 
   List<String> _buildOverlayPageLines(_GradingGroupEntry entry) {
@@ -2150,8 +2304,9 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
 
   String _extractBookName(HomeworkItem hw) {
     final contentRaw = (hw.content ?? '').trim();
-    final fromContent =
-        RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw)?.group(1);
+    final fromContent = RegExp(r'(?:^|\n)\s*\uAD50\uC7AC:\s*([^\n]+)')
+        .firstMatch(contentRaw)
+        ?.group(1);
     if (fromContent != null && fromContent.trim().isNotEmpty) {
       return fromContent.trim();
     }
@@ -2161,7 +2316,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     if (hasLinkedTextbook) {
       final stripped = _stripUnitPrefix(hw.title.trim());
       if (stripped.isNotEmpty) {
-        final idx = stripped.indexOf('·');
+        final idx = stripped.indexOf('?');
         if (idx == -1) return stripped;
         final candidate = stripped.substring(0, idx).trim();
         if (candidate.isNotEmpty) return candidate;
@@ -2175,8 +2330,9 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
 
   String _extractCourseName(HomeworkItem hw) {
     final contentRaw = (hw.content ?? '').trim();
-    final fromContent =
-        RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw)?.group(1);
+    final fromContent = RegExp(r'(?:^|\n)\s*\uACFC\uC815:\s*([^\n]+)')
+        .firstMatch(contentRaw)
+        ?.group(1);
     return (fromContent ?? '').trim();
   }
 
@@ -2189,7 +2345,10 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   }
 
   bool _isPrintCoverEntry(_GradingGroupEntry entry) {
-    const printLikeTypes = <String>{'프린트', '테스트'};
+    const printLikeTypes = <String>{
+      '\uCD9C\uB825\uBB3C',
+      '\uD504\uB9B0\uD2B8',
+    };
     if (printLikeTypes.contains(_normalizedTypeLabel(entry.summary))) {
       return true;
     }
@@ -2205,13 +2364,13 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
 
   Color _coverColorForType(HomeworkItem hw) {
     switch (_normalizedTypeLabel(hw)) {
-      case '프린트':
-      case '테스트':
+      case '\uCD9C\uB825\uBB3C':
+      case '\uD504\uB9B0\uD2B8':
         return Colors.white;
-      case '교재':
-      case '문제집':
+      case '\uAD50\uC7AC':
+      case '\uBB38\uC81C\uC9D1':
         return const Color(0xFF2E7D32);
-      case '학습':
+      case '\uBB38\uC81C\uC740\uD589':
         return const Color(0xFF6A1B9A);
       default:
         return const Color(0xFF2B2B2B);

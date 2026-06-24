@@ -6,6 +6,7 @@ import '../problem_bank_models.dart';
 
 const List<String> _naesinExamTerms = <String>['중간고사', '기말고사'];
 const List<int> _naesinLinkYears = <int>[
+  2021,
   2022,
   2023,
   2024,
@@ -13,6 +14,26 @@ const List<int> _naesinLinkYears = <int>[
   2026,
   2027,
   2028,
+];
+const List<String> _naesinMiddleSchools = <String>[
+  '경신중',
+  '능인중',
+  '대륜중',
+  '동도중',
+  '소선여중',
+  '오성중',
+  '정화중',
+  '황금중',
+];
+const List<String> _naesinHighSchools = <String>[
+  '경북고',
+  '경신고',
+  '능인고',
+  '대구여고',
+  '대륜고',
+  '오성고',
+  '정화여고',
+  '혜화여고',
 ];
 
 class _NaesinLinkSelection {
@@ -193,8 +214,7 @@ Future<void> showProblemBankExportPresetDialog({
                 child: const Text('취소'),
               ),
               FilledButton(
-                onPressed: () =>
-                    Navigator.of(ctx).pop(controller.text.trim()),
+                onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
                 child: const Text('저장'),
               ),
             ],
@@ -290,8 +310,8 @@ Future<void> showProblemBankExportPresetDialog({
             _normalizeNaesinCurriculumCode(preset.naesinCurriculumCode);
         var selectedGradeKey = existing?.gradeKey ?? 'M1';
         var selectedCourseKey = existing?.courseKey ?? 'M1-1';
-        var selectedExamTerm = existing?.examTerm ??
-            (now.month >= 8 ? _naesinExamTerms.last : _naesinExamTerms.first);
+        var selectedExamTerm =
+            existing?.examTerm ?? _defaultNaesinExamTermByDate(now);
         if (!_naesinExamTerms.contains(selectedExamTerm)) {
           selectedExamTerm = _naesinExamTerms.first;
         }
@@ -925,7 +945,8 @@ class _ExportPresetCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      const Icon(Icons.link, size: 12, color: Color(0xFFAFC2D6)),
+                      const Icon(Icons.link,
+                          size: 12, color: Color(0xFFAFC2D6)),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
@@ -955,6 +976,17 @@ int _defaultNaesinYearByDate(DateTime now) {
   if (_naesinLinkYears.contains(now.year)) return now.year;
   if (now.year < _naesinLinkYears.first) return _naesinLinkYears.first;
   return _naesinLinkYears.last;
+}
+
+String _defaultNaesinExamTermByDate(DateTime now) {
+  final month = now.month;
+  final day = now.day;
+  if (month <= 4) return '중간고사';
+  if (month == 5) return day <= 15 ? '중간고사' : '기말고사';
+  if (month <= 7) return '기말고사';
+  if (month <= 9) return '중간고사';
+  if (month == 10) return day <= 15 ? '중간고사' : '기말고사';
+  return '기말고사';
 }
 
 String _normalizeNaesinCurriculumCode(String raw) {
@@ -1008,13 +1040,15 @@ List<_NaesinOption> _naesinCourseOptionsForGrade(
         _NaesinOption('H1-c2', '공통수학2'),
       ];
     case 'H2':
+      return const <_NaesinOption>[
+        _NaesinOption('H-algebra', '대수'),
+        _NaesinOption('H-calc1', '미적분1'),
+        _NaesinOption('H-calc2', '미적분2'),
+        _NaesinOption('H-probstats', '확률과 통계'),
+      ];
     case 'H3':
       return const <_NaesinOption>[
-        _NaesinOption('H-math1', '수학1'),
-        _NaesinOption('H-math2', '수학2'),
-        _NaesinOption('H-calculus', '미적분'),
-        _NaesinOption('H-probstats', '확률과 통계'),
-        _NaesinOption('H-geometry', '기하'),
+        _NaesinOption('H-algebra', '대수'),
       ];
     default:
       return const <_NaesinOption>[_NaesinOption('M1-1', '1-1')];
@@ -1023,9 +1057,9 @@ List<_NaesinOption> _naesinCourseOptionsForGrade(
 
 List<String> _schoolsForGradeKey(String gradeKey) {
   if (gradeKey.startsWith('H')) {
-    return const <String>['학교 미지정', '고등학교'];
+    return _naesinHighSchools;
   }
-  return const <String>['학교 미지정', '중학교'];
+  return _naesinMiddleSchools;
 }
 
 String _courseDisplayLabel(String courseKey) {
@@ -1095,8 +1129,7 @@ String _naesinLinkSummaryLabel(String rawKey) {
     '${parsed.year}',
     parsed.examTerm,
   ];
-  if (parsed.school.trim().isNotEmpty &&
-      parsed.school.trim() != '학교 미지정') {
+  if (parsed.school.trim().isNotEmpty && parsed.school.trim() != '학교 미지정') {
     pieces.add(parsed.school.trim());
   }
   if (parsed.cellLabel.trim().isNotEmpty) {

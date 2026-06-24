@@ -3119,20 +3119,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _showMakeupManagementDialog() async {
-    await showDialog(
-      context: context,
-      barrierColor: Colors.black54,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: context.yggSurfaceBase,
-          insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const SizedBox(width: 770, height: 760, child: MakeupView()),
-        );
-      },
-    );
+    await showMakeupManagementDialog(context);
   }
 
   Widget _buildContent() {
@@ -3605,10 +3592,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                                 actionButtonMinSize,
                                                           ),
                                                           onPressed: () async {
-                                                            await showDialog(
-                                                              context: context,
-                                                              builder: (_) =>
-                                                                  const ClassContentEventsDialog(),
+                                                            await showClassContentEventsDialog(
+                                                              context,
                                                             );
                                                           },
                                                         ),

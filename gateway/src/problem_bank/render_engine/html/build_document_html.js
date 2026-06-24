@@ -1709,9 +1709,15 @@ function renderExplanationSection(questions) {
 function resolveReviewAnswer(question) {
   const exp = String(question?.export_answer || '').trim();
   if (exp) return exp;
+  const obj = String(question?.objective_answer_key || '').trim();
+  const allowSubjective = question?.allow_subjective !== false;
+  const isObjectiveMode = String(question?.export_mode || question?.questionMode || question?.mode || '').trim() === 'objective';
+  if (!allowSubjective || isObjectiveMode) {
+    if (obj) return obj;
+    return '(미기입)';
+  }
   const sub = String(question?.subjective_answer || '').trim();
   if (sub) return sub;
-  const obj = String(question?.objective_answer_key || '').trim();
   if (obj) return obj;
   return '(미기입)';
 }

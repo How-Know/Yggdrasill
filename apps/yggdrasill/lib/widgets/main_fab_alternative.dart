@@ -5,6 +5,7 @@ import 'memo_dialogs.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
+import '../services/exam_mode.dart';
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 /// 홈 하단 **확인** FAB·M5 **질문 칩**이 같은 레이아웃 경로(`GestureDetector` → 고정 `SizedBox` → `Container`)를 쓰도록 통일.
@@ -326,6 +327,26 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
     );
   }
 
+  Widget _buildExamFabButton({
+    required bool enabled,
+    required bool dialogOpen,
+  }) {
+    return Opacity(
+      opacity: enabled && !dialogOpen ? 1.0 : 0.45,
+      child: IgnorePointer(
+        ignoring: !enabled || dialogOpen,
+        child: FabStyleActionButton(
+          icon: Icons.event_note_rounded,
+          onPressed: () {
+            _collapseFabMenu();
+            final action = examScheduleAction;
+            if (action != null) unawaited(action());
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -337,60 +358,86 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
             return ValueListenableBuilder<int>(
               valueListenable: homeBatchConfirmPendingCount,
               builder: (context, pendingConfirmCount, ___) {
-                    final shouldShowBatchConfirmFab =
-                        widget.showHomeBatchConfirmFab && showBatchConfirmFab;
-                    final canRunBatchConfirm = shouldShowBatchConfirmFab &&
-                        pendingConfirmCount > 0 &&
-                        homeBatchConfirmAction != null;
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        if (shouldShowBatchConfirmFab) ...[
-                          Opacity(
-                            opacity: canRunBatchConfirm ? 1.0 : 0.45,
-                            child: IgnorePointer(
-                              ignoring: !canRunBatchConfirm,
-                              child: HomeBottomActionPill(
-                                backgroundColor:
-                                    FabTabBarTokens.previewConfirmActionColor,
-                                onTap: () async {
-                                  final action = homeBatchConfirmAction;
-                                  if (action == null) return;
-                                  await action();
-                                },
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(
-                                      Icons.check_rounded,
-                                      size: 21,
-                                      color: Colors.white,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      '반환',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.w700,
+                return ValueListenableBuilder<bool>(
+                  valueListenable: ExamModeService.instance.isOn,
+                  builder: (context, examModeOn, ____) {
+                    return ValueListenableBuilder<bool>(
+                      valueListenable:
+                          ExamModeService.instance.suppressExamActionCluster,
+                      builder: (context, suppressExamButton, _____) {
+                        return ValueListenableBuilder<bool>(
+                          valueListenable:
+                              ExamModeService.instance.examScheduleDialogOpen,
+                          builder: (context, examScheduleDialogOpen, ______) {
+                            final shouldShowBatchConfirmFab =
+                                widget.showHomeBatchConfirmFab &&
+                                    showBatchConfirmFab;
+                            final canRunBatchConfirm =
+                                shouldShowBatchConfirmFab &&
+                                    pendingConfirmCount > 0 &&
+                                    homeBatchConfirmAction != null;
+                            final shouldShowExamFab =
+                                examModeOn && !suppressExamButton;
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                if (shouldShowBatchConfirmFab) ...[
+                                  Opacity(
+                                    opacity: canRunBatchConfirm ? 1.0 : 0.45,
+                                    child: IgnorePointer(
+                                      ignoring: !canRunBatchConfirm,
+                                      child: HomeBottomActionPill(
+                                        backgroundColor: FabTabBarTokens
+                                            .previewConfirmActionColor,
+                                        onTap: () async {
+                                          final action = homeBatchConfirmAction;
+                                          if (action == null) return;
+                                          await action();
+                                        },
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.check_rounded,
+                                              size: 21,
+                                              color: Colors.white,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              '반환',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 17,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
+                                if (shouldShowExamFab) ...[
+                                  _buildExamFabButton(
+                                    enabled: examScheduleAction != null,
+                                    dialogOpen: examScheduleDialogOpen,
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
+                                Column(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    _buildPrimaryFabButton(),
                                   ],
                                 ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                        ],
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            _buildPrimaryFabButton(),
-                          ],
-                        ),
-                      ],
+                              ],
+                            );
+                          },
+                        );
+                      },
                     );
                   },
                 );
@@ -398,6 +445,8 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
             );
           },
         );
+      },
+    );
   }
 
   Future<void> _openMemoAddDialog(BuildContext context) async {

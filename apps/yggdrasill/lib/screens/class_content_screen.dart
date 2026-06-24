@@ -814,6 +814,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   ? GradingModePage(
                                       attendingStudentIds: attendingStudentIds,
                                       studentNamesById: studentNamesById,
+                                      headerDateText:
+                                          _formatDateWithWeekdayShort(
+                                        headerDateTime,
+                                      ),
+                                      headerTimeText:
+                                          _formatHourMinute(headerDateTime),
+                                      headerSubmittedText:
+                                          '제출 $submittedCount',
+                                      showAnchorDateHint:
+                                          !isAttendanceAnchorToday(anchorDate),
                                       pendingConfirms: _pendingConfirms,
                                       onSubmittedCardTap: (studentId, group,
                                           summary, children) async {
@@ -959,21 +969,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       },
                                     ),
                             ),
-                            Positioned(
-                              top: 0,
-                              left: 0,
-                              right: 0,
-                              child: SafeArea(
-                                bottom: false,
-                                child: _buildFloatingHomeHeader(
-                                  context: context,
-                                  headerDateTime: headerDateTime,
-                                  anchorDate: anchorDate,
-                                  attendingCount: list.length,
-                                  submittedCount: submittedCount,
+                            if (!_isGradingMode)
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                child: SafeArea(
+                                  bottom: false,
+                                  child: _buildFloatingHomeHeader(
+                                    context: context,
+                                    headerDateTime: headerDateTime,
+                                    anchorDate: anchorDate,
+                                    attendingCount: list.length,
+                                    submittedCount: submittedCount,
+                                  ),
                                 ),
                               ),
-                            ),
                           ],
                         );
                       },

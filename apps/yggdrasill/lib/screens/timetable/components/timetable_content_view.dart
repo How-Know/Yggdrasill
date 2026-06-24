@@ -134,22 +134,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
   OverlayEntry? _dropdownOverlay;
   bool _showDeleteZone = false;
   Future<void> _showMakeupListDialog() async {
-    await showDialog(
-      context: context,
-      barrierColor: Colors.black54,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: kDlgBg,
-          insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: SizedBox(
-            width: 1104, // 920 * 1.2
-            height: 800, // 640 * 1.2
-            child: const MakeupView(),
-          ),
-        );
-      },
+    await showMakeupManagementDialog(
+      context,
+      maxWidth: 1104,
+      maxHeight: 800,
     );
   }
 

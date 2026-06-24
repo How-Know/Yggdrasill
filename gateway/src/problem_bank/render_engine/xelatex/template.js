@@ -6861,13 +6861,19 @@ function renderQuickAnswerTableLatex(questions) {
   const qs = Array.isArray(questions) ? questions : [];
   if (qs.length === 0) return '';
 
-  // 정답 소스 해석. export_answer → subjective_answer → objective_answer_key 순.
+  // 정답 소스 해석. 객관식 전용 문항은 과거 subjective_answer 가 남아 있어도 무시한다.
   function resolveAnswer(q) {
     const expAns = String(q?.export_answer || '').trim();
     if (expAns) return expAns;
+    const objKey = String(q?.objective_answer_key || '').trim();
+    const allowSubjective = q?.allow_subjective !== false;
+    const isObjectiveMode = String(q?.export_mode || q?.questionMode || q?.mode || '').trim() === 'objective';
+    if (!allowSubjective || isObjectiveMode) {
+      if (objKey) return objKey;
+      return '-';
+    }
     const sub = String(q?.subjective_answer || '').trim();
     if (sub) return sub;
-    const objKey = String(q?.objective_answer_key || '').trim();
     if (objKey) return objKey;
     return '-';
   }
@@ -7411,9 +7417,15 @@ export function buildDocumentTexSource(questions, options = {}) {
     const resolveReviewAnswer = (q) => {
       const exp = String(q?.export_answer || '').trim();
       if (exp) return exp;
+      const obj = String(q?.objective_answer_key || '').trim();
+      const allowSubjective = q?.allow_subjective !== false;
+      const isObjectiveMode = String(q?.export_mode || q?.questionMode || q?.mode || '').trim() === 'objective';
+      if (!allowSubjective || isObjectiveMode) {
+        if (obj) return obj;
+        return '(미기입)';
+      }
       const sub = String(q?.subjective_answer || '').trim();
       if (sub) return sub;
-      const obj = String(q?.objective_answer_key || '').trim();
       if (obj) return obj;
       return '(미기입)';
     };

@@ -392,12 +392,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   void _showSnack(String message, {bool error = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: error ? const Color(0xFFDE6A73) : _accent,
-      ),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: error ? const Color(0xFFDE6A73) : _accent,
+        ),
+      );
+    });
   }
 
   String _formatElapsed(Duration d) {
@@ -3397,12 +3402,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           mergedMeta['score_point'] =
               rounded == parsedScore ? rounded.toInt() : parsedScore;
         }
+        if (!q.allowSubjective) {
+          mergedMeta.remove('subjective_answer');
+          mergedMeta.remove('answer_parts');
+        }
         final normalizedMeta =
             _metaWithSuppressedAutoTypesNormalized(q, mergedMeta);
+        if (!q.allowSubjective) {
+          normalizedMeta.remove('subjective_answer');
+          normalizedMeta.remove('answer_parts');
+        }
         _syncFigureMetaWithStem(stem: q.stem, meta: normalizedMeta);
-        final normalizedSubjectiveAnswer = q.subjectiveAnswer.trim().isNotEmpty
-            ? q.subjectiveAnswer
-            : '${normalizedMeta['subjective_answer'] ?? ''}';
+        final normalizedSubjectiveAnswer = !q.allowSubjective
+            ? ''
+            : (q.subjectiveAnswer.trim().isNotEmpty
+                ? q.subjectiveAnswer
+                : '${normalizedMeta['subjective_answer'] ?? ''}');
         final saveFigureRefs = _figureRefsForSave(q);
         await _service.updateQuestionReview(
           questionId: q.id,
@@ -4769,6 +4784,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         );
       },
     );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
     for (final ctrl in blankChoiceLabelCtrls) {
       ctrl.dispose();
     }
@@ -6728,6 +6745,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       },
     );
 
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
     for (final e in entries) {
       e.controller.dispose();
     }
@@ -11923,6 +11942,38 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       ),
                     ],
                     const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            '최대 (슬롯 본문 폭에 맞춤)',
+                            style: TextStyle(
+                              color: _text,
+                              fontSize: 11.6,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          height: 24,
+                          child: Switch(
+                            value: (drafts[t.key] ?? const TableScaleValue())
+                                .widthMax,
+                            activeThumbColor: _accent,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            onChanged: (v) {
+                              final cur =
+                                  drafts[t.key] ?? const TableScaleValue();
+                              setLocalState(() {
+                                drafts[t.key] = cur.copyWith(widthMax: v);
+                              });
+                              onSettingChanged();
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                     _buildTableScaleSlider(
                       title: '가로',
                       value:
@@ -11930,6 +11981,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       min: minS,
                       max: maxS,
                       divisions: divisions,
+                      enabled:
+                          !(drafts[t.key] ?? const TableScaleValue()).widthMax,
                       onChanged: (v) {
                         final cur = drafts[t.key] ?? const TableScaleValue();
                         setLocalState(() {
@@ -12183,61 +12236,70 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required int divisions,
     required ValueChanged<double> onChanged,
     required ValueChanged<double> onChangeEnd,
+    bool enabled = true,
   }) {
     final clamped = value.clamp(min, max);
     final pct = (clamped * 100).round();
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 36,
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: _text,
-                fontSize: 11.6,
-                fontWeight: FontWeight.w700,
+    final labelColor = enabled ? _text : _textSub;
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.45,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 36,
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 11.6,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-              ),
-              child: Slider(
-                value: clamped,
-                min: min,
-                max: max,
-                divisions: divisions,
-                activeColor: _accent,
-                inactiveColor: _border,
-                onChanged: (v) {
-                  // 0.05 단위 스냅.
-                  final rounded = (v * 20).roundToDouble() / 20.0;
-                  onChanged(rounded);
-                },
-                onChangeEnd: onChangeEnd,
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 44,
-            child: Text(
-              '$pct%',
-              textAlign: TextAlign.end,
-              style: const TextStyle(
-                color: _text,
-                fontSize: 11.4,
-                fontWeight: FontWeight.w700,
-                fontFeatures: [FontFeature.tabularFigures()],
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 3,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 7),
+                  overlayShape:
+                      const RoundSliderOverlayShape(overlayRadius: 14),
+                ),
+                child: Slider(
+                  value: clamped,
+                  min: min,
+                  max: max,
+                  divisions: divisions,
+                  activeColor: _accent,
+                  inactiveColor: _border,
+                  onChanged: enabled
+                      ? (v) {
+                          // 0.05 단위 스냅.
+                          final rounded = (v * 20).roundToDouble() / 20.0;
+                          onChanged(rounded);
+                        }
+                      : null,
+                  onChangeEnd: enabled ? onChangeEnd : null,
+                ),
               ),
             ),
-          ),
-        ],
+            SizedBox(
+              width: 44,
+              child: Text(
+                enabled ? '$pct%' : '최대',
+                textAlign: TextAlign.end,
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 11.4,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -13279,6 +13341,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         );
       },
     );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
     for (final entry in partEntries) {
       entry.controller.dispose();
     }

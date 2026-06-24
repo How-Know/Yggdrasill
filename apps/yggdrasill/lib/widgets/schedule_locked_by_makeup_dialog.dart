@@ -85,22 +85,7 @@ Future<void> showScheduleLockedByMakeupDialog(
             onPressed: () async {
               Navigator.of(dialogContext).pop();
               // 보강 관리 열기
-              await showDialog<void>(
-                context: ctx,
-                barrierColor: Colors.black54,
-                builder: (context) {
-                  return Dialog(
-                    backgroundColor: const Color(0xFF1F1F1F),
-                    insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    child: const SizedBox(
-                      width: 770,
-                      height: 760,
-                      child: MakeupView(),
-                    ),
-                  );
-                },
-              );
+              await showMakeupManagementDialog(ctx);
             },
             child: const Text(
               '보강 관리',

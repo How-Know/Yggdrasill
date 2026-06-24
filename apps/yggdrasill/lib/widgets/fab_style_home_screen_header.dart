@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'home_header_weather_icon.dart';
 
-/// 홈 상단 날씨·시간·통계 — 공용 메인 타이틀 토큰 + FAB 글래스 패널.
+/// ????? ??????????? ???? ?? ?????? ??? + FAB ???? ???.
 class FabStyleHomeScreenHeader extends StatelessWidget {
   const FabStyleHomeScreenHeader({
     super.key,
@@ -51,7 +51,8 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         FabStyleGlassPanel(
-          useTopButtonCapsuleBackground: true,
+          useTopButtonCapsuleBackground: brightness == Brightness.light,
+          useFabTabBarBackground: brightness == Brightness.dark,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: isGradingHeader
               ? _buildGradingHeaderBody(
@@ -87,7 +88,10 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                           if (statsText != null && statsText!.isNotEmpty)
                             Text(statsText!, style: statsStyle),
                           if (showAnchorDateHint)
-                            Text('슬라이드시트 기준일', style: hintStyle),
+                            Text(
+                              '\uC2AC\uB77C\uC774\uB4DC\uC2DC\uD2B8 \uAE30\uC900\uC77C',
+                              style: hintStyle,
+                            ),
                         ],
                       ),
                     ),
@@ -121,7 +125,7 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
     required String timeText,
   }) {
     return [
-      _measureSingleLineTextWidth('00.00 (월)', dateStyle),
+      _measureSingleLineTextWidth('00.00 (??', dateStyle),
       _measureSingleLineTextWidth('23:59', dateStyle),
       _measureSingleLineTextWidth(dateTimeText, dateStyle),
       _measureSingleLineTextWidth(timeText, dateStyle),
@@ -129,7 +133,7 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
   }
 
   static double _gradingStatsColumnWidth(TextStyle statsStyle) {
-    return _measureSingleLineTextWidth('제출 99', statsStyle)
+    return _measureSingleLineTextWidth('??? 99', statsStyle)
         .clamp(30.0, double.infinity);
   }
 
@@ -203,12 +207,13 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                   SizedBox(
                     height: titleLineHeight,
                     child: Align(
-                      alignment: Alignment.centerLeft,
+                      alignment: Alignment.centerRight,
                       child: Text(
                         dateTimeText,
                         maxLines: 1,
                         softWrap: false,
-                        overflow: TextOverflow.fade,
+                        overflow: TextOverflow.clip,
+                        textAlign: TextAlign.right,
                         style: dateStyle,
                         textHeightBehavior: textHeightBehavior,
                       ),
@@ -223,7 +228,7 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                         secondaryText!,
                         maxLines: 1,
                         softWrap: false,
-                        overflow: TextOverflow.fade,
+                        overflow: TextOverflow.clip,
                         style: dateStyle,
                         textAlign: TextAlign.right,
                         textHeightBehavior: textHeightBehavior,
@@ -237,7 +242,10 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
         ),
         if (showAnchorDateHint) ...[
           const SizedBox(height: 4),
-          Text('슬라이드시트 기준일', style: hintStyle),
+          Text(
+            '\uC2AC\uB77C\uC774\uB4DC\uC2DC\uD2B8 \uAE30\uC900\uC77C',
+            style: hintStyle,
+          ),
         ],
       ],
     );

@@ -711,7 +711,7 @@ const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_footerpretendard_04';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_tablewidthmax_03';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const DEFAULT_TITLE_PAGE_GOAL_TEXT = '다시 풀기';
 
@@ -4138,8 +4138,15 @@ function normalizeUnifiedAnswerKind(raw) {
 function normalizePbAnswerForUnifiedRender(questionRow) {
   const answerKind = normalizeUnifiedAnswerKind(questionRow?.question_type);
   if (answerKind === 'image') return '';
+  const allowObjective = questionRow?.allow_objective !== false;
+  const allowSubjective = questionRow?.allow_subjective !== false;
+  const objective = normalizeAnswerValueForTexRender(
+    questionRow?.objective_answer_key || questionRow?.meta?.objective_answer_key,
+  );
+  if (allowObjective && !allowSubjective) return objective;
   const subjective = normalizeAnswerValueForTexRender(questionRow?.subjective_answer);
   if (subjective) return subjective;
+  if (answerKind === 'objective') return objective;
   return '';
 }
 

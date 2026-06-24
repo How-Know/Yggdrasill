@@ -3,12 +3,29 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/tenant_service.dart';
 import '../services/data_manager.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/utility_glass_dialog_shell.dart';
 
 class ClassContentEventsDialog extends StatefulWidget {
-  const ClassContentEventsDialog({super.key});
+  const ClassContentEventsDialog({
+    super.key,
+    this.embeddedInGlassShell = false,
+  });
+
+  /// [UtilityGlassDialogShell] 안에 넣을 때 true — 자체 헤더/배경 생략.
+  final bool embeddedInGlassShell;
 
   @override
-  State<ClassContentEventsDialog> createState() => _ClassContentEventsDialogState();
+  State<ClassContentEventsDialog> createState() =>
+      _ClassContentEventsDialogState();
+}
+
+Future<void> showClassContentEventsDialog(BuildContext context) {
+  return showUtilityGlassBottomSheet(
+    context: context,
+    title: '수업 타임라인',
+    icon: Icons.timeline_rounded,
+    child: const ClassContentEventsDialog(embeddedInGlassShell: true),
+  );
 }
 
 class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
@@ -199,58 +216,101 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final padding = widget.embeddedInGlassShell
+        ? const EdgeInsets.fromLTRB(18, 12, 18, 16)
+        : const EdgeInsets.fromLTRB(26, 26, 26, 18);
+
+    final body = Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!widget.embeddedInGlassShell) ...[
+            _buildHeader(context),
+            const SizedBox(height: 14),
+          ],
+          Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: widget.embeddedInGlassShell ? 0 : 8,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _TimelineDayToolbar(
+                    dayStart: _selectedDayStart,
+                    onPrev: () => setState(() {
+                      _selectedDayStart =
+                          _selectedDayStart.subtract(const Duration(days: 1));
+                      _applyFilter();
+                    }),
+                    onNext: () => setState(() {
+                      _selectedDayStart =
+                          _selectedDayStart.add(const Duration(days: 1));
+                      _applyFilter();
+                    }),
+                    onPickDay: (picked) {
+                      setState(() {
+                        _selectedDayStart =
+                            DateTime(picked.year, picked.month, picked.day);
+                      });
+                      _applyFilter();
+                    },
+                  ),
+                ),
+                if (widget.embeddedInGlassShell)
+                  IconButton(
+                    tooltip: '새로 고침',
+                    onPressed: _load,
+                    icon: const Icon(
+                      Icons.refresh_rounded,
+                      color: Color(0xFFE3E3E6),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: widget.embeddedInGlassShell ? 0 : 8,
+            ),
+            child: _buildFilterChips(),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: widget.embeddedInGlassShell ? 0 : 8,
+              ),
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : (_error != null
+                      ? Center(
+                          child: Text(
+                            _error!,
+                            style: const TextStyle(color: Colors.redAccent),
+                          ),
+                        )
+                      : _buildList()),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (widget.embeddedInGlassShell) {
+      return body;
+    }
+
     return Dialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.all(24),
       child: Container(
-        padding: const EdgeInsets.fromLTRB(26, 26, 26, 18),
         width: 770,
         height: 640,
         color: kDlgBg,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildHeader(context),
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: _TimelineDayToolbar(
-                dayStart: _selectedDayStart,
-                onPrev: () => setState(() {
-                  _selectedDayStart = _selectedDayStart.subtract(const Duration(days: 1));
-                  _applyFilter();
-                }),
-                onNext: () => setState(() {
-                  _selectedDayStart = _selectedDayStart.add(const Duration(days: 1));
-                  _applyFilter();
-                }),
-                onPickDay: (picked) {
-                  setState(() {
-                    _selectedDayStart = DateTime(picked.year, picked.month, picked.day);
-                  });
-                  _applyFilter();
-                },
-              ),
-            ),
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: _buildFilterChips(),
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : (_error != null
-                        ? Center(child: Text(_error!, style: const TextStyle(color: Colors.redAccent)))
-                        : _buildList()),
-              ),
-            ),
-          ],
-        ),
+        child: body,
       ),
     );
   }

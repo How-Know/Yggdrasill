@@ -59,7 +59,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_footerpretendard_04';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_tablewidthmax_03';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -2741,14 +2741,14 @@ function looksObjectiveInOriginal(question, originalChoices = null) {
 }
 
 function originalQuestionModeOf(question, originalChoices = null) {
-  const type = String(question.question_type || '').trim();
-  if (/\uC11C\uC220/.test(type)) return 'essay';
-  if (/\uAC1D\uAD00\uC2DD/.test(type)) return 'objective';
-  if (/\uC8FC\uAD00\uC2DD/.test(type)) return 'subjective';
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
   if (allowObjective && !allowSubjective) return 'objective';
   if (!allowObjective && allowSubjective) return 'subjective';
+  const type = String(question.question_type || '').trim();
+  if (/\uC11C\uC220/.test(type)) return 'essay';
+  if (/\uAC1D\uAD00\uC2DD/.test(type)) return 'objective';
+  if (/\uC8FC\uAD00\uC2DD/.test(type)) return 'subjective';
   return looksObjectiveInOriginal(question, originalChoices) ? 'objective' : 'subjective';
 }
 
@@ -2757,9 +2757,12 @@ function selectableQuestionModes(question, originalChoices) {
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
   const originalMode = originalQuestionModeOf(question, originalChoices);
-  if (allowObjective || originalMode === 'objective') out.push('objective');
-  if (allowSubjective || originalMode === 'subjective') out.push('subjective');
-  if (/\uC11C\uC220/.test(String(question.question_type || '')) || originalMode === 'essay') {
+  if (allowObjective) out.push('objective');
+  if (allowSubjective) out.push('subjective');
+  if (allowSubjective && (
+    /\uC11C\uC220/.test(String(question.question_type || '')) ||
+    originalMode === 'essay'
+  )) {
     out.push('essay');
   }
   if (out.length === 0) out.push(originalMode);
@@ -2785,9 +2788,9 @@ function normalizeQuestionModeSelection(question, selectedMode, fallbackMode = '
 function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'original') {
   const objectiveChoices = resolveObjectiveChoices(question);
   const objectiveAnswer = resolveObjectiveAnswer(question);
-  const subjectiveAnswer = resolveSubjectiveAnswer(question, objectiveAnswer);
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
+  const subjectiveAnswer = allowSubjective ? resolveSubjectiveAnswer(question, objectiveAnswer) : '';
   const requestedMode = normalizeQuestionMode(selectedMode);
   let mode = normalizeQuestionModeSelection(question, selectedMode, fallbackMode);
   if (mode === 'objective' && (!allowObjective || objectiveChoices.length < 2)) {
@@ -2802,7 +2805,7 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
     allow_subjective: allowSubjective,
     objective_choices: objectiveChoices,
     objective_answer_key: objectiveAnswer,
-    subjective_answer: subjectiveAnswer,
+    subjective_answer: allowSubjective ? subjectiveAnswer : '',
     export_mode: mode,
     export_answer: '',
   };

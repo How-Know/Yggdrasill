@@ -2947,6 +2947,12 @@ function tableWidthFraction(rows, tableScale = null, { forceWidthFrac = null } =
   if (Number.isFinite(forced) && forced > 0) {
     return Math.max(0.05, Math.min(1.0, forced));
   }
+  // '최대' 옵션: 슬롯 본문 폭(\linewidth) 전체를 사용. 표 래퍼의 좌우 \hfill 이
+  //   0 으로 collapse 되어 표 우측선이 본문 텍스트 우측선(=우측/1단에서는 상단
+  //   가로 디바이더 오른쪽 선)과 정확히 일치한다.
+  if (tableScale?.widthMax === true) {
+    return 1.0;
+  }
   const baseWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
   return Math.max(0.05, Math.min(1.0, baseWidthFrac * widthScale));
 }
@@ -3089,7 +3095,11 @@ function renderTableLatex(
   // 폭이 충분하면 그대로, 넘칠 때만 표 전체가 같은 비율로 작아진다.
   // → 어떤 경우에도 모든 셀의 글자 크기는 서로 동일하게 유지되고 오버플로우는 사라진다.
   const tableInner = [
-    '\\adjustbox{max width=\\linewidth}{%',
+    // max width 는 \linewidth 가 아니라 "현재 들여쓰기(\leftskip)를 뺀 실제 본문 가용폭"
+    //   으로 잡는다. inline 문항번호 경로에서는 본문 전체에 \leftskip=1em 이 걸리므로
+    //   1.0\linewidth 폭(=최대) 표가 그대로면 오른쪽으로 \leftskip 만큼 삐져나간다.
+    //   \dimexpr 는 glue(\leftskip/\rightskip)를 자연폭(dimen)으로 강제 변환하므로 안전하다.
+    '\\adjustbox{max width=\\dimexpr\\linewidth-\\leftskip-\\rightskip\\relax}{%',
     `{\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
@@ -3292,6 +3302,7 @@ function resolveTableScale(question, type, index) {
       tabColSepPt: resolveTableTabColSepPt(hit),
       columnScales: toColumnScales(hit.columnScales ?? hit.cols ?? null),
       rowScales: toRowScales(hit.rowScales ?? hit.rows ?? null),
+      widthMax: hit.widthMax === true,
     };
   }
   if (def) return {
@@ -3306,6 +3317,7 @@ function resolveTableScale(question, type, index) {
     tabColSepPt: resolveTableTabColSepPt(def),
     columnScales: toColumnScales(def.columnScales ?? def.cols ?? null),
     rowScales: toRowScales(def.rowScales ?? def.rows ?? null),
+    widthMax: def.widthMax === true,
   };
   return {
     widthScale: 1.0,
@@ -3315,6 +3327,7 @@ function resolveTableScale(question, type, index) {
     tabColSepPt: 6,
     columnScales: null,
     rowScales: null,
+    widthMax: false,
   };
 }
 
@@ -7458,13 +7471,19 @@ function renderQuickAnswerTableLatex(questions) {
   const qs = Array.isArray(questions) ? questions : [];
   if (qs.length === 0) return '';
 
-  // 정답 소스 해석. export_answer → subjective_answer → objective_answer_key 순.
+  // 정답 소스 해석. 객관식 전용 문항은 과거 subjective_answer 가 남아 있어도 무시한다.
   function resolveAnswer(q) {
     const expAns = String(q?.export_answer || '').trim();
     if (expAns) return expAns;
+    const objKey = String(q?.objective_answer_key || '').trim();
+    const allowSubjective = q?.allow_subjective !== false;
+    const isObjectiveMode = String(q?.export_mode || q?.questionMode || q?.mode || '').trim() === 'objective';
+    if (!allowSubjective || isObjectiveMode) {
+      if (objKey) return objKey;
+      return '-';
+    }
     const sub = String(q?.subjective_answer || '').trim();
     if (sub) return sub;
-    const objKey = String(q?.objective_answer_key || '').trim();
     if (objKey) return objKey;
     return '-';
   }
@@ -8017,9 +8036,15 @@ export function buildDocumentTexSource(questions, options = {}) {
     const resolveReviewAnswer = (q) => {
       const exp = String(q?.export_answer || '').trim();
       if (exp) return exp;
+      const obj = String(q?.objective_answer_key || '').trim();
+      const allowSubjective = q?.allow_subjective !== false;
+      const isObjectiveMode = String(q?.export_mode || q?.questionMode || q?.mode || '').trim() === 'objective';
+      if (!allowSubjective || isObjectiveMode) {
+        if (obj) return obj;
+        return '(미기입)';
+      }
       const sub = String(q?.subjective_answer || '').trim();
       if (sub) return sub;
-      const obj = String(q?.objective_answer_key || '').trim();
       if (obj) return obj;
       return '(미기입)';
     };

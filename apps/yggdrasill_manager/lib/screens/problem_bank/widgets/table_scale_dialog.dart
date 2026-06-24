@@ -215,10 +215,39 @@ class _TableScaleDialogState extends State<TableScaleDialog> {
                 ),
               ),
             ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '최대 (슬롯 본문 폭에 맞춤)',
+                  style: TextStyle(
+                    color: Color(0xFFE5E7EB),
+                    fontSize: 11.8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: 24,
+                child: Switch(
+                  value: scale.widthMax,
+                  activeThumbColor: const Color(0xFF60A5FA),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onChanged: (v) {
+                    setState(() {
+                      _scales[entry.key] = scale.copyWith(widthMax: v);
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
           _buildSlider(
             title: '가로',
             value: scale.widthScale,
+            enabled: !scale.widthMax,
             onChanged: (v) {
               setState(() {
                 _scales[entry.key] = scale.copyWith(widthScale: v);
@@ -243,59 +272,69 @@ class _TableScaleDialogState extends State<TableScaleDialog> {
     required String title,
     required double value,
     required ValueChanged<double> onChanged,
+    bool enabled = true,
   }) {
     final clamped = value.clamp(_min, _max);
     final pct = (clamped * 100).round();
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 36,
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: Color(0xFFE5E7EB),
-                fontSize: 11.8,
-                fontWeight: FontWeight.w700,
+    final labelColor =
+        enabled ? const Color(0xFFE5E7EB) : const Color(0xFF6B7280);
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.45,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 36,
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 11.8,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-              ),
-              child: Slider(
-                value: clamped,
-                min: _min,
-                max: _max,
-                divisions: _divisions,
-                activeColor: const Color(0xFF60A5FA),
-                inactiveColor: const Color(0xFF3F3F46),
-                onChanged: (v) {
-                  final rounded = (v * 20).roundToDouble() / 20;
-                  onChanged(rounded);
-                },
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 44,
-            child: Text(
-              '$pct%',
-              textAlign: TextAlign.end,
-              style: const TextStyle(
-                color: Color(0xFFE5E7EB),
-                fontSize: 11.6,
-                fontWeight: FontWeight.w700,
-                fontFeatures: [FontFeature.tabularFigures()],
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 3,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 7),
+                  overlayShape:
+                      const RoundSliderOverlayShape(overlayRadius: 14),
+                ),
+                child: Slider(
+                  value: clamped,
+                  min: _min,
+                  max: _max,
+                  divisions: _divisions,
+                  activeColor: const Color(0xFF60A5FA),
+                  inactiveColor: const Color(0xFF3F3F46),
+                  onChanged: enabled
+                      ? (v) {
+                          final rounded = (v * 20).roundToDouble() / 20;
+                          onChanged(rounded);
+                        }
+                      : null,
+                ),
               ),
             ),
-          ),
-        ],
+            SizedBox(
+              width: 44,
+              child: Text(
+                enabled ? '$pct%' : '최대',
+                textAlign: TextAlign.end,
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 11.6,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -335,12 +374,16 @@ class TableScaleValue {
     this.tabColSepPt = 6.0,
     this.columnScales,
     this.rowScales,
+    this.widthMax = false,
   });
 
   final double widthScale;
   final double heightScale;
   final double fontSizeDeltaPt;
   final double tabColSepPt;
+
+  /// 표 폭을 슬롯 본문 폭(\linewidth) 전체로 사용. true 이면 widthScale 은 무시된다.
+  final bool widthMax;
 
   /// struct 표의 컬럼별 상대 가중치(0.3 ~ 2.5). null 이면 전부 균등(기본).
   /// 합이 1 일 필요는 없고, 렌더러가 합으로 정규화해 컬럼 폭 비율로 쓴다.
@@ -358,6 +401,7 @@ class TableScaleValue {
     double? tabColSepPt,
     List<double>? columnScales,
     List<double>? rowScales,
+    bool? widthMax,
     bool clearColumnScales = false,
     bool clearRowScales = false,
   }) =>
@@ -369,6 +413,7 @@ class TableScaleValue {
         columnScales:
             clearColumnScales ? null : (columnScales ?? this.columnScales),
         rowScales: clearRowScales ? null : (rowScales ?? this.rowScales),
+        widthMax: widthMax ?? this.widthMax,
       );
 
   Map<String, dynamic> toJson() => {
@@ -379,6 +424,7 @@ class TableScaleValue {
         if (columnScales != null && columnScales!.isNotEmpty)
           'columnScales': columnScales,
         if (rowScales != null && rowScales!.isNotEmpty) 'rowScales': rowScales,
+        if (widthMax) 'widthMax': true,
       };
 
   static TableScaleValue fromJson(dynamic raw) {
@@ -415,10 +461,12 @@ class TableScaleValue {
       tabColSepPt: (p is num) ? p.toDouble().clamp(0.5, 12.0).toDouble() : 6.0,
       columnScales: parsedCs,
       rowScales: parsedRs,
+      widthMax: raw['widthMax'] == true,
     );
   }
 
   bool get isDefault =>
+      !widthMax &&
       (widthScale - 1.0).abs() < 1e-3 &&
       (heightScale - 1.0).abs() < 1e-3 &&
       fontSizeDeltaPt.abs() < 1e-3 &&

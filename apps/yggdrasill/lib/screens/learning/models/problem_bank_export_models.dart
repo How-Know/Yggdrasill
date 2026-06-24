@@ -60,8 +60,7 @@ const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
 const String kLearningDefaultTitlePageGoalText = '다시 풀기';
-const String kLearningRenderConfigVersion =
-    'pb_render_v103_stable_01';
+const String kLearningRenderConfigVersion = 'pb_render_v103_stable_01';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. 서버 측
 //   EXPORT_RENDER_CONFIG_VERSION_V2 / RENDER_CONFIG_VERSION_V2 와 일치해야 한다.
 //   클라이언트가 mathEngine='xelatex-v2' 로 요청하면 서버 normalize 단계에서
@@ -369,8 +368,9 @@ class LearningProblemExportSettings {
       timeLimitText: timeLimitText,
       titlePageTopText:
           titlePageTopText.isEmpty ? base.titlePageTopText : titlePageTopText,
-      titlePageGoalText:
-          titlePageGoalText.isEmpty ? base.titlePageGoalText : titlePageGoalText,
+      titlePageGoalText: titlePageGoalText.isEmpty
+          ? base.titlePageGoalText
+          : titlePageGoalText,
       includeQuestionScore: includeQuestionScore,
       questionScoreByQuestionId: questionScoreByQuestionId,
     );
@@ -693,23 +693,24 @@ String questionModeLabelOf(String mode) {
 }
 
 bool allowEssayOf(LearningProblemQuestion question) {
+  if (!question.allowSubjective) return false;
   return question.meta['allow_essay'] == true ||
       question.questionType.contains('\uC11C\uC220');
 }
 
 String originalQuestionModeOf(LearningProblemQuestion question) {
+  if (question.allowObjective && !question.allowSubjective) {
+    return kLearningQuestionModeObjective;
+  }
+  if (!question.allowObjective && question.allowSubjective) {
+    return kLearningQuestionModeSubjective;
+  }
   final type = question.questionType.trim();
   if (type.contains('\uC11C\uC220')) return kLearningQuestionModeEssay;
   if (type.contains('\uAC1D\uAD00\uC2DD')) {
     return kLearningQuestionModeObjective;
   }
   if (type.contains('\uC8FC\uAD00\uC2DD')) {
-    return kLearningQuestionModeSubjective;
-  }
-  if (question.allowObjective && !question.allowSubjective) {
-    return kLearningQuestionModeObjective;
-  }
-  if (!question.allowObjective && question.allowSubjective) {
     return kLearningQuestionModeSubjective;
   }
   if (question.effectiveChoices.length >= 2) {
@@ -971,6 +972,9 @@ String previewAnswerForMode(
   if (questionMode == kLearningQuestionModeObjective) {
     return objectiveAnswerForPreview(question);
   }
+  if (!question.allowSubjective) {
+    return objectiveAnswerForPreview(question);
+  }
   if (questionMode == kLearningQuestionModeSubjective ||
       questionMode == kLearningQuestionModeEssay) {
     return subjectiveAnswerForPreview(question);
@@ -990,6 +994,10 @@ String objectiveAnswerForPreview(LearningProblemQuestion question) {
 }
 
 String subjectiveAnswerForPreview(LearningProblemQuestion question) {
+  if (!question.allowSubjective) {
+    return objectiveAnswerForPreview(question);
+  }
+
   // 세트형 문항: meta.answer_parts 가 저장되어 있으면
   // "(1) 12\n(2) ㄱ, ㄷ" 형태로 줄바꿈을 살려 반환한다.
   // _sanitizeAnswerText 는 모든 공백을 단일 공백으로 합치므로
