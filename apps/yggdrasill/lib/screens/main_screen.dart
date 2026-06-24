@@ -20,6 +20,7 @@ import '../widgets/main_fab_alternative.dart';
 import '../theme/ygg_semantic_colors.dart';
 import '../app_overlays.dart';
 import '../services/tenant_service.dart';
+import '../services/watch_bridge_service.dart';
 import '../services/m5_question_request_store.dart';
 import '../models/class_info.dart';
 import '../models/session_override.dart';
@@ -1141,6 +1142,40 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       attended: attended,
       leaved: leaved,
     );
+    // 최신 출결 상태를 Apple Watch로 반영(iOS 전용, 그 외 no-op)
+    WatchBridgeService.instance.pushTodayTargets();
+  }
+
+  /// Apple Watch로 내려줄 오늘 출결 타깃 스냅샷을 직렬화한다.
+  ///
+  /// 워치는 여기서 받은 식별자/컨텍스트(setId, classDateTime, classEndTime,
+  /// className, sessionTypeId)를 그대로 되돌려주므로, iPhone은 재해석 없이
+  /// 기존 출결 로직을 호출할 수 있다.
+  List<Map<String, dynamic>> _buildWatchAttendanceTargets() {
+    final List<Map<String, dynamic>> items = [];
+    void add(_AttendanceTarget t, String status) {
+      items.add(<String, dynamic>{
+        'setId': t.setId,
+        'studentId': t.student.id,
+        'name': t.student.name,
+        'classDateTime': t.classDateTime.toIso8601String(),
+        'classEndTime': t.classDateTime.add(t.duration).toIso8601String(),
+        'className': t.classInfo?.name ?? '수업',
+        'sessionTypeId': t.classInfo?.id,
+        'status': status,
+      });
+    }
+
+    for (final t in _cachedWaiting) {
+      add(t, 'waiting');
+    }
+    for (final t in _cachedAttended) {
+      add(t, 'attended');
+    }
+    for (final t in _cachedLeaved) {
+      add(t, 'leaved');
+    }
+    return items;
   }
 
   /// 출석 사이드시트에 뜨는 학생 칩이 그려지기 전에 배정을 미리 로드해,
@@ -1858,6 +1893,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     DataManager.instance.attendanceRecordsNotifier.addListener(
       _markSideSheetDirty,
     );
+    // Apple Watch에 오늘 출결 타깃 스냅샷을 공급하는 콜백 등록
+    WatchBridgeService.instance.targetsProvider = _buildWatchAttendanceTargets;
     _utilityToolbarController = AnimationController(
       duration: const Duration(milliseconds: 260),
       reverseDuration: const Duration(milliseconds: 200),
@@ -2053,6 +2090,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     HardwareKeyboard.instance.removeHandler(_handleDebugSpaceSnackBarKey);
     // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
     _removeTooltip();
+    if (identical(
+      WatchBridgeService.instance.targetsProvider,
+      _buildWatchAttendanceTargets,
+    )) {
+      WatchBridgeService.instance.targetsProvider = null;
+    }
     if (identical(homeBatchConfirmAction, _globalBatchConfirmAction)) {
       homeBatchConfirmAction = null;
     }

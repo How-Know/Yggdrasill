@@ -17,6 +17,7 @@ import 'screens/timetable/timetable_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/data_manager.dart';
 import 'services/sync_service.dart';
+import 'services/watch_bridge_service.dart';
 import 'models/memo.dart';
 import 'models/student.dart';
 import 'models/education_level.dart';
@@ -864,6 +865,8 @@ void main() async {
   if (showUpdateSnack) {
     await sp.remove('show_update_snack');
   }
+  // Apple Watch 브리지 초기화(iOS 전용, 그 외 플랫폼 no-op)
+  WatchBridgeService.instance.init();
   runApp(MyApp(startFullscreen: fullscreen, startMaximized: maximizeFlag));
   if (showUpdateSnack) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
