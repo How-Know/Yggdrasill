@@ -800,8 +800,9 @@ void main() async {
         ', preferSupabaseRead=' +
         TagStore.preferSupabaseRead.toString());
   } catch (_) {}
-  await windowManager.ensureInitialized();
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  if (isDesktop) {
+    await windowManager.ensureInitialized();
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
@@ -812,19 +813,21 @@ void main() async {
   // 창을 보여주기 전에 최소/초기 크기를 먼저 적용해 즉시 제한이 걸리도록 처리
   // Surface Pro 12" (2196x1464 @150% → 1464x976) 의 95% 기준 최소 크기
   const Size kMinSize = Size(1430, 950);
-  final windowOptions = WindowOptions(
-    minimumSize: kMinSize,
-    size: (fullscreen || maximizeFlag) ? null : kMinSize,
-    center: !(fullscreen || maximizeFlag),
-    backgroundColor: _windowSurfaceForThemeMode(AppThemeController.mode.value),
-  );
-  await windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.show();
-    if (!(fullscreen || maximizeFlag)) {
-      await windowManager.center();
-    }
-    await windowManager.focus();
-  });
+  if (isDesktop) {
+    final windowOptions = WindowOptions(
+      minimumSize: kMinSize,
+      size: (fullscreen || maximizeFlag) ? null : kMinSize,
+      center: !(fullscreen || maximizeFlag),
+      backgroundColor: _windowSurfaceForThemeMode(AppThemeController.mode.value),
+    );
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      if (!(fullscreen || maximizeFlag)) {
+        await windowManager.center();
+      }
+      await windowManager.focus();
+    });
+  }
   // 시작 시 최신 버전 존재 여부를 확인해 전역 알림 상태를 준비한다.
   unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
   // 백필 실행 플래그
