@@ -415,6 +415,7 @@ async function publishStudentsTodayToDevice(academy_id, device_id, source = 'lis
     (binds || []).filter(b => b.device_id !== device_id).map(b => b.student_id)
   );
   const filtered = (data || []).filter(s => !boundToOther.has(s.student_id));
+  console.log('[gateway][list_today] result', { source, device_id, rpcTotal: (data || []).length, boundToOther: boundToOther.size, sent: filtered.length });
   publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
   return filtered.length;
 }
@@ -1355,6 +1356,24 @@ try {
           }
         } catch (e) {
           console.error('[gateway] realtime attendance_records handler error', e);
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'attendance_records' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? {};
+          // 새 학생 등원(INSERT). 아직 하원 전이면 다른 기기 리스트에 즉시 반영한다.
+          // UPDATE(하원)만 구독하던 기존 로직에선 신규 등원이 다른 기기에 자동 갱신되지 않아
+          // "한 M5가 켜져 있으면 다른 M5에서 새 학생을 못 불러오던" 문제가 있었다.
+          if (rec.academy_id && !rec.departure_time) {
+            console.log('[gateway] attendance arrival → list resync', { student_id: rec.student_id });
+            await republishStudentListToUnboundDevices(rec.academy_id, 'realtime_arrival');
+          }
+        } catch (e) {
+          console.error('[gateway] realtime attendance_records insert handler error', e);
         }
       }
     )

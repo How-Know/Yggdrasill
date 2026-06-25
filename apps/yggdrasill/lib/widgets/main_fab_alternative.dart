@@ -382,7 +382,22 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
+                                if (shouldShowExamFab) ...[
+                                  _buildExamFabButton(
+                                    enabled: examScheduleAction != null,
+                                    dialogOpen: examScheduleDialogOpen,
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
+                                Column(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    _buildPrimaryFabButton(),
+                                  ],
+                                ),
                                 if (shouldShowBatchConfirmFab) ...[
+                                  const SizedBox(width: 12),
                                   Opacity(
                                     opacity: canRunBatchConfirm ? 1.0 : 0.45,
                                     child: IgnorePointer(
@@ -417,22 +432,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(width: 12),
                                 ],
-                                if (shouldShowExamFab) ...[
-                                  _buildExamFabButton(
-                                    enabled: examScheduleAction != null,
-                                    dialogOpen: examScheduleDialogOpen,
-                                  ),
-                                  const SizedBox(width: 12),
-                                ],
-                                Column(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    _buildPrimaryFabButton(),
-                                  ],
-                                ),
                               ],
                             );
                           },

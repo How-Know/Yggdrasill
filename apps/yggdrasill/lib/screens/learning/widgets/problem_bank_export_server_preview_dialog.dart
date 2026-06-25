@@ -1,10 +1,15 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
-import '../../../theme/ygg_semantic_colors.dart';
+import '../../../services/print_routing_service.dart';
+import '../../../widgets/dialog_tokens.dart';
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 class ProblemBankPreviewQuestionScoreEntry {
   const ProblemBankPreviewQuestionScoreEntry({
@@ -129,9 +134,9 @@ class ProblemBankPreviewRefreshResult {
     this.titlePageIndices = const <int>[],
     this.titlePageHeaders = const <Map<String, dynamic>>[],
     this.coverPageTexts = const <String, dynamic>{},
-    this.includeAcademyLogo = false,
+    this.includeAcademyLogo = true,
     this.includeCoverPage = false,
-    this.includeAnswerSheet = true,
+    this.includeAnswerSheet = false,
     this.includeExplanation = false,
     this.includeQuestionScore = false,
     this.questionScoreByQuestionId = const <String, double>{},
@@ -187,6 +192,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     super.key,
     required this.pdfUrl,
     required this.titleText,
+    required this.expandedDialogSize,
     this.initialSubjectTitle = '수학 영역',
     this.initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.initialTitlePageGoalText = '다시 풀기',
@@ -200,9 +206,9 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialTitlePageIndices = const <int>[],
     this.initialTitlePageHeaders = const <Map<String, dynamic>>[],
     this.initialCoverPageTexts = const <String, dynamic>{},
-    this.initialIncludeAcademyLogo = false,
+    this.initialIncludeAcademyLogo = true,
     this.initialIncludeCoverPage = false,
-    this.initialIncludeAnswerSheet = true,
+    this.initialIncludeAnswerSheet = false,
     this.initialIncludeExplanation = false,
     this.initialIncludeQuestionScore = false,
     this.initialMathEngine = 'xelatex-v2',
@@ -219,6 +225,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
 
   final String pdfUrl;
   final String titleText;
+  final Size expandedDialogSize;
   final String initialSubjectTitle;
   final String initialTitlePageTopText;
   final String initialTitlePageGoalText;
@@ -250,6 +257,33 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested;
   final ProblemBankPreviewCreateAssignmentCallback? onCreateAssignmentRequested;
 
+  static const double _dialogFractionAtMaxWindow = 0.75;
+  static const double _dialogMaxCurrentWindowFraction = 0.8;
+  static const EdgeInsets _dialogInsetPadding =
+      EdgeInsets.symmetric(horizontal: 20, vertical: 12);
+
+  static Size _previewDialogSizeFor(BuildContext context) {
+    final windowSize = MediaQuery.sizeOf(context);
+    final view = View.of(context);
+    final screenSize = view.physicalSize / view.devicePixelRatio;
+    final availableWidth = windowSize.width - _dialogInsetPadding.horizontal;
+    final availableHeight = windowSize.height - _dialogInsetPadding.vertical;
+    final maxWindowAvailableWidth =
+        screenSize.width - _dialogInsetPadding.horizontal;
+    final maxWindowAvailableHeight =
+        screenSize.height - _dialogInsetPadding.vertical;
+    return Size(
+      math.min(
+        maxWindowAvailableWidth * _dialogFractionAtMaxWindow,
+        availableWidth * _dialogMaxCurrentWindowFraction,
+      ),
+      math.min(
+        maxWindowAvailableHeight * _dialogFractionAtMaxWindow,
+        availableHeight * _dialogMaxCurrentWindowFraction,
+      ),
+    );
+  }
+
   static Future<void> open(
     BuildContext context, {
     required String pdfUrl,
@@ -270,9 +304,9 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     List<Map<String, dynamic>> initialTitlePageHeaders =
         const <Map<String, dynamic>>[],
     Map<String, dynamic> initialCoverPageTexts = const <String, dynamic>{},
-    bool initialIncludeAcademyLogo = false,
+    bool initialIncludeAcademyLogo = true,
     bool initialIncludeCoverPage = false,
-    bool initialIncludeAnswerSheet = true,
+    bool initialIncludeAnswerSheet = false,
     bool initialIncludeExplanation = false,
     bool initialIncludeQuestionScore = false,
     String initialMathEngine = 'xelatex-v2',
@@ -288,60 +322,51 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested,
     ProblemBankPreviewCreateAssignmentCallback? onCreateAssignmentRequested,
   }) async {
-    final size = MediaQuery.sizeOf(context);
-    final maxWidth = (size.width - 24).clamp(1180.0, 2320.0).toDouble();
-    final maxHeight = (size.height * 0.8).clamp(640.0, 1280.0).toDouble();
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
+        final dialogSize = _previewDialogSizeFor(ctx);
         return PopScope(
           canPop: false,
           child: Dialog(
-            backgroundColor: const Color(0xFF10171A),
-            insetPadding:
-                const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: maxWidth,
-                maxHeight: maxHeight,
-                minWidth: 1040,
-                minHeight: 620,
-              ),
-              child: ProblemBankExportServerPreviewDialog(
-                pdfUrl: pdfUrl,
-                titleText: titleText,
-                initialSubjectTitle: initialSubjectTitle,
-                initialTitlePageTopText: initialTitlePageTopText,
-                initialTitlePageGoalText: initialTitlePageGoalText,
-                isAssignmentTemplate: isAssignmentTemplate,
-                initialTimeLimitText: initialTimeLimitText,
-                layoutColumns: layoutColumns,
-                maxQuestionsPerPage: maxQuestionsPerPage,
-                totalQuestionCount: totalQuestionCount,
-                initialPageColumnQuestionCounts:
-                    initialPageColumnQuestionCounts,
-                initialColumnLabelAnchors: initialColumnLabelAnchors,
-                initialTitlePageIndices: initialTitlePageIndices,
-                initialTitlePageHeaders: initialTitlePageHeaders,
-                initialCoverPageTexts: initialCoverPageTexts,
-                initialIncludeAcademyLogo: initialIncludeAcademyLogo,
-                initialIncludeCoverPage: initialIncludeCoverPage,
-                initialIncludeAnswerSheet: initialIncludeAnswerSheet,
-                initialIncludeExplanation: initialIncludeExplanation,
-                initialIncludeQuestionScore: initialIncludeQuestionScore,
-                initialMathEngine: initialMathEngine,
-                initialQuestionScoreByQuestionId:
-                    initialQuestionScoreByQuestionId,
-                questionScoreEntries: questionScoreEntries,
-                initialEditingPresetId: initialEditingPresetId,
-                initialEditingPresetName: initialEditingPresetName,
-                assignmentFlowNames: assignmentFlowNames,
-                onRefreshRequested: onRefreshRequested,
-                onGeneratePdfRequested: onGeneratePdfRequested,
-                onSaveSettingsRequested: onSaveSettingsRequested,
-                onCreateAssignmentRequested: onCreateAssignmentRequested,
-              ),
+            backgroundColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            insetPadding: _dialogInsetPadding,
+            child: ProblemBankExportServerPreviewDialog(
+              pdfUrl: pdfUrl,
+              titleText: titleText,
+              expandedDialogSize: dialogSize,
+              initialSubjectTitle: initialSubjectTitle,
+              initialTitlePageTopText: initialTitlePageTopText,
+              initialTitlePageGoalText: initialTitlePageGoalText,
+              isAssignmentTemplate: isAssignmentTemplate,
+              initialTimeLimitText: initialTimeLimitText,
+              layoutColumns: layoutColumns,
+              maxQuestionsPerPage: maxQuestionsPerPage,
+              totalQuestionCount: totalQuestionCount,
+              initialPageColumnQuestionCounts: initialPageColumnQuestionCounts,
+              initialColumnLabelAnchors: initialColumnLabelAnchors,
+              initialTitlePageIndices: initialTitlePageIndices,
+              initialTitlePageHeaders: initialTitlePageHeaders,
+              initialCoverPageTexts: initialCoverPageTexts,
+              initialIncludeAcademyLogo: initialIncludeAcademyLogo,
+              initialIncludeCoverPage: initialIncludeCoverPage,
+              initialIncludeAnswerSheet: initialIncludeAnswerSheet,
+              initialIncludeExplanation: initialIncludeExplanation,
+              initialIncludeQuestionScore: initialIncludeQuestionScore,
+              initialMathEngine: initialMathEngine,
+              initialQuestionScoreByQuestionId:
+                  initialQuestionScoreByQuestionId,
+              questionScoreEntries: questionScoreEntries,
+              initialEditingPresetId: initialEditingPresetId,
+              initialEditingPresetName: initialEditingPresetName,
+              assignmentFlowNames: assignmentFlowNames,
+              onRefreshRequested: onRefreshRequested,
+              onGeneratePdfRequested: onGeneratePdfRequested,
+              onSaveSettingsRequested: onSaveSettingsRequested,
+              onCreateAssignmentRequested: onCreateAssignmentRequested,
             ),
           ),
         );
@@ -360,7 +385,13 @@ class _ProblemBankExportServerPreviewDialogState
   static const String _defaultTitlePageGoalText = '다시 풀기';
   static const double _minScale = 0.2;
   static const double _maxScale = 8;
-  static const Color _panelBg = Color(0xFF151C21);
+  static const double _settingsPanelWidthFraction = 0.3;
+  static const double _settingsPanelMinWidth = 320;
+  static const double _settingsPanelMaxWidth = 420;
+  static const double _settingsPanelCollapsedWidth = 48;
+  static const double _settingsPanelGap = 12;
+  static const EdgeInsets _dialogContentPadding =
+      EdgeInsets.fromLTRB(14, 12, 14, 12);
   static const Color _panelSectionBg = Color(0xFF10171A);
   static const Color _panelBorder = Color(0xFF223131);
   static const Color _textPrimary = Color(0xFFEAF2F2);
@@ -370,6 +401,28 @@ class _ProblemBankExportServerPreviewDialogState
   static const double _firstPageAnchorPaddingTopPt = 27.0;
   static const double _otherPageAnchorTopPt = 9.2;
   static const double _otherPageAnchorPaddingTopPt = 35.8;
+
+  double _expandedSettingsPanelWidthFor(double dialogWidth) {
+    return (dialogWidth * _settingsPanelWidthFraction)
+        .clamp(_settingsPanelMinWidth, _settingsPanelMaxWidth)
+        .toDouble();
+  }
+
+  PreviewAcademyPanelStyle _settingsStyle(BuildContext context) {
+    return FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+  }
+
+  Color _settingsGroupedFill(BuildContext context) {
+    return FabTabBarTokens.previewAcademyDialogGroupedFillColor(
+      Theme.of(context).brightness,
+    );
+  }
+
+  Border _settingsGroupedBorder(BuildContext context) {
+    return FabTabBarTokens.groupedCardBorderFor(Theme.of(context).brightness);
+  }
 
   final PdfViewerController _viewerController = PdfViewerController();
   late final TextEditingController _subjectController;
@@ -396,8 +449,10 @@ class _ProblemBankExportServerPreviewDialogState
   int _viewerRevision = 0;
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
+  bool _isPrintingPdf = false;
   bool _isSavingSettings = false;
   bool _isCreatingAssignment = false;
+  bool _settingsPanelExpanded = true;
   String _mathEngine = 'xelatex-v2';
   String? _previewFailureMessage;
   String _lastPresetDisplayName = '';
@@ -430,11 +485,7 @@ class _ProblemBankExportServerPreviewDialogState
   void initState() {
     super.initState();
     _currentPdfUrl = widget.pdfUrl;
-    final initialEngine = widget.initialMathEngine.trim().toLowerCase();
-    // V2 (xelatex-v2) 는 한글-수식 시각 정렬·줄간격 대칭을 새로 잡는 별도 파이프라인.
-    //   V1 (xelatex) 캐시·매크로와 완전히 격리되어 동작하므로, V2 가 명시적으로 들어오면
-    //   그대로 보존한다.
-    _mathEngine = initialEngine == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex-v2';
+    _mathEngine = 'xelatex-v2';
     _previewFailureMessage = null;
     _editingPresetId = widget.initialEditingPresetId.trim();
     _editingPresetName = widget.initialEditingPresetName.trim();
@@ -629,7 +680,7 @@ class _ProblemBankExportServerPreviewDialogState
             builder: (context, setDialogState) {
               final total = _questionScoreTotal(draft);
               return AlertDialog(
-                backgroundColor: _panelBg,
+                backgroundColor: kDlgBg,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                   side: const BorderSide(color: _panelBorder),
@@ -1956,7 +2007,7 @@ class _ProblemBankExportServerPreviewDialogState
       barrierDismissible: false,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF10171A),
+          backgroundColor: kDlgBg,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: const BorderSide(color: _panelBorder),
@@ -2074,6 +2125,58 @@ class _ProblemBankExportServerPreviewDialogState
       duration: const Duration(milliseconds: 120),
     );
     if (mounted) setState(() {});
+  }
+
+  Future<void> _printCurrentPdf() async {
+    if (_isPrintingPdf) return;
+    final uri = Uri.tryParse(_currentPdfUrl.trim());
+    if (uri == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('인쇄할 PDF URL이 없습니다.')),
+      );
+      return;
+    }
+    setState(() {
+      _isPrintingPdf = true;
+    });
+    try {
+      final response = await http.get(uri);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('PDF 다운로드 실패(${response.statusCode})');
+      }
+      if (response.bodyBytes.isEmpty) {
+        throw Exception('PDF 데이터가 비어 있습니다.');
+      }
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}${Platform.pathSeparator}server_pdf_preview_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+      await file.writeAsBytes(response.bodyBytes, flush: true);
+      final directPrinted = await PrintRoutingService.instance.printFile(
+        path: file.path,
+        channel: PrintRoutingChannel.general,
+        debugSource: 'problem_bank_server_preview',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            directPrinted ? '인쇄 요청을 보냈습니다.' : 'PDF를 열었습니다. 인쇄를 진행해 주세요.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('인쇄 준비 실패: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPrintingPdf = false;
+        });
+      }
+    }
   }
 
   Future<void> _refreshPreview() async {
@@ -2216,7 +2319,7 @@ class _ProblemBankExportServerPreviewDialogState
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF10171A),
+          backgroundColor: kDlgBg,
           title: const Text(
             '프리셋 이름',
             style: TextStyle(color: _textPrimary),
@@ -2286,7 +2389,7 @@ class _ProblemBankExportServerPreviewDialogState
             }
 
             return AlertDialog(
-              backgroundColor: const Color(0xFF10171A),
+              backgroundColor: kDlgBg,
               title: const Text(
                 '과제 이름',
                 style: TextStyle(color: _textPrimary),
@@ -2643,23 +2746,31 @@ class _ProblemBankExportServerPreviewDialogState
     required String title,
     required Widget child,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
+    final style = _settingsStyle(context);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: _settingsGroupedFill(context),
+        borderRadius: BorderRadius.circular(
+          FabTabBarTokens.previewAcademyGroupedCardRadius,
+        ),
+        border: _settingsGroupedBorder(context),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             title,
-            style: const TextStyle(
-              color: _textPrimary,
-              fontSize: 13.4,
-              fontWeight: FontWeight.w800,
+            style: TextStyle(
+              color: style.title,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           child,
-          const SizedBox(height: 10),
-          const Divider(height: 1, color: Color(0xFF213037)),
         ],
       ),
     );
@@ -2672,14 +2783,19 @@ class _ProblemBankExportServerPreviewDialogState
     required ValueChanged<bool> onChanged,
     Widget? trailingAction,
   }) {
+    final style = _settingsStyle(context);
+    final brightness = Theme.of(context).brightness;
+    final tileColor = brightness == Brightness.dark
+        ? const Color(0xFF1C1C1E)
+        : const Color(0xFFF2F2F7);
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      padding: const EdgeInsets.fromLTRB(14, 11, 12, 11),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F171C),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF223137)),
+        color: tileColor,
+        borderRadius: BorderRadius.circular(18),
+        border: _settingsGroupedBorder(context),
       ),
       child: Row(
         children: [
@@ -2689,17 +2805,17 @@ class _ProblemBankExportServerPreviewDialogState
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
-                    color: _textPrimary,
-                    fontSize: 12.8,
+                  style: TextStyle(
+                    color: style.title,
+                    fontSize: 13,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   description,
-                  style: const TextStyle(
-                    color: _textMuted,
+                  style: TextStyle(
+                    color: style.hint,
                     fontSize: 11.4,
                     fontWeight: FontWeight.w600,
                     height: 1.3,
@@ -2716,10 +2832,12 @@ class _ProblemBankExportServerPreviewDialogState
           Switch(
             value: value,
             onChanged: onChanged,
-            activeThumbColor: const Color(0xFFC7F2D8),
-            activeTrackColor: const Color(0xFF1E6B55),
-            inactiveThumbColor: const Color(0xFF8EA0A8),
-            inactiveTrackColor: const Color(0xFF25333A),
+            activeThumbColor: const Color(0xFFFFFFFF),
+            activeTrackColor: FabTabBarTokens.previewConfirmActionColor,
+            inactiveThumbColor:
+                brightness == Brightness.dark ? const Color(0xFF8E8E93) : null,
+            inactiveTrackColor:
+                brightness == Brightness.dark ? const Color(0xFF3A3A3C) : null,
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
         ],
@@ -2732,12 +2850,13 @@ class _ProblemBankExportServerPreviewDialogState
     required TextEditingController controller,
     String? hintText,
   }) {
+    final style = _settingsStyle(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: TextField(
         controller: controller,
-        style: const TextStyle(
-          color: _textPrimary,
+        style: TextStyle(
+          color: style.inputText,
           fontSize: 12.6,
           fontWeight: FontWeight.w700,
         ),
@@ -2746,24 +2865,27 @@ class _ProblemBankExportServerPreviewDialogState
           hintText: hintText,
           isDense: true,
           filled: true,
-          fillColor: const Color(0xFF0E161B),
-          labelStyle: const TextStyle(
-            color: _textMuted,
+          fillColor: _settingsGroupedFill(context),
+          labelStyle: TextStyle(
+            color: style.label,
             fontSize: 12.0,
             fontWeight: FontWeight.w700,
           ),
-          hintStyle: const TextStyle(
-            color: Color(0xFF708188),
+          hintStyle: TextStyle(
+            color: style.hint,
             fontSize: 11.8,
             fontWeight: FontWeight.w600,
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF263740)),
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide(color: style.border),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF357D68), width: 1.1),
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(
+              color: FabTabBarTokens.previewConfirmActionColor,
+              width: 1.1,
+            ),
           ),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -2777,10 +2899,11 @@ class _ProblemBankExportServerPreviewDialogState
     required TextEditingController controller,
     String? hintText,
   }) {
+    final style = _settingsStyle(context);
     return TextField(
       controller: controller,
-      style: const TextStyle(
-        color: _textPrimary,
+      style: TextStyle(
+        color: style.inputText,
         fontSize: 12.3,
         fontWeight: FontWeight.w700,
       ),
@@ -2789,24 +2912,27 @@ class _ProblemBankExportServerPreviewDialogState
         hintText: hintText,
         isDense: true,
         filled: true,
-        fillColor: const Color(0xFF0E161B),
-        labelStyle: const TextStyle(
-          color: _textMuted,
+        fillColor: _settingsGroupedFill(context),
+        labelStyle: TextStyle(
+          color: style.label,
           fontSize: 11.7,
           fontWeight: FontWeight.w700,
         ),
-        hintStyle: const TextStyle(
-          color: Color(0xFF708188),
+        hintStyle: TextStyle(
+          color: style.hint,
           fontSize: 11.3,
           fontWeight: FontWeight.w600,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFF263740)),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: style.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFF357D68), width: 1.1),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(
+            color: FabTabBarTokens.previewConfirmActionColor,
+            width: 1.1,
+          ),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       ),
@@ -3577,451 +3703,524 @@ class _ProblemBankExportServerPreviewDialogState
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final panelCardBackground = panelStyle.groupedCardBackground;
+    final panelCardBorder = FabTabBarTokens.groupedCardBorderFor(brightness);
+    final panelButtonBackground = brightness == Brightness.dark
+        ? const Color(0xFF2C2C2E)
+        : const Color(0xFFEAF3FF);
+    final expandedSettingsPanelWidth =
+        _expandedSettingsPanelWidthFor(widget.expandedDialogSize.width);
+    final settingsPanelWidth = _settingsPanelExpanded
+        ? expandedSettingsPanelWidth
+        : _settingsPanelCollapsedWidth;
+    final dialogRadius = BorderRadius.circular(
+      FabTabBarTokens.previewAcademyInputSheetRadius,
+    );
     final currentUrl = _currentPdfUrl.trim();
     final uri = currentUrl.isEmpty ? null : Uri.tryParse(currentUrl);
     final zoomPercent = _viewerController.isReady
         ? (_viewerController.currentZoom * 100).round()
         : 100;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        widget.titleText,
-                        style: const TextStyle(
-                          color: Color(0xFFEAF2F2),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '닫기',
-                      onPressed: _attemptClose,
-                      icon: const Icon(Icons.close, color: Color(0xFF9FB3B3)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF151E24),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: const Color(0xFF223131)),
-                      ),
-                      child: Text(
-                        _pageCount > 0 ? '$_pageNumber / $_pageCount' : '- / -',
-                        style: const TextStyle(
-                          color: Color(0xFF9FB3B3),
-                          fontSize: 12.4,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: '축소',
-                      onPressed: () => _zoomByFactor(0.85),
-                      icon: const Icon(Icons.remove, color: Color(0xFF9FB3B3)),
-                    ),
-                    Text(
-                      '$zoomPercent%',
-                      style: const TextStyle(
-                        color: Color(0xFF9FB3B3),
-                        fontSize: 12.6,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '확대',
-                      onPressed: () => _zoomByFactor(1.15),
-                      icon: const Icon(Icons.add, color: Color(0xFF9FB3B3)),
-                    ),
-                    IconButton(
-                      tooltip: '화면 맞춤',
-                      onPressed: _resetZoomToFit,
-                      icon: const Icon(
-                        Icons.fit_screen_rounded,
-                        color: Color(0xFF9FB3B3),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Container(
-                      color: context.yggSurfaceBase,
-                      child: uri == null
-                          ? Center(
+    return SizedBox(
+      width: widget.expandedDialogSize.width,
+      height: widget.expandedDialogSize.height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: kDlgBg,
+          borderRadius: dialogRadius,
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 32,
+              offset: Offset(0, 12),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: dialogRadius,
+          child: ColoredBox(
+            color: kDlgBg,
+            child: Padding(
+              padding: _dialogContentPadding,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
                               child: Text(
-                                (_previewFailureMessage ?? '유효한 PDF URL이 아닙니다.')
-                                    .trim(),
-                                textAlign: TextAlign.center,
+                                widget.titleText,
+                                style: const TextStyle(
+                                  color: Color(0xFFEAF2F2),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '닫기',
+                              onPressed: _attemptClose,
+                              icon: const Icon(Icons.close,
+                                  color: Color(0xFF9FB3B3)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF151E24),
+                                borderRadius: BorderRadius.circular(999),
+                                border:
+                                    Border.all(color: const Color(0xFF223131)),
+                              ),
+                              child: Text(
+                                _pageCount > 0
+                                    ? '$_pageNumber / $_pageCount'
+                                    : '- / -',
                                 style: const TextStyle(
                                   color: Color(0xFF9FB3B3),
-                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12.4,
+                                  fontWeight: FontWeight.w800,
                                 ),
                               ),
-                            )
-                          : PdfViewer.uri(
-                              uri,
-                              key: ValueKey(
-                                  'preview_${_viewerRevision}_${uri.toString()}'),
-                              controller: _viewerController,
-                              params: PdfViewerParams(
-                                backgroundColor: context.yggSurfaceBase,
-                                margin: 10,
-                                layoutPages: _layoutTwoPageVertical,
-                                pageAnchor: PdfPageAnchor.center,
-                                pageAnchorEnd: PdfPageAnchor.center,
-                                panEnabled: true,
-                                scaleEnabled: true,
-                                panAxis: PanAxis.free,
-                                pageDropShadow: null,
-                                maxScale: _maxScale,
-                                minScale: _minScale,
-                                useAlternativeFitScaleAsMinScale: false,
-                                calculateInitialZoom: (
-                                  document,
-                                  controller,
-                                  fitZoom,
-                                  coverZoom,
-                                ) {
-                                  _fitZoom ??= fitZoom;
-                                  return fitZoom;
-                                },
-                                onViewerReady: (document, controller) {
-                                  if (!mounted) return;
-                                  setState(() {
-                                    _pageCount = document.pages.length;
-                                    _pageNumber = (controller.pageNumber ?? 1)
-                                        .clamp(1, 9999);
-                                  });
-                                },
-                                onPageChanged: (page) {
-                                  if (!mounted || page == null) return;
-                                  setState(() {
-                                    _pageNumber = page;
-                                  });
-                                },
-                                loadingBannerBuilder: (
-                                  context,
-                                  bytesDownloaded,
-                                  totalBytes,
-                                ) {
-                                  return const Center(
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2),
-                                  );
-                                },
-                                errorBannerBuilder: (
-                                  context,
-                                  error,
-                                  stackTrace,
-                                  documentRef,
-                                ) {
-                                  return Center(
-                                    child: Text(
-                                      '미리보기 PDF를 열 수 없습니다: $error',
-                                      style: const TextStyle(
-                                        color: Color(0xFF9FB3B3),
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  );
-                                },
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              tooltip: '축소',
+                              onPressed: () => _zoomByFactor(0.85),
+                              icon: const Icon(Icons.remove,
+                                  color: Color(0xFF9FB3B3)),
+                            ),
+                            Text(
+                              '$zoomPercent%',
+                              style: const TextStyle(
+                                color: Color(0xFF9FB3B3),
+                                fontSize: 12.6,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 360,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-              decoration: BoxDecoration(
-                color: _panelBg,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _panelBorder),
-              ),
-              child: Column(
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<String>(
-                      segments: const <ButtonSegment<String>>[
-                        ButtonSegment<String>(
-                          value: 'mathjax-svg',
-                          label: Text('MathJax SVG'),
-                          icon: Icon(Icons.code_rounded, size: 16),
+                            IconButton(
+                              tooltip: '확대',
+                              onPressed: () => _zoomByFactor(1.15),
+                              icon: const Icon(Icons.add,
+                                  color: Color(0xFF9FB3B3)),
+                            ),
+                            IconButton(
+                              tooltip: '화면 맞춤',
+                              onPressed: _resetZoomToFit,
+                              icon: const Icon(
+                                Icons.fit_screen_rounded,
+                                color: Color(0xFF9FB3B3),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '인쇄',
+                              onPressed: uri == null || _isPrintingPdf
+                                  ? null
+                                  : _printCurrentPdf,
+                              icon: _isPrintingPdf
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.print_rounded,
+                                      color: Color(0xFF9FB3B3),
+                                    ),
+                            ),
+                          ],
                         ),
-                        ButtonSegment<String>(
-                          value: 'xelatex-v2',
-                          label: Text('XeLaTeX V2'),
-                          icon: Icon(Icons.science_rounded, size: 16),
+                        const SizedBox(height: 8),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              color: kDlgPanelBg,
+                              child: uri == null
+                                  ? Center(
+                                      child: Text(
+                                        (_previewFailureMessage ??
+                                                '유효한 PDF URL이 아닙니다.')
+                                            .trim(),
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          color: Color(0xFF9FB3B3),
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    )
+                                  : PdfViewer.uri(
+                                      uri,
+                                      key: ValueKey(
+                                          'preview_${_viewerRevision}_${uri.toString()}'),
+                                      controller: _viewerController,
+                                      params: PdfViewerParams(
+                                        backgroundColor: kDlgPanelBg,
+                                        margin: 10,
+                                        layoutPages: _layoutTwoPageVertical,
+                                        pageAnchor: PdfPageAnchor.center,
+                                        pageAnchorEnd: PdfPageAnchor.center,
+                                        panEnabled: true,
+                                        scaleEnabled: true,
+                                        panAxis: PanAxis.free,
+                                        pageDropShadow: null,
+                                        maxScale: _maxScale,
+                                        minScale: _minScale,
+                                        useAlternativeFitScaleAsMinScale: false,
+                                        calculateInitialZoom: (
+                                          document,
+                                          controller,
+                                          fitZoom,
+                                          coverZoom,
+                                        ) {
+                                          _fitZoom ??= fitZoom;
+                                          return fitZoom;
+                                        },
+                                        onViewerReady: (document, controller) {
+                                          if (!mounted) return;
+                                          setState(() {
+                                            _pageCount = document.pages.length;
+                                            _pageNumber =
+                                                (controller.pageNumber ?? 1)
+                                                    .clamp(1, 9999);
+                                          });
+                                        },
+                                        onPageChanged: (page) {
+                                          if (!mounted || page == null) {
+                                            return;
+                                          }
+                                          setState(() {
+                                            _pageNumber = page;
+                                          });
+                                        },
+                                        loadingBannerBuilder: (
+                                          context,
+                                          bytesDownloaded,
+                                          totalBytes,
+                                        ) {
+                                          return const Center(
+                                            child: CircularProgressIndicator(
+                                                strokeWidth: 2),
+                                          );
+                                        },
+                                        errorBannerBuilder: (
+                                          context,
+                                          error,
+                                          stackTrace,
+                                          documentRef,
+                                        ) {
+                                          return Center(
+                                            child: Text(
+                                              '미리보기 PDF를 열 수 없습니다: $error',
+                                              style: const TextStyle(
+                                                color: Color(0xFF9FB3B3),
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                            ),
+                          ),
                         ),
                       ],
-                      selected: <String>{_mathEngine},
-                      onSelectionChanged: (Set<String> selected) {
-                        setState(() {
-                          _mathEngine = selected.first;
-                        });
-                        _refreshPreview();
-                      },
-                      style: ButtonStyle(
-                        backgroundColor:
-                            WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return _accent.withValues(alpha: 0.25);
-                          }
-                          return _panelSectionBg;
-                        }),
-                        foregroundColor:
-                            WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return _accent;
-                          }
-                          return _textMuted;
-                        }),
-                        side: WidgetStateProperty.all(
-                          const BorderSide(color: _panelBorder),
-                        ),
-                        visualDensity: VisualDensity.compact,
-                        textStyle: WidgetStateProperty.all(
-                          const TextStyle(fontSize: 12),
-                        ),
-                      ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          '설정',
-                          style: TextStyle(
-                            color: Color(0xFFEAF2F2),
-                            fontSize: 14.2,
-                            fontWeight: FontWeight.w800,
-                          ),
+                  const SizedBox(width: _settingsPanelGap),
+                  AnimatedContainer(
+                    duration: FabTabBarTokens
+                        .previewAcademyInputSheetTransitionDuration,
+                    curve: Curves.easeOutCubic,
+                    width: settingsPanelWidth,
+                    child: Container(
+                      padding: _settingsPanelExpanded
+                          ? const EdgeInsets.fromLTRB(10, 10, 10, 10)
+                          : EdgeInsets.zero,
+                      decoration: BoxDecoration(
+                        color: panelCardBackground,
+                        borderRadius: BorderRadius.circular(
+                          FabTabBarTokens.previewAcademyGroupedCardRadius,
                         ),
+                        border: panelCardBorder,
                       ),
-                      FilledButton.tonalIcon(
-                        onPressed: _isRefreshing ? null : _refreshPreview,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1C2A31),
-                          foregroundColor: _textPrimary,
-                          disabledBackgroundColor: const Color(0xFF172026),
-                          disabledForegroundColor: _textMuted,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        icon: _isRefreshing
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.refresh_rounded, size: 16),
-                        label: const Text('새로고침'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Expanded(
-                    child: SingleChildScrollView(
                       child: Column(
                         children: [
-                          _buildSectionCard(
-                            title: '타이틀',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                          if (_settingsPanelExpanded) ...[
+                            Row(
                               children: [
-                                _buildCoverTextField(
-                                  label: '제목 페이지 상단 문구 (모든 제목 페이지 공통)',
-                                  controller: _titlePageTopTextController,
-                                  hintText: _defaultTitlePageTopText,
-                                ),
-                                if (widget.isAssignmentTemplate)
-                                  _buildCoverTextField(
-                                    label: '과제목표 (제목 옆 가운데·회색, 기본 "다시 풀기")',
-                                    controller: _titlePageGoalTextController,
-                                    hintText: _defaultTitlePageGoalText,
+                                IconButton(
+                                  tooltip: '설정 접기',
+                                  onPressed: () => setState(
+                                      () => _settingsPanelExpanded = false),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                    minWidth: 36,
+                                    minHeight: 36,
                                   ),
-                                _buildTitleSwitchTile(
-                                  label: '학원 로고',
-                                  description: '모의고사형 제목 페이지에 학원 로고를 표시합니다.',
-                                  value: _includeAcademyLogo,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeAcademyLogo = value;
-                                    });
-                                  },
+                                  icon: const Icon(
+                                    Icons.chevron_right,
+                                  ),
+                                  color: panelStyle.icon,
                                 ),
-                                _buildTitleSwitchTile(
-                                  label: '표지',
-                                  description:
-                                      'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.',
-                                  value: _includeCoverPage,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeCoverPage = value;
-                                    });
-                                  },
-                                ),
-                                _buildTitleSwitchTile(
-                                  label: '점수',
-                                  description: '문항 끝에 [N점] 형식으로 배점을 표시합니다.',
-                                  value: _includeQuestionScore,
-                                  trailingAction: IconButton(
-                                    onPressed: _questionScoreEntries.isEmpty
-                                        ? null
-                                        : _openQuestionScoreSettingsDialog,
-                                    tooltip: '문항별 점수 설정',
-                                    icon: const Icon(Icons.tune_rounded),
-                                    iconSize: 18,
-                                    color: _textPrimary,
-                                    disabledColor: _textMuted,
-                                    visualDensity: VisualDensity.compact,
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: const Color(0xFF1B252B),
-                                      foregroundColor: _textPrimary,
-                                      disabledBackgroundColor:
-                                          const Color(0xFF162026),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
+                                Expanded(
+                                  child: Text(
+                                    '설정',
+                                    style: TextStyle(
+                                      color: panelStyle.title,
+                                      fontSize: 14.2,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeQuestionScore = value;
-                                    });
-                                  },
                                 ),
-                                _buildTitleSwitchTile(
-                                  label: '빠른정답',
-                                  description: '정답지(빠른정답) 페이지를 포함합니다.',
-                                  value: _includeAnswerSheet,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeAnswerSheet = value;
-                                    });
-                                  },
+                                FilledButton.tonalIcon(
+                                  onPressed:
+                                      _isRefreshing ? null : _refreshPreview,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: panelButtonBackground,
+                                    foregroundColor:
+                                        panelStyle.changeButtonText,
+                                    disabledBackgroundColor: panelStyle.divider,
+                                    disabledForegroundColor: panelStyle.hint,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  icon: _isRefreshing
+                                      ? const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Icon(Icons.refresh_rounded,
+                                          size: 16),
+                                  label: const Text('새로고침'),
                                 ),
-                                _buildTitleSwitchTile(
-                                  label: '해설',
-                                  description: '해설/검수 메모 페이지를 포함합니다.',
-                                  value: _includeExplanation,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeExplanation = value;
-                                    });
-                                  },
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  children: [
+                                    _buildSectionCard(
+                                      title: '타이틀',
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          _buildCoverTextField(
+                                            label:
+                                                '제목 페이지 상단 문구 (모든 제목 페이지 공통)',
+                                            controller:
+                                                _titlePageTopTextController,
+                                            hintText: _defaultTitlePageTopText,
+                                          ),
+                                          if (widget.isAssignmentTemplate)
+                                            _buildCoverTextField(
+                                              label:
+                                                  '과제목표 (제목 옆 가운데·회색, 기본 "다시 풀기")',
+                                              controller:
+                                                  _titlePageGoalTextController,
+                                              hintText:
+                                                  _defaultTitlePageGoalText,
+                                            ),
+                                          _buildTitleSwitchTile(
+                                            label: '학원 로고',
+                                            description:
+                                                '모의고사형 제목 페이지에 학원 로고를 표시합니다.',
+                                            value: _includeAcademyLogo,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _includeAcademyLogo = value;
+                                              });
+                                            },
+                                          ),
+                                          _buildTitleSwitchTile(
+                                            label: '표지',
+                                            description:
+                                                'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.',
+                                            value: _includeCoverPage,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _includeCoverPage = value;
+                                              });
+                                            },
+                                          ),
+                                          _buildTitleSwitchTile(
+                                            label: '점수',
+                                            description:
+                                                '문항 끝에 [N점] 형식으로 배점을 표시합니다.',
+                                            value: _includeQuestionScore,
+                                            trailingAction: IconButton(
+                                              onPressed: _questionScoreEntries
+                                                      .isEmpty
+                                                  ? null
+                                                  : _openQuestionScoreSettingsDialog,
+                                              tooltip: '문항별 점수 설정',
+                                              icon: const Icon(
+                                                  Icons.tune_rounded),
+                                              iconSize: 18,
+                                              color: _textPrimary,
+                                              disabledColor: _textMuted,
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              style: IconButton.styleFrom(
+                                                backgroundColor:
+                                                    const Color(0xFF1B252B),
+                                                foregroundColor: _textPrimary,
+                                                disabledBackgroundColor:
+                                                    const Color(0xFF162026),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                              ),
+                                            ),
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _includeQuestionScore = value;
+                                              });
+                                            },
+                                          ),
+                                          _buildTitleSwitchTile(
+                                            label: '빠른정답',
+                                            description:
+                                                '정답지(빠른정답) 페이지를 포함합니다.',
+                                            value: _includeAnswerSheet,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _includeAnswerSheet = value;
+                                              });
+                                            },
+                                          ),
+                                          _buildTitleSwitchTile(
+                                            label: '해설',
+                                            description: '해설/검수 메모 페이지를 포함합니다.',
+                                            value: _includeExplanation,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _includeExplanation = value;
+                                              });
+                                            },
+                                          ),
+                                          if (_includeCoverPage)
+                                            _buildCoverPageTextEditor(),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '중앙 타이틀 입력은 페이지 카드 하단의 `제목` 편집에서 페이지별로 설정합니다.\n1페이지는 기본 제목 페이지이며, 제목 페이지로 지정된 카드에서 타이틀/부제를 각각 입력할 수 있습니다.',
+                                            style: TextStyle(
+                                              color: panelStyle.hint,
+                                              fontSize: 12.0,
+                                              fontWeight: FontWeight.w600,
+                                              height: 1.38,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    _buildSectionCard(
+                                      title: '문제와 답안',
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          _buildCoverTextField(
+                                            label: '제한시간 (저장/복원용, PDF 미표시)',
+                                            controller: _timeLimitController,
+                                            hintText: '예: 100분',
+                                          ),
+                                          Text(
+                                            '현재 설정: 로고 ${_includeAcademyLogo ? 'ON' : 'OFF'} · 점수 ${_includeQuestionScore ? 'ON' : 'OFF'} · 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
+                                            style: TextStyle(
+                                              color: panelStyle.hint,
+                                              fontSize: 12.2,
+                                              fontWeight: FontWeight.w600,
+                                              height: 1.35,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    _buildSectionCard(
+                                      title: '레이아웃',
+                                      child: _buildPageLayoutCards(),
+                                    ),
+                                  ],
                                 ),
-                                if (_includeCoverPage)
-                                  _buildCoverPageTextEditor(),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  '중앙 타이틀 입력은 페이지 카드 하단의 `제목` 편집에서 페이지별로 설정합니다.\n1페이지는 기본 제목 페이지이며, 제목 페이지로 지정된 카드에서 타이틀/부제를 각각 입력할 수 있습니다.',
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            _buildCreateAssignmentButton(),
+                            const SizedBox(height: 8),
+                            _buildSaveSettingsButtons(),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed:
+                                    (widget.onGeneratePdfRequested == null ||
+                                            _isGeneratingPdf ||
+                                            _isRefreshing ||
+                                            _isSavingSettings ||
+                                            _isCreatingAssignment)
+                                        ? null
+                                        : _generatePdf,
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF173C36),
+                                  foregroundColor: const Color(0xFFC7F2D8),
+                                  disabledBackgroundColor:
+                                      const Color(0xFF152A27),
+                                  disabledForegroundColor:
+                                      const Color(0xFF7CA39A),
+                                  minimumSize: const Size.fromHeight(42),
+                                  shape: const StadiumBorder(),
+                                ),
+                                icon: _isGeneratingPdf
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.picture_as_pdf,
+                                        size: 18),
+                                label: const Text(
+                                  'PDF 생성',
                                   style: TextStyle(
-                                    color: Color(0xFF9FB3B3),
-                                    fontSize: 12.0,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.38,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
                                   ),
                                 ),
-                              ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildSectionCard(
-                            title: '문제와 답안',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _buildCoverTextField(
-                                  label: '제한시간 (저장/복원용, PDF 미표시)',
-                                  controller: _timeLimitController,
-                                  hintText: '예: 100분',
-                                ),
-                                Text(
-                                  '현재 설정: 로고 ${_includeAcademyLogo ? 'ON' : 'OFF'} · 점수 ${_includeQuestionScore ? 'ON' : 'OFF'} · 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
-                                  style: const TextStyle(
-                                    color: Color(0xFF9FB3B3),
-                                    fontSize: 12.2,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ],
+                          ] else ...[
+                            IconButton(
+                              tooltip: '설정 펼치기',
+                              onPressed: () =>
+                                  setState(() => _settingsPanelExpanded = true),
+                              icon: const Icon(Icons.chevron_left),
+                              color: panelStyle.icon,
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildSectionCard(
-                            title: '레이아웃',
-                            child: _buildPageLayoutCards(),
-                          ),
+                            const Expanded(child: SizedBox.shrink()),
+                          ],
                         ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _buildCreateAssignmentButton(),
-                  const SizedBox(height: 8),
-                  _buildSaveSettingsButtons(),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: (widget.onGeneratePdfRequested == null ||
-                              _isGeneratingPdf ||
-                              _isRefreshing ||
-                              _isSavingSettings ||
-                              _isCreatingAssignment)
-                          ? null
-                          : _generatePdf,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF173C36),
-                        foregroundColor: const Color(0xFFC7F2D8),
-                        disabledBackgroundColor: const Color(0xFF152A27),
-                        disabledForegroundColor: const Color(0xFF7CA39A),
-                        minimumSize: const Size.fromHeight(42),
-                        shape: const StadiumBorder(),
-                      ),
-                      icon: _isGeneratingPdf
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.picture_as_pdf, size: 18),
-                      label: const Text(
-                        'PDF 생성',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13,
-                        ),
                       ),
                     ),
                   ),
@@ -4029,7 +4228,7 @@ class _ProblemBankExportServerPreviewDialogState
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

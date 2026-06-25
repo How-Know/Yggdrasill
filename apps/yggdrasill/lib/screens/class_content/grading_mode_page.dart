@@ -19,6 +19,7 @@ import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 const double _kGradingBaseCardWidth = 288.0;
 const double _kGradingBaseCardMetaHeight = 140.0;
+const double _kGradingBaseCardMetaDisplayHeight = 108.0;
 const double _kGradingBaseCardHeight =
     _kGradingBaseCardWidth * 1.414 * 0.9 + _kGradingBaseCardMetaHeight;
 const double _kGradingWidthScale = 0.9;
@@ -26,12 +27,23 @@ const double _kGradingCardAspectRatio =
     (_kGradingBaseCardWidth * _kGradingWidthScale) / _kGradingBaseCardHeight;
 const double _kGradingCardMetaRatio =
     _kGradingBaseCardMetaHeight / _kGradingBaseCardHeight;
+const double _kGradingCardMetaDisplayRatio =
+    _kGradingBaseCardMetaDisplayHeight / _kGradingBaseCardHeight;
 const double _kGradingCardHeightByViewport = 0.52;
 const double _kGradingCardMinHeight = 140.0;
 const double _kGradingCardMaxHeight = 620.0;
 const double _kGradingCardMinWidth = 108.0;
 const double _kGradingCardMaxWidth = 396.0;
 const double _kGradingHomeworkRowTopInset = 24.0;
+const double _kGradingHomeworkCardMetaFontSize = 22.0;
+const double _kGradingHomeworkCardMetaLineHeightMax = 0.92;
+const double _kGradingHomeworkCardMetaLineHeightMin = 0.72;
+const double _kGradingHomeworkCardCoverNameFontSize =
+    FabTabBarTokens.previewAcademyMainTitleFontSize;
+const double _kGradingHomeworkCardCoverDetailFontSize = 22.0;
+const double _kGradingHomeworkCardCoverNameLineHeight = 1.15;
+const double _kGradingHomeworkCardCoverDetailLineHeight = 1.1;
+const double _kGradingHomeworkCardCoverNameVerticalPad = 10.0;
 const double _kGradingAnswerRailHorizontalPadding = 24.0;
 const double _kGradingAnswerRailHeaderGap = 12.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(0, 24, 24, 24);
@@ -59,6 +71,57 @@ String _gradingCardAssignmentNumberLabel(HomeworkItem hw) {
     return raw;
   }
   return '\uACFC\uC81C ${hw.orderIndex + 1}';
+}
+
+({String line1, String line2}) _splitGradingCardTitleLines(
+  String text, {
+  required double maxWidth,
+  required TextStyle style,
+}) {
+  final normalized = text.trim();
+  if (normalized.isEmpty) {
+    return (line1: '', line2: '');
+  }
+
+  bool fitsOneLine(String candidate) {
+    final painter = TextPainter(
+      text: TextSpan(text: candidate, style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      textScaler: TextScaler.noScaling,
+    )..layout(maxWidth: maxWidth);
+    return !painter.didExceedMaxLines && painter.width <= maxWidth + 0.5;
+  }
+
+  if (fitsOneLine(normalized)) {
+    return (line1: normalized, line2: '');
+  }
+
+  var breakAt = 1;
+  var low = 1;
+  var high = normalized.length;
+  while (low <= high) {
+    final mid = (low + high) >> 1;
+    final prefix = normalized.substring(0, mid);
+    if (fitsOneLine(prefix)) {
+      breakAt = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  final spaceIdx = normalized.lastIndexOf(' ', breakAt);
+  if (spaceIdx > 0) {
+    breakAt = spaceIdx;
+  }
+
+  final first = normalized.substring(0, breakAt).trimRight();
+  final second = normalized.substring(breakAt).trimLeft();
+  if (second.isEmpty) {
+    return (line1: normalized, line2: '');
+  }
+  return (line1: first, line2: second);
 }
 
 typedef GradingGroupTapCallback = Future<void> Function(
@@ -285,10 +348,18 @@ class _GradingModePageState extends State<GradingModePage> {
     final metaHeight = (height * _kGradingCardMetaRatio)
         .clamp(minMetaHeight, maxMetaHeight)
         .toDouble();
+    final minMetaDisplayHeight = math.min(
+      72.0,
+      metaHeight * (_kGradingBaseCardMetaDisplayHeight / _kGradingBaseCardMetaHeight),
+    );
+    final metaDisplayHeight = (height * _kGradingCardMetaDisplayRatio)
+        .clamp(minMetaDisplayHeight, metaHeight)
+        .toDouble();
     return _GradingCardLayout(
       width: width,
       height: height,
       metaHeight: metaHeight,
+      metaDisplayHeight: metaDisplayHeight,
       spacing: spacing,
     );
   }
@@ -671,6 +742,7 @@ class _GradingModePageState extends State<GradingModePage> {
             entry: entry,
             cardHeight: cardLayout.height,
             metaHeight: cardLayout.metaHeight,
+            metaDisplayHeight: cardLayout.metaDisplayHeight,
             isPendingConfirm: _isEntryPending(entry),
             isCompleteCheckbox: _isEntryPendingComplete(entry),
             coverPathFuture: (() {
@@ -1223,12 +1295,14 @@ class _GradingCardLayout {
   final double width;
   final double height;
   final double metaHeight;
+  final double metaDisplayHeight;
   final double spacing;
 
   const _GradingCardLayout({
     required this.width,
     required this.height,
     required this.metaHeight,
+    required this.metaDisplayHeight,
     required this.spacing,
   });
 }
@@ -1842,6 +1916,7 @@ class _SubmittedHomeworkCard extends StatefulWidget {
   final _GradingGroupEntry entry;
   final double cardHeight;
   final double metaHeight;
+  final double metaDisplayHeight;
   final Future<String?> coverPathFuture;
   final Future<void> Function()? onTap;
   final bool isPendingConfirm;
@@ -1851,6 +1926,7 @@ class _SubmittedHomeworkCard extends StatefulWidget {
     required this.entry,
     required this.cardHeight,
     required this.metaHeight,
+    required this.metaDisplayHeight,
     required this.coverPathFuture,
     this.onTap,
     this.isPendingConfirm = false,
@@ -1867,6 +1943,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   _GradingGroupEntry get entry => widget.entry;
   double get cardHeight => widget.cardHeight;
   double get metaHeight => widget.metaHeight;
+  double get metaDisplayHeight => widget.metaDisplayHeight;
   Future<String?> get coverPathFuture => widget.coverPathFuture;
   Future<void> Function()? get onTap => widget.onTap;
   bool get isPendingConfirm => widget.isPendingConfirm;
@@ -1903,12 +1980,13 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     final contentPadH = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
     final pageLines = _buildOverlayPageLines(entry);
-    final childCountText = '\uD558\uC704 ${entry.children.length}\uAC1C';
     final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
       Theme.of(context).brightness,
     );
     final coverHeight = (cardHeight - metaHeight).clamp(0.0, cardHeight);
-    final metaContentHeight = math.max(0.0, metaHeight - coverMetaGap);
+    final metaBottomInset = math.max(0.0, metaHeight - metaDisplayHeight);
+    final metaContentHeight =
+        math.max(0.0, metaDisplayHeight - coverMetaGap);
 
     Widget buildCoverStack() {
       return Stack(
@@ -1931,7 +2009,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                 scale,
                 line4: line4,
                 pageLines: pageLines,
-                childCountText: childCountText,
+                assignmentNumText: assignmentNumText,
               ),
             ),
           ),
@@ -1983,8 +2061,13 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     }
 
     Widget buildMetaSection() {
-      const subFontSize = 20.0;
-      const lineHeight = 1.1;
+      const subFontSize = _kGradingHomeworkCardMetaFontSize;
+      final lineHeight = (metaContentHeight / (subFontSize * 3))
+          .clamp(
+            _kGradingHomeworkCardMetaLineHeightMin,
+            _kGradingHomeworkCardMetaLineHeightMax,
+          )
+          .toDouble();
       final titleStyle = FabTabBarTokens.previewAcademyLabelStyle(panelStyle)
           .copyWith(
         fontSize: subFontSize,
@@ -1999,59 +2082,67 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         fontWeight: FontWeight.w600,
         height: lineHeight,
       );
-      final assignmentStyle = TextStyle(
-        color: panelStyle.label,
-        fontSize: subFontSize,
-        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
-        fontWeight: FontWeight.w700,
-        height: lineHeight,
-      );
       final line1Text = bookStr == '-' && courseStr == '-'
           ? (line2.trim().isEmpty ? '-' : line2)
           : (bookStr != '-' && courseStr != '-'
               ? '$bookStr \u00B7 $courseStr'
               : (bookStr != '-' ? bookStr : courseStr));
-      final totalTextHeight = (subFontSize * lineHeight) * 3;
-      final slack = math.max(0.0, metaContentHeight - totalTextHeight);
-      final baseGap = slack > 0 ? slack / 2 : 0.0;
-      final gap12 = baseGap * 0.7;
-      final gap23 = baseGap * 0.7;
+      final lineRowHeight = subFontSize * lineHeight;
+      final metaLineGap =
+          math.max(0.0, (metaContentHeight - lineRowHeight * 3) / 2);
 
       return SizedBox(
         height: metaContentHeight,
         width: double.infinity,
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: contentPadH),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                line1Text,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textScaler: TextScaler.noScaling,
-                style: titleStyle,
-              ),
-              SizedBox(height: gap12),
-              Text(
-                line2,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textScaler: TextScaler.noScaling,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final titleForRows = line1Text == line2 ? '' : line2;
+              final titleSplit = _splitGradingCardTitleLines(
+                titleForRows,
+                maxWidth: constraints.maxWidth,
                 style: subtitleStyle,
-              ),
-              SizedBox(height: gap23),
-              Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  assignmentNumText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textScaler: TextScaler.noScaling,
-                  style: assignmentStyle,
-                ),
-              ),
-            ],
+              );
+
+              Widget metaLineSlot({
+                required String text,
+                required TextStyle style,
+                Alignment alignment = Alignment.centerLeft,
+              }) {
+                return SizedBox(
+                  height: lineRowHeight,
+                  width: double.infinity,
+                  child: Align(
+                    alignment: alignment,
+                    child: Text(
+                      text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textScaler: TextScaler.noScaling,
+                      style: style,
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  metaLineSlot(text: line1Text, style: titleStyle),
+                  SizedBox(height: metaLineGap),
+                  metaLineSlot(
+                    text: titleSplit.line1,
+                    style: subtitleStyle,
+                  ),
+                  SizedBox(height: metaLineGap),
+                  metaLineSlot(
+                    text: titleSplit.line2,
+                    style: subtitleStyle,
+                  ),
+                ],
+              );
+            },
           ),
         ),
       );
@@ -2067,6 +2158,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         ),
         SizedBox(height: coverMetaGap),
         buildMetaSection(),
+        SizedBox(height: metaBottomInset),
       ],
     );
 
@@ -2085,7 +2177,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     double scale, {
     required String line4,
     required List<String> pageLines,
-    required String childCountText,
+    required String assignmentNumText,
   }) {
     return FutureBuilder<String?>(
       future: coverPathFuture,
@@ -2101,13 +2193,22 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         final useDarkOverlayText = !isProblemBankSource &&
             (isPrintCover ||
                 (!hasImage && fallbackCoverColor.computeLuminance() > 0.6));
-        const overlayNameSize = FabTabBarTokens.previewAcademyMainTitleFontSize;
-        const overlayDetailSize = 20.0;
+        const overlayNameFontSize = _kGradingHomeworkCardCoverNameFontSize;
+        const overlayDetailFontSize = _kGradingHomeworkCardCoverDetailFontSize;
+        const overlayNameLineHeight = _kGradingHomeworkCardCoverNameLineHeight;
+        const overlayDetailLineHeight =
+            _kGradingHomeworkCardCoverDetailLineHeight;
         final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
         final overlayNameColor = useDarkOverlayText
             ? Colors.black.withValues(alpha: 0.82)
             : Colors.white;
-        final overlayTimeGap = (6.0 * scale).clamp(3.0, 6.0).toDouble();
+        final overlayBlockGap = (6.0 * scale).clamp(4.0, 7.0).toDouble();
+        final overlayDetailGap =
+            (overlayBlockGap * 0.72).clamp(2.0, 4.5).toDouble();
+        final overlayNameVerticalPad =
+            (_kGradingHomeworkCardCoverNameVerticalPad * scale)
+                .clamp(8.0, 12.0)
+                .toDouble();
         final overlayTextShadows = useDarkOverlayText
             ? const <Shadow>[]
             : <Shadow>[
@@ -2162,7 +2263,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(
                     overlayHorizontalPad,
-                    (12.0 * scale).clamp(6.0, 12.0).toDouble(),
+                    (12.0 * scale).clamp(8.0, 12.0).toDouble(),
                     overlayHorizontalPad,
                     0,
                   ),
@@ -2170,21 +2271,27 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(
-                        entry.studentName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: overlayNameColor,
-                          fontSize: overlayNameSize,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.3,
-                          shadows: overlayNameShadows,
+                      Padding(
+                        padding: EdgeInsets.symmetric(
+                          vertical: overlayNameVerticalPad,
+                        ),
+                        child: Text(
+                          entry.studentName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: overlayNameColor,
+                            fontSize: overlayNameFontSize,
+                            fontWeight: FontWeight.w900,
+                            height: overlayNameLineHeight,
+                            letterSpacing: 0.3,
+                            shadows: overlayNameShadows,
+                          ),
                         ),
                       ),
                       if (line4 != '-') ...[
-                        SizedBox(height: overlayTimeGap),
+                        SizedBox(height: overlayBlockGap),
                         Text(
                           line4,
                           maxLines: 1,
@@ -2192,14 +2299,15 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: overlayNameColor,
-                            fontSize: overlayDetailSize,
+                            fontSize: overlayDetailFontSize,
                             fontWeight: FontWeight.w700,
+                            height: overlayDetailLineHeight,
                             shadows: overlayTextShadows,
                           ),
                         ),
                       ],
                       if (pageLines.isNotEmpty) ...[
-                        SizedBox(height: overlayTimeGap),
+                        SizedBox(height: overlayBlockGap),
                         for (int i = 0; i < pageLines.length; i++) ...[
                           Text(
                             pageLines[i],
@@ -2208,15 +2316,14 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                             textAlign: TextAlign.left,
                             style: TextStyle(
                               color: overlayNameColor,
-                              fontSize: overlayDetailSize,
+                              fontSize: overlayDetailFontSize,
                               fontWeight: FontWeight.w700,
+                              height: overlayDetailLineHeight,
                               shadows: overlayTextShadows,
                             ),
                           ),
                           if (i != pageLines.length - 1)
-                            SizedBox(
-                              height: (overlayTimeGap * 0.58).clamp(2.0, 4.0),
-                            ),
+                            SizedBox(height: overlayDetailGap),
                         ],
                       ],
                     ],
@@ -2226,7 +2333,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
             ),
             IgnorePointer(
               child: Align(
-                alignment: Alignment.bottomLeft,
+                alignment: Alignment.bottomRight,
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(
                     overlayHorizontalPad,
@@ -2235,14 +2342,15 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                     (8.0 * scale).clamp(4.0, 10.0).toDouble(),
                   ),
                   child: Text(
-                    childCountText,
+                    assignmentNumText,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.left,
+                    textAlign: TextAlign.right,
                     style: TextStyle(
                       color: overlayNameColor,
-                      fontSize: overlayDetailSize,
+                      fontSize: overlayDetailFontSize,
                       fontWeight: FontWeight.w700,
+                      height: overlayDetailLineHeight,
                       shadows: overlayTextShadows,
                     ),
                   ),

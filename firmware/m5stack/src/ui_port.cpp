@@ -2933,14 +2933,19 @@ static void build_homeworks_ui_internal() {
 }
 
 static void on_screensaver_wake(void) {
+  Serial.println("[SS-DIAG] wake_cb: enter"); Serial.flush();
   ui_after_screensaver_wake();
+  Serial.println("[SS-DIAG] wake_cb: after ui_after_screensaver_wake"); Serial.flush();
   if (s_homeworks_mode && is_entry_hub_visible()) {
+    Serial.println("[SS-DIAG] wake_cb: before hub_clock_timer_cb"); Serial.flush();
     hub_clock_timer_cb(nullptr);
+    Serial.println("[SS-DIAG] wake_cb: after hub_clock_timer_cb"); Serial.flush();
     if (!s_hub_clock_timer) {
       s_hub_clock_timer = lv_timer_create(hub_clock_timer_cb, 30000, NULL);
       lv_timer_set_repeat_count(s_hub_clock_timer, -1);
     }
   }
+  Serial.println("[SS-DIAG] wake_cb: done"); Serial.flush();
 }
 
 void ui_port_init() {

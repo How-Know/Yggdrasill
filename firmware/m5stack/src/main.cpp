@@ -57,6 +57,14 @@ static uint8_t mqttConsecutiveDisconnects = 0;
 static char willPayloadBuf[128];
 static char willTopicBuf[128];
 
+// [WIFI-DIAG] 무선 연결 진단 누적 버퍼. setup()의 WiFi 연결 과정(스캔/RSSI/첫 시도/
+// fallback/최종 결과/소요시간)을 모았다가 onMqttConnect에서 diag 토픽으로 발행한다.
+// USB를 꽂으면 증상이 사라져 시리얼로는 무선 문제를 재현할 수 없으므로 원격 수집한다.
+static String g_wifi_diag;
+static uint32_t g_wifi_connect_start_ms = 0;
+static uint32_t g_wifi_connected_ms = 0;
+static bool g_wifi_diag_sent = false;
+
 // MQTT stale watchdog states
 static uint32_t g_last_mqtt_connect_ms = 0;
 static uint32_t g_last_mqtt_rx_any_ms = 0;
@@ -71,6 +79,11 @@ static const uint32_t MQTT_STALE_SOFT_MS = 45000;
 static const uint32_t MQTT_STALE_HARD_MS = 180000;
 static const uint32_t MQTT_STALE_SOFT_COOLDOWN_MS = 15000;
 static const uint32_t MQTT_STALE_HARD_COOLDOWN_MS = 90000;
+// MQTT 첫 연결 watchdog: WiFi 연결 직후 첫 TCP SYN이 유실되면 lwIP 기본 타임아웃(~30초)
+// 까지 매달려 부팅~리스트 수신이 40초+ 걸린다. 재연결은 보통 2초면 되므로,
+// 연결 시도 후 일정 시간 내 못 붙으면 강제로 끊고 즉시 재연결한다.
+static uint32_t g_mqtt_connect_attempt_ms = 0;
+static const uint32_t MQTT_CONNECT_STALL_MS = 6000;
 
 // Deferred homework update (MQTT callback -> main loop)
 static portMUX_TYPE g_hw_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -362,6 +375,7 @@ void fw_clear_local_binding_state(void) {
 void onMqttConnect(bool sessionPresent) {
   g_last_mqtt_connect_ms = millis();
   g_last_mqtt_rx_any_ms = g_last_mqtt_connect_ms;
+  g_mqtt_connect_attempt_ms = 0; // 연결 성공 → 첫 연결 watchdog 해제
   mqttConsecutiveDisconnects = 0;
   ackFilterPrefix = String("academies/") + academyId + "/ack/";
   String ackTopic = ackFilterPrefix + "+";
@@ -379,6 +393,18 @@ void onMqttConnect(bool sessionPresent) {
   deviceAckTopic = String("academies/") + academyId + "/devices/" + deviceId + "/ack";
   mqtt.subscribe(deviceAckTopic.c_str(), 1);
   Serial.printf("MQTT connected & subscribed (sessionPresent=%d)\n", sessionPresent ? 1 : 0);
+
+  // [WIFI-DIAG] WiFi 연결 진단을 원격 수집(최초 1회). 무선 상태에서만 재현되는
+  // fallback/멈춤 증상의 근본 원인(RSSI 약화/AP 다중/연결 지연)을 확인하기 위함.
+  if (!g_wifi_diag_sent) {
+    g_wifi_diag_sent = true;
+    String diag = g_wifi_diag;
+    diag += "mqtt_connect_after_wifi_ms=" + String((unsigned long)(g_last_mqtt_connect_ms - g_wifi_connected_ms)) + "\n";
+    diag += "boot_to_mqtt_ms=" + String((unsigned long)(g_last_mqtt_connect_ms - g_wifi_connect_start_ms)) + "\n";
+    String diagTopic = String("academies/") + academyId + "/devices/" + deviceId + "/diag";
+    mqtt.publish(diagTopic.c_str(), 1, false, diag.c_str());
+    Serial.println("[WIFI-DIAG] published:\n" + diag);
+  }
 
   // Presence (retain)
   {
@@ -848,18 +874,32 @@ void setup() {
   const char* ssidToUse = configuredSsid;
   bool foundMatch = false;
   uint8_t targetBssid[6] = {0};
+  g_wifi_connect_start_ms = millis();
+  int targetRssi = 0;
   {
     Serial.println("WiFi scanning...");
     int n = WiFi.scanNetworks();
+    g_wifi_diag += "scan_nets=" + String(n) + "\n";
     for (int i = 0; i < n; ++i) {
       String s = WiFi.SSID(i);
       int ch = WiFi.channel(i);
-      if (i < 6) { Serial.printf("%d) %s (ch%d)\n", i + 1, s.c_str(), ch); }
-      if (s == String(configuredSsid)) { targetChannel = ch; ssidToUse = configuredSsid; foundMatch = true; memcpy(targetBssid, WiFi.BSSID(i), 6); }
-      else if (s == String(fallbackUtf8Ssid)) { targetChannel = ch; ssidToUse = fallbackUtf8Ssid; foundMatch = true; memcpy(targetBssid, WiFi.BSSID(i), 6); }
+      int rssi = WiFi.RSSI(i);
+      if (i < 6) { Serial.printf("%d) %s (ch%d rssi%d)\n", i + 1, s.c_str(), ch, rssi); }
+      // 진단: 스캔된 AP 목록(최대 12개) — 단일/다중 AP, 신호세기 확인용
+      if (i < 12) {
+        g_wifi_diag += "ap[" + String(i) + "]=" + s + " ch" + String(ch) + " rssi" + String(rssi) + "\n";
+      }
+      // 같은 SSID가 여러 개여도 RSSI가 가장 강한 AP를 선택(약한 AP 고정으로 인한 첫 연결 실패 방지)
+      if (s == String(configuredSsid) || s == String(fallbackUtf8Ssid)) {
+        if (!foundMatch || rssi > targetRssi) {
+          targetChannel = ch; ssidToUse = (s == String(configuredSsid)) ? configuredSsid : fallbackUtf8Ssid;
+          foundMatch = true; targetRssi = rssi; memcpy(targetBssid, WiFi.BSSID(i), 6);
+        }
+      }
     }
     WiFi.scanDelete();
   }
+  g_wifi_diag += "first_attempt ssid=" + String(ssidToUse) + " ch" + String(targetChannel) + " rssi" + String(targetRssi) + " matched=" + String(foundMatch ? 1 : 0) + "\n";
   if (targetChannel > 0) {
     if (foundMatch) {
       WiFi.begin(ssidToUse, WIFI_PASS, targetChannel, targetBssid);
@@ -872,9 +912,11 @@ void setup() {
 
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) { delay(200); }
+  g_wifi_diag += "first_result connected=" + String(WiFi.status() == WL_CONNECTED ? 1 : 0) + " elapsed_ms=" + String((unsigned long)(millis() - start)) + " status=" + String((int)WiFi.status()) + "\n";
 
   // Fallback: SSID 인코딩 문제로 실패 시, 스캔 결과를 이용해 순차 접속 시도
   if (WiFi.status() != WL_CONNECTED) {
+    g_wifi_diag += "fallback entered=1\n";
     M5.Display.println("Fallback connect trials...");
     int n2 = WiFi.scanNetworks();
     for (int i = 0; i < n2; ++i) {
@@ -885,9 +927,16 @@ void setup() {
       WiFi.begin(ss.c_str(), WIFI_PASS, ch, bssid);
       uint32_t t0 = millis();
       while (WiFi.status() != WL_CONNECTED && millis() - t0 < 6000) { delay(200); }
+      g_wifi_diag += "fallback_try[" + String(i) + "]=" + ss + " connected=" + String(WiFi.status() == WL_CONNECTED ? 1 : 0) + "\n";
       if (WiFi.status() == WL_CONNECTED) break;
     }
     WiFi.scanDelete();
+  }
+  g_wifi_connected_ms = millis();
+  if (WiFi.status() == WL_CONNECTED) {
+    g_wifi_diag += "final connected=1 rssi=" + String((int)WiFi.RSSI()) + " total_ms=" + String((unsigned long)(g_wifi_connected_ms - g_wifi_connect_start_ms)) + "\n";
+  } else {
+    g_wifi_diag += "final connected=0 total_ms=" + String((unsigned long)(g_wifi_connected_ms - g_wifi_connect_start_ms)) + "\n";
   }
   configureMqttServer();
   mqtt.setKeepAlive(30);
@@ -896,8 +945,12 @@ void setup() {
   mqtt.onDisconnect(onMqttDisconnect);
   mqtt.onMessage(onMqttMessage);
   // 고유 clientId는 최초 연결 전에 설정해야 함(브로커 즉시 종료 방지)
+  // setClientId()는 포인터만 저장(_clientId = clientId)하고 복사하지 않으므로
+  // 버퍼 수명이 프로그램 전체여야 한다. 지역 변수로 두면 setup() 종료/재연결 시
+  // 스택이 덮여 clientId가 깨지고("2","U" 등), 같은 깨진 값을 가진 기기끼리
+  // session takeover 핑퐁이 발생해 등원 리스트를 못 불러오는 버그가 생긴다.
+  static char cid[40];
   {
-    char cid[40];
     uint64_t mac = ESP.getEfuseMac();
     snprintf(cid, sizeof(cid), "m5-%llx", (unsigned long long)mac);
     mqtt.setClientId(cid);
@@ -908,6 +961,7 @@ void setup() {
   snprintf(willTopicBuf, sizeof(willTopicBuf), "academies/%s/devices/%s/presence", academyId.c_str(), deviceId.c_str());
   mqtt.setWill(willTopicBuf, 1, true, willPayloadBuf, strlen(willPayloadBuf));
   mqtt.connect();
+  g_mqtt_connect_attempt_ms = millis();
   Serial.print("WiFi connected, IP: "); Serial.println(WiFi.localIP());
   configTime(9 * 3600, 0, "pool.ntp.org", "time.google.com");
   Serial.println("MQTT connecting...");
@@ -924,6 +978,23 @@ void loop() {
   uint32_t nowTick = millis();
   lv_tick_inc(nowTick - lastTick);
   lastTick = nowTick;
+
+  // [HB] 진단용 하트비트: loop() 생존 여부로 "멈춤"이 진짜 hang(영구 정지)인지
+  // 단순 데이터 대기(렌더는 도는데 변화만 없음)인지 구분한다.
+  {
+    static uint32_t s_hb_last = 0;
+    if (s_hb_last == 0 || (nowTick - s_hb_last) >= 3000) {
+      s_hb_last = nowTick;
+      Serial.printf("[HB] up=%lus heap=%u sid=%d srecv=%d ready=%d mqtt=%d\n",
+                    (unsigned long)(nowTick / 1000),
+                    (unsigned)esp_get_free_heap_size(),
+                    studentId.length() > 0 ? 1 : 0,
+                    g_students_received ? 1 : 0,
+                    g_first_ui_data_ready ? 1 : 0,
+                    mqtt.connected() ? 1 : 0);
+      Serial.flush();
+    }
+  }
 
   // homeworks 토픽은 단일 슬롯에 덮어쓰기 → 처리 중·직후에 또 도착한 페이로드를 같은 루프에서 연속 소비
   for (int hw_drain = 0; hw_drain < 12 && g_hw_pending; hw_drain++) {
@@ -1076,7 +1147,20 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && !mqtt.connected() && nextMqttReconnectMs && now >= nextMqttReconnectMs) {
     nextMqttReconnectMs = 0;
     mqtt.connect();
+    g_mqtt_connect_attempt_ms = now;
     Serial.println("MQTT reconnect...");
+  }
+
+  // MQTT 첫 연결 watchdog: 연결 시도 후 MQTT_CONNECT_STALL_MS 내 못 붙으면(첫 SYN 유실로
+  // ~30초 매달리는 케이스) 강제로 끊고 즉시 재연결을 예약한다. 재연결은 보통 2초 내 성공.
+  if (WiFi.status() == WL_CONNECTED && !mqtt.connected()
+      && g_mqtt_connect_attempt_ms > 0
+      && (now - g_mqtt_connect_attempt_ms) >= MQTT_CONNECT_STALL_MS) {
+    Serial.printf("[MQTT][WATCHDOG] connect stalled %lums -> force reconnect\n",
+                  (unsigned long)(now - g_mqtt_connect_attempt_ms));
+    g_mqtt_connect_attempt_ms = 0;
+    mqtt.disconnect(true);
+    nextMqttReconnectMs = now + 300;
   }
 
   if (is_group_cmd_v2_enabled() && g_group_transition_pending && g_group_transition_pending_since_ms > 0) {

@@ -786,10 +786,11 @@ void screensaver_check_shake(void) {
         g_display_sleeping = false;
         
         // Close the screensaver immediately and return to main screen
-        Serial.println("[SCREENSAVER] Closing screensaver");
+        Serial.println("[SCREENSAVER] Closing screensaver"); Serial.flush();
         if (g_close_timer) { lv_timer_del(g_close_timer); g_close_timer = NULL; }
         if (g_blink_timer) { lv_timer_del(g_blink_timer); g_blink_timer = NULL; }
         if (g_blink_once_timer) { lv_timer_del(g_blink_once_timer); g_blink_once_timer = NULL; }
+        Serial.println("[SS-DIAG] timers deleted"); Serial.flush();
         
         g_brow_l = NULL;
         g_brow_r = NULL;
@@ -800,10 +801,14 @@ void screensaver_check_shake(void) {
         g_mouth = NULL;
         g_face_container = NULL;
         
+        Serial.println("[SS-DIAG] before lv_scr_load"); Serial.flush();
         if (g_prev_scr) lv_scr_load(g_prev_scr);
+        Serial.println("[SS-DIAG] after lv_scr_load / before lv_obj_del"); Serial.flush();
         if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
+        Serial.println("[SS-DIAG] after lv_obj_del / before wake_cb"); Serial.flush();
         g_last_activity_ms = lv_tick_get();
         if (g_wake_cb) g_wake_cb();
+        Serial.println("[SS-DIAG] after wake_cb (wake complete)"); Serial.flush();
     }
 }
 
