@@ -686,8 +686,8 @@ class RightSheetGradingSearchService {
       } else {
         pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
       }
-      final key = '${baseItem.id}|$pageNumber|$questionIndex|$uid';
-      final uidScore = presetScoreByUid[uid];
+      final key = '${baseItem.id}|pb|$uid';
+      final uidScore = question.totalScorePoint ?? presetScoreByUid[uid];
       if (uidScore != null && uidScore.isFinite && uidScore > 0) {
         scoreByQuestionKey[key] = uidScore;
       }

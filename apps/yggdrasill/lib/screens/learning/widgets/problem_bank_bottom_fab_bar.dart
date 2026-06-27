@@ -1,8 +1,11 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import 'problem_bank_range_controls.dart';
 
 class ProblemBankBottomFabBar extends StatelessWidget {
   const ProblemBankBottomFabBar({
@@ -290,9 +293,11 @@ class ProblemBankFilterMenuButton extends StatefulWidget {
     required this.difficultyFilterOptions,
     required this.selectedTypeFilters,
     required this.selectedDifficultyFilters,
+    required this.visibleQuestionCount,
     required this.onToggleTypeFilter,
     required this.onToggleDifficultyFilter,
     required this.onClearFilters,
+    required this.onRandomPick,
   });
 
   final bool disabled;
@@ -301,9 +306,11 @@ class ProblemBankFilterMenuButton extends StatefulWidget {
   final List<String> difficultyFilterOptions;
   final Set<String> selectedTypeFilters;
   final Set<String> selectedDifficultyFilters;
+  final int visibleQuestionCount;
   final ValueChanged<String> onToggleTypeFilter;
   final ValueChanged<String> onToggleDifficultyFilter;
   final VoidCallback onClearFilters;
+  final ValueChanged<int> onRandomPick;
 
   @override
   State<ProblemBankFilterMenuButton> createState() =>
@@ -312,121 +319,87 @@ class ProblemBankFilterMenuButton extends StatefulWidget {
 
 class _ProblemBankFilterMenuButtonState
     extends State<ProblemBankFilterMenuButton> {
-  final LayerLink _layerLink = LayerLink();
-  OverlayEntry? _overlayEntry;
+  final OverlayPortalController _overlayController = OverlayPortalController();
 
-  bool get _isOpen => _overlayEntry != null;
-
-  @override
-  void didUpdateWidget(covariant ProblemBankFilterMenuButton oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (_overlayEntry == null) return;
-    if (oldWidget.filterActive == widget.filterActive &&
-        _setEquals(oldWidget.selectedTypeFilters, widget.selectedTypeFilters) &&
-        _setEquals(
-          oldWidget.selectedDifficultyFilters,
-          widget.selectedDifficultyFilters,
-        ) &&
-        oldWidget.typeFilterOptions == widget.typeFilterOptions &&
-        oldWidget.difficultyFilterOptions == widget.difficultyFilterOptions) {
-      return;
-    }
-    _scheduleOverlayRebuild();
-  }
-
-  bool _setEquals(Set<String> a, Set<String> b) {
-    if (a.length != b.length) return false;
-    for (final value in a) {
-      if (!b.contains(value)) return false;
-    }
-    return true;
-  }
-
-  void _scheduleOverlayRebuild() {
-    if (_overlayEntry == null) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _overlayEntry == null) return;
-      _overlayEntry!.markNeedsBuild();
-    });
-  }
-
-  @override
-  void dispose() {
-    _removeOverlay();
-    super.dispose();
-  }
+  bool get _isOpen => _overlayController.isShowing;
 
   void _toggleOverlay() {
     if (widget.disabled) return;
     if (_isOpen) {
-      _removeOverlay();
-      return;
+      _overlayController.hide();
+    } else {
+      _overlayController.show();
     }
-    _overlayEntry = _buildOverlayEntry();
-    Overlay.of(context).insert(_overlayEntry!);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() {});
-    });
+    setState(() {});
   }
 
-  void _removeOverlay() {
-    final entry = _overlayEntry;
-    if (entry == null) return;
-    _overlayEntry = null;
-    entry.remove();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() {});
-    });
+  void _closeOverlay() {
+    if (!_isOpen) return;
+    _overlayController.hide();
+    setState(() {});
   }
 
-  OverlayEntry _buildOverlayEntry() {
-    return OverlayEntry(
-      builder: (overlayContext) {
+  @override
+  Widget build(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final fg = widget.filterActive || _isOpen
+        ? palette.labelSelected
+        : palette.labelUnselected;
+
+    return OverlayPortal.overlayChildLayoutBuilder(
+      controller: _overlayController,
+      overlayChildBuilder: (overlayContext, info) {
+        final targetRect = MatrixUtils.transformRect(
+          info.childPaintTransform,
+          Offset.zero & info.childSize,
+        );
+        final overlaySize = info.overlaySize;
+        final panelWidth = math.min(
+          _ProblemBankFilterPanel.panelMaxWidth,
+          overlaySize.width - 24,
+        );
+        final left = (targetRect.right - panelWidth)
+            .clamp(12.0, overlaySize.width - panelWidth - 12);
+        final top = targetRect.bottom +
+            FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
+        final maxPanelHeight = math.min(
+          overlaySize.height * 2 / 3,
+          overlaySize.height - top - 16,
+        );
+
         return Stack(
           children: [
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
-                onTap: _removeOverlay,
+                onTap: _closeOverlay,
               ),
             ),
-            CompositedTransformFollower(
-              link: _layerLink,
-              showWhenUnlinked: false,
-              targetAnchor: Alignment.bottomCenter,
-              followerAnchor: Alignment.topCenter,
-              offset: const Offset(0, 10),
+            Positioned(
+              left: left,
+              top: top,
+              width: panelWidth,
               child: Material(
                 color: Colors.transparent,
                 child: _ProblemBankFilterPanel(
+                  maxHeight: maxPanelHeight,
                   filterActive: widget.filterActive,
                   typeFilterOptions: widget.typeFilterOptions,
                   difficultyFilterOptions: widget.difficultyFilterOptions,
                   selectedTypeFilters: widget.selectedTypeFilters,
                   selectedDifficultyFilters: widget.selectedDifficultyFilters,
+                  visibleQuestionCount: widget.visibleQuestionCount,
                   onToggleTypeFilter: widget.onToggleTypeFilter,
                   onToggleDifficultyFilter: widget.onToggleDifficultyFilter,
                   onClearFilters: widget.onClearFilters,
-                  onClose: _removeOverlay,
+                  onRandomPick: widget.onRandomPick,
+                  onClose: _closeOverlay,
                 ),
               ),
             ),
           ],
         );
       },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
-    final fg = widget.filterActive || _isOpen
-        ? (isDark ? const Color(0xFFBEE7D2) : const Color(0xFF1A6B5E))
-        : (isDark ? const Color(0xFF9FB3B3) : Colors.black);
-
-    return CompositedTransformTarget(
-      link: _layerLink,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -445,246 +418,597 @@ class _ProblemBankFilterMenuButtonState
 
 class _ProblemBankFilterPanel extends StatelessWidget {
   const _ProblemBankFilterPanel({
+    required this.maxHeight,
     required this.filterActive,
     required this.typeFilterOptions,
     required this.difficultyFilterOptions,
     required this.selectedTypeFilters,
     required this.selectedDifficultyFilters,
+    required this.visibleQuestionCount,
     required this.onToggleTypeFilter,
     required this.onToggleDifficultyFilter,
     required this.onClearFilters,
+    required this.onRandomPick,
     required this.onClose,
   });
 
+  static const double panelMaxWidth = 560;
+  static const double _filterFontSize = 16;
+
+  final double maxHeight;
   final bool filterActive;
   final List<String> typeFilterOptions;
   final List<String> difficultyFilterOptions;
   final Set<String> selectedTypeFilters;
   final Set<String> selectedDifficultyFilters;
+  final int visibleQuestionCount;
   final ValueChanged<String> onToggleTypeFilter;
   final ValueChanged<String> onToggleDifficultyFilter;
   final VoidCallback onClearFilters;
+  final ValueChanged<int> onRandomPick;
   final VoidCallback onClose;
-
-  static const Color _checkboxBorder = Color(0xFF5E7777);
-  static const Color _checkboxActive = Color(0xFF1A6B5E);
 
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final isDark = brightness == Brightness.dark;
-    final panelColor = isDark ? const Color(0xFF111A1D) : Colors.white;
-    final borderColor = isDark
-        ? const Color(0xFF355056).withValues(alpha: 0.8)
-        : Colors.black.withValues(alpha: 0.08);
-    final titleColor =
-        isDark ? const Color(0xFFEAF2F2) : const Color(0xFF111A1D);
-    final sectionColor =
-        isDark ? const Color(0xFFD6ECEA) : const Color(0xFF1F2A2D);
-    final mutedColor =
-        isDark ? const Color(0xFF8FAAAA) : const Color(0xFF5F6B70);
-    final faintColor =
-        isDark ? const Color(0xFF6F8585) : const Color(0xFF8A9499);
-    final dividerColor =
-        isDark ? const Color(0xFF2A3A3A) : const Color(0xFFE7ECEC);
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final glassTint = isDark
+        ? FabTabBarTokens.previewAcademyMenuGlassTintDark
+        : FabTabBarTokens.previewAcademyMenuGlassTintLight;
+    final radius = BorderRadius.circular(
+      FabTabBarTokens.previewAcademyMenuRadius,
+    );
+    final hoverOverlay = isDark
+        ? FabTabBarTokens.previewAcademyMenuGlassHoverOverlayDark
+        : FabTabBarTokens.previewAcademyMenuGlassHoverOverlayLight;
     final resetColor = filterActive
-        ? (isDark ? const Color(0xFFBEE7D2) : const Color(0xFF1A6B5E))
-        : faintColor;
+        ? FabTabBarTokens.previewConfirmActionColor
+        : style.hint;
+    const headerBlockHeight = 52.0;
+    final bodyMaxHeight = math.max(0.0, maxHeight - headerBlockHeight);
 
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        width: 420,
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        decoration: BoxDecoration(
-          color: panelColor,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: borderColor),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.1),
-              blurRadius: 18,
-              offset: const Offset(0, 8),
-            ),
-          ],
+    final panelContent = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '문항 필터',
+                  style: FabTabBarTokens.previewMenuItemTextStyle(style)
+                      .copyWith(
+                    fontSize: _filterFontSize,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: filterActive ? onClearFilters : null,
+                style: TextButton.styleFrom(
+                  foregroundColor: resetColor,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  '초기화',
+                  style: FabTabBarTokens.previewAcademyLabelStyle(style)
+                      .copyWith(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: resetColor,
+                  ),
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onClose,
+                  borderRadius: BorderRadius.circular(999),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: style.icon,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
+        Divider(color: style.divider, height: 1),
+        Flexible(
+          fit: FlexFit.loose,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: bodyMaxHeight),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Expanded(
-                  child: Text(
-                    '문항 필터',
-                    style: TextStyle(
-                      color: titleColor,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                TextButton(
-                  onPressed: filterActive ? onClearFilters : null,
-                  style: TextButton.styleFrom(
-                    foregroundColor: resetColor,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 30),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text(
-                    '필터 초기화',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  onPressed: onClose,
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 18,
-                  color: mutedColor,
-                  tooltip: '닫기',
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
-            ),
-            Divider(color: dividerColor, height: 1),
-            const SizedBox(height: 10),
-            IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: _buildFilterColumn(
-                      title: '유형별',
+                  flex: 3,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: _buildTypeFilterColumn(
                       emptyMessage: '유형 정보 없음',
                       options: typeFilterOptions,
                       selected: selectedTypeFilters,
                       onToggle: onToggleTypeFilter,
-                      titleColor: sectionColor,
-                      emptyColor: faintColor,
-                      selectedTextColor: sectionColor,
-                      textColor: mutedColor,
+                      style: style,
+                      hoverOverlay: hoverOverlay,
                     ),
                   ),
-                  const SizedBox(width: 14),
-                  Container(
-                    width: 1,
-                    color: dividerColor,
+                ),
+                const SizedBox(width: 12),
+                Container(width: 1, color: style.divider),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: _buildRightFilterColumn(
+                    difficultyOptions: difficultyFilterOptions,
+                    selectedDifficultyFilters: selectedDifficultyFilters,
+                    onToggleDifficultyFilter: onToggleDifficultyFilter,
+                    visibleQuestionCount: visibleQuestionCount,
+                    onRandomPick: onRandomPick,
+                    style: style,
+                    hoverOverlay: hoverOverlay,
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: _buildFilterColumn(
-                      title: '난이도별',
-                      emptyMessage: '난이도 정보 없음',
-                      options: difficultyFilterOptions,
-                      selected: selectedDifficultyFilters,
-                      onToggle: onToggleDifficultyFilter,
-                      titleColor: sectionColor,
-                      emptyColor: faintColor,
-                      selectedTextColor: sectionColor,
-                      textColor: mutedColor,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
+        ),
+      ],
+    );
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: Material(
+        type: MaterialType.transparency,
+        color: Colors.transparent,
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            decoration: TextDecoration.none,
+            decorationColor: Colors.transparent,
+          ),
+          child: isDark
+              ? DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: style.groupedCardBackground,
+                    borderRadius: radius,
+                    border: FabTabBarTokens.groupedCardBorderFor(brightness),
+                  ),
+                  child: panelContent,
+                )
+              : DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: radius,
+                    border: Border.all(
+                      color: const Color(0x40FFFFFF),
+                      width: 0.5,
+                    ),
+                    boxShadow: palette.boxShadows,
+                  ),
+                  child: ClipRRect(
+                    borderRadius: radius,
+                    clipBehavior: Clip.antiAlias,
+                    child: ColoredBox(
+                      color: glassTint,
+                      child: panelContent,
+                    ),
+                  ),
+                ),
         ),
       ),
     );
   }
 
-  Widget _buildFilterColumn({
-    required String title,
+  Widget _buildRightFilterColumn({
+    required List<String> difficultyOptions,
+    required Set<String> selectedDifficultyFilters,
+    required ValueChanged<String> onToggleDifficultyFilter,
+    required int visibleQuestionCount,
+    required ValueChanged<int> onRandomPick,
+    required PreviewAcademyPanelStyle style,
+    required Color hoverOverlay,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 6, 4),
+          child: Text(
+            '난이도별',
+            style: FabTabBarTokens.previewAcademyLabelStyle(style).copyWith(
+              fontSize: _filterFontSize,
+              fontWeight: FontWeight.w800,
+              color: style.label,
+            ),
+          ),
+        ),
+        Expanded(
+          child: difficultyOptions.isEmpty
+              ? Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  child: Text(
+                    '난이도 정보 없음',
+                    style: FabTabBarTokens.previewBodyTextStyle(
+                      style,
+                      color: style.hint,
+                      fontWeight: FontWeight.w600,
+                    ).copyWith(fontSize: _filterFontSize),
+                  ),
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final option in difficultyOptions)
+                        _ProblemBankFilterMenuRow(
+                          selected:
+                              selectedDifficultyFilters.contains(option),
+                          style: style,
+                          hoverOverlay: hoverOverlay,
+                          onTap: () => onToggleDifficultyFilter(option),
+                          child: Text(
+                            option,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: FabTabBarTokens.previewMenuItemTextStyle(
+                              style,
+                            ).copyWith(
+                              fontSize: _filterFontSize,
+                              fontWeight:
+                                  selectedDifficultyFilters.contains(option)
+                                      ? FontWeight.w700
+                                      : FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+        ),
+        Divider(color: style.divider, height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
+          child: _ProblemBankRandomPickSection(
+            visibleQuestionCount: visibleQuestionCount,
+            style: style,
+            onPick: onRandomPick,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTypeFilterColumn({
     required String emptyMessage,
     required List<String> options,
     required Set<String> selected,
     required ValueChanged<String> onToggle,
-    required Color titleColor,
-    required Color emptyColor,
-    required Color selectedTextColor,
-    required Color textColor,
+    required PreviewAcademyPanelStyle style,
+    required Color hoverOverlay,
   }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 6, 4),
+          child: Text(
+            '유형별',
+            style: FabTabBarTokens.previewAcademyLabelStyle(style).copyWith(
+              fontSize: _filterFontSize,
+              fontWeight: FontWeight.w800,
+              color: style.label,
+            ),
+          ),
+        ),
+        if (options.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: Text(
+              emptyMessage,
+              style: FabTabBarTokens.previewBodyTextStyle(
+                style,
+                color: style.hint,
+                fontWeight: FontWeight.w600,
+              ).copyWith(fontSize: _filterFontSize),
+            ),
+          )
+        else
+          for (final option in options)
+            _ProblemBankFilterMenuRow(
+              selected: selected.contains(option),
+              style: style,
+              hoverOverlay: hoverOverlay,
+              onTap: () => onToggle(option),
+              child: _ProblemBankTypeFilterLabel(
+                typeKey: option,
+                style: style,
+              ),
+            ),
+      ],
+    );
+  }
+}
+
+class _ProblemBankTypeFilterLabel extends StatelessWidget {
+  const _ProblemBankTypeFilterLabel({
+    required this.typeKey,
+    required this.style,
+  });
+
+  final String typeKey;
+  final PreviewAcademyPanelStyle style;
+
+  ({String number, String name}) _parseTypeKey() {
+    final parts = typeKey.split('|');
+    final number = parts.isNotEmpty ? parts.first.trim() : '';
+    final name =
+        parts.length > 1 ? parts.sublist(1).join('|').trim() : '';
+    if (number == '유형 미지정') {
+      return (number: number, name: '');
+    }
+    return (number: number, name: name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final parsed = _parseTypeKey();
+    final numberStyle = FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+      fontSize: _ProblemBankFilterPanel._filterFontSize,
+      fontWeight: FontWeight.w800,
+      height: 1.2,
+    );
+    final nameStyle = FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+      fontSize: _ProblemBankFilterPanel._filterFontSize,
+      fontWeight: FontWeight.w600,
+      color: style.hint,
+      height: 1.2,
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          title,
-          style: TextStyle(
-            color: titleColor,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
+          parsed.number,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: numberStyle,
         ),
-        const SizedBox(height: 8),
-        if (options.isEmpty)
+        if (parsed.name.isNotEmpty) ...[
+          const SizedBox(height: 2),
           Text(
-            emptyMessage,
-            style: TextStyle(
-              color: emptyColor,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          )
-        else
-          for (final option in options)
-            _buildFilterCheckbox(
-              label: option,
-              checked: selected.contains(option),
-              onChanged: () => onToggle(option),
-              selectedTextColor: selectedTextColor,
-              textColor: textColor,
-            ),
+            parsed.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: nameStyle,
+          ),
+        ],
       ],
     );
   }
+}
 
-  Widget _buildFilterCheckbox({
-    required String label,
-    required bool checked,
-    required VoidCallback onChanged,
-    required Color selectedTextColor,
-    required Color textColor,
-  }) {
-    return InkWell(
-      onTap: onChanged,
-      borderRadius: BorderRadius.circular(6),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: 38,
-              height: 38,
-              child: Checkbox(
-                value: checked,
-                visualDensity: VisualDensity.compact,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                side: const BorderSide(color: _checkboxBorder),
-                activeColor: _checkboxActive,
-                onChanged: (_) => onChanged(),
-              ),
+class _ProblemBankFilterMenuRow extends StatefulWidget {
+  const _ProblemBankFilterMenuRow({
+    required this.selected,
+    required this.style,
+    required this.hoverOverlay,
+    required this.onTap,
+    required this.child,
+  });
+
+  final bool selected;
+  final PreviewAcademyPanelStyle style;
+  final Color hoverOverlay;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  State<_ProblemBankFilterMenuRow> createState() =>
+      _ProblemBankFilterMenuRowState();
+}
+
+class _ProblemBankFilterMenuRowState extends State<_ProblemBankFilterMenuRow> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: ColoredBox(
+          color: _hovered ? widget.hoverOverlay : Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 24,
+                  child: widget.selected
+                      ? Icon(
+                          Icons.check_rounded,
+                          size: _ProblemBankFilterPanel._filterFontSize,
+                          color: widget.style.title,
+                        )
+                      : null,
+                ),
+                Expanded(child: widget.child),
+              ],
             ),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: checked ? selectedTextColor : textColor,
-                  fontSize: 12,
-                  fontWeight: checked ? FontWeight.w800 : FontWeight.w700,
-                  height: 1.25,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProblemBankRandomPickSection extends StatefulWidget {
+  const _ProblemBankRandomPickSection({
+    required this.visibleQuestionCount,
+    required this.style,
+    required this.onPick,
+  });
+
+  final int visibleQuestionCount;
+  final PreviewAcademyPanelStyle style;
+  final ValueChanged<int> onPick;
+
+  @override
+  State<_ProblemBankRandomPickSection> createState() =>
+      _ProblemBankRandomPickSectionState();
+}
+
+class _ProblemBankRandomPickSectionState
+    extends State<_ProblemBankRandomPickSection> {
+  final TextEditingController _countController = TextEditingController();
+
+  @override
+  void dispose() {
+    _countController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final parsed = int.tryParse(_countController.text.trim());
+    if (parsed == null || parsed <= 0) return;
+    if (widget.visibleQuestionCount <= 0) return;
+    widget.onPick(parsed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canPick = widget.visibleQuestionCount > 0;
+    final hintColor = widget.style.hint;
+    final brightness = Theme.of(context).brightness;
+    final fieldDecoration = BoxDecoration(
+      color: widget.style.dropdownBackground,
+      borderRadius: BorderRadius.circular(10),
+      border: FabTabBarTokens.groupedCardBorderFor(brightness),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '랜덤 선택',
+            style: FabTabBarTokens.previewAcademyLabelStyle(widget.style)
+                .copyWith(
+              fontSize: _ProblemBankFilterPanel._filterFontSize,
+              fontWeight: FontWeight.w800,
+              color: widget.style.label,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            canPick
+                ? '현재 화면 ${widget.visibleQuestionCount}문항 중'
+                : '선택 가능한 문항이 없습니다',
+            style: FabTabBarTokens.previewBodyTextStyle(
+              widget.style,
+              color: hintColor,
+              fontWeight: FontWeight.w600,
+            ).copyWith(fontSize: _ProblemBankFilterPanel._filterFontSize),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 88),
+                  child: SizedBox(
+                    height: problemBankRangeControlHeight,
+                    child: DecoratedBox(
+                      decoration: fieldDecoration,
+                      child: TextField(
+                        controller: _countController,
+                        enabled: canPick,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        style: FabTabBarTokens.previewBodyTextStyle(
+                          widget.style,
+                          fontWeight: FontWeight.w600,
+                        ).copyWith(
+                          fontSize: _ProblemBankFilterPanel._filterFontSize,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: '개수',
+                          hintStyle: TextStyle(
+                            color: hintColor,
+                            fontSize: _ProblemBankFilterPanel._filterFontSize,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          isDense: true,
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 10,
+                          ),
+                        ),
+                        onSubmitted: canPick ? (_) => _submit() : null,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
+              const Spacer(),
+              SizedBox(
+                height: problemBankRangeControlHeight,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: canPick ? _submit : null,
+                    borderRadius: BorderRadius.circular(10),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: canPick
+                            ? FabTabBarTokens.previewConfirmActionColor
+                            : widget.style.dropdownBackground,
+                        borderRadius: BorderRadius.circular(10),
+                        border: FabTabBarTokens.groupedCardBorderFor(brightness),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Center(
+                          child: Text(
+                            '뽑기',
+                            style: TextStyle(
+                              fontFamily: FabTabBarTokens
+                                  .previewAcademyLabelFontFamily,
+                              color: canPick ? Colors.white : hintColor,
+                              fontSize: _ProblemBankFilterPanel._filterFontSize,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -12,6 +12,7 @@ import '../../services/homework_assignment_store.dart';
 import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
 import '../../utils/homework_page_text.dart';
+import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/home_header_weather_icon.dart';
 import '../../widgets/resource_textbook_card.dart';
@@ -350,7 +351,8 @@ class _GradingModePageState extends State<GradingModePage> {
         .toDouble();
     final minMetaDisplayHeight = math.min(
       72.0,
-      metaHeight * (_kGradingBaseCardMetaDisplayHeight / _kGradingBaseCardMetaHeight),
+      metaHeight *
+          (_kGradingBaseCardMetaDisplayHeight / _kGradingBaseCardMetaHeight),
     );
     final metaDisplayHeight = (height * _kGradingCardMetaDisplayRatio)
         .clamp(minMetaDisplayHeight, metaHeight)
@@ -409,8 +411,8 @@ class _GradingModePageState extends State<GradingModePage> {
     final brightness = Theme.of(context).brightness;
     final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle);
-    final statsStyle = FabTabBarTokens.previewAcademyLabelStyle(panelStyle)
-        .copyWith(
+    final statsStyle =
+        FabTabBarTokens.previewAcademyLabelStyle(panelStyle).copyWith(
       color: brightness == Brightness.light
           ? const Color(0xFF1976D2)
           : const Color(0xFF8FB3FF),
@@ -577,16 +579,16 @@ class _GradingModePageState extends State<GradingModePage> {
   int _bookTypeRank(_GradingAnswerBook book) {
     final haystack =
         '${book.name} ${book.description}'.replaceAll(RegExp(r'\s+'), '');
-    if (haystack.contains('\uAC1C\uB150') ||
-        haystack.contains('\uAE30\uBCF8')) return 0;
-    if (haystack.contains('\uC720\uD615') ||
-        haystack.contains('\uC751\uC6A9')) return 1;
+    if (haystack.contains('\uAC1C\uB150') || haystack.contains('\uAE30\uBCF8'))
+      return 0;
+    if (haystack.contains('\uC720\uD615') || haystack.contains('\uC751\uC6A9'))
+      return 1;
     if (haystack.contains('\uC2EC\uD654') ||
         haystack.contains('\uCD5C\uC0C1\uC704')) {
       return 2;
     }
-    if (haystack.contains('\uC2E4\uC804') ||
-        haystack.contains('\uAE30\uCD9C')) return 3;
+    if (haystack.contains('\uC2E4\uC804') || haystack.contains('\uAE30\uCD9C'))
+      return 3;
     return 4;
   }
 
@@ -690,11 +692,8 @@ class _GradingModePageState extends State<GradingModePage> {
   ) async {
     final answerPath = grade.answerPath.trim();
     if (answerPath.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('\uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.'),
-        ),
-      );
+      showAppSnackBar(
+          context, '\uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.');
       return;
     }
     final titleBase = book.name.trim().isEmpty
@@ -1155,7 +1154,8 @@ class _GradingModePageState extends State<GradingModePage> {
       id: (runningChild ?? first).id,
       assignmentCode: (runningChild ?? first).assignmentCode,
       learningTrackCode: group.learningTrackCode,
-      title: title.trim().isEmpty ? '(\uC81C\uBAA9 \uC5C6\uC74C)' : title.trim(),
+      title:
+          title.trim().isEmpty ? '(\uC81C\uBAA9 \uC5C6\uC74C)' : title.trim(),
       body: displaySeed.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
@@ -1462,52 +1462,52 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-              child: widget.isLoading && widget.books.isEmpty
-                  ? const Center(
-                      child: SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : widget.books.isEmpty
-                      ? const Center(
-                          child: Text(
-                            '\uC5F0\uACB0\uB41C \uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Color(0xFF7F8C8C),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              height: 1.3,
-                            ),
-                          ),
-                        )
-                      : Listener(
-                          behavior: HitTestBehavior.opaque,
-                          onPointerSignal: (signal) {
-                            if (signal is PointerScrollEvent) {
-                              final dx = signal.scrollDelta.dx;
-                              final dy = signal.scrollDelta.dy;
-                              if (dy != 0 && dy.abs() > dx.abs()) {
-                                _changeBookBy(dy > 0 ? 1 : -1);
-                              }
-                            }
-                          },
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onVerticalDragStart: _handleBookDragStart,
-                            onVerticalDragUpdate: _handleBookDragUpdate,
-                            onVerticalDragEnd: _handleBookDragEnd,
-                            onVerticalDragCancel: _resetBookDrag,
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                return _buildRevolvingStack(constraints);
-                              },
-                            ),
+            child: widget.isLoading && widget.books.isEmpty
+                ? const Center(
+                    child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : widget.books.isEmpty
+                    ? const Center(
+                        child: Text(
+                          '\uC5F0\uACB0\uB41C \uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Color(0xFF7F8C8C),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            height: 1.3,
                           ),
                         ),
-            ),
+                      )
+                    : Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerSignal: (signal) {
+                          if (signal is PointerScrollEvent) {
+                            final dx = signal.scrollDelta.dx;
+                            final dy = signal.scrollDelta.dy;
+                            if (dy != 0 && dy.abs() > dx.abs()) {
+                              _changeBookBy(dy > 0 ? 1 : -1);
+                            }
+                          }
+                        },
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onVerticalDragStart: _handleBookDragStart,
+                          onVerticalDragUpdate: _handleBookDragUpdate,
+                          onVerticalDragEnd: _handleBookDragEnd,
+                          onVerticalDragCancel: _resetBookDrag,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              return _buildRevolvingStack(constraints);
+                            },
+                          ),
+                        ),
+                      ),
+          ),
         ],
       ),
     );
@@ -1798,8 +1798,8 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                               fontFamily:
                                   FabTabBarTokens.previewHeadlineFontFamily,
                               color: Colors.white,
-                              fontSize:
-                                  FabTabBarTokens.previewAcademyMainTitleFontSize,
+                              fontSize: FabTabBarTokens
+                                  .previewAcademyMainTitleFontSize,
                               fontWeight:
                                   FabTabBarTokens.previewHeadlineFontWeight,
                               height: 1.15,
@@ -1845,9 +1845,8 @@ class _GradingAnswerGradeBadge extends StatelessWidget {
     final brightness = Theme.of(context).brightness;
     final palette = FabTabBarTokens.paletteFor(brightness);
     final isDark = brightness == Brightness.dark;
-    final capsuleColor = isDark
-        ? const Color(0xE610171A)
-        : Colors.white.withValues(alpha: 0.92);
+    final capsuleColor =
+        isDark ? const Color(0xE610171A) : Colors.white.withValues(alpha: 0.92);
     final borderColor = isDark
         ? const Color(0xFF355056).withValues(alpha: 0.62)
         : Colors.black.withValues(alpha: 0.04);
@@ -1985,8 +1984,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     );
     final coverHeight = (cardHeight - metaHeight).clamp(0.0, cardHeight);
     final metaBottomInset = math.max(0.0, metaHeight - metaDisplayHeight);
-    final metaContentHeight =
-        math.max(0.0, metaDisplayHeight - coverMetaGap);
+    final metaContentHeight = math.max(0.0, metaDisplayHeight - coverMetaGap);
 
     Widget buildCoverStack() {
       return Stack(
@@ -2068,8 +2066,8 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
             _kGradingHomeworkCardMetaLineHeightMax,
           )
           .toDouble();
-      final titleStyle = FabTabBarTokens.previewAcademyLabelStyle(panelStyle)
-          .copyWith(
+      final titleStyle =
+          FabTabBarTokens.previewAcademyLabelStyle(panelStyle).copyWith(
         fontSize: subFontSize,
         fontWeight: FontWeight.w700,
         height: lineHeight,

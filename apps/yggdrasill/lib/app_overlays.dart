@@ -290,3 +290,35 @@ final ValueNotifier<ExamPresetDragPayload?> activeExamPresetDragPayload =
 /// 시험 프리셋 카드 드래그 피드백이 왼쪽 사이드시트 영역에 진입했는지 여부.
 final ValueNotifier<bool> isExamPresetDraggingOverLeftSideSheet =
     ValueNotifier<bool>(false);
+
+/// 교재 탐색기 등 외부 화면 → 문제은행 탭으로 보낼 문항 핸드오프 요청.
+/// - null: 대기 중 요청 없음
+/// - non-null: 문제은행이 부트스트랩 시 소비하여 장바구니에 주입
+class ProblemBankHandoffRequest {
+  const ProblemBankHandoffRequest({required this.questionUids});
+
+  final List<String> questionUids;
+}
+
+final ValueNotifier<ProblemBankHandoffRequest?> pendingProblemBankHandoff =
+    ValueNotifier<ProblemBankHandoffRequest?>(null);
+
+/// 메인 네비게이션(사이드바) 인덱스 전환 요청. (예: 외부 화면 → 학습 탭 3)
+final ValueNotifier<int?> requestedMainNavIndex = ValueNotifier<int?>(null);
+
+/// 학습 화면 내부 탭 전환 요청. (0: 커리큘럼, 1: 문제은행)
+final ValueNotifier<int?> requestedLearningTab = ValueNotifier<int?>(null);
+
+/// 외부 화면에서 선택한 문항 UID 목록을 문제은행 탭으로 보내 장바구니에 담는다.
+/// 메인 탭(학습=3) → 학습 내부 탭(문제은행=1) 순으로 전환 요청을 발행한다.
+void requestOpenQuestionsInProblemBank(List<String> questionUids) {
+  final uids = questionUids
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList(growable: false);
+  if (uids.isEmpty) return;
+  pendingProblemBankHandoff.value =
+      ProblemBankHandoffRequest(questionUids: uids);
+  requestedLearningTab.value = 1;
+  requestedMainNavIndex.value = 3;
+}

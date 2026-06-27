@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -1912,9 +1912,8 @@ class ProblemBankService {
   }) async {
     final aid = academyId.trim();
     final docId = documentId.trim();
-    final number = questionNumber.trim().isEmpty
-        ? 'question'
-        : questionNumber.trim();
+    final number =
+        questionNumber.trim().isEmpty ? 'question' : questionNumber.trim();
     if (aid.isEmpty || docId.isEmpty) {
       throw Exception('manual_figure_missing_scope');
     }
@@ -2529,6 +2528,12 @@ class ProblemBankService {
       );
     }
     await _client.from('pb_questions').update(payload).eq('id', questionId);
+    if (nextMeta != null) {
+      await _syncQuestionScoreToExportPresets(
+        questionId: questionId,
+        meta: nextMeta,
+      );
+    }
     final mayAffectSubjectiveRender = subjectiveAnswer != null ||
         questionType != null ||
         allowSubjective != null ||
@@ -2536,6 +2541,92 @@ class ProblemBankService {
     if (mayAffectSubjectiveRender) {
       _scheduleUnifiedAnswerRenderRefreshForQuestion(questionId);
     }
+  }
+
+  Future<void> _syncQuestionScoreToExportPresets({
+    required String questionId,
+    required Map<String, dynamic> meta,
+  }) async {
+    try {
+      final questionRow = await _client
+          .from('pb_questions')
+          .select('id,academy_id,question_uid')
+          .eq('id', questionId)
+          .maybeSingle();
+      final academyId = '${questionRow?['academy_id'] ?? ''}'.trim();
+      final stableUid = '${questionRow?['question_uid'] ?? ''}'.trim();
+      final rowId = '${questionRow?['id'] ?? questionId}'.trim();
+      if (academyId.isEmpty || stableUid.isEmpty) return;
+
+      final score = _scorePointFromMeta(meta);
+      final presetsById = <String, Map<String, dynamic>>{};
+
+      Future<void> collectPresets(String column, String key) async {
+        if (key.trim().isEmpty) return;
+        final rows = await _client
+            .from('pb_export_presets')
+            .select('id,render_config')
+            .eq('academy_id', academyId)
+            .contains(column, <String>[key]);
+        for (final raw in rows) {
+          final row = _mapFromDynamic(raw);
+          final id = '${row['id'] ?? ''}'.trim();
+          if (id.isNotEmpty) presetsById[id] = row;
+        }
+      }
+
+      await collectPresets('selected_question_uids', stableUid);
+      await collectPresets('selected_question_ids', rowId);
+
+      for (final entry in presetsById.entries) {
+        final renderConfig = _mapFromDynamic(entry.value['render_config']);
+        final rawScoreMap = renderConfig['questionScoreByQuestionUid'] ??
+            renderConfig['questionScoreByQuestionId'];
+        final scoreMap = _mapFromDynamic(rawScoreMap);
+        if (score == null) {
+          scoreMap.remove(stableUid);
+          scoreMap.remove(rowId);
+        } else {
+          final normalizedScore =
+              score == score.roundToDouble() ? score.toInt() : score;
+          scoreMap[stableUid] = normalizedScore;
+          if (scoreMap.containsKey(rowId)) {
+            scoreMap[rowId] = normalizedScore;
+          }
+        }
+        renderConfig['questionScoreByQuestionUid'] = scoreMap;
+        renderConfig['questionScoreByQuestionId'] = scoreMap;
+        await _client
+            .from('pb_export_presets')
+            .update(<String, dynamic>{'render_config': renderConfig})
+            .eq('academy_id', academyId)
+            .eq('id', entry.key);
+      }
+    } catch (error) {
+      debugPrint('syncQuestionScoreToExportPresets failed: $error');
+    }
+  }
+
+  double? _scorePointFromMeta(Map<String, dynamic> meta) {
+    final scoreParts = meta['score_parts'];
+    if (scoreParts is List) {
+      var total = 0.0;
+      for (final raw in scoreParts) {
+        final item = _mapFromDynamic(raw);
+        final value = item['value'];
+        final parsed =
+            value is num ? value.toDouble() : double.tryParse('$value');
+        if (parsed != null && parsed.isFinite && parsed > 0) {
+          total += parsed;
+        }
+      }
+      if (total > 0) return total;
+    }
+
+    final raw = meta['score_point'] ?? meta['scorePoint'];
+    final parsed = raw is num ? raw.toDouble() : double.tryParse('$raw');
+    if (parsed != null && parsed.isFinite && parsed > 0) return parsed;
+    return null;
   }
 
   /// 특정 문항에 대해 가장 최근 revision 한 건을 조회.
@@ -2587,9 +2678,7 @@ class ProblemBankService {
     if (figureRefs != null) {
       update['figure_refs'] = figureRefs;
     }
-    await _client
-        .from('pb_questions')
-        .update(update).eq('id', questionId);
+    await _client.from('pb_questions').update(update).eq('id', questionId);
   }
 
   Future<void> bulkSetChecked({

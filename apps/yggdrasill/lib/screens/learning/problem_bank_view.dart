@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 
+import '../../app_overlays.dart';
 import '../../models/student_flow.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
@@ -150,6 +151,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _academyId = academyId;
       await _loadDetailedCourseOptions(forceResetSelection: true);
       await _reloadSchoolsAndQuestions(resetSelection: true);
+      await _consumePendingHandoff();
     } catch (e) {
       _showSnack('문제은행 초기화 실패: $e');
     } finally {
@@ -158,6 +160,47 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           _isInitializing = false;
         });
       }
+    }
+  }
+
+  /// 외부 화면(교재 탐색기 등)에서 전달된 문항 UID를 장바구니에 주입한다.
+  Future<void> _consumePendingHandoff() async {
+    final request = pendingProblemBankHandoff.value;
+    if (request == null) return;
+    pendingProblemBankHandoff.value = null;
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    final uids = request.questionUids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    if (uids.isEmpty) return;
+    try {
+      final questions = await _service.loadQuestionsByQuestionUids(
+        academyId: academyId,
+        questionUids: uids,
+      );
+      if (!mounted || questions.isEmpty) return;
+      // 전달된 UID 순서를 유지해 장바구니를 구성한다.
+      final byUid = <String, LearningProblemQuestion>{};
+      for (final q in questions) {
+        byUid[q.stableQuestionKey] = q;
+        byUid[q.id] = q;
+      }
+      setState(() {
+        _cartQuestionIds.clear();
+        _cartQuestionsById.clear();
+        for (final uid in uids) {
+          final question = byUid[uid];
+          if (question == null) continue;
+          if (_cartQuestionIds.contains(question.id)) continue;
+          _cartQuestionIds.add(question.id);
+          _cartQuestionsById[question.id] = question;
+        }
+        _showOnlySelectedQuestions = _cartQuestionIds.isNotEmpty;
+      });
+    } catch (e) {
+      _showSnack('전달된 문항을 불러오지 못했습니다: $e');
     }
   }
 
@@ -1324,9 +1367,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (typeFilters.isEmpty && difficultyFilters.isEmpty) return _questions;
     return _questions.where((q) {
       if (typeFilters.isNotEmpty) {
-        final key = _privateMaterialTypeGroupTitle(
-          _privateMaterialTypeGroupKey(q),
-        );
+        final key = _privateMaterialTypeGroupKey(q);
         if (!typeFilters.contains(key)) return false;
       }
       if (difficultyFilters.isNotEmpty) {
@@ -1389,6 +1430,23 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _activeTypeFilters.clear();
       _activeDifficultyFilters.clear();
     });
+  }
+
+  void _randomPickFromVisibleQuestions(int count) {
+    final pool = _visibleQuestions;
+    if (pool.isEmpty) {
+      _showSnack('선택할 문항이 없습니다.');
+      return;
+    }
+    final pickCount = count.clamp(1, pool.length);
+    final shuffled = List<LearningProblemQuestion>.from(pool)
+      ..shuffle(math.Random());
+    setState(() {
+      _selectedQuestionIds
+        ..clear()
+        ..addAll(shuffled.take(pickCount).map((q) => q.id));
+    });
+    _showSnack('$pickCount문항을 무작위로 선택했습니다.');
   }
 
   void _addSelectedQuestionsToCart() {
@@ -2517,8 +2575,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         initialTitlePageGoalText: initialTitlePageGoalText.isEmpty
             ? kLearningDefaultTitlePageGoalText
             : initialTitlePageGoalText,
-        isAssignmentTemplate:
-            _exportSettings.templateProfile == 'assignment',
+        isAssignmentTemplate: _exportSettings.templateProfile == 'assignment',
         initialTimeLimitText: initialTimeLimitText,
         initialIncludeAcademyLogo: readBoolFlag(
           initialPrimary('includeAcademyLogo'),
@@ -4650,9 +4707,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             difficultyFilterOptions: _difficultyFilterOptions,
                             selectedTypeFilters: _activeTypeFilters,
                             selectedDifficultyFilters: _activeDifficultyFilters,
+                            visibleQuestionCount: _visibleQuestions.length,
                             onToggleTypeFilter: _toggleTypeFilter,
                             onToggleDifficultyFilter: _toggleDifficultyFilter,
                             onClearFilters: _clearQuestionFilters,
+                            onRandomPick: _randomPickFromVisibleQuestions,
                           ),
                         ),
                       ),
@@ -4751,9 +4810,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       if ('${group['kind'] ?? ''}'.trim() != 'type') continue;
       final label = '${group['label'] ?? ''}'.trim();
       if (label.isEmpty) continue;
-      out.add(_privateMaterialTypeGroupTitle(_privateMaterialTypeGroupKey(q)));
+      out.add(_privateMaterialTypeGroupKey(q));
     }
-    return out.toList()..sort();
+    final list = out.toList();
+    list.sort((a, b) {
+      final aLabel = a.split('|').first.trim();
+      final bLabel = b.split('|').first.trim();
+      return aLabel.compareTo(bLabel);
+    });
+    return list;
   }
 
   List<String> get _difficultyFilterOptions {
@@ -4813,10 +4878,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         _questionCardPreferredWidth * 6 + 5 * _questionCardSpacing;
     final availableWidth =
         constraints.maxWidth.isFinite ? constraints.maxWidth : fallbackWidth;
-    final idealColumns =
-        ((availableWidth + _questionCardSpacing) /
-                (_questionCardPreferredWidth + _questionCardSpacing))
-            .round();
+    final idealColumns = ((availableWidth + _questionCardSpacing) /
+            (_questionCardPreferredWidth + _questionCardSpacing))
+        .round();
     var columns = idealColumns.clamp(1, 99).toInt();
     var cardWidth =
         (availableWidth - (columns - 1) * _questionCardSpacing) / columns;
@@ -4919,8 +4983,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     grouped[key] ?? const <LearningProblemQuestion>[];
                 final allSelected = questions.isNotEmpty &&
                     questions.every((q) => _selectedQuestionIds.contains(q.id));
-                final anySelected = questions
-                    .any((q) => _selectedQuestionIds.contains(q.id));
+                final anySelected =
+                    questions.any((q) => _selectedQuestionIds.contains(q.id));
                 final brightness = Theme.of(context).brightness;
                 final panelStyle =
                     FabTabBarTokens.previewAcademyPanelStyleFor(brightness);

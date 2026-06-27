@@ -622,6 +622,37 @@ function normalizeQuestionScoreMap(raw, selectedIds, fallbackScores = {}) {
   return out;
 }
 
+function questionScoreFromMeta(metaRaw) {
+  const meta = metaRaw && typeof metaRaw === 'object' ? metaRaw : {};
+  if (Array.isArray(meta.score_parts)) {
+    const total = meta.score_parts.reduce((sum, item) => {
+      const value = item && typeof item === 'object' ? item.value : null;
+      const parsed = Number.parseFloat(String(value ?? ''));
+      return Number.isFinite(parsed) && parsed > 0 ? sum + parsed : sum;
+    }, 0);
+    if (total > 0) return total;
+  }
+  const parsed = Number.parseFloat(String(meta.score_point ?? meta.scorePoint ?? ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function questionScoreMapFromRows(questionRows, selectedQuestionUidsOrdered) {
+  const byKey = new Map();
+  for (const row of Array.isArray(questionRows) ? questionRows : []) {
+    const uid = String(row?.question_uid || '').trim();
+    const id = String(row?.id || '').trim();
+    if (uid) byKey.set(uid, row);
+    if (id) byKey.set(id, row);
+  }
+  const out = {};
+  for (const uid of selectedQuestionUidsOrdered) {
+    const row = byKey.get(uid);
+    const score = questionScoreFromMeta(row?.meta);
+    if (score != null) out[uid] = Math.min(999, score);
+  }
+  return out;
+}
+
 function normalizeSelectedQuestionIdsOrdered(raw, fallbackSelectedIds) {
   const fallback = Array.isArray(fallbackSelectedIds)
     ? fallbackSelectedIds.filter((v) => isUuid(v))
@@ -711,7 +742,7 @@ const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_tablewidthmax_03';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_choicesinfigure_01';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const DEFAULT_TITLE_PAGE_GOAL_TEXT = '다시 풀기';
 
@@ -2560,7 +2591,7 @@ async function saveSettingsAsDocument(body, res) {
       for (const uidChunk of chunkArray(selectedQuestionUidsOrderedInput, 200)) {
         const { data: rows, error: rowErr } = await supa
           .from('pb_questions')
-          .select('id,question_uid,document_id')
+          .select('id,question_uid,document_id,meta')
           .eq('academy_id', academyId)
           .in('question_uid', uidChunk);
         if (rowErr) {
@@ -2580,7 +2611,7 @@ async function saveSettingsAsDocument(body, res) {
       for (const idChunk of chunkArray(selectedQuestionIdsOrderedInput, 200)) {
         const { data: rows, error: rowErr } = await supa
           .from('pb_questions')
-          .select('id,question_uid,document_id')
+          .select('id,question_uid,document_id,meta')
           .eq('academy_id', academyId)
           .in('id', idChunk);
         if (rowErr) {
@@ -2687,12 +2718,19 @@ async function saveSettingsAsDocument(body, res) {
       selectedQuestionUidsOrdered,
       fallbackQuestionMode,
     );
-    const sourceQuestionScoreByQuestionUid = normalizeQuestionScoreMap(
+    const requestedQuestionScoreByQuestionUid =
       body.questionScoreByQuestionUid
         || body.questionScoreByQuestionId
         || rawRenderConfig.questionScoreByQuestionUid
-        || rawRenderConfig.questionScoreByQuestionId,
+        || rawRenderConfig.questionScoreByQuestionId;
+    const currentQuestionScoreByQuestionUid = questionScoreMapFromRows(
+      orderedSourceRows,
       selectedQuestionUidsOrdered,
+    );
+    const sourceQuestionScoreByQuestionUid = normalizeQuestionScoreMap(
+      currentQuestionScoreByQuestionUid,
+      selectedQuestionUidsOrdered,
+      requestedQuestionScoreByQuestionUid,
     );
 
     const normalizedRenderConfig = normalizeExportRenderConfig(

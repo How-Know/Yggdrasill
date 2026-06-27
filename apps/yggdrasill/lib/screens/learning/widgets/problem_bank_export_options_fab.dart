@@ -3,6 +3,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+
 /// 문제은행 우측 상단 — 양식·출력 FAB와 펼침 패널.
 class ProblemBankExportOptionsFab extends StatefulWidget {
   const ProblemBankExportOptionsFab({
@@ -32,15 +34,44 @@ class _ProblemBankExportOptionsFabState
     final panelMaxHeight = math.min(520.0, screen.height * 0.58);
 
     final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     final isDark = brightness == Brightness.dark;
     final capsuleColor =
-        isDark ? const Color(0xE610171A) : Colors.white.withValues(alpha: 0.92);
-    final borderColor = isDark
-        ? const Color(0xFF355056).withValues(alpha: 0.62)
-        : Colors.black.withValues(alpha: 0.04);
-    final iconColor = isDark ? const Color(0xFF9FB3B3) : Colors.black;
-    final activeIconColor =
-        isDark ? const Color(0xFFEAF2F2) : const Color(0xFF111A1D);
+        isDark ? panelStyle.groupedCardBackground : palette.surface;
+    final capsuleBorder = isDark
+        ? FabTabBarTokens.groupedCardBorderFor(brightness)
+        : Border.all(color: Colors.black.withValues(alpha: 0.04));
+    final iconColor = palette.labelUnselected;
+    final activeIconColor = palette.labelSelected;
+
+    final capsule = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: capsuleColor,
+        borderRadius: BorderRadius.circular(999),
+        border: capsuleBorder,
+        boxShadow: isDark
+            ? const <BoxShadow>[]
+            : FabTabBarTokens.fabBarLightBoxShadows,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _TopIconButton(
+            tooltip: _expanded ? '양식·출력 닫기' : '양식·출력',
+            icon: _expanded ? Icons.close_rounded : Icons.print_outlined,
+            color: _expanded ? activeIconColor : iconColor,
+            onPressed:
+                widget.isBusy ? null : () => setState(() => _expanded = !_expanded),
+          ),
+          if (widget.filterButton != null) ...[
+            const SizedBox(width: 22),
+            widget.filterButton!,
+          ],
+        ],
+      ),
+    );
 
     return Material(
       color: Colors.transparent,
@@ -50,46 +81,15 @@ class _ProblemBankExportOptionsFabState
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(999),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: capsuleColor,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: borderColor),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(
-                        alpha: isDark ? 0.22 : 0.08,
-                      ),
-                      blurRadius: 28,
-                      offset: const Offset(0, 12),
+            child: isDark
+                ? capsule
+                : BackdropFilter(
+                    filter: ImageFilter.blur(
+                      sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+                      sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
                     ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _TopIconButton(
-                      tooltip: _expanded ? '양식·출력 닫기' : '양식·출력',
-                      icon: _expanded
-                          ? Icons.close_rounded
-                          : Icons.print_outlined,
-                      color: _expanded ? activeIconColor : iconColor,
-                      onPressed: widget.isBusy
-                          ? null
-                          : () => setState(() => _expanded = !_expanded),
-                    ),
-                    if (widget.filterButton != null) ...[
-                      const SizedBox(width: 22),
-                      widget.filterButton!,
-                    ],
-                  ],
-                ),
-              ),
-            ),
+                    child: capsule,
+                  ),
           ),
           AnimatedCrossFade(
             duration: const Duration(milliseconds: 200),
@@ -100,9 +100,14 @@ class _ProblemBankExportOptionsFabState
             secondChild: Padding(
               padding: const EdgeInsets.only(top: 8),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(
+                  FabTabBarTokens.previewAcademyMenuRadius,
+                ),
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  filter: ImageFilter.blur(
+                    sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+                    sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+                  ),
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       maxWidth: panelMaxWidth,

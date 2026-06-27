@@ -350,18 +350,13 @@ class HomeworkTestGradingResultService {
       final correctionAttemptNumbers = <String, int>{};
       for (final raw in itemRows) {
         final row = Map<String, dynamic>.from(raw as Map);
-        final key = '${row['question_key'] ?? ''}'.trim();
-        if (key.isEmpty) continue;
-        states[key] = _decodeState('${row['state'] ?? ''}');
-        final correctionState = '${row['correction_state'] ?? ''}'.trim();
-        if (correctionState.isNotEmpty) {
-          correctionStates[key] = correctionState;
-          final correctionAttemptNumber =
-              _intOf(row['correction_attempt_number']);
-          if (correctionAttemptNumber > 0) {
-            correctionAttemptNumbers[key] = correctionAttemptNumber;
-          }
-        }
+        _mergeSavedSessionItemRow(
+          row: row,
+          homeworkItemId: itemId,
+          states: states,
+          correctionStates: correctionStates,
+          correctionAttemptNumbers: correctionAttemptNumbers,
+        );
       }
       return HomeworkTestSavedGradingSession(
         attempt: attempt,
@@ -411,18 +406,13 @@ class HomeworkTestGradingResultService {
       final correctionAttemptNumbers = <String, int>{};
       for (final raw in itemRows) {
         final row = Map<String, dynamic>.from(raw as Map);
-        final key = '${row['question_key'] ?? ''}'.trim();
-        if (key.isEmpty) continue;
-        states[key] = _decodeState('${row['state'] ?? ''}');
-        final correctionState = '${row['correction_state'] ?? ''}'.trim();
-        if (correctionState.isNotEmpty) {
-          correctionStates[key] = correctionState;
-          final correctionAttemptNumber =
-              _intOf(row['correction_attempt_number']);
-          if (correctionAttemptNumber > 0) {
-            correctionAttemptNumbers[key] = correctionAttemptNumber;
-          }
-        }
+        _mergeSavedSessionItemRow(
+          row: row,
+          homeworkItemId: itemId,
+          states: states,
+          correctionStates: correctionStates,
+          correctionAttemptNumbers: correctionAttemptNumbers,
+        );
       }
       return HomeworkTestSavedGradingSession(
         attempt: attempt,
@@ -583,7 +573,7 @@ class HomeworkTestGradingResultService {
     try {
       var query = Supabase.instance.client
           .from('homework_test_grading_attempt_items')
-          .select('question_key,question_uid,state')
+          .select('homework_item_id,question_key,question_uid,state')
           .eq('academy_id', academyId);
       if (sid.isNotEmpty) {
         query = query.eq('student_id', sid);
@@ -604,9 +594,19 @@ class HomeworkTestGradingResultService {
       final byKey = <String, _QuestionErrorAccumulator>{};
       for (final raw in rows) {
         final map = Map<String, dynamic>.from(raw);
-        final questionKey = '${map['question_key'] ?? ''}'.trim();
+        final rawQuestionKey = '${map['question_key'] ?? ''}'.trim();
+        final rowHomeworkItemId = '${map['homework_item_id'] ?? ''}'.trim();
+        final questionKey = rowHomeworkItemId.isEmpty
+            ? rawQuestionKey
+            : _stableQuestionKeyForRow(
+                row: map,
+                homeworkItemId: rowHomeworkItemId,
+              );
         if (questionKey.isEmpty) continue;
-        final questionUid = '${map['question_uid'] ?? ''}'.trim();
+        final questionUid = ('${map['question_uid'] ?? ''}'.trim().isNotEmpty
+                ? '${map['question_uid'] ?? ''}'
+                : (_questionUidFromKey(rawQuestionKey) ?? ''))
+            .trim();
         final state = '${map['state'] ?? ''}'.trim().toLowerCase();
         final bucket =
             byKey.putIfAbsent(questionKey, () => _QuestionErrorAccumulator());
@@ -796,7 +796,7 @@ class HomeworkTestGradingResultService {
       return await supa
           .from('homework_test_grading_attempt_items')
           .select(
-              'question_key,state,correction_state,correction_attempt_number')
+              'question_key,question_uid,state,correction_state,correction_attempt_number')
           .eq('academy_id', academyId)
           .eq('attempt_id', attemptId)
           .order('page_number', ascending: true)
@@ -805,7 +805,7 @@ class HomeworkTestGradingResultService {
       if (!_isMissingRetryColumnError(error)) rethrow;
       return await supa
           .from('homework_test_grading_attempt_items')
-          .select('question_key,state')
+          .select('question_key,question_uid,state')
           .eq('academy_id', academyId)
           .eq('attempt_id', attemptId)
           .order('page_number', ascending: true)
@@ -836,19 +836,26 @@ class HomeworkTestGradingResultService {
     try {
       final rows = await Supabase.instance.client
           .from('homework_test_grading_attempt_items')
-          .select('question_key,correction_attempt_number')
+          .select('question_key,question_uid,correction_attempt_number')
           .eq('academy_id', academyId)
           .eq('homework_item_id', homeworkItemId)
           .eq('correction_state', 'corrected');
       final out = <String, int>{};
       for (final raw in rows) {
         final row = Map<String, dynamic>.from(raw as Map);
-        final key = '${row['question_key'] ?? ''}'.trim();
+        final rawKey = '${row['question_key'] ?? ''}'.trim();
+        final stableKey = _stableQuestionKeyForRow(
+          row: row,
+          homeworkItemId: homeworkItemId,
+        );
         final number = _intOf(row['correction_attempt_number']);
-        if (key.isEmpty || number <= 0) continue;
-        final existing = out[key];
-        if (existing == null || number < existing) {
-          out[key] = number;
+        if (number <= 0) continue;
+        for (final key in <String>{rawKey, stableKey}) {
+          if (key.isEmpty) continue;
+          final existing = out[key];
+          if (existing == null || number < existing) {
+            out[key] = number;
+          }
         }
       }
       return out;
@@ -858,6 +865,50 @@ class HomeworkTestGradingResultService {
       }
       return const <String, int>{};
     }
+  }
+
+  void _mergeSavedSessionItemRow({
+    required Map<String, dynamic> row,
+    required String homeworkItemId,
+    required Map<String, HomeworkAnswerCellState> states,
+    required Map<String, String> correctionStates,
+    required Map<String, int> correctionAttemptNumbers,
+  }) {
+    final key = '${row['question_key'] ?? ''}'.trim();
+    if (key.isEmpty) return;
+    final state = _decodeState('${row['state'] ?? ''}');
+    final keys = <String>{key};
+    final stableKey = _stableQuestionKeyForRow(
+      row: row,
+      homeworkItemId: homeworkItemId,
+    );
+    if (stableKey.isNotEmpty) keys.add(stableKey);
+
+    final correctionState = '${row['correction_state'] ?? ''}'.trim();
+    final correctionAttemptNumber = _intOf(row['correction_attempt_number']);
+    for (final oneKey in keys) {
+      states[oneKey] = state;
+      if (correctionState.isNotEmpty) {
+        correctionStates[oneKey] = correctionState;
+        if (correctionAttemptNumber > 0) {
+          correctionAttemptNumbers[oneKey] = correctionAttemptNumber;
+        }
+      }
+    }
+  }
+
+  String _stableQuestionKeyForRow({
+    required Map<String, dynamic> row,
+    required String homeworkItemId,
+  }) {
+    final itemId = homeworkItemId.trim();
+    if (itemId.isEmpty) return '';
+    final explicitUid = '${row['question_uid'] ?? ''}'.trim();
+    final uid = explicitUid.isNotEmpty
+        ? explicitUid
+        : (_questionUidFromKey('${row['question_key'] ?? ''}') ?? '').trim();
+    if (uid.isEmpty) return '';
+    return '$itemId|pb|$uid';
   }
 
   String _normalizeAssignmentCode(String? raw) {
@@ -891,6 +942,10 @@ class HomeworkTestGradingResultService {
 
   String? _questionUidFromKey(String key) {
     final parts = key.split('|');
+    if (parts.length >= 3 && parts[1] == 'pb') {
+      final uid = parts.sublist(2).join('|').trim();
+      return uid.isEmpty ? null : uid;
+    }
     if (parts.length < 4) return null;
     final uid = parts.sublist(3).join('|').trim();
     return uid.isEmpty ? null : uid;

@@ -59,7 +59,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_tablewidthmax_03';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_choicesinfigure_01';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -2790,14 +2790,21 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
   const objectiveAnswer = resolveObjectiveAnswer(question);
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
+  // 선택지가 본문 그림 안에 들어있는 객관식 문항: DB 에 텍스트 선택지가 0 개여도
+  //   정상이다. 이 플래그가 켜져 있으면 객관식 모드에서 텍스트 선택지 검증을 건너뛰고
+  //   본문(그림)만 렌더한다. (실수로 선택지가 비워진 깨진 문항과 구분하기 위해 명시 플래그 사용)
+  const choicesInFigure = question?.meta?.objective_choices_in_figure === true;
   const subjectiveAnswer = allowSubjective ? resolveSubjectiveAnswer(question, objectiveAnswer) : '';
   const requestedMode = normalizeQuestionMode(selectedMode);
   let mode = normalizeQuestionModeSelection(question, selectedMode, fallbackMode);
   if (mode === 'objective' && (!allowObjective || objectiveChoices.length < 2)) {
-    if (requestedMode === 'objective' || !allowSubjective) {
+    if (choicesInFigure && allowObjective) {
+      // 그림에 선택지가 있는 객관식 → 텍스트 선택지 없이 객관식 모드 유지.
+    } else if (requestedMode === 'objective' || !allowSubjective) {
       throw new Error(`question_mode_incompatible_objective:${question.id || question.question_number || '?'}`);
+    } else {
+      mode = 'subjective';
     }
-    mode = 'subjective';
   }
   const out = {
     ...question,
@@ -2810,7 +2817,7 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
     export_answer: '',
   };
   if (mode === 'objective') {
-    if (!allowObjective || objectiveChoices.length < 2) {
+    if ((!allowObjective || objectiveChoices.length < 2) && !choicesInFigure) {
       throw new Error(`question_mode_incompatible_objective:${question.id || question.question_number || '?'}`);
     }
     return {

@@ -20,7 +20,23 @@ class _LearningScreenState extends State<LearningScreen> {
   @override
   void initState() {
     super.initState();
+    final requestedTab = requestedLearningTab.value;
+    if (requestedTab != null && (requestedTab == 0 || requestedTab == 1)) {
+      _selectedTab = requestedTab;
+      requestedLearningTab.value = null;
+    }
+    requestedLearningTab.addListener(_onRequestedLearningTabChanged);
     _syncProblemBankOverlayVisibility();
+  }
+
+  void _onRequestedLearningTabChanged() {
+    final requested = requestedLearningTab.value;
+    if (requested == null) return;
+    requestedLearningTab.value = null;
+    if (!mounted) return;
+    if (requested != 0 && requested != 1) return;
+    if (requested == _selectedTab) return;
+    _onLearningTabSelected(requested);
   }
 
   @override
@@ -33,6 +49,7 @@ class _LearningScreenState extends State<LearningScreen> {
 
   @override
   void dispose() {
+    requestedLearningTab.removeListener(_onRequestedLearningTabChanged);
     _tabOverlay.dispose();
     ExamModeService.instance.suppressExamActionCluster.value = false;
     hideGlobalMemoFloatingBanners.value = false;

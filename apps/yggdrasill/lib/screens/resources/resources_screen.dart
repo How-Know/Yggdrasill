@@ -22,6 +22,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../widgets/pdf/pdf_editor_dialog.dart';
 import '../../widgets/pdf/textbook_viewer_dialog.dart';
 import '../../widgets/resource_file_meta_dialog.dart';
+import 'textbook_explorer_view.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../models/education_level.dart';
 import '../../models/textbook_drag_payload.dart';
@@ -193,6 +194,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   static const List<String> _resourceTabLabels = ['교재', '시험', '기타'];
 
   int _customTabIndex = 0;
+  TextbookExplorerController? _explorer;
   final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
       FabStyleScreenTabBarOverlay();
   final GlobalKey _dropdownButtonKey = GlobalKey();
@@ -229,6 +231,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   final Set<String> _expandedFolderIds = <String>{};
   Set<String> _favoriteFileIds = <String>{};
   String? _fileDropTargetFolderId;
+  final Map<String, Future<bool>> _textbookCacheStatusFutures =
+      <String, Future<bool>>{};
 
   final LearningProblemBankService _examPresetService =
       LearningProblemBankService();
@@ -248,6 +252,53 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   String get _currentCategory => _customTabIndex == 0
       ? 'textbook'
       : (_customTabIndex == 1 ? 'exam' : 'other');
+
+  String _textbookCacheStatusKey({
+    required String fileId,
+    required String gradeLabel,
+    required String kind,
+  }) {
+    return '$fileId#$gradeLabel#$kind';
+  }
+
+  Future<bool> _isTextbookPdfCached({
+    required String fileId,
+    required String gradeLabel,
+    required String kind,
+  }) {
+    final key = _textbookCacheStatusKey(
+      fileId: fileId,
+      gradeLabel: gradeLabel,
+      kind: kind,
+    );
+    return _textbookCacheStatusFutures.putIfAbsent(key, () async {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      if (academyId == null || academyId.trim().isEmpty) return false;
+      return TextbookPdfService.instance.isCached(
+        TextbookPdfRef(
+          academyId: academyId,
+          fileId: fileId,
+          gradeLabel: gradeLabel,
+          kind: kind,
+        ),
+      );
+    });
+  }
+
+  void _invalidateTextbookCacheStatus({
+    required String fileId,
+    required String gradeLabel,
+    required String kind,
+  }) {
+    _textbookCacheStatusFutures.remove(
+      _textbookCacheStatusKey(
+        fileId: fileId,
+        gradeLabel: gradeLabel,
+        kind: kind,
+      ),
+    );
+    if (mounted) setState(() {});
+  }
 
   List<_ResourceFolder> _childFoldersOf(String? parentId) {
     final list =
@@ -2080,8 +2131,51 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     );
   }
 
-  void _selectResourcesTab(int index) {
+  void _openTextbookExplorer({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String bookTitle,
+    String? description,
+    String? categoryLabel,
+    String? folderLabel,
+  }) {
+    _explorer?.dispose();
+    final controller = TextbookExplorerController(
+      academyId: academyId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      bookTitle: bookTitle,
+      description: description,
+      categoryLabel: categoryLabel,
+      folderLabel: folderLabel,
+    );
+    controller.onClose = _closeTextbookExplorer;
     setState(() {
+      _explorer = controller;
+    });
+    hideGlobalMemoFloatingBanners.value = true;
+    _syncFabTabBarOverlay();
+    unawaited(controller.load());
+  }
+
+  void _closeTextbookExplorer() {
+    final controller = _explorer;
+    if (controller == null) return;
+    setState(() {
+      _explorer = null;
+    });
+    controller.dispose();
+    hideGlobalMemoFloatingBanners.value = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncFabTabBarOverlay();
+    });
+  }
+
+  void _selectResourcesTab(int index) {
+    final explorer = _explorer;
+    setState(() {
+      _explorer = null;
       _customTabIndex = index;
       _expandedFolderIds.clear();
       _selectedFolderIdForTree =
@@ -2090,6 +2184,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       _folders.clear();
       _files.clear();
     });
+    explorer?.dispose();
+    if (explorer != null) {
+      hideGlobalMemoFloatingBanners.value = false;
+    }
     widget.printController?._notifyStateChanged();
     _fabTabBarOverlay.sync(
       context,
@@ -2103,6 +2201,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   @override
   void dispose() {
     widget.printController?._detach(notify: false);
+    _explorer?.dispose();
+    hideGlobalMemoFloatingBanners.value = false;
     _fabTabBarOverlay.dispose();
     for (final c in _gridScrollCtrls) {
       c.dispose();
@@ -2592,66 +2692,71 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                 child: SizedBox(
                   width: _folderTreePanelWidth(context),
-                  child: _buildFolderTreeDecoratedPanel(),
+                  child: _explorer != null
+                      ? TextbookExplorerTreePanel(controller: _explorer!)
+                      : _buildFolderTreeDecoratedPanel(),
                 ),
               ),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(
-                            child: Stack(
-                              clipBehavior: Clip.none,
+                  child: _explorer != null
+                      ? TextbookExplorerContent(controller: _explorer!)
+                      : Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Positioned.fill(
-                                  child: IndexedStack(
-                                    index: _customTabIndex,
+                                Expanded(
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
                                     children: [
-                                      _buildTextbooksTreeLayout(0),
-                                      _buildTextbooksTreeLayout(1),
-                                      _buildTextbooksTreeLayout(2),
+                                      Positioned.fill(
+                                        child: IndexedStack(
+                                          index: _customTabIndex,
+                                          children: [
+                                            _buildTextbooksTreeLayout(0),
+                                            _buildTextbooksTreeLayout(1),
+                                            _buildTextbooksTreeLayout(2),
+                                          ],
+                                        ),
+                                      ),
+                                      if (_currentCategory == 'other')
+                                        Positioned(
+                                          top: _resourcesPageTitleBandHeight -
+                                              _otherTabListHeaderHeight,
+                                          left: 0,
+                                          right: 0,
+                                          child: _buildOtherTabListHeader(),
+                                        ),
                                     ],
                                   ),
                                 ),
-                                if (_currentCategory == 'other')
-                                  Positioned(
-                                    top: _resourcesPageTitleBandHeight -
-                                        _otherTabListHeaderHeight,
-                                    left: 0,
-                                    right: 0,
-                                    child: _buildOtherTabListHeader(),
-                                  ),
                               ],
                             ),
-                          ),
-                        ],
-                      ),
-                      Positioned(
-                        top: FabTabBarTokens.previewAcademyTopInset - 12,
-                        left: 24,
-                        right: 12,
-                        child: IgnorePointer(
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              _resourceTabLabels[_customTabIndex],
-                              style:
-                                  FabTabBarTokens.previewAcademyMainTitleStyle(
-                                FabTabBarTokens.previewAcademyPanelStyleFor(
-                                  Theme.of(context).brightness,
+                            Positioned(
+                              top: FabTabBarTokens.previewAcademyTopInset - 12,
+                              left: 24,
+                              right: 12,
+                              child: IgnorePointer(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    _resourceTabLabels[_customTabIndex],
+                                    style: FabTabBarTokens
+                                        .previewAcademyMainTitleStyle(
+                                      FabTabBarTokens
+                                          .previewAcademyPanelStyleFor(
+                                        Theme.of(context).brightness,
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ],
@@ -6259,7 +6364,20 @@ class _GridFileCardState extends State<_GridFileCard> {
         context.findAncestorStateOfType<_ResourcesScreenState>();
     final grades = resState?._grades ?? const <String>[];
     final isOther = resState?._currentCategory == 'other';
+    final isTextbook = resState?._currentCategory == 'textbook';
     final currentGrade = resState?._effectiveGradeLabelForFile(file);
+    final bodyLink = currentGrade == null
+        ? ''
+        : (file.linksByGrade['$currentGrade#body']?.trim() ?? '');
+    final isStorageBody = _isStorageBackedTextbookLink(bodyLink);
+    final bodyCacheFuture =
+        isTextbook && isStorageBody && currentGrade != null && resState != null
+            ? resState._isTextbookPdfCached(
+                fileId: file.id,
+                gradeLabel: currentGrade,
+                kind: 'body',
+              )
+            : null;
     final pdfLink = isOther ? (file.linksByGrade['pdf']?.trim() ?? '') : '';
     final hwpLink = isOther ? (file.linksByGrade['hwp']?.trim() ?? '') : '';
     final hasOtherLink = isOther && (pdfLink.isNotEmpty || hwpLink.isNotEmpty);
@@ -6278,7 +6396,6 @@ class _GridFileCardState extends State<_GridFileCard> {
     final hasExplicitIcon = (file.iconImagePath?.trim().isNotEmpty ?? false) ||
         (file.icon != null && file.icon != Icons.insert_drive_file);
     final displayGrade = isOther ? null : (currentGrade ?? file.primaryGrade);
-    final isTextbook = resState?._currentCategory == 'textbook';
     final isPrintMode = resState?._printPickMode ?? false;
     Future<void> openPrimaryLink() async {
       if (isOther) {
@@ -6307,6 +6424,11 @@ class _GridFileCardState extends State<_GridFileCard> {
           context,
           fileId: file.id,
           displayName: file.name,
+          gradeLabel: currentGrade,
+          kind: 'body',
+        );
+        resState?._invalidateTextbookCacheStatus(
+          fileId: file.id,
           gradeLabel: currentGrade,
           kind: 'body',
         );
@@ -6360,6 +6482,36 @@ class _GridFileCardState extends State<_GridFileCard> {
       );
     }
 
+    Future<void> openExplorerPage() async {
+      if (currentGrade == null) {
+        openMetaDialog();
+        return;
+      }
+      String? parentLabel;
+      final parentId = file.parentId;
+      if (parentId != null && parentId.isNotEmpty) {
+        final idx =
+            resState?._folders.indexWhere((f) => f.id == parentId) ?? -1;
+        if (idx != -1 && resState != null) {
+          parentLabel = resState._folders[idx].name;
+        }
+      }
+      String academyId = '';
+      try {
+        academyId = await TenantService.instance.getActiveAcademyId() ?? '';
+      } catch (_) {}
+      if (!context.mounted) return;
+      resState?._openTextbookExplorer(
+        academyId: academyId,
+        bookId: file.id,
+        gradeLabel: currentGrade,
+        bookTitle: file.name,
+        description: file.description,
+        categoryLabel: '교재',
+        folderLabel: parentLabel,
+      );
+    }
+
     void handleGradeDelta(int delta) {
       if (resState == null) return;
       resState._changeFileGradeByDelta(file, delta);
@@ -6389,6 +6541,21 @@ class _GridFileCardState extends State<_GridFileCard> {
           onTap: () async {
             if (isPrintMode) {
               await resState?._handlePrintPick(file);
+              return;
+            }
+            if (bodyCacheFuture != null) {
+              bool cached;
+              try {
+                cached = await bodyCacheFuture;
+              } catch (_) {
+                cached = false;
+              }
+              if (!cached) {
+                await openPrimaryLink();
+                return;
+              }
+              // 마이그레이션(스토리지) 교재 + 다운로드 완료 → 페이지 진입.
+              await openExplorerPage();
               return;
             }
             openMetaDialog();
@@ -6498,6 +6665,21 @@ class _GridFileCardState extends State<_GridFileCard> {
                                                   color: Colors.white
                                                       .withOpacity(0.18),
                                                 ),
+                                              ),
+                                            ),
+                                          if (bodyCacheFuture != null)
+                                            Positioned.fill(
+                                              child: FutureBuilder<bool>(
+                                                future: bodyCacheFuture,
+                                                builder: (context, snapshot) {
+                                                  final cached =
+                                                      snapshot.data == true;
+                                                  if (cached) {
+                                                    return const SizedBox
+                                                        .shrink();
+                                                  }
+                                                  return const _TextbookDownloadOverlay();
+                                                },
                                               ),
                                             ),
                                           Positioned(
@@ -7290,17 +7472,32 @@ class _SmallLinkButtonPill extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
+    final resourcesState =
+        context.findAncestorStateOfType<_ResourcesScreenState>();
     final key = currentGrade != null ? '${currentGrade}#${kind}' : null;
     final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
     final enabled = link.isNotEmpty;
     final isAns = kind == 'ans';
+    final isStorageLink = _isStorageBackedTextbookLink(link);
+    final cacheFuture = enabled &&
+            isStorageLink &&
+            currentGrade != null &&
+            resourcesState != null
+        ? resourcesState._isTextbookPdfCached(
+            fileId: file.id,
+            gradeLabel: currentGrade!,
+            kind: kind,
+          )
+        : null;
     // 확장자 계산 (호버 시에만 보여줌)
     String? ext;
-    if (_isStorageBackedTextbookLink(link))
+    if (_isStorageBackedTextbookLink(link)) {
       ext = 'PDF';
-    else if (link.endsWith('.pdf'))
+    } else if (link.endsWith('.pdf')) {
       ext = 'PDF';
-    else if (link.endsWith('.hwp')) ext = 'HWP';
+    } else if (link.endsWith('.hwp')) {
+      ext = 'HWP';
+    }
     return Tooltip(
       message: ext ?? (isAns ? '정답' : '해설'),
       child: InkWell(
@@ -7317,6 +7514,11 @@ class _SmallLinkButtonPill extends StatelessWidget {
                     gradeLabel: currentGrade!,
                     kind: kind,
                   );
+                  resourcesState?._invalidateTextbookCacheStatus(
+                    fileId: file.id,
+                    gradeLabel: currentGrade!,
+                    kind: kind,
+                  );
                   return;
                 }
                 if (link.startsWith('http://') || link.startsWith('https://')) {
@@ -7327,26 +7529,95 @@ class _SmallLinkButtonPill extends StatelessWidget {
                 }
               },
         borderRadius: BorderRadius.circular(overlay ? 16 : 8),
-        child: Container(
-          height: overlay ? 32 : 28,
-          padding: EdgeInsets.symmetric(horizontal: overlay ? 10 : 8),
+        child: cacheFuture == null
+            ? _buildPill(enabled: enabled, downloaded: true, isAns: isAns)
+            : FutureBuilder<bool>(
+                future: cacheFuture,
+                builder: (context, snapshot) {
+                  final downloaded = snapshot.data == true;
+                  return _buildPill(
+                    enabled: enabled,
+                    downloaded: downloaded,
+                    isAns: isAns,
+                  );
+                },
+              ),
+      ),
+    );
+  }
+
+  Widget _buildPill({
+    required bool enabled,
+    required bool downloaded,
+    required bool isAns,
+  }) {
+    final visuallyEnabled = enabled && downloaded;
+    return Container(
+      height: overlay ? 32 : 28,
+      padding: EdgeInsets.symmetric(horizontal: overlay ? 10 : 8),
+      decoration: BoxDecoration(
+        color: overlay
+            ? Colors.black.withValues(alpha: visuallyEnabled ? 0.45 : 0.22)
+            : (visuallyEnabled
+                ? const Color(0xFF3A3F44)
+                : const Color(0xFF2A2A2A).withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(overlay ? 16 : 8),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        isAns ? '정답' : '해설',
+        style: TextStyle(
+          color: visuallyEnabled ? Colors.white70 : Colors.white30,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _TextbookDownloadOverlay extends StatelessWidget {
+  const _TextbookDownloadOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFD8D8D8).withValues(alpha: 0.48),
+      ),
+      child: Center(
+        child: DecoratedBox(
           decoration: BoxDecoration(
-            color: overlay
-                ? Colors.black.withOpacity(enabled ? 0.45 : 0.28)
-                : (enabled ? const Color(0xFF3A3F44) : const Color(0xFF2A2A2A)),
-            borderRadius: BorderRadius.circular(overlay ? 16 : 8),
-            // 윤곽선 제거
+            color: Colors.black.withValues(alpha: 0.26),
+            borderRadius: BorderRadius.circular(18),
           ),
-          alignment: Alignment.center,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(isAns ? '정답' : '해설',
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.arrow_downward_rounded,
+                    size: 28, color: Colors.white),
+                SizedBox(height: 3),
+                SizedBox(
+                  width: 38,
+                  child: Divider(
+                    height: 1,
+                    thickness: 2,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(height: 7),
+                Text(
+                  '다운로드',
                   style: TextStyle(
-                      color: enabled ? Colors.white70 : Colors.white38,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700)),
-            ],
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +34,7 @@ import 'learning/models/problem_bank_export_models.dart'
     show kLearningQuestionModeObjective, previewAnswerForMode;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/app_snackbar.dart';
 import '../theme/ygg_semantic_colors.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../widgets/homework_overview_naesin_past_exam_panel.dart';
@@ -728,9 +730,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         dateTimeText: _isGradingMode
             ? _formatDateWithWeekdayShort(headerDateTime)
             : _formatDateWithWeekdayAndTime(headerDateTime),
-        statsText: _isGradingMode
-            ? '제출 $submittedCount'
-            : '등원 $attendingCount',
+        statsText: _isGradingMode ? '제출 $submittedCount' : '등원 $attendingCount',
         secondaryText:
             _isGradingMode ? _formatHourMinute(headerDateTime) : null,
         gradingStats: _isGradingMode,
@@ -820,8 +820,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       ),
                                       headerTimeText:
                                           _formatHourMinute(headerDateTime),
-                                      headerSubmittedText:
-                                          '제출 $submittedCount',
+                                      headerSubmittedText: '제출 $submittedCount',
                                       showAnchorDateHint:
                                           !isAttendanceAnchorToday(anchorDate),
                                       pendingConfirms: _pendingConfirms,
@@ -858,8 +857,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                         }
                                         HomeworkItem answerSeed =
                                             submittedChildren.first;
-                                        for (final child
-                                            in submittedChildren) {
+                                        for (final child in submittedChildren) {
                                           if (_hasDirectHomeworkTextbookLink(
                                               child)) {
                                             answerSeed = child;
@@ -3527,8 +3525,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
       }
 
-      final key = '${baseItem.id}|$pageNumber|$questionIndex|$uid';
-      final uidScore = presetScoreByUid[uid];
+      final key = '${baseItem.id}|pb|$uid';
+      final uidScore = question.totalScorePoint ?? presetScoreByUid[uid];
       if (uidScore != null && uidScore.isFinite && uidScore > 0) {
         scoreByQuestionKey[key] = uidScore;
       }
@@ -5252,6 +5250,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       hw: latest,
       target: target,
       minProgress: minProgress,
+      studentId: studentId,
     );
     if (!context.mounted || draft == null) return;
 
@@ -5971,7 +5970,10 @@ Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(
 }
 
 List<Widget> _buildHomeworkCheckTargetInfo(
+  BuildContext context,
   HomeworkItem hw, {
+  required DateTime assignedAt,
+  DateTime? dueDate,
   List<HomeworkItem> groupChildren = const <HomeworkItem>[],
   Map<String, int> assignmentCountsByItem = const <String, int>{},
   Map<String, HomeworkAssignmentCycleMeta> cycleMetaByItem =
@@ -6047,24 +6049,55 @@ List<Widget> _buildHomeworkCheckTargetInfo(
         ? safeCount
         : resolveSplitCount(safeCount, splitParts, splitRound);
     final countText = safeCount <= 0 ? '' : '$splitCount문항';
-    if (pageText.isEmpty && countText.isEmpty) return '-';
+    if (pageText.isEmpty && countText.isEmpty) return '';
     if (pageText.isEmpty) return countText;
     if (countText.isEmpty) return pageText;
     return '$pageText · $countText';
   }
 
-  String childCheckHomeworkText(HomeworkItem child) {
-    final homeworkCountRaw = assignmentCountsByItem[child.id] ?? 0;
-    final homeworkCount = homeworkCountRaw < 0 ? 0 : homeworkCountRaw;
-    return '검사 ${child.checkCount}회 · 숙제 $homeworkCount회';
+  final dateRangeText = _formatDateRange(assignedAt, dueDate);
+  final dlg = YggDialogColors.of(context);
+  final dateRangeStyle = TextStyle(
+    color: dlg.textSub,
+    fontSize: 16,
+    fontWeight: FontWeight.w600,
+  );
+  final metaStyle = TextStyle(
+    color: dlg.textSub,
+    fontSize: 16,
+    fontWeight: FontWeight.w600,
+  );
+
+  int resolveCheckCount() {
+    if (groupChildren.isNotEmpty) {
+      return groupChildren.fold<int>(
+        0,
+        (sum, child) => sum + math.max(0, child.checkCount),
+      );
+    }
+    return math.max(0, hw.checkCount);
   }
+
+  int resolveHomeworkCount() {
+    if (groupChildren.isNotEmpty) {
+      return groupChildren.fold<int>(0, (sum, child) {
+        final raw = assignmentCountsByItem[child.id] ?? 0;
+        return sum + math.max(0, raw);
+      });
+    }
+    final raw = assignmentCountsByItem[hw.id] ?? 0;
+    return math.max(0, raw);
+  }
+
+  final checkHomeworkText =
+      '검사 ${resolveCheckCount()}회 · 숙제 ${resolveHomeworkCount()}회';
 
   final widgets = <Widget>[
     if (bookAndCourse.isNotEmpty) ...[
       LatexTextRenderer(
         bookAndCourse,
-        style: const TextStyle(
-          color: kDlgText,
+        style: TextStyle(
+          color: dlg.text,
           fontSize: 20,
           fontWeight: FontWeight.w900,
         ),
@@ -6074,56 +6107,79 @@ List<Widget> _buildHomeworkCheckTargetInfo(
       ),
       const SizedBox(height: 4),
     ],
-    LatexTextRenderer(
-      title,
-      style: TextStyle(
-        color: bookAndCourse.isNotEmpty ? kDlgTextSub : kDlgText,
-        fontSize: bookAndCourse.isNotEmpty ? 15 : 18,
-        fontWeight:
-            bookAndCourse.isNotEmpty ? FontWeight.w600 : FontWeight.w800,
-      ),
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.ellipsis,
+    Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: LatexTextRenderer(
+            title,
+            style: TextStyle(
+              color: groupChildren.isNotEmpty
+                  ? dlg.text
+                  : (bookAndCourse.isNotEmpty ? dlg.textSub : dlg.text),
+              fontSize: groupChildren.isNotEmpty ? 20 : 16,
+              fontWeight: groupChildren.isNotEmpty
+                  ? FontWeight.w800
+                  : (bookAndCourse.isNotEmpty
+                      ? FontWeight.w600
+                      : FontWeight.w800),
+            ),
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          dateRangeText,
+          textAlign: TextAlign.right,
+          style: dateRangeStyle,
+        ),
+      ],
     ),
-    if (pageAndCount.isNotEmpty) ...[
-      const SizedBox(height: 3),
-      Text(
-        pageAndCount,
-        style: const TextStyle(color: kDlgTextSub, fontSize: 13),
-      ),
-    ],
+    const SizedBox(height: 4),
+    Row(
+      children: [
+        Expanded(
+          child: Text(
+            pageAndCount.isEmpty ? '' : pageAndCount,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: metaStyle,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          checkHomeworkText,
+          textAlign: TextAlign.right,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: metaStyle,
+        ),
+      ],
+    ),
   ];
   if (groupChildren.isEmpty) return widgets;
 
   widgets.addAll([
-    const SizedBox(height: 12),
+    const SizedBox(height: 24),
     Container(
       width: double.infinity,
       height: 1,
-      color: const Color(0x223A4545),
+      color: dlg.divider,
     ),
-    const SizedBox(height: 10),
-    Text(
-      '하위 과제 ${groupChildren.length}개',
-      style: const TextStyle(
-        color: kDlgText,
-        fontSize: 14,
-        fontWeight: FontWeight.w800,
-      ),
-    ),
-    const SizedBox(height: 8),
+    const SizedBox(height: 24),
   ]);
 
-  const TextStyle groupChildTitleStyle = TextStyle(
-    color: Color(0xFFB9C3BA),
-    fontSize: 15,
+  final groupChildTitleStyle = TextStyle(
+    color: dlg.groupChildTitle,
+    fontSize: 16,
     fontWeight: FontWeight.w600,
     height: 1.2,
   );
-  const TextStyle groupChildMetaStyle = TextStyle(
-    color: Color(0xFF8FA1A1),
-    fontSize: 13.5,
+  final groupChildMetaStyle = TextStyle(
+    color: dlg.textSub,
+    fontSize: 16,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
@@ -6131,76 +6187,278 @@ List<Widget> _buildHomeworkCheckTargetInfo(
   for (int i = 0; i < groupChildren.length; i++) {
     final child = groupChildren[i];
     final memo = (child.memo ?? '').trim();
-    final memoText = memo.isEmpty ? '-' : memo;
     widgets.add(
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${i + 1}. ',
+            style: groupChildTitleStyle,
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    '${i + 1}. ${childTitle(child)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: groupChildTitleStyle,
-                  ),
+                Text(
+                  childTitle(child),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: groupChildTitleStyle,
                 ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    childCheckHomeworkText(child),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: groupChildMetaStyle,
-                  ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        childPageCount(child),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: groupChildMetaStyle,
+                      ),
+                    ),
+                    if (memo.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          memo,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                          style: groupChildMetaStyle,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 3),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    childPageCount(child),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: groupChildMetaStyle,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    memoText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: groupChildMetaStyle,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
     if (i != groupChildren.length - 1) {
-      widgets.addAll([
-        const SizedBox(height: 5),
-        Container(
-          width: double.infinity,
-          height: 1,
-          color: const Color(0x223A4545),
-        ),
-        const SizedBox(height: 5),
-      ]);
+      widgets.add(const SizedBox(height: 24));
     }
   }
 
   return widgets;
+}
+
+class _HomeworkCheckGlassPanel extends StatelessWidget {
+  const _HomeworkCheckGlassPanel({
+    required this.icon,
+    required this.title,
+    required this.child,
+    required this.actions,
+    required this.onClose,
+    this.bottomChild,
+  });
+
+  final IconData icon;
+  final String title;
+  final Widget child;
+  final Widget? bottomChild;
+  final List<Widget> actions;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    final media = MediaQuery.of(context);
+    final maxWidth = math.min(media.size.width - 48, 560.0);
+    final maxHeight = math.min(media.size.height * 0.72, 640.0);
+    final radius = BorderRadius.circular(28);
+    final blurSigma = FabTabBarTokens.previewAcademyMenuGlassBlurSigma;
+
+    return SafeArea(
+      top: false,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: maxWidth,
+              maxHeight: maxHeight,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0x40000000).withValues(alpha: 0.25),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: radius,
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: BackdropFilter(
+                        filter: ui.ImageFilter.blur(
+                          sigmaX: blurSigma,
+                          sigmaY: blurSigma,
+                        ),
+                        child: const ColoredBox(color: Colors.transparent),
+                      ),
+                    ),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: dlg.glassTint,
+                        border: Border.all(color: dlg.glassBorder, width: 0.5),
+                        borderRadius: radius,
+                      ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.max,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(18, 14, 12, 8),
+                              child: Row(
+                                children: [
+                                  Icon(icon, color: dlg.headerText, size: 24),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: dlg.headerText,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w800,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: '닫기',
+                                    onPressed: onClose,
+                                    icon: Icon(
+                                      Icons.close_rounded,
+                                      color: dlg.closeIcon,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Divider(height: 1, color: dlg.divider),
+                            Expanded(
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(18, 24, 18, 24),
+                                child: child,
+                              ),
+                            ),
+                            if (bottomChild != null) ...[
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(18, 0, 18, 14),
+                                child: bottomChild!,
+                              ),
+                            ] else if (actions.isNotEmpty)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(18, 10, 18, 14),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    for (var i = 0;
+                                        i < actions.length;
+                                        i++) ...[
+                                      if (i > 0) const SizedBox(width: 8),
+                                      actions[i],
+                                    ],
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeworkCheckSectionTitle extends StatelessWidget {
+  const _HomeworkCheckSectionTitle({
+    required this.icon,
+    required this.title,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10, top: 2),
+      child: Row(
+        children: [
+          Icon(icon, color: dlg.headerText.withValues(alpha: 0.8), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: dlg.headerText,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.1,
+              ),
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 12),
+            Flexible(child: trailing!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeworkCheckCard extends StatelessWidget {
+  const _HomeworkCheckCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: dlg.cardBg,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: dlg.cardBorder, width: 0.5),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: child,
+        ),
+      ),
+    );
+  }
 }
 
 Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
@@ -6208,6 +6466,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
   required HomeworkItem hw,
   required _HomeworkCheckTarget target,
   required int minProgress,
+  String? studentId,
   bool showStartGradingOption = false,
   List<HomeworkItem> groupChildren = const <HomeworkItem>[],
   Map<String, int> assignmentCountsByItem = const <String, int>{},
@@ -6227,322 +6486,319 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
     text: issueType == 'other' ? (target.issueNote ?? '') : '',
   );
 
+  var effectiveAssignmentCounts = assignmentCountsByItem;
+  final sid = studentId?.trim() ?? '';
+  if (effectiveAssignmentCounts.isEmpty && sid.isNotEmpty) {
+    effectiveAssignmentCounts =
+        await HomeworkAssignmentStore.instance.loadAssignmentCounts(sid);
+  }
+
   final result = await showDialog<_HomeworkCheckDraft>(
     context: context,
     builder: (ctx) {
       return StatefulBuilder(
         builder: (ctx, setState) {
-          final maxContentHeight = math.max(
-            320.0,
-            math.min(MediaQuery.of(ctx).size.height * 0.66, 620.0),
-          );
-          return AlertDialog(
-            backgroundColor: kDlgBg,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('숙제 검사',
-                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
-            content: SizedBox(
-              width: 480,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: maxContentHeight),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10, top: 2),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 4,
-                              height: 16,
-                              decoration: BoxDecoration(
-                                color: kDlgAccent,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            const Icon(
-                              Icons.assignment_turned_in,
-                              color: kDlgTextSub,
-                              size: 18,
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              '숙제 내용',
-                              style: TextStyle(
-                                color: kDlgText,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                _formatDateRange(
-                                    target.assignedAt, target.dueDate),
-                                textAlign: TextAlign.right,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: kDlgTextSub,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.only(left: 24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: _buildHomeworkCheckTargetInfo(
-                            hw,
-                            groupChildren: groupChildren,
-                            assignmentCountsByItem: assignmentCountsByItem,
-                            cycleMetaByItem: cycleMetaByItem,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      const YggDialogSectionHeader(
-                          icon: Icons.tune_rounded, title: '완료율'),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Slider(
-                              value: progress > sliderMax
-                                  ? sliderMax.toDouble()
-                                  : progress.toDouble(),
-                              min: 0,
-                              max: sliderMax.toDouble(),
-                              divisions: 10,
-                              label: '$progress%',
-                              activeColor: kDlgAccent,
-                              inactiveColor: kDlgBorder,
-                              onChanged: (v) {
-                                final next = ((v / 10).round() * 10)
-                                    .clamp(minProgress, sliderMax);
-                                setState(() {
-                                  progress = next;
-                                  final text = next.toString();
-                                  if (progressController.text != text) {
-                                    progressController.text = text;
-                                    progressController.selection =
-                                        TextSelection.collapsed(
-                                            offset: text.length);
-                                  }
-                                });
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          SizedBox(
-                            width: 70,
-                            child: TextField(
-                              controller: progressController,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly
-                              ],
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  color: kDlgText,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800),
-                              decoration: InputDecoration(
-                                suffixText: '%',
-                                suffixStyle:
-                                    const TextStyle(color: kDlgTextSub),
-                                filled: true,
-                                fillColor: kDlgFieldBg,
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide:
-                                      const BorderSide(color: kDlgBorder),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(
-                                      color: kDlgAccent, width: 1.4),
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 8),
-                              ),
-                              onChanged: (v) {
-                                final parsed = int.tryParse(v);
-                                if (parsed == null) return;
-                                final safe =
-                                    parsed.clamp(minProgress, progressMax);
-                                setState(() => progress = safe);
-                                final safeText = safe.toString();
-                                if (safeText != v) {
-                                  progressController.text = safeText;
-                                  progressController.selection =
-                                      TextSelection.collapsed(
-                                          offset: safeText.length);
-                                }
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      const YggDialogSectionHeader(
-                          icon: Icons.flag_outlined, title: '미완료 사유 (선택)'),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          YggDialogFilterChip(
-                            label: '분실',
-                            selected: issueType == 'lost',
-                            onSelected: (v) => setState(() {
-                              issueType = v ? 'lost' : null;
-                              if (issueType != 'other') {
-                                noteController.text = '';
-                              }
-                            }),
-                          ),
-                          YggDialogFilterChip(
-                            label: '잊음',
-                            selected: issueType == 'forgot',
-                            onSelected: (v) => setState(() {
-                              issueType = v ? 'forgot' : null;
-                              if (issueType != 'other') {
-                                noteController.text = '';
-                              }
-                            }),
-                          ),
-                          YggDialogFilterChip(
-                            label: '기타',
-                            selected: issueType == 'other',
-                            onSelected: (v) => setState(() {
-                              issueType = v ? 'other' : null;
-                              if (!v) noteController.text = '';
-                            }),
-                          ),
-                        ],
-                      ),
-                      if (issueType == 'other') ...[
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: noteController,
-                          minLines: 1,
-                          maxLines: 2,
-                          style: const TextStyle(color: kDlgText),
-                          decoration: InputDecoration(
-                            hintText: '사유를 입력하세요',
-                            hintStyle:
-                                const TextStyle(color: Color(0xFF6E7E7E)),
-                            filled: true,
-                            fillColor: kDlgFieldBg,
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: kDlgBorder),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(
-                                  color: kDlgAccent, width: 1.4),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                          ),
-                        ),
-                      ],
-                      if (showStartGradingOption) ...[
-                        const SizedBox(height: 14),
-                        const YggDialogSectionHeader(
-                          icon: Icons.fact_check_outlined,
-                          title: '검사 후 처리',
-                        ),
-                        InkWell(
-                          borderRadius: BorderRadius.circular(10),
-                          onTap: () {
-                            setState(() => startGrading = !startGrading);
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 2),
-                            child: Row(
-                              children: [
-                                IgnorePointer(
-                                  child: Checkbox(
-                                    value: startGrading,
-                                    onChanged: (_) {},
-                                    activeColor: kDlgAccent,
-                                    checkColor: const Color(0xFF10191C),
-                                    side: const BorderSide(color: kDlgBorder),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        '바로채점',
-                                        style: TextStyle(
-                                          color: kDlgText,
-                                          fontSize: 13.5,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                      SizedBox(height: 2),
-                                      Text(
-                                        '체크 시 제출 단계로 넘긴 뒤 연결된 정답/문제 DB 채점 화면을 바로 엽니다.',
-                                        style: TextStyle(
-                                          color: kDlgTextSub,
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w600,
-                                          height: 1.25,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+          final dlg = YggDialogColors.of(ctx);
+          return _HomeworkCheckGlassPanel(
+            icon: Icons.assignment_turned_in,
+            title: '숙제 검사',
+            onClose: () => Navigator.of(ctx).pop(null),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _buildHomeworkCheckTargetInfo(
+                  ctx,
+                  hw,
+                  assignedAt: target.assignedAt,
+                  dueDate: target.dueDate,
+                  groupChildren: groupChildren,
+                  assignmentCountsByItem: effectiveAssignmentCounts,
+                  cycleMetaByItem: cycleMetaByItem,
                 ),
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(null),
-                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final parsed = int.tryParse(progressController.text.trim());
-                  final safeProgress =
-                      (parsed ?? progress).clamp(minProgress, 150);
-                  final issueNote =
-                      issueType == 'other' ? noteController.text.trim() : null;
-                  Navigator.of(ctx).pop(
-                    _HomeworkCheckDraft(
-                      progress: safeProgress,
-                      issueType: issueType,
-                      issueNote: issueNote?.isEmpty == true ? null : issueNote,
-                      startGrading: showStartGradingOption && startGrading,
+            bottomChild: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _HomeworkCheckSectionTitle(
+                  icon: Icons.tune_rounded,
+                  title: '완료율',
+                ),
+                _HomeworkCheckCard(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Slider(
+                          value: progress > sliderMax
+                              ? sliderMax.toDouble()
+                              : progress.toDouble(),
+                          min: 0,
+                          max: sliderMax.toDouble(),
+                          divisions: 10,
+                          label: '$progress%',
+                          activeColor: kDlgAccent,
+                          inactiveColor: dlg.border,
+                          onChanged: (v) {
+                            final next = ((v / 10).round() * 10)
+                                .clamp(minProgress, sliderMax);
+                            setState(() {
+                              progress = next;
+                              final text = next.toString();
+                              if (progressController.text != text) {
+                                progressController.text = text;
+                                progressController.selection =
+                                    TextSelection.collapsed(
+                                        offset: text.length);
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 70,
+                        child: TextField(
+                          controller: progressController,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly
+                          ],
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: dlg.text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          decoration: InputDecoration(
+                            suffixText: '%',
+                            suffixStyle: TextStyle(
+                              color: dlg.textSub,
+                              fontSize: 16,
+                            ),
+                            filled: true,
+                            fillColor: dlg.fieldBg,
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(color: dlg.border),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(
+                                color: kDlgAccent,
+                                width: 1.4,
+                              ),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 8,
+                            ),
+                          ),
+                          onChanged: (v) {
+                            final parsed = int.tryParse(v);
+                            if (parsed == null) return;
+                            final safe = parsed.clamp(minProgress, progressMax);
+                            setState(() => progress = safe);
+                            final safeText = safe.toString();
+                            if (safeText != v) {
+                              progressController.text = safeText;
+                              progressController.selection =
+                                  TextSelection.collapsed(
+                                      offset: safeText.length);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    YggDialogFilterChip(
+                      label: '분실',
+                      height: FabTabBarTokens.fabBarHeight,
+                      labelFontSize: FabTabBarTokens.fabBarLabelFontSize,
+                      selected: issueType == 'lost',
+                      onSelected: (v) => setState(() {
+                        issueType = v ? 'lost' : null;
+                        if (issueType != 'other') {
+                          noteController.text = '';
+                        }
+                      }),
                     ),
-                  );
-                },
-                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-                child: const Text('저장'),
-              ),
-            ],
+                    const SizedBox(width: 6),
+                    YggDialogFilterChip(
+                      label: '잊음',
+                      height: FabTabBarTokens.fabBarHeight,
+                      labelFontSize: FabTabBarTokens.fabBarLabelFontSize,
+                      selected: issueType == 'forgot',
+                      onSelected: (v) => setState(() {
+                        issueType = v ? 'forgot' : null;
+                        if (issueType != 'other') {
+                          noteController.text = '';
+                        }
+                      }),
+                    ),
+                    const SizedBox(width: 6),
+                    YggDialogFilterChip(
+                      label: '기타',
+                      height: FabTabBarTokens.fabBarHeight,
+                      labelFontSize: FabTabBarTokens.fabBarLabelFontSize,
+                      selected: issueType == 'other',
+                      onSelected: (v) => setState(() {
+                        issueType = v ? 'other' : null;
+                        if (!v) noteController.text = '';
+                      }),
+                    ),
+                    if (showStartGradingOption) ...[
+                      const SizedBox(width: 6),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(
+                            FabTabBarTokens.fabBarHeight / 2,
+                          ),
+                          onTap: () {
+                            setState(() => startGrading = !startGrading);
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 160),
+                            height: FabTabBarTokens.fabBarHeight,
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: startGrading
+                                  ? dlg.chipSelected
+                                  : dlg.chipBg,
+                              borderRadius: BorderRadius.circular(
+                                FabTabBarTokens.fabBarHeight / 2,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: IgnorePointer(
+                                    child: Checkbox(
+                                      value: startGrading,
+                                      onChanged: (_) {},
+                                      activeColor: kDlgAccent,
+                                      checkColor: const Color(0xFF10191C),
+                                      side: BorderSide(color: dlg.border),
+                                      materialTapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '바로채점',
+                                  style: TextStyle(
+                                    color: startGrading
+                                        ? Colors.white
+                                        : dlg.chipText,
+                                    fontSize:
+                                        FabTabBarTokens.fabBarLabelFontSize,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(
+                          FabTabBarTokens.fabBarHeight / 2,
+                        ),
+                        onTap: () {
+                          final parsed =
+                              int.tryParse(progressController.text.trim());
+                          final safeProgress =
+                              (parsed ?? progress).clamp(minProgress, 150);
+                          final issueNote = issueType == 'other'
+                              ? noteController.text.trim()
+                              : null;
+                          Navigator.of(ctx).pop(
+                            _HomeworkCheckDraft(
+                              progress: safeProgress,
+                              issueType: issueType,
+                              issueNote:
+                                  issueNote?.isEmpty == true ? null : issueNote,
+                              startGrading:
+                                  showStartGradingOption && startGrading,
+                            ),
+                          );
+                        },
+                        child: Container(
+                          height: FabTabBarTokens.fabBarHeight,
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: kDlgAccent,
+                            borderRadius: BorderRadius.circular(
+                              FabTabBarTokens.fabBarHeight / 2,
+                            ),
+                          ),
+                          child: const Text(
+                            '저장',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (issueType == 'other') ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: noteController,
+                    minLines: 1,
+                    maxLines: 2,
+                    style: TextStyle(color: dlg.text, fontSize: 16),
+                    decoration: InputDecoration(
+                      hintText: '사유를 입력하세요',
+                      hintStyle: TextStyle(
+                        color: dlg.hint,
+                        fontSize: 16,
+                      ),
+                      filled: true,
+                      fillColor: dlg.fieldBg,
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: dlg.border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: kDlgAccent,
+                          width: 1.4,
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: const [],
           );
         },
       );
@@ -6592,6 +6848,7 @@ Future<void> _runHomeworkCheckAndConfirm({
     hw: latest,
     target: target,
     minProgress: minProgress,
+    studentId: studentId,
   );
   if (!context.mounted || draft == null) return;
 
@@ -7043,6 +7300,7 @@ Future<_HomeworkCheckResult?> _runHomeworkCheckDialogOnly({
     hw: latest,
     target: target,
     minProgress: minProgress,
+    studentId: studentId,
     showStartGradingOption: true,
   );
   if (!context.mounted || draft == null) return null;
@@ -9195,6 +9453,103 @@ Future<void> _moveGroupChildByDrag({
   }
 }
 
+class _HomeworkCardTheme {
+  const _HomeworkCardTheme({
+    required this.titleStyle,
+    required this.metaStyle,
+    required this.secondaryRowStyle,
+    required this.idleBorderColor,
+    required this.reservedBorderColor,
+    required this.reservedBorderExpandedColor,
+    required this.dividerColor,
+    required this.dividerStrongColor,
+    required this.childDividerColor,
+    required this.iconMutedColor,
+    required this.flowChipDefaultBg,
+    required this.flowChipDefaultBorder,
+    required this.flowChipDefaultText,
+    required this.pendingConfirmOverlay,
+    required this.dragFeedbackBackground,
+    required this.dragFeedbackBorder,
+    required this.reservedExpandedShadow,
+  });
+
+  final TextStyle titleStyle;
+  final TextStyle metaStyle;
+  final TextStyle secondaryRowStyle;
+  final Color idleBorderColor;
+  final Color reservedBorderColor;
+  final Color reservedBorderExpandedColor;
+  final Color dividerColor;
+  final Color dividerStrongColor;
+  final Color childDividerColor;
+  final Color iconMutedColor;
+  final Color flowChipDefaultBg;
+  final Color flowChipDefaultBorder;
+  final Color flowChipDefaultText;
+  final Color pendingConfirmOverlay;
+  final Color dragFeedbackBackground;
+  final Color dragFeedbackBorder;
+  final List<BoxShadow> reservedExpandedShadow;
+
+  factory _HomeworkCardTheme.forBrightness(Brightness brightness) {
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final isLight = brightness == Brightness.light;
+    final groupedBorder =
+        FabTabBarTokens.groupedCardBorderFor(brightness).top.color;
+
+    return _HomeworkCardTheme(
+      titleStyle: FabTabBarTokens.previewAcademyLabelStyle(panel).copyWith(
+        fontSize: 24,
+        fontWeight: FontWeight.w700,
+        height: 1.1,
+      ),
+      metaStyle: FabTabBarTokens.previewAcademyLabelStyle(panel).copyWith(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        height: 1.1,
+      ),
+      secondaryRowStyle: TextStyle(
+        fontFamily: FabTabBarTokens.previewAcademyValueFontFamily,
+        fontWeight: FontWeight.w600,
+        fontSize: 16,
+        height: 1.1,
+        color: isLight ? panel.hint : const Color(0xFF8FA1A1),
+      ),
+      idleBorderColor: isLight ? groupedBorder : Colors.white24,
+      reservedBorderColor: isLight ? groupedBorder : const Color(0xFF273338),
+      reservedBorderExpandedColor: isLight
+          ? kDlgAccent.withValues(alpha: 0.45)
+          : const Color(0xFF33554C),
+      dividerColor: panel.divider,
+      dividerStrongColor: isLight ? groupedBorder : const Color(0x80FFFFFF),
+      childDividerColor: isLight ? panel.divider : const Color(0x223A4545),
+      iconMutedColor: panel.icon,
+      flowChipDefaultBg:
+          isLight ? const Color(0xFFF2F2F7) : const Color(0xFF2A3030),
+      flowChipDefaultBorder: isLight ? groupedBorder : const Color(0xFF4A5858),
+      flowChipDefaultText: isLight ? panel.hint : const Color(0xFF9FB3B3),
+      pendingConfirmOverlay:
+          isLight ? const Color(0xCCF2F2F7) : const Color(0xCC0B1112),
+      dragFeedbackBackground:
+          isLight ? const Color(0xFFECECEF) : const Color(0xFF202629),
+      dragFeedbackBorder: isLight ? groupedBorder : const Color(0xFF3E5757),
+      reservedExpandedShadow: isLight
+          ? FabTabBarTokens.fabBarLightBoxShadows
+          : const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 8,
+                offset: Offset(0, 3),
+              ),
+            ],
+    );
+  }
+
+  static _HomeworkCardTheme of(BuildContext context) =>
+      _HomeworkCardTheme.forBrightness(Theme.of(context).brightness);
+}
+
 const double _homeworkChipCollapsedHeight = 160.0;
 const double _homeworkChipExpandedHeight = 238.0;
 double _homeworkGroupExpandedHeightForChildCount(int childCount) {
@@ -9755,6 +10110,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
   );
   if (reservedGroups.isEmpty) return const <Widget>[];
 
+  final cardTheme = _HomeworkCardTheme.of(context);
   final out = <Widget>[];
   for (int i = 0; i < reservedGroups.length; i++) {
     final group = reservedGroups[i];
@@ -9850,6 +10206,10 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
       return '$bookName · $courseName';
     }
 
+    final groupedCardBackground = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    ).groupedCardBackground;
+
     final String line1TextbookLabel = () {
       final labels = <String>[];
       for (final entry in entries) {
@@ -9910,12 +10270,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
               children: [
                 Text(
                   '${childIndex + 1}. ${childLabel(hw)}',
-                  style: const TextStyle(
-                    color: Color(0xFFB9C3BA),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    height: 1.2,
-                  ),
+                  style: cardTheme.secondaryRowStyle.copyWith(height: 1.2),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -9924,12 +10279,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                   width: double.infinity,
                   child: Text(
                     childPageCountLabel(hw),
-                    style: const TextStyle(
-                      color: Color(0xFF8FA1A1),
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w600,
-                      height: 1.1,
-                    ),
+                    style: cardTheme.secondaryRowStyle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.right,
@@ -9940,12 +10290,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                   width: double.infinity,
                   child: Text(
                     childMemoLabel(hw),
-                    style: const TextStyle(
-                      color: Color(0xFF8FA1A1),
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w600,
-                      height: 1.1,
-                    ),
+                    style: cardTheme.secondaryRowStyle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.right,
@@ -9962,7 +10307,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
           Container(
             width: double.infinity,
             height: 1.3,
-            color: const Color(0x223A4545),
+            color: cardTheme.childDividerColor,
           ),
           const SizedBox(height: 10),
         ]);
@@ -10023,23 +10368,15 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                 isExpanded ? expandedReservedHeight : collapsedReservedHeight,
           ),
           decoration: BoxDecoration(
-            color: const Color(0xFF15171C),
+            color: groupedCardBackground,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: isExpanded
-                  ? const Color(0xFF33554C)
-                  : const Color(0xFF273338),
+                  ? cardTheme.reservedBorderExpandedColor
+                  : cardTheme.reservedBorderColor,
               width: isExpanded ? 1.4 : 1.1,
             ),
-            boxShadow: isExpanded
-                ? const [
-                    BoxShadow(
-                      color: Color(0x22000000),
-                      blurRadius: 8,
-                      offset: Offset(0, 3),
-                    ),
-                  ]
-                : const [],
+            boxShadow: isExpanded ? cardTheme.reservedExpandedShadow : const [],
           ),
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
           child: Column(
@@ -10047,10 +10384,10 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
             children: [
               Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.inventory_2_rounded,
                     size: 17,
-                    color: Color(0xFF8FA3A8),
+                    color: cardTheme.iconMutedColor,
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -10058,12 +10395,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                       line1TextbookLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFFCAD2C5),
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        height: 1.15,
-                      ),
+                      style: cardTheme.titleStyle.copyWith(height: 1.15),
                     ),
                   ),
                   if (isActivating)
@@ -10081,7 +10413,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                           ? Icons.keyboard_arrow_up_rounded
                           : Icons.keyboard_arrow_down_rounded,
                       size: 20,
-                      color: kDlgTextSub,
+                      color: cardTheme.iconMutedColor,
                     ),
                 ],
               ),
@@ -10090,53 +10422,33 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                 line2GroupTitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFB9C3BA),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  height: 1.2,
-                ),
+                style: cardTheme.metaStyle.copyWith(height: 1.2),
               ),
               const SizedBox(height: 5),
               Text(
                 topMeta,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF8FA1A1),
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w600,
-                  height: 1.1,
-                ),
+                style: cardTheme.secondaryRowStyle,
               ),
               const SizedBox(height: 5),
               Text(
                 bottomMeta,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: kDlgAccent,
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w700,
-                  height: 1.1,
-                ),
+                style: cardTheme.secondaryRowStyle,
               ),
               if (isExpanded) ...[
                 const SizedBox(height: 20),
-                const Divider(
+                Divider(
                   height: 1,
                   thickness: 1.2,
-                  color: Color(0x80FFFFFF),
+                  color: cardTheme.dividerStrongColor,
                 ),
                 const SizedBox(height: 16),
                 Text(
                   '그룹 과제 ${entries.length}개',
-                  style: const TextStyle(
-                    color: Color(0xFFCAD2C5),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    height: 1.1,
-                  ),
+                  style: cardTheme.secondaryRowStyle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -11284,7 +11596,7 @@ String _toLocalFilePath(String rawPath) {
 
 void _showHomeworkChipSnackBar(BuildContext context, String message) {
   if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  showAppSnackBar(context, message);
 }
 
 Future<Map<String, HomeworkAssignmentDetail>>
@@ -13937,6 +14249,7 @@ bool _isTestHomeworkItem(HomeworkItem item) {
 
 Widget _buildFlowChip(
   String flowName, {
+  required _HomeworkCardTheme cardTheme,
   String? dueLabel,
   bool isHomeworkDue = false,
   String? overrideText,
@@ -13961,15 +14274,15 @@ Widget _buildFlowChip(
   final Color backgroundColor = overrideBackgroundColor ??
       (isHomeworkDue
           ? const Color(0x1F4FBF97)
-          : (isDefault ? Colors.transparent : const Color(0xFF2A3030)));
+          : (isDefault ? Colors.transparent : cardTheme.flowChipDefaultBg));
   final Border? border = overrideBorder ??
       (isHomeworkDue
           ? Border.all(color: kDlgAccent, width: 1.05)
           : (isDefault
-              ? Border.all(color: const Color(0xFF4A5858), width: 1)
+              ? Border.all(color: cardTheme.flowChipDefaultBorder, width: 1)
               : null));
   final Color textColor = overrideTextColor ??
-      (isHomeworkDue ? const Color(0xFF9FE3C6) : const Color(0xFF9FB3B3));
+      (isHomeworkDue ? const Color(0xFF9FE3C6) : cardTheme.flowChipDefaultText);
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
     decoration: BoxDecoration(
@@ -14024,47 +14337,19 @@ Widget _buildHomeworkChipVisual(
   final bool visualRunning = isReservation ? false : isRunning;
   final int visualPhase = isReservation ? 1 : phase;
   const Color unifiedHomeworkAccent = kDlgAccent;
-  final TextStyle titleStyle = const TextStyle(
-    color: Color(0xFFCAD2C5),
-    fontSize: 24,
-    fontWeight: FontWeight.w700,
-    height: 1.1,
-  );
-  final TextStyle metaStyle = const TextStyle(
-    color: Color(0xFFCAD2C5),
-    fontSize: 17,
-    fontWeight: FontWeight.w600,
-    height: 1.1,
-  );
-  final TextStyle statStyle = const TextStyle(
-    color: Color(0xFF7F8C8C),
-    fontSize: 14.5,
-    fontWeight: FontWeight.w600,
-    height: 1.1,
-  );
-  final TextStyle line4Style = const TextStyle(
-    color: Color(0xFF748686),
-    fontSize: 13.5,
-    fontWeight: FontWeight.w600,
-    height: 1.1,
-  );
-  final TextStyle groupChildTitleStyle = const TextStyle(
-    color: Color(0xFFB9C3BA),
-    fontSize: 15,
-    fontWeight: FontWeight.w600,
-    height: 1.2,
-  );
-  final TextStyle groupChildMetaStyle = const TextStyle(
-    color: Color(0xFF8FA1A1),
-    fontSize: 13.5,
-    fontWeight: FontWeight.w600,
-    height: 1.1,
-  );
+  final cardTheme = _HomeworkCardTheme.of(context);
+  final TextStyle titleStyle = cardTheme.titleStyle;
+  final TextStyle metaStyle = cardTheme.metaStyle;
+  final TextStyle secondaryRowStyle = cardTheme.secondaryRowStyle;
   const double leftPad = 24;
   const double rightPad = 24;
   final double chipHeight = chipHeightOverride ??
       (isExpanded ? _homeworkChipExpandedHeight : _homeworkChipCollapsedHeight);
   const double borderWMax = 3.0;
+
+  final groupedCardBackground = FabTabBarTokens.previewAcademyPanelStyleFor(
+    Theme.of(context).brightness,
+  ).groupedCardBackground;
 
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
@@ -14337,16 +14622,17 @@ Widget _buildHomeworkChipVisual(
           : (visualPhase == 4
               ? Border.all(
                   color: Color.lerp(
-                        Colors.white24,
+                        cardTheme.idleBorderColor,
                         unifiedHomeworkAccent.withOpacity(0.9),
                         phase4Pulse,
                       ) ??
-                      Colors.white24,
+                      cardTheme.idleBorderColor,
                   width: borderWMax,
                 )
               : (visualPhase == 1
                   ? Border.all(color: Colors.transparent, width: borderWMax)
-                  : Border.all(color: Colors.white24, width: borderWMax))));
+                  : Border.all(
+                      color: cardTheme.idleBorderColor, width: borderWMax))));
 
   Widget row1 = ConstrainedBox(
     constraints: BoxConstraints(maxWidth: maxRowW),
@@ -14363,6 +14649,7 @@ Widget _buildHomeworkChipVisual(
         const SizedBox(width: 10),
         _buildFlowChip(
           displayFlowName,
+          cardTheme: cardTheme,
           dueLabel: dueLabel,
           isHomeworkDue: isHomeworkDue,
           overrideText: flowChipOverrideText,
@@ -14401,19 +14688,19 @@ Widget _buildHomeworkChipVisual(
     constraints: BoxConstraints(maxWidth: maxRowW),
     child: Row(
       children: [
-        Text(startDateText, style: statStyle),
+        Text(startDateText, style: secondaryRowStyle),
         const SizedBox(width: 8),
-        Text(progressText, style: statStyle),
+        Text(progressText, style: secondaryRowStyle),
         const Spacer(),
-        Text('총 $durationText', style: statStyle),
+        Text('총 $durationText', style: secondaryRowStyle),
       ],
     ),
   );
 
   Widget buildTypeLabelCell() {
-    final style = line4Style.copyWith(
+    final style = secondaryRowStyle.copyWith(
       decoration: onTypeTap != null ? TextDecoration.underline : null,
-      decorationColor: onTypeTap != null ? line4Style.color : null,
+      decorationColor: onTypeTap != null ? secondaryRowStyle.color : null,
     );
     final label = Text(
       typeText,
@@ -14441,7 +14728,7 @@ Widget _buildHomeworkChipVisual(
         const SizedBox(width: 10),
         Text(
           assignmentCodeText,
-          style: line4Style.copyWith(color: const Color(0xFFB9C9C9)),
+          style: secondaryRowStyle,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.right,
@@ -14514,12 +14801,12 @@ Widget _buildHomeworkChipVisual(
                   children: [
                     Text(
                       '${index + 1}. ',
-                      style: groupChildTitleStyle,
+                      style: secondaryRowStyle,
                     ),
                     Expanded(
                       child: LatexTextRenderer(
                         groupChildLabel(child),
-                        style: groupChildTitleStyle,
+                        style: secondaryRowStyle,
                         softWrap: true,
                       ),
                     ),
@@ -14535,7 +14822,7 @@ Widget _buildHomeworkChipVisual(
                     width: double.infinity,
                     child: Text(
                       groupChildPageCountLabel(child),
-                      style: groupChildMetaStyle.copyWith(
+                      style: secondaryRowStyle.copyWith(
                         decoration: enablePageTap
                             ? TextDecoration.underline
                             : TextDecoration.none,
@@ -14556,7 +14843,7 @@ Widget _buildHomeworkChipVisual(
                     width: double.infinity,
                     child: Text(
                       groupChildMemoLabel(child),
-                      style: groupChildMetaStyle.copyWith(
+                      style: secondaryRowStyle.copyWith(
                         decoration: enableMemoTap
                             ? TextDecoration.underline
                             : TextDecoration.none,
@@ -14592,9 +14879,9 @@ Widget _buildHomeworkChipVisual(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF202629),
+                  color: cardTheme.dragFeedbackBackground,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFF3E5757)),
+                  border: Border.all(color: cardTheme.dragFeedbackBorder),
                 ),
                 child: buildRowCore(enablePageTap: false, enableMemoTap: false),
               ),
@@ -14664,7 +14951,7 @@ Widget _buildHomeworkChipVisual(
             Expanded(
               child: Text(
                 expandedLine3Left,
-                style: statStyle,
+                style: secondaryRowStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -14672,7 +14959,7 @@ Widget _buildHomeworkChipVisual(
             const SizedBox(width: 8),
             Text(
               expandedLine3Right,
-              style: statStyle,
+              style: secondaryRowStyle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.right,
@@ -14688,7 +14975,7 @@ Widget _buildHomeworkChipVisual(
             Expanded(
               child: Text(
                 line4PageText,
-                style: line4Style,
+                style: secondaryRowStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -14696,7 +14983,7 @@ Widget _buildHomeworkChipVisual(
             const SizedBox(width: 8),
             Text(
               line4TotalCountText,
-              style: line4Style,
+              style: secondaryRowStyle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.right,
@@ -14712,7 +14999,7 @@ Widget _buildHomeworkChipVisual(
             Expanded(
               child: Text(
                 line5Left,
-                style: line4Style,
+                style: secondaryRowStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -14722,7 +15009,7 @@ Widget _buildHomeworkChipVisual(
               constraints: const BoxConstraints(maxWidth: 220),
               child: Text(
                 line5Right,
-                style: line4Style,
+                style: secondaryRowStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
@@ -14742,7 +15029,7 @@ Widget _buildHomeworkChipVisual(
               constraints: const BoxConstraints(maxWidth: 220),
               child: Text(
                 assignmentCodeText,
-                style: line4Style.copyWith(color: const Color(0xFFB9C9C9)),
+                style: secondaryRowStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
@@ -14756,7 +15043,7 @@ Widget _buildHomeworkChipVisual(
         Container(
           width: maxRowW,
           height: 1,
-          color: const Color(0x80FFFFFF),
+          color: cardTheme.dividerStrongColor,
         ),
         const SizedBox(height: 12),
         ConstrainedBox(
@@ -14766,7 +15053,7 @@ Widget _buildHomeworkChipVisual(
               Expanded(
                 child: Text(
                   '그룹 과제 ${groupChildren.length}개',
-                  style: metaStyle,
+                  style: secondaryRowStyle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -14812,7 +15099,7 @@ Widget _buildHomeworkChipVisual(
             Container(
               width: maxRowW,
               height: 1.3,
-              color: const Color(0x66FFFFFF),
+              color: cardTheme.dividerColor,
             ),
             const SizedBox(height: 10),
           ],
@@ -14837,7 +15124,7 @@ Widget _buildHomeworkChipVisual(
     padding: const EdgeInsets.fromLTRB(leftPad, 14, rightPad, 14),
     alignment: Alignment.topLeft,
     decoration: BoxDecoration(
-      color: const Color(0xFF15171C),
+      color: groupedCardBackground,
       borderRadius: BorderRadius.circular(12),
       border: border,
       boxShadow: [
@@ -14878,7 +15165,7 @@ Widget _buildHomeworkChipVisual(
           child: IgnorePointer(
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xCC0B1112),
+                color: cardTheme.pendingConfirmOverlay,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Center(
@@ -15900,9 +16187,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
                                     size: 34,
                                     color: widget.upColor,
                                   ),
-                                  if (widget.upSubLabel
-                                      .trim()
-                                      .isNotEmpty) ...[
+                                  if (widget.upSubLabel.trim().isNotEmpty) ...[
                                     const SizedBox(height: 3),
                                     Text(
                                       widget.upSubLabel.trim(),
@@ -15932,34 +16217,34 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
             ),
           ),
           AnimatedContainer(
-          duration:
-              _dragging ? Duration.zero : const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          transform: Matrix4.translationValues(_offset, 0, 0),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: widget.onTap,
-              onLongPress: widget.onLongPress,
-              onSecondaryTap: widget.onSecondaryTap,
-              onDoubleTap: widget.onDoubleTap,
-              onHorizontalDragUpdate: (details) {
-                final delta = details.delta.dx;
-                if (delta > 0) {
-                  // 오른쪽 방향: 슬라이드 불가여도 반대방향에서 복귀는 허용
-                  if (!widget.canSlideDown && _offset >= 0) return;
-                } else if (delta < 0) {
-                  // 왼쪽 방향: 슬라이드 불가여도 반대방향에서 복귀는 허용
-                  if (!widget.canSlideUp && _offset <= 0) return;
-                }
-                _updateOffset(delta);
-              },
-              onHorizontalDragEnd: _endDrag,
-              child: widget.child,
+            duration:
+                _dragging ? Duration.zero : const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+            transform: Matrix4.translationValues(_offset, 0, 0),
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: widget.onTap,
+                onLongPress: widget.onLongPress,
+                onSecondaryTap: widget.onSecondaryTap,
+                onDoubleTap: widget.onDoubleTap,
+                onHorizontalDragUpdate: (details) {
+                  final delta = details.delta.dx;
+                  if (delta > 0) {
+                    // 오른쪽 방향: 슬라이드 불가여도 반대방향에서 복귀는 허용
+                    if (!widget.canSlideDown && _offset >= 0) return;
+                  } else if (delta < 0) {
+                    // 왼쪽 방향: 슬라이드 불가여도 반대방향에서 복귀는 허용
+                    if (!widget.canSlideUp && _offset <= 0) return;
+                  }
+                  _updateOffset(delta);
+                },
+                onHorizontalDragEnd: _endDrag,
+                child: widget.child,
+              ),
             ),
           ),
-        ),
-      ],
+        ],
       ),
     );
   }
@@ -15992,8 +16277,7 @@ class _AttendingButton extends StatelessWidget {
     final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     final primaryTextColor = panelStyle.title;
     final secondaryTextColor = panelStyle.label;
-    final tertiaryTextColor =
-        isDark ? Colors.white54 : const Color(0xFF8E8E93);
+    final tertiaryTextColor = isDark ? Colors.white54 : const Color(0xFF8E8E93);
     final deviceBadgeBackground = isDark
         ? Colors.white.withValues(alpha: 0.12)
         : Colors.black.withValues(alpha: 0.05);
@@ -16060,7 +16344,9 @@ class _AttendingButton extends StatelessWidget {
                               : null;
 
                           final nameStyle = TextStyle(
-                            color: isResting ? tertiaryTextColor : primaryTextColor,
+                            color: isResting
+                                ? tertiaryTextColor
+                                : primaryTextColor,
                             fontSize: 38,
                             fontWeight: FontWeight.w600,
                             height: 1.0,

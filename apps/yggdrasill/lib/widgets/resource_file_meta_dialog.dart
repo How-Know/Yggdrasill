@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../services/data_manager.dart';
@@ -42,6 +44,7 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
   List<_BigUnitNode> _units = const <_BigUnitNode>[];
   Map<String, _SmallUnitStats> _statsBySmallKey =
       const <String, _SmallUnitStats>{};
+  bool _metaExpanded = false;
 
   // Problem regions (textbook_problem_crops) grouped by raw page number.
   bool _regionsLoading = false;
@@ -243,8 +246,45 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
     return '${_formatDouble(value, fraction: 2)}회';
   }
 
-  String _formatTotalChecks(int? value) => value == null ? '-' : '${value}건';
-  String _formatStudents(int? value) => value == null ? '-' : '${value}명';
+  String _formatTotalChecks(int? value) => value == null ? '-' : '$value건';
+  String _formatStudents(int? value) => value == null ? '-' : '$value명';
+
+  int? get _totalPageCount {
+    final pages = <int>{};
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          final start = small.startPage;
+          final end = small.endPage;
+          if (start != null && end != null && start > 0 && end >= start) {
+            for (var page = start; page <= end; page += 1) {
+              pages.add(page);
+            }
+          } else if (start != null && start > 0) {
+            pages.add(start);
+          } else if (end != null && end > 0) {
+            pages.add(end);
+          }
+        }
+      }
+    }
+    for (final region in _regions) {
+      if (region.rawPage > 0) pages.add(region.rawPage);
+    }
+    if (pages.isEmpty) return null;
+    return pages.reduce(math.max);
+  }
+
+  int get _numberedQuestionCount {
+    final numbers = <String>{};
+    for (final region in _regions) {
+      if (region.isSetHeader) continue;
+      final number = region.problemNumber.trim();
+      if (number.isEmpty) continue;
+      numbers.add(number);
+    }
+    return numbers.length;
+  }
 
   String _smallPageText(_SmallUnitNode small) {
     if (small.startPage == null && small.endPage == null) return '';
@@ -420,9 +460,9 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
           const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
-              color: kDlgPanelBg.withOpacity(0.35),
+              color: kDlgPanelBg.withValues(alpha: 0.35),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: kDlgBorder.withOpacity(0.8)),
+              border: Border.all(color: kDlgBorder.withValues(alpha: 0.8)),
             ),
             child: Column(
               children: [
@@ -473,101 +513,231 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
     );
   }
 
+  Widget _buildBasicInfoSection() {
+    final titleParts = <String>[
+      widget.fileName.trim().isEmpty ? '(이름 없음)' : widget.fileName.trim(),
+      if ((widget.gradeLabel ?? '').trim().isNotEmpty)
+        (widget.gradeLabel ?? '').trim(),
+    ];
+    final pageCount = _totalPageCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const YggDialogSectionHeader(
+          icon: Icons.menu_book_outlined,
+          title: '기본 정보',
+        ),
+        _buildInfoPanel(
+          children: [
+            _MetaRow(label: '책', value: titleParts.join(' · ')),
+            _MetaRow(
+              label: '설명',
+              value: (widget.description ?? '').trim().isEmpty
+                  ? '-'
+                  : widget.description!.trim(),
+            ),
+            _MetaRow(
+              label: '분류',
+              value: (widget.categoryLabel ?? '').trim().isEmpty
+                  ? '-'
+                  : widget.categoryLabel!.trim(),
+            ),
+            _MetaRow(
+              label: '폴더',
+              value: (widget.parentLabel ?? '').trim().isEmpty
+                  ? '루트'
+                  : widget.parentLabel!.trim(),
+            ),
+            _MetaRow(
+              label: '총페이지',
+              value: pageCount == null ? '-' : '$pageCount쪽',
+            ),
+            _MetaRow(
+              label: '총문항',
+              value: _regionsLoading ? '계산 중...' : '$_numberedQuestionCount문항',
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildExpandableMetaSection() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: kDlgPanelBg,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: () => setState(() => _metaExpanded = !_metaExpanded),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: kDlgTextSub, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      '메타 정보',
+                      style: TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    _metaExpanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    color: kDlgTextSub,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedCrossFade(
+            firstChild: const SizedBox(width: double.infinity),
+            secondChild: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: _buildInfoPanel(
+                children: [
+                  _MetaRow(
+                    label: '과정',
+                    value: (widget.gradeLabel ?? '').trim().isEmpty
+                        ? '-'
+                        : widget.gradeLabel!.trim(),
+                  ),
+                  _MetaRow(
+                    label: '링크',
+                    value:
+                        widget.linkCount == null ? '-' : '${widget.linkCount}개',
+                  ),
+                  _MetaRow(label: '표지', value: widget.hasCover ? '있음' : '없음'),
+                  _MetaRow(label: '아이콘', value: widget.hasIcon ? '있음' : '없음'),
+                  _MetaRow(
+                    label: '문항영역',
+                    value: _regionsLoading ? '불러오는 중' : '${_regions.length}개',
+                  ),
+                ],
+              ),
+            ),
+            crossFadeState: _metaExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 180),
+            sizeCurve: Curves.easeOutCubic,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: kDlgBorder),
-      ),
-      titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-      contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-      actionsPadding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
-      title: const Text(
-        '교재 정보',
-        style: TextStyle(
-          color: kDlgText,
-          fontWeight: FontWeight.w900,
-          fontSize: 20,
+    final radius = BorderRadius.circular(34);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: kDlgBg,
+          borderRadius: radius,
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 32,
+              offset: Offset(0, 12),
+            ),
+          ],
         ),
-      ),
-      content: SizedBox(
-        width: 620,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 620),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const YggDialogSectionHeader(
-                  icon: Icons.info_outline,
-                  title: '기본 정보',
-                ),
-                _buildInfoPanel(
-                  children: [
-                    _MetaRow(label: '이름', value: widget.fileName),
-                    if ((widget.description ?? '').trim().isNotEmpty)
-                      _MetaRow(label: '설명', value: widget.description!.trim()),
-                    if ((widget.categoryLabel ?? '').trim().isNotEmpty)
-                      _MetaRow(
-                          label: '분류', value: widget.categoryLabel!.trim()),
-                    if ((widget.parentLabel ?? '').trim().isNotEmpty)
-                      _MetaRow(label: '폴더', value: widget.parentLabel!.trim()),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const YggDialogSectionHeader(
-                  icon: Icons.link_outlined,
-                  title: '연결 정보',
-                ),
-                _buildInfoPanel(
-                  children: [
-                    _MetaRow(
-                      label: '과정',
-                      value: (widget.gradeLabel ?? '').trim().isEmpty
-                          ? '-'
-                          : widget.gradeLabel!.trim(),
-                    ),
-                    _MetaRow(
-                      label: '링크',
-                      value: widget.linkCount == null
-                          ? '-'
-                          : '${widget.linkCount}개',
-                    ),
-                    _MetaRow(label: '표지', value: widget.hasCover ? '있음' : '없음'),
-                    _MetaRow(label: '아이콘', value: widget.hasIcon ? '있음' : '없음'),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const YggDialogSectionHeader(
-                  icon: Icons.account_tree_outlined,
-                  title: '소단원 통계',
-                ),
-                _buildUnitStatsSection(),
-                if (_canLoadRegions) ...[
-                  const SizedBox(height: 12),
-                  const YggDialogSectionHeader(
-                    icon: Icons.crop_free,
-                    title: '문항 위치',
+        child: ClipRRect(
+          borderRadius: radius,
+          child: SizedBox(
+            width: 980,
+            height: 680,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 18, 18),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '교재 정보',
+                          style: TextStyle(
+                            color: kDlgText,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 20,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '닫기',
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                        color: kDlgTextSub,
+                      ),
+                    ],
                   ),
-                  _buildRegionsSection(),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 350,
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _buildBasicInfoSection(),
+                                const SizedBox(height: 14),
+                                _buildExpandableMetaSection(),
+                                if (_canLoadRegions) ...[
+                                  const SizedBox(height: 14),
+                                  const YggDialogSectionHeader(
+                                    icon: Icons.crop_free,
+                                    title: '문항 위치',
+                                  ),
+                                  _buildRegionsSection(),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const YggDialogSectionHeader(
+                                icon: Icons.account_tree_outlined,
+                                title: '단원 트리',
+                              ),
+                              Expanded(
+                                child: SingleChildScrollView(
+                                  child: _buildUnitStatsSection(),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          style: TextButton.styleFrom(
-            foregroundColor: kDlgTextSub,
-          ),
-          child: const Text('닫기'),
-        ),
-      ],
     );
   }
 
@@ -738,7 +908,7 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: fg.withOpacity(0.35)),
+          border: Border.all(color: fg.withValues(alpha: 0.35)),
         ),
         child: Text(
           text,

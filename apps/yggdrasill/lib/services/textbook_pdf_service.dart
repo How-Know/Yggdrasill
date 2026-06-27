@@ -133,6 +133,38 @@ class TextbookPdfService {
     return rows.first;
   }
 
+  String _fallbackLinkKey(TextbookPdfRef ref) {
+    if (ref.linkId != null) return '${ref.linkId}';
+    return 'by_tuple:${ref.academyId}:${ref.fileId}:${ref.gradeLabel}:${ref.kind}';
+  }
+
+  Future<bool> _cacheExists(String linkKey) async {
+    final row = await _lookupCache(linkKey);
+    if (row == null) return false;
+    final localPath = '${row['local_path'] ?? ''}'.trim();
+    return localPath.isNotEmpty && await File(localPath).exists();
+  }
+
+  /// Checks whether a storage-backed textbook PDF has already been downloaded.
+  ///
+  /// This deliberately does not download. It only resolves the canonical
+  /// link id from the gateway, then checks the local cache table.
+  Future<bool> isCached(TextbookPdfRef ref) async {
+    try {
+      final target = await _askGateway(ref);
+      final linkKey =
+          target.linkId.isNotEmpty ? target.linkId : _fallbackLinkKey(ref);
+      if (await _cacheExists(linkKey)) return true;
+      final fallbackKey = _fallbackLinkKey(ref);
+      if (fallbackKey != linkKey) {
+        return _cacheExists(fallbackKey);
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _writeCache({
     required String linkId,
     required String localPath,

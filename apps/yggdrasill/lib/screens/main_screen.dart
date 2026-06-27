@@ -1870,6 +1870,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  void _applyNavIndex(int index) {
+    final closeRightSheet = closeRightSideSheetAction;
+    if (closeRightSheet != null) {
+      unawaited(closeRightSheet());
+    }
+    setState(() {
+      _selectedIndex = index;
+    });
+    hideGlobalMemoFloatingBanners.value = (index == 0 || index == 1);
+    rightSideSheetEdgeOpenEnabled.value = (index != 0);
+    if (index == 0) {
+      blockRightSideSheetOpen.value = !gradingModeActive.value;
+    } else {
+      blockRightSideSheetOpen.value = false;
+    }
+  }
+
+  void _onRequestedMainNavIndexChanged() {
+    final requested = requestedMainNavIndex.value;
+    if (requested == null) return;
+    requestedMainNavIndex.value = null;
+    if (!mounted) return;
+    if (requested < 0 || requested > 5) return;
+    if (requested == _selectedIndex) return;
+    _applyNavIndex(requested);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1889,6 +1916,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         (_selectedIndex == 0 && !gradingModeActive.value);
     _classContentPrintController.addListener(_onPrintControllerChanged);
     _resourcesPrintController.addListener(_onPrintControllerChanged);
+    requestedMainNavIndex.addListener(_onRequestedMainNavIndexChanged);
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
     DataManager.instance.attendanceRecordsNotifier.addListener(
       _markSideSheetDirty,
@@ -2088,6 +2116,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleDebugSpaceSnackBarKey);
+    requestedMainNavIndex.removeListener(_onRequestedMainNavIndexChanged);
     // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
     _removeTooltip();
     if (identical(
@@ -3257,22 +3286,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     // 안전 가드: 네비게이션 레일은 0~4까지만 허용하므로 표시 인덱스를 보정
     final int _railSelectedIndex =
         (_selectedIndex >= 0 && _selectedIndex <= 5) ? _selectedIndex : 0;
-    void selectDestination(int index) {
-      final closeRightSheet = closeRightSideSheetAction;
-      if (closeRightSheet != null) {
-        unawaited(closeRightSheet());
-      }
-      setState(() {
-        _selectedIndex = index;
-      });
-      hideGlobalMemoFloatingBanners.value = (index == 0 || index == 1);
-      rightSideSheetEdgeOpenEnabled.value = (index != 0);
-      if (index == 0) {
-        blockRightSideSheetOpen.value = !gradingModeActive.value;
-      } else {
-        blockRightSideSheetOpen.value = false;
-      }
-    }
+    void selectDestination(int index) => _applyNavIndex(index);
 
     return Scaffold(
       backgroundColor: context.yggSurfaceBase,

@@ -141,7 +141,7 @@ class _PresetPreviewSession {
 
   final LearningProblemBankService service;
   final String academyId;
-  final LearningProblemDocumentExportPreset preset;
+  LearningProblemDocumentExportPreset preset;
   final List<LearningProblemQuestion> questions;
   late LearningProblemExportSettings settings;
   late String mathEngine;
@@ -259,6 +259,9 @@ class _PresetPreviewSession {
         ),
       );
     }
+    final currentQuestionScoreByUid = <String, double>{
+      for (final entry in scoreEntries) entry.questionId: entry.defaultScore,
+    };
 
     await ProblemBankExportServerPreviewDialog.open(
       context,
@@ -310,7 +313,7 @@ class _PresetPreviewSession {
       initialIncludeExplanation: settings.includeExplanation,
       initialIncludeQuestionScore: settings.includeQuestionScore,
       initialMathEngine: mathEngine,
-      initialQuestionScoreByQuestionId: preset.questionScoreByQuestionUid,
+      initialQuestionScoreByQuestionId: currentQuestionScoreByUid,
       questionScoreEntries: scoreEntries,
       initialCoverPageTexts: _readCoverPageTexts(
         initialPrimary('coverPageTexts'),
@@ -357,10 +360,8 @@ class _PresetPreviewSession {
           'questionScoreByQuestionId': request.questionScoreByQuestionId,
           'mathEngine': request.mathEngine,
           'disableAutoLabels': request.disableAutoLabels,
+          'pageColumnQuestionCounts': request.pageColumnQuestionCounts,
         };
-        if (request.pageColumnQuestionCounts.isNotEmpty) {
-          patch['pageColumnQuestionCounts'] = request.pageColumnQuestionCounts;
-        }
         if (settings.layoutColumnCount == 2) {
           patch['layoutMode'] = 'custom_columns';
           patch['columnLabelAnchors'] = request.columnLabelAnchors;
@@ -444,10 +445,8 @@ class _PresetPreviewSession {
           'questionScoreByQuestionId': request.questionScoreByQuestionId,
           'mathEngine': request.mathEngine,
           'disableAutoLabels': request.disableAutoLabels,
+          'pageColumnQuestionCounts': request.pageColumnQuestionCounts,
         };
-        if (request.pageColumnQuestionCounts.isNotEmpty) {
-          patch['pageColumnQuestionCounts'] = request.pageColumnQuestionCounts;
-        }
         if (settings.layoutColumnCount == 2) {
           patch['layoutMode'] = 'custom_columns';
           patch['columnLabelAnchors'] = request.columnLabelAnchors;
@@ -456,8 +455,14 @@ class _PresetPreviewSession {
         }
         final renderConfig = _renderConfig(patch: patch);
         final sourceDocumentId = questions.first.documentId.trim();
-        if (sourceDocumentId.isEmpty) return false;
+        if (sourceDocumentId.isEmpty) {
+          if (context.mounted) {
+            showAppSnackBar(context, '원본 문서 정보를 찾지 못해 프리셋을 저장하지 못했습니다.');
+          }
+          return false;
+        }
         try {
+          final presetIdToUpdate = request.presetIdToUpdate.trim();
           final saveResult = await service.saveExportSettingsAsDocument(
             academyId: academyId,
             sourceDocumentId: sourceDocumentId,
@@ -473,10 +478,33 @@ class _PresetPreviewSession {
             includeAnswerSheet: request.includeAnswerSheet,
             includeExplanation: request.includeExplanation,
             displayName: request.presetDisplayName.trim(),
-            presetId: request.presetIdToUpdate.trim(),
+            presetId: presetIdToUpdate,
           );
-          return (saveResult.preset?.id ?? request.presetIdToUpdate).isNotEmpty;
-        } catch (_) {
+          final savedPresetId =
+              (saveResult.preset?.id ?? presetIdToUpdate).trim();
+          if (savedPresetId.isEmpty) {
+            throw Exception('저장된 프리셋 ID가 비어 있습니다.');
+          }
+          final updated = await service.overwriteExportPresetRenderConfig(
+            academyId: academyId,
+            presetId: savedPresetId,
+            renderConfig: renderConfig,
+          );
+          if (updated == null) {
+            throw Exception('프리셋 렌더 설정을 갱신하지 못했습니다.');
+          }
+          preset = updated;
+          if (context.mounted) {
+            showAppSnackBar(
+              context,
+              presetIdToUpdate.isNotEmpty ? '프리셋 업데이트 완료' : '새 프리셋 저장 완료',
+            );
+          }
+          return true;
+        } catch (e) {
+          if (context.mounted) {
+            showAppSnackBar(context, '프리셋 저장 실패: $e');
+          }
           return false;
         }
       },

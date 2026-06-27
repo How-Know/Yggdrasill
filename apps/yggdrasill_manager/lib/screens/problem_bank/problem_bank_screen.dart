@@ -10108,6 +10108,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final hasBoxColumnControls = hasDecoBox || hasBogiBox;
     var decoBoxTwoCol = (q.meta['deco_box_columns'] as num?)?.toInt() == 2;
     var bogiBoxTwoCol = (q.meta['bogi_box_columns'] as num?)?.toInt() == 2;
+    // 선택지가 본문 그림 안에 들어있는 객관식 문항 플래그. true 이면 텍스트 선택지가
+    //   0 개여도 객관식으로 출제(본문 그림에 보기 포함)한다.
+    var choicesInFigureDraft = q.meta['objective_choices_in_figure'] == true;
     var refreshing = false;
     var dialogQ = q;
     final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
@@ -10155,6 +10158,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               } else {
                 draftMeta.remove('bogi_box_columns');
               }
+            }
+            if (choicesInFigureDraft) {
+              draftMeta['objective_choices_in_figure'] = true;
+            } else {
+              draftMeta.remove('objective_choices_in_figure');
             }
             final previewQ = (hasFigures ||
                     hasTables ||
@@ -10258,6 +10266,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               });
             }
 
+            void persistChoicesInFigureChanges() {
+              final idx = _questions.indexWhere((item) => item.id == q.id);
+              if (idx < 0) return;
+              final current = _questions[idx];
+              final already = current.meta['objective_choices_in_figure'] == true;
+              if (already == choicesInFigureDraft) return;
+              final updatedMeta = Map<String, dynamic>.from(current.meta);
+              if (choicesInFigureDraft) {
+                updatedMeta['objective_choices_in_figure'] = true;
+              } else {
+                updatedMeta.remove('objective_choices_in_figure');
+              }
+              final updatedQ = current.copyWith(meta: updatedMeta);
+              setState(() {
+                _questions = <ProblemBankQuestion>[
+                  for (var i = 0; i < _questions.length; i += 1)
+                    i == idx ? updatedQ : _questions[i],
+                ];
+                _dirtyQuestionIds.add(updatedQ.id);
+              });
+            }
+
             // 그림/표 편집 양쪽 모두 반영 후 서버 미리보기를 재발급한다.
             void applyAndRefresh() {
               persistFigureChanges();
@@ -10265,6 +10295,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               persistAnswerFigureChanges();
               persistImageChoiceChanges();
               persistBoxColumnChanges();
+              persistChoicesInFigureChanges();
               setLocalState(() {
                 refreshing = true;
               });
@@ -10332,6 +10363,62 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (q.allowObjective &&
+                        (hasFigures || hasFigureMarker)) ...[
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                        decoration: BoxDecoration(
+                          color: _panel,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Expanded(
+                                  child: Text(
+                                    '선택지가 그림에 포함됨',
+                                    style: TextStyle(
+                                      color: _text,
+                                      fontSize: 12.4,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  height: 24,
+                                  child: Switch(
+                                    value: choicesInFigureDraft,
+                                    activeColor: _accent,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    onChanged: (v) {
+                                      setLocalState(() {
+                                        choicesInFigureDraft = v;
+                                      });
+                                      applyAndRefresh();
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            const Text(
+                              '본문 그림 안에 객관식 보기가 들어있어 텍스트 선택지가 없는 문항용. '
+                              '켜면 선택지가 0개여도 객관식으로 출제됩니다.',
+                              style: TextStyle(
+                                color: _textSub,
+                                fontSize: 10.8,
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     if (hasFigureMarker) ...[
                       _buildManualFigureDropPanel(
                         title: '본문 그림 수동 업로드',
