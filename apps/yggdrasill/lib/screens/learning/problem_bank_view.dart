@@ -3327,8 +3327,32 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
-  String _naesinLinkSummaryLabel(String rawKey) {
-    return NaesinExamContext.linkSummaryLabel(rawKey);
+  String _naesinLinkSummaryLabel(
+    String rawKey, {
+    String curriculumCode = '',
+  }) {
+    final parsed = NaesinExamContext.parseNaesinLinkKey(rawKey);
+    if (parsed == null) return '';
+    final safeCurriculumCode = _normalizeNaesinCurriculumCode(curriculumCode);
+    final displayCourseKey = _reconcileNaesinCourseKeyForCurriculum(
+      gradeKey: parsed.gradeKey,
+      curriculumCode: safeCurriculumCode,
+      currentCourseKey: parsed.courseKey,
+    );
+    final courseOptions = _naesinCourseOptionsForGradeAndCurriculum(
+      parsed.gradeKey,
+      safeCurriculumCode,
+    );
+    var course = NaesinExamContext.courseLabel(displayCourseKey);
+    for (final option in courseOptions) {
+      if (option.key == displayCourseKey) {
+        course = option.label;
+        break;
+      }
+    }
+    final base =
+        '${parsed.school} · ${parsed.year} · $course · ${parsed.examTerm}';
+    return parsed.cellLabel.isEmpty ? base : '$base · ${parsed.cellLabel}';
   }
 
   String _normalizeNaesinCurriculumCode(String raw) {
@@ -3350,6 +3374,64 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       gradeKey,
       curriculumCode,
     ).map((e) => _NaesinCourseOption(key: e.key, label: e.label)).toList();
+  }
+
+  String _reconcileNaesinCourseKeyForCurriculum({
+    required String gradeKey,
+    required String curriculumCode,
+    required String currentCourseKey,
+  }) {
+    final options = _naesinCourseOptionsForGradeAndCurriculum(
+      gradeKey,
+      curriculumCode,
+    );
+    if (options.isEmpty) return currentCourseKey.trim();
+    final current = currentCourseKey.trim();
+    if (options.any((option) => option.key == current)) return current;
+
+    final mapped = _mapNaesinCourseKeyAcrossCurriculum(
+      currentCourseKey: current,
+      targetCurriculumCode: curriculumCode,
+    );
+    if (options.any((option) => option.key == mapped)) return mapped;
+    return options.first.key;
+  }
+
+  String _mapNaesinCourseKeyAcrossCurriculum({
+    required String currentCourseKey,
+    required String targetCurriculumCode,
+  }) {
+    final key = currentCourseKey.trim();
+    if (targetCurriculumCode.trim() == 'rev_2015') {
+      switch (key) {
+        case 'H1-c1':
+          return 'H1-math-upper';
+        case 'H1-c2':
+          return 'H1-math-lower';
+        case 'H-algebra':
+          return 'H-math1';
+        case 'H-calc1':
+          return 'H-math2';
+        case 'H-calc2':
+          return 'H-calculus';
+        default:
+          return key;
+      }
+    }
+    switch (key) {
+      case 'H1-math-upper':
+        return 'H1-c1';
+      case 'H1-math-lower':
+        return 'H1-c2';
+      case 'H-math1':
+        return 'H-algebra';
+      case 'H-math2':
+        return 'H-calc1';
+      case 'H-calculus':
+        return 'H-calc2';
+      default:
+        return key;
+    }
   }
 
   ({String gradeKey, String courseKey}) _deriveNaesinDefaultGradeCourse() {
@@ -3886,6 +3968,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 ? preset.naesinCurriculumCode
                 : '${preset.renderConfig['curriculumCode'] ?? _curriculumFilter.primaryCode()}',
           );
+          selectedCourseKey = _reconcileNaesinCourseKeyForCurriculum(
+            gradeKey: selectedGradeKey,
+            curriculumCode: selectedCurriculumCode,
+            currentCourseKey: selectedCourseKey,
+          );
 
           final nextLink =
               await showDialog<({String linkKey, String curriculumCode})>(
@@ -3929,14 +4016,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     );
                   }
 
+                  selectedCourseKey = _reconcileNaesinCourseKeyForCurriculum(
+                    gradeKey: selectedGradeKey,
+                    curriculumCode: selectedCurriculumCode,
+                    currentCourseKey: selectedCourseKey,
+                  );
                   final courseOptions =
                       _naesinCourseOptionsForGradeAndCurriculum(
                     selectedGradeKey,
                     selectedCurriculumCode,
                   );
-                  if (!courseOptions.any((e) => e.key == selectedCourseKey)) {
-                    selectedCourseKey = courseOptions.first.key;
-                  }
                   schoolOptions =
                       NaesinExamContext.schoolsForGradeKey(selectedGradeKey);
                   if (!schoolOptions.contains(selectedSchool)) {
@@ -3973,7 +4062,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             ),
                             const SizedBox(height: 12),
                             DropdownButtonFormField<String>(
-                              value: selectedCurriculumCode,
+                              key: ValueKey(
+                                'naesin-curriculum-$selectedCurriculumCode',
+                              ),
+                              initialValue: selectedCurriculumCode,
                               decoration: fieldDecoration('교육과정'),
                               dropdownColor: const Color(0xFF141D22),
                               style: fieldTextStyle,
@@ -3999,6 +4091,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                 setLinkState(() {
                                   selectedCurriculumCode =
                                       _normalizeNaesinCurriculumCode(value);
+                                  selectedCourseKey =
+                                      _reconcileNaesinCourseKeyForCurriculum(
+                                    gradeKey: selectedGradeKey,
+                                    curriculumCode: selectedCurriculumCode,
+                                    currentCourseKey: selectedCourseKey,
+                                  );
                                 });
                               },
                             ),
@@ -4007,7 +4105,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                               children: [
                                 Expanded(
                                   child: DropdownButtonFormField<String>(
-                                    value: selectedGradeKey,
+                                    key: ValueKey(
+                                      'naesin-grade-$selectedCurriculumCode-$selectedGradeKey',
+                                    ),
+                                    initialValue: selectedGradeKey,
                                     decoration: fieldDecoration('학년'),
                                     dropdownColor: const Color(0xFF141D22),
                                     style: fieldTextStyle,
@@ -4028,6 +4129,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                       }
                                       setLinkState(() {
                                         selectedGradeKey = value;
+                                        selectedCourseKey =
+                                            _reconcileNaesinCourseKeyForCurriculum(
+                                          gradeKey: selectedGradeKey,
+                                          curriculumCode:
+                                              selectedCurriculumCode,
+                                          currentCourseKey: selectedCourseKey,
+                                        );
                                         schoolOptions = NaesinExamContext
                                             .schoolsForGradeKey(
                                           selectedGradeKey,
@@ -4043,7 +4151,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: DropdownButtonFormField<String>(
-                                    value: selectedCourseKey,
+                                    key: ValueKey(
+                                      'naesin-course-$selectedCurriculumCode-$selectedGradeKey-$selectedCourseKey',
+                                    ),
+                                    initialValue: selectedCourseKey,
                                     decoration: fieldDecoration('과정'),
                                     dropdownColor: const Color(0xFF141D22),
                                     style: fieldTextStyle,
@@ -4075,7 +4186,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                               children: [
                                 Expanded(
                                   child: DropdownButtonFormField<String>(
-                                    value: selectedExamTerm,
+                                    initialValue: selectedExamTerm,
                                     decoration: fieldDecoration('시험 구분'),
                                     dropdownColor: const Color(0xFF141D22),
                                     style: fieldTextStyle,
@@ -4104,7 +4215,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: DropdownButtonFormField<int>(
-                                    value: selectedYear,
+                                    initialValue: selectedYear,
                                     decoration: fieldDecoration('연도'),
                                     dropdownColor: const Color(0xFF141D22),
                                     style: fieldTextStyle,
@@ -4132,7 +4243,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             ),
                             const SizedBox(height: 12),
                             DropdownButtonFormField<String>(
-                              value: selectedSchool,
+                              key: ValueKey(
+                                'naesin-school-$selectedGradeKey-$selectedSchool',
+                              ),
+                              initialValue: selectedSchool,
                               decoration: fieldDecoration('학교'),
                               dropdownColor: const Color(0xFF141D22),
                               style: fieldTextStyle,
@@ -4401,6 +4515,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                       naesinLinkLabel: _naesinLinkSummaryLabel(
                                         '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
                                             .trim(),
+                                        curriculumCode:
+                                            preset.naesinCurriculumCode,
                                       ),
                                       createdAtLabel: _formatDateTimeShort(
                                         preset.createdAt,

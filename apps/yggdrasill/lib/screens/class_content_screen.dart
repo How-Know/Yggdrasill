@@ -41,6 +41,7 @@ import '../widgets/homework_overview_naesin_past_exam_panel.dart';
 import '../app_overlays.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
+import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
 import '../widgets/fab_style_home_screen_header.dart';
@@ -6091,6 +6092,8 @@ List<Widget> _buildHomeworkCheckTargetInfo(
 
   final checkHomeworkText =
       '검사 ${resolveCheckCount()}회 · 숙제 ${resolveHomeworkCount()}회';
+  const groupTitleFontSize = 20.0;
+  final isGroupHomework = groupChildren.isNotEmpty;
 
   final widgets = <Widget>[
     if (bookAndCourse.isNotEmpty) ...[
@@ -6105,7 +6108,7 @@ List<Widget> _buildHomeworkCheckTargetInfo(
         softWrap: false,
         overflow: TextOverflow.ellipsis,
       ),
-      const SizedBox(height: 4),
+      const SizedBox(height: 8),
     ],
     Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -6114,11 +6117,11 @@ List<Widget> _buildHomeworkCheckTargetInfo(
           child: LatexTextRenderer(
             title,
             style: TextStyle(
-              color: groupChildren.isNotEmpty
+              color: isGroupHomework
                   ? dlg.text
                   : (bookAndCourse.isNotEmpty ? dlg.textSub : dlg.text),
-              fontSize: groupChildren.isNotEmpty ? 20 : 16,
-              fontWeight: groupChildren.isNotEmpty
+              fontSize: isGroupHomework ? groupTitleFontSize : 16,
+              fontWeight: isGroupHomework
                   ? FontWeight.w800
                   : (bookAndCourse.isNotEmpty
                       ? FontWeight.w600
@@ -6244,6 +6247,13 @@ List<Widget> _buildHomeworkCheckTargetInfo(
   return widgets;
 }
 
+/// [FabStyleTabBar] 기본 padding(6) 안쪽 하이라이트 알약 높이와 동일.
+const double _homeworkCheckActionButtonHeight =
+    FabTabBarTokens.fabBarHeight - 12;
+
+/// 확인 버튼 — 라벨+좌우 패딩(20×2) 기준 폭의 130%.
+const double _homeworkCheckConfirmButtonWidth = 94.0;
+
 class _HomeworkCheckGlassPanel extends StatelessWidget {
   const _HomeworkCheckGlassPanel({
     required this.icon,
@@ -6264,8 +6274,21 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dlg = YggDialogColors.of(context);
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final glassTint = isDark
+        ? UtilityGlassDialogTokens.glassTint
+        : FabTabBarTokens.previewAcademyMenuGlassTintLight;
+    final glassBorder = isDark
+        ? UtilityGlassDialogTokens.borderColor
+        : const Color(0x4D000000);
     final media = MediaQuery.of(context);
-    final maxWidth = math.min(media.size.width - 48, 560.0);
+    const panelOuterHorizontalPadding = 28.0;
+    const panelInnerHorizontalPadding = 22.0;
+    final maxWidth = math.min(
+      media.size.width - panelOuterHorizontalPadding * 2,
+      560.0 * 1.1,
+    );
     final maxHeight = math.min(media.size.height * 0.72, 640.0);
     final radius = BorderRadius.circular(28);
     final blurSigma = FabTabBarTokens.previewAcademyMenuGlassBlurSigma;
@@ -6275,7 +6298,12 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
       child: Align(
         alignment: Alignment.bottomCenter,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+          padding: const EdgeInsets.fromLTRB(
+            panelOuterHorizontalPadding,
+            0,
+            panelOuterHorizontalPadding,
+            18,
+          ),
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: maxWidth,
@@ -6308,8 +6336,8 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
                     ),
                     DecoratedBox(
                       decoration: BoxDecoration(
-                        color: dlg.glassTint,
-                        border: Border.all(color: dlg.glassBorder, width: 0.5),
+                        color: glassTint,
+                        border: Border.all(color: glassBorder, width: 0.5),
                         borderRadius: radius,
                       ),
                       child: Material(
@@ -6318,7 +6346,12 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
                           mainAxisSize: MainAxisSize.max,
                           children: [
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(18, 14, 12, 8),
+                              padding: const EdgeInsets.fromLTRB(
+                                panelInnerHorizontalPadding,
+                                14,
+                                12,
+                                8,
+                              ),
                               child: Row(
                                 children: [
                                   Icon(icon, color: dlg.headerText, size: 24),
@@ -6350,15 +6383,23 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
                             Divider(height: 1, color: dlg.divider),
                             Expanded(
                               child: Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(18, 24, 18, 24),
+                                padding: const EdgeInsets.fromLTRB(
+                                  panelInnerHorizontalPadding,
+                                  24,
+                                  panelInnerHorizontalPadding,
+                                  24,
+                                ),
                                 child: child,
                               ),
                             ),
                             if (bottomChild != null) ...[
                               Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(18, 0, 18, 14),
+                                padding: const EdgeInsets.fromLTRB(
+                                  panelInnerHorizontalPadding,
+                                  0,
+                                  panelInnerHorizontalPadding,
+                                  14,
+                                ),
                                 child: bottomChild!,
                               ),
                             ] else if (actions.isNotEmpty)
@@ -6493,8 +6534,12 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
         await HomeworkAssignmentStore.instance.loadAssignmentCounts(sid);
   }
 
-  final result = await showDialog<_HomeworkCheckDraft>(
+  final result = await showModalBottomSheet<_HomeworkCheckDraft>(
     context: context,
+    isScrollControlled: true,
+    useRootNavigator: true,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.18),
     builder: (ctx) {
       return StatefulBuilder(
         builder: (ctx, setState) {
@@ -6619,7 +6664,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                   children: [
                     YggDialogFilterChip(
                       label: '분실',
-                      height: FabTabBarTokens.fabBarHeight,
+                      height: _homeworkCheckActionButtonHeight,
                       labelFontSize: FabTabBarTokens.fabBarLabelFontSize,
                       selected: issueType == 'lost',
                       onSelected: (v) => setState(() {
@@ -6632,7 +6677,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                     const SizedBox(width: 6),
                     YggDialogFilterChip(
                       label: '잊음',
-                      height: FabTabBarTokens.fabBarHeight,
+                      height: _homeworkCheckActionButtonHeight,
                       labelFontSize: FabTabBarTokens.fabBarLabelFontSize,
                       selected: issueType == 'forgot',
                       onSelected: (v) => setState(() {
@@ -6645,7 +6690,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                     const SizedBox(width: 6),
                     YggDialogFilterChip(
                       label: '기타',
-                      height: FabTabBarTokens.fabBarHeight,
+                      height: _homeworkCheckActionButtonHeight,
                       labelFontSize: FabTabBarTokens.fabBarLabelFontSize,
                       selected: issueType == 'other',
                       onSelected: (v) => setState(() {
@@ -6655,61 +6700,42 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                     ),
                     if (showStartGradingOption) ...[
                       const SizedBox(width: 6),
-                      Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(
-                            FabTabBarTokens.fabBarHeight / 2,
-                          ),
-                          onTap: () {
-                            setState(() => startGrading = !startGrading);
-                          },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 160),
-                            height: FabTabBarTokens.fabBarHeight,
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color: startGrading
-                                  ? dlg.chipSelected
-                                  : dlg.chipBg,
-                              borderRadius: BorderRadius.circular(
-                                FabTabBarTokens.fabBarHeight / 2,
+                      GestureDetector(
+                        onTap: () {
+                          setState(() => startGrading = !startGrading);
+                        },
+                        behavior: HitTestBehavior.opaque,
+                        child: SizedBox(
+                          height: _homeworkCheckActionButtonHeight,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: Checkbox(
+                                  value: startGrading,
+                                  onChanged: (v) {
+                                    setState(() => startGrading = v ?? false);
+                                  },
+                                  activeColor: kDlgAccent,
+                                  checkColor: const Color(0xFF10191C),
+                                  side: BorderSide(color: dlg.border),
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                ),
                               ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: IgnorePointer(
-                                    child: Checkbox(
-                                      value: startGrading,
-                                      onChanged: (_) {},
-                                      activeColor: kDlgAccent,
-                                      checkColor: const Color(0xFF10191C),
-                                      side: BorderSide(color: dlg.border),
-                                      materialTapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                  ),
+                              const SizedBox(width: 4),
+                              Text(
+                                '바로채점',
+                                style: TextStyle(
+                                  color: dlg.chipText,
+                                  fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '바로채점',
-                                  style: TextStyle(
-                                    color: startGrading
-                                        ? Colors.white
-                                        : dlg.chipText,
-                                    fontSize:
-                                        FabTabBarTokens.fabBarLabelFontSize,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -6719,7 +6745,7 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                       color: Colors.transparent,
                       child: InkWell(
                         borderRadius: BorderRadius.circular(
-                          FabTabBarTokens.fabBarHeight / 2,
+                          _homeworkCheckActionButtonHeight / 2,
                         ),
                         onTap: () {
                           final parsed =
@@ -6741,21 +6767,21 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                           );
                         },
                         child: Container(
-                          height: FabTabBarTokens.fabBarHeight,
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          width: _homeworkCheckConfirmButtonWidth,
+                          height: _homeworkCheckActionButtonHeight,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             color: kDlgAccent,
                             borderRadius: BorderRadius.circular(
-                              FabTabBarTokens.fabBarHeight / 2,
+                              _homeworkCheckActionButtonHeight / 2,
                             ),
                           ),
                           child: const Text(
-                            '저장',
+                            '확인',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
