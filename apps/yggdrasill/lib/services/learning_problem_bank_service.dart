@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/naesin_exam_context.dart';
+
 class LearningProblemChoice {
   const LearningProblemChoice({
     required this.label,
@@ -388,6 +390,25 @@ class LearningProblemDocumentSummary {
     return '${raw.substring(0, 12)}…';
   }
 
+  /// 내신 기출 트리 문서 행 — `학년 학기 중간|기말 (과목)` (원본 파일명은 유지).
+  String get schoolPastTreeLabel {
+    final grade = _schoolPastGradeLabel(gradeLabel, gradeKey);
+    final semester = _schoolPastSemesterLabel(semesterLabel, courseKey);
+    final term = _schoolPastExamTermLabel(examTermLabel);
+    final subject = courseLabel.trim();
+
+    final head = <String>[
+      if (grade.isNotEmpty) grade,
+      if (semester.isNotEmpty) semester,
+      if (term.isNotEmpty) term,
+    ].join(' ');
+
+    if (head.isNotEmpty && subject.isNotEmpty) return '$head ($subject)';
+    if (head.isNotEmpty) return head;
+    if (subject.isNotEmpty) return subject;
+    return displayTitle;
+  }
+
   String get textbookBookId {
     final scope = _mapOrEmpty(meta['textbook_scope'] ?? meta['textbookScope']);
     final raw = '${scope['book_id'] ?? scope['bookId'] ?? ''}'.trim();
@@ -415,6 +436,50 @@ class LearningProblemDocumentSummary {
     }
     return parts.join(' · ');
   }
+}
+
+String _schoolPastGradeLabel(String gradeLabel, String gradeKey) {
+  var label = gradeLabel.trim();
+  if (label.isEmpty) {
+    final key = gradeKey.trim();
+    if (key.isEmpty) return '';
+    for (final grade in NaesinExamContext.allGradeOptions()) {
+      if (grade.key == key) {
+        label = grade.label;
+        break;
+      }
+    }
+    if (label.isEmpty) label = key;
+  }
+  return _appendSchoolYearSuffix(label);
+}
+
+String _appendSchoolYearSuffix(String label) {
+  final trimmed = label.trim();
+  if (trimmed.isEmpty) return '';
+  if (trimmed.endsWith('학년')) return trimmed;
+  final middleHigh = RegExp(r'^(?:중|고)(\d+)$').firstMatch(trimmed);
+  if (middleHigh != null) {
+    return '${middleHigh.group(1)}학년';
+  }
+  return '$trimmed학년';
+}
+
+String _schoolPastSemesterLabel(String semesterLabel, String courseKey) {
+  final label = semesterLabel.trim();
+  if (label == '1학기' || label == '2학기') return label;
+  final key = courseKey.trim();
+  if (key.endsWith('-1') || key.endsWith('-c1')) return '1학기';
+  if (key.endsWith('-2') || key.endsWith('-c2')) return '2학기';
+  return '';
+}
+
+String _schoolPastExamTermLabel(String examTermLabel) {
+  final label = examTermLabel.trim();
+  if (label == '중간' || label == '기말') return label;
+  if (label.contains('중간')) return '중간';
+  if (label.contains('기말')) return '기말';
+  return '';
 }
 
 class LearningProblemExportJob {

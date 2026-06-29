@@ -293,8 +293,10 @@ class CustomNavigationRail extends StatelessWidget {
             child: Align(
               alignment: Alignment.center,
               child: AccountButton(
-                padding: const EdgeInsets.only(bottom: 16.0, top: 8.0),
-                radius: 20,
+                padding: EdgeInsets.only(
+                  bottom: FabTabBarTokens.navRailAccountButtonBottomInset(),
+                ),
+                radius: FabTabBarTokens.navRailAccountButtonRadius,
               ),
             ),
           ),

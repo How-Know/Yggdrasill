@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../widgets/app_time_picker_dialog.dart';
+import '../../../../widgets/solid_capsule_action_bar.dart';
 
 /// FAB 스타일 탭바 색상·치수 토큰 (Preview 전용 — 본앱 미적용).
 class FabTabBarTokens {
@@ -18,6 +19,15 @@ class FabTabBarTokens {
 
   /// [MainFabAlternative] + 버튼·[FabStyleScreenTabBarOverlay] 공통 하단 여백
   static const double fabBarBottomInset = 24;
+
+  /// [CustomNavigationRail] 하단 [AccountButton] 반지름.
+  static const double navRailAccountButtonRadius = 20;
+
+  /// [AccountButton] 중심을 [FabStyleTabBar] 중심과 맞추는 하단 inset.
+  static double navRailAccountButtonBottomInset({
+    double accountButtonRadius = navRailAccountButtonRadius,
+  }) =>
+      fabBarBottomInset + fabBarHeight / 2 - accountButtonRadius;
 
   /// [MainFabAlternative] + 버튼·펼침 pill 공통 오른쪽 여백
   static const double fabBarRightInset = 24;
@@ -3339,40 +3349,10 @@ class FabStyleGlassPanel extends StatelessWidget {
     final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final brightness = Theme.of(context).brightness;
     if (useTopButtonCapsuleBackground) {
-      final isDark = brightness == Brightness.dark;
-      final capsuleColor = isDark
-          ? const Color(0xE610171A)
-          : Colors.white.withValues(alpha: 0.92);
-      final borderColor = isDark
-          ? const Color(0xFF355056).withValues(alpha: 0.62)
-          : Colors.black.withValues(alpha: 0.04);
-      final radius = BorderRadius.circular(FabTabBarTokens.fabMenuPillRadius);
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
-              blurRadius: 28,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-            child: Container(
-              decoration: BoxDecoration(
-                color: capsuleColor,
-                borderRadius: radius,
-                border: Border.all(color: borderColor),
-              ),
-              padding: padding,
-              child: child,
-            ),
-          ),
-        ),
+      return SolidCapsuleActionBar(
+        padding: padding,
+        borderRadius: FabTabBarTokens.fabMenuPillRadius,
+        child: child,
       );
     }
     if (useFabTabBarBackground) {

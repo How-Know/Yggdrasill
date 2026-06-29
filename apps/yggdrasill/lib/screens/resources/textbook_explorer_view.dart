@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -738,24 +740,6 @@ class TextbookExplorerContent extends StatelessWidget {
               right: 12,
               child: _buildHeader(context, style),
             ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 18,
-              child: Center(
-                child: _TbExFabBar(
-                  mode: controller.mode,
-                  cartCount: controller.cartCount,
-                  selectedCount: controller.selectedKeys.length,
-                  enabled: !controller.loading && controller.data.hasQuestions,
-                  onQuestionsMode: () =>
-                      controller.switchMode(TbExRightMode.questions),
-                  onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
-                  onAdd: () => controller.addSelectedToCart(context),
-                  onOpenCart: () => controller.openCart(context),
-                ),
-              ),
-            ),
           ],
         );
       },
@@ -1355,8 +1339,9 @@ class _DiffDot extends StatelessWidget {
 }
 
 // ================================================================= FAB BAR
-class _TbExFabBar extends StatelessWidget {
-  const _TbExFabBar({
+class TbExFabBar extends StatelessWidget {
+  const TbExFabBar({
+    super.key,
     required this.mode,
     required this.cartCount,
     required this.selectedCount,
@@ -1379,56 +1364,72 @@ class _TbExFabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
-    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-    return Container(
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: style.dropdownBackground,
-        borderRadius: BorderRadius.circular(999),
-        border: FabTabBarTokens.groupedCardBorderFor(brightness),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final radius = BorderRadius.circular(FabTabBarTokens.fabBarHeight / 2);
+    final disabled = !enabled;
+
+    return Center(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: palette.boxShadows,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            ),
+            child: Container(
+              height: FabTabBarTokens.fabBarHeight,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: radius,
+              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _FabPill(
+                      icon: Icons.grid_view_rounded,
+                      label: '문항별',
+                      selected: mode == TbExRightMode.questions,
+                      enabled: !disabled,
+                      onTap: onQuestionsMode,
+                    ),
+                    _FabPill(
+                      icon: Icons.picture_as_pdf_outlined,
+                      label: '원본보기',
+                      selected: mode == TbExRightMode.pdf,
+                      enabled: !disabled,
+                      onTap: onPdfMode,
+                      width: 128,
+                    ),
+                    _FabPill(
+                      icon: Icons.add_rounded,
+                      label: selectedCount > 0 ? '추가 $selectedCount' : '추가',
+                      selected: false,
+                      enabled: !disabled,
+                      onTap: onAdd,
+                      width: selectedCount > 0 ? 128 : 112,
+                    ),
+                    _FabPill(
+                      icon: Icons.shopping_cart_outlined,
+                      label: cartCount > 0 ? '장바구니 $cartCount' : '장바구니',
+                      selected: false,
+                      enabled: !disabled && cartCount > 0,
+                      onTap: onOpenCart,
+                      width: 144,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _FabPill(
-            icon: Icons.grid_view_rounded,
-            label: '문항별',
-            selected: mode == TbExRightMode.questions,
-            enabled: enabled,
-            onTap: onQuestionsMode,
-          ),
-          const SizedBox(width: 4),
-          _FabPill(
-            icon: Icons.picture_as_pdf_outlined,
-            label: '원본보기',
-            selected: mode == TbExRightMode.pdf,
-            enabled: enabled,
-            onTap: onPdfMode,
-          ),
-          const SizedBox(width: 4),
-          _FabPill(
-            icon: Icons.add_rounded,
-            label: selectedCount > 0 ? '추가 $selectedCount' : '추가',
-            selected: false,
-            enabled: enabled,
-            onTap: onAdd,
-          ),
-          const SizedBox(width: 4),
-          _FabPill(
-            icon: Icons.shopping_cart_outlined,
-            label: cartCount > 0 ? '장바구니 $cartCount' : '장바구니',
-            selected: false,
-            enabled: enabled && cartCount > 0,
-            onTap: onOpenCart,
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1441,6 +1442,7 @@ class _FabPill extends StatelessWidget {
     required this.selected,
     required this.enabled,
     required this.onTap,
+    this.width = 112,
   });
 
   final IconData icon;
@@ -1448,39 +1450,139 @@ class _FabPill extends StatelessWidget {
   final bool selected;
   final bool enabled;
   final VoidCallback onTap;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
-    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-    final highlight = FabTabBarTokens.fabHighlightPillFill(brightness);
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final bg = selected ? palette.highlight : Colors.transparent;
     final fg = !enabled
-        ? style.hint.withValues(alpha: 0.4)
-        : (selected ? style.title : style.hint);
-    return Material(
-      color: selected ? highlight : Colors.transparent,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: enabled ? onTap : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 18, color: fg),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+        ? palette.labelUnselected.withValues(alpha: 0.45)
+        : (selected ? palette.labelSelected : palette.labelUnselected);
+
+    return Tooltip(
+      message: label,
+      waitDuration: const Duration(milliseconds: 450),
+      child: SizedBox(
+        width: width,
+        height: double.infinity,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: enabled ? onTap : null,
+              borderRadius: BorderRadius.circular(999),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 20, color: fg),
+                    const SizedBox(width: 7),
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily:
+                            FabTabBarTokens.previewAcademyLabelFontFamily,
+                        color: fg,
+                        fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 교재 탐색 액션 FAB — [FabStyleScreenTabBarOverlay]와 동일 루트 오버레이·Y 기준.
+class TextbookExplorerFabOverlay {
+  OverlayEntry? _entry;
+  TextbookExplorerController? _controller;
+  double _left = 0;
+  double _right = 0;
+  bool _syncScheduled = false;
+  bool _disposed = false;
+
+  void sync(
+    BuildContext context, {
+    TextbookExplorerController? controller,
+    required double left,
+    required double right,
+  }) {
+    if (_disposed) return;
+    if (controller == null) {
+      hide();
+      return;
+    }
+    _controller = controller;
+    _left = left;
+    _right = right;
+
+    if (_syncScheduled) return;
+    _syncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncScheduled = false;
+      if (_disposed || !context.mounted) return;
+      final overlay = Overlay.maybeOf(context, rootOverlay: true);
+      if (overlay == null) return;
+
+      if (_entry == null) {
+        _entry = OverlayEntry(builder: _buildOverlay);
+        overlay.insert(_entry!);
+      } else {
+        _entry!.markNeedsBuild();
+      }
+    });
+  }
+
+  void hide() {
+    _controller = null;
+    _entry?.remove();
+    _entry = null;
+  }
+
+  void dispose() {
+    _disposed = true;
+    hide();
+  }
+
+  Widget _buildOverlay(BuildContext overlayContext) {
+    final controller = _controller;
+    if (controller == null) return const SizedBox.shrink();
+
+    return Positioned(
+      left: _left,
+      right: _right,
+      bottom: FabTabBarTokens.fabBarBottomInset,
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) {
+          return TbExFabBar(
+            mode: controller.mode,
+            cartCount: controller.cartCount,
+            selectedCount: controller.selectedKeys.length,
+            enabled: !controller.loading && controller.data.hasQuestions,
+            onQuestionsMode: () =>
+                controller.switchMode(TbExRightMode.questions),
+            onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
+            onAdd: () => controller.addSelectedToCart(overlayContext),
+            onOpenCart: () => controller.openCart(overlayContext),
+          );
+        },
       ),
     );
   }

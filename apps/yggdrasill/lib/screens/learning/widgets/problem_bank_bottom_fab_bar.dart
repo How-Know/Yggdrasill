@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../../../widgets/solid_capsule_action_bar.dart';
 import 'problem_bank_range_controls.dart';
 
 class ProblemBankBottomFabBar extends StatelessWidget {
@@ -341,11 +342,6 @@ class _ProblemBankFilterMenuButtonState
 
   @override
   Widget build(BuildContext context) {
-    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
-    final fg = widget.filterActive || _isOpen
-        ? palette.labelSelected
-        : palette.labelUnselected;
-
     return OverlayPortal.overlayChildLayoutBuilder(
       controller: _overlayController,
       overlayChildBuilder: (overlayContext, info) {
@@ -400,17 +396,12 @@ class _ProblemBankFilterMenuButtonState
           ],
         );
       },
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _toggleOverlay,
-          borderRadius: BorderRadius.circular(999),
-          child: SizedBox(
-            width: 40,
-            height: 40,
-            child: Icon(Icons.filter_list_rounded, size: 25, color: fg),
-          ),
-        ),
+      child: SolidCapsuleActionButton(
+        tooltip: '출력 필터',
+        icon: Icons.filter_list_rounded,
+        selected: widget.filterActive || _isOpen,
+        accentWhenSelected: true,
+        onPressed: widget.disabled ? null : _toggleOverlay,
       ),
     );
   }

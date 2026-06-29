@@ -203,11 +203,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     onTap: () {
                       // ✅ 즉시 드롭다운 닫기(다이얼로그가 열려있는 동안에도 FAB 메뉴가 남지 않게)
                       _collapseFabMenu();
-                      showDialog(
-                        context: context,
-                        barrierDismissible: true,
-                        builder: (context) => const MakeupQuickDialog(),
-                      );
+                      showMakeupRegisterDialog(context);
                     },
                   ),
                   const SizedBox(height: FabTabBarTokens.fabMenuItemSpacing),
@@ -218,14 +214,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     onTap: () {
                       // ✅ 수강료 결제 관리 다이얼로그를 열면 드롭다운을 즉시 접는다
                       _collapseFabMenu();
-                      showDialog(
-                        context: context,
-                        builder: (context) => PaymentManagementDialog(
-                          onClose: () {
-                            _collapseFabMenu();
-                          },
-                        ),
-                      );
+                      showPaymentManagementDialog(context);
                     },
                   ),
                 ],

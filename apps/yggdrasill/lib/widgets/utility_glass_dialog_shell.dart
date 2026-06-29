@@ -22,6 +22,7 @@ class UtilityGlassDialogShell extends StatelessWidget {
     required this.child,
     this.maxWidth = 820,
     this.maxHeight = 760,
+    this.preferredWidth,
     this.onClose,
     this.headerTrailing,
   });
@@ -31,6 +32,8 @@ class UtilityGlassDialogShell extends StatelessWidget {
   final Widget child;
   final double maxWidth;
   final double maxHeight;
+  /// 지정 시 셸이 이 너비로 고정된다. (기본은 내용만큼만 줄어듦)
+  final double? preferredWidth;
   final VoidCallback? onClose;
   final Widget? headerTrailing;
 
@@ -41,7 +44,8 @@ class UtilityGlassDialogShell extends StatelessWidget {
 
     return ConstrainedBox(
       constraints: BoxConstraints(
-        maxWidth: maxWidth,
+        minWidth: preferredWidth ?? 0,
+        maxWidth: preferredWidth ?? maxWidth,
         maxHeight: maxHeight,
       ),
       child: DecoratedBox(
@@ -137,6 +141,7 @@ Future<void> showUtilityGlassDialog({
   required Widget child,
   double? maxWidth,
   double? maxHeight,
+  double? preferredWidth,
   Widget? headerTrailing,
 }) {
   final media = MediaQuery.of(context);
@@ -156,6 +161,7 @@ Future<void> showUtilityGlassDialog({
           icon: icon,
           maxWidth: resolvedMaxWidth,
           maxHeight: resolvedMaxHeight,
+          preferredWidth: preferredWidth,
           headerTrailing: headerTrailing,
           child: child,
         ),
@@ -172,6 +178,7 @@ Future<void> showUtilityGlassBottomSheet({
   required Widget child,
   double? maxWidth,
   double? maxHeight,
+  double? preferredWidth,
   Widget? headerTrailing,
 }) {
   return showModalBottomSheet<void>(
@@ -180,11 +187,17 @@ Future<void> showUtilityGlassBottomSheet({
     useRootNavigator: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.18),
+    constraints: preferredWidth == null
+        ? null
+        : BoxConstraints(maxWidth: maxWidth ?? double.infinity),
     builder: (sheetContext) {
       final media = MediaQuery.of(sheetContext);
       final resolvedMaxWidth = maxWidth ?? math.min(media.size.width - 48, 820.0);
       final resolvedMaxHeight =
           maxHeight ?? math.min(media.size.height * 0.72, 640.0);
+      final resolvedPreferredWidth = preferredWidth == null
+          ? null
+          : math.min(preferredWidth, resolvedMaxWidth);
 
       return SafeArea(
         top: false,
@@ -194,7 +207,8 @@ Future<void> showUtilityGlassBottomSheet({
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxWidth: resolvedMaxWidth,
+                minWidth: resolvedPreferredWidth ?? 0,
+                maxWidth: resolvedPreferredWidth ?? resolvedMaxWidth,
                 maxHeight: resolvedMaxHeight,
               ),
               child: UtilityGlassDialogShell(
@@ -202,6 +216,7 @@ Future<void> showUtilityGlassBottomSheet({
                 icon: icon,
                 maxWidth: resolvedMaxWidth,
                 maxHeight: resolvedMaxHeight,
+                preferredWidth: resolvedPreferredWidth,
                 headerTrailing: headerTrailing,
                 onClose: () => Navigator.of(sheetContext).pop(),
                 child: child,

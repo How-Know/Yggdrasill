@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/attendance_record.dart';
@@ -8,6 +11,7 @@ import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
 import '../utils/attendance_judgement.dart';
 import '../widgets/dialog_tokens.dart';
+import 'utility_glass_dialog_shell.dart';
 
 const Color _pmPanelBg = Color(0xFF10171A);
 const Color _pmCardBg = Color(0xFF15171C);
@@ -16,6 +20,10 @@ const Color _pmText = Color(0xFFEAF2F2);
 const Color _pmTextSub = Color(0xFF9FB3B3);
 const Color _pmAccent = Color(0xFF33A373);
 const Color _pmDanger = Color(0xFFF04747);
+
+const double _paymentDialogMaxWidth = 1180.0 * 1.3 * 0.6;
+const double _paymentDialogMaxHeight = 720.0;
+const double _paymentDialogFallbackWidth = 1176.0 * 1.3 * 0.6;
 
 class _PaymentItem {
   final StudentWithInfo studentWithInfo;
@@ -39,11 +47,39 @@ class _PaymentItem {
 
 class PaymentManagementDialog extends StatefulWidget {
   final VoidCallback? onClose;
-  
-  const PaymentManagementDialog({super.key, this.onClose});
+
+  const PaymentManagementDialog({
+    super.key,
+    this.onClose,
+    this.embeddedInGlassShell = false,
+  });
+
+  /// [UtilityGlassDialogShell] 안에 넣을 때 true — 자체 헤더/배경 생략.
+  final bool embeddedInGlassShell;
 
   @override
   State<PaymentManagementDialog> createState() => _PaymentManagementDialogState();
+}
+
+Future<void> showPaymentManagementDialog(
+  BuildContext context, {
+  VoidCallback? onClose,
+}) {
+  final media = MediaQuery.of(context);
+  final resolvedMaxWidth = math.min(media.size.width - 48, _paymentDialogMaxWidth);
+  final resolvedMaxHeight = math.min(media.size.height - 48, _paymentDialogMaxHeight);
+  return showUtilityGlassBottomSheet(
+    context: context,
+    title: '수강료 결제 관리',
+    icon: Icons.credit_card_rounded,
+    maxWidth: resolvedMaxWidth,
+    maxHeight: resolvedMaxHeight,
+    preferredWidth: resolvedMaxWidth,
+    child: PaymentManagementDialog(
+      embeddedInGlassShell: true,
+      onClose: onClose,
+    ),
+  );
 }
 
 class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
@@ -324,6 +360,13 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     );
   }
 
+  Future<void> _onRefresh() async {
+    try {
+      await DataManager.instance.loadPaymentRecords();
+    } catch (_) {}
+    if (mounted) _loadPaymentData();
+  }
+
   void _showPaidStudentsList() {
     String fmtYmd(DateTime d) => '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
     final paidSorted = List<_PaymentItem>.from(_paidInRangeStudents)
@@ -476,7 +519,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     );
   }
 
-  Widget _buildHeader(BuildContext context) {
+  Widget _buildHeader(BuildContext context, YggDialogColors dlg) {
     return SizedBox(
       height: 48,
       child: Stack(
@@ -484,28 +527,18 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                margin: const EdgeInsets.only(right: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: IconButton(
-                  tooltip: '닫기',
-                  icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _notifyClosed();
-                  },
-                ),
+              IconButton(
+                tooltip: '닫기',
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _notifyClosed();
+                },
+                icon: Icon(Icons.arrow_back_rounded, color: dlg.closeIcon),
               ),
-              const Text(
+              Text(
                 '수강료 결제 관리',
                 style: TextStyle(
-                  color: _pmText,
+                  color: dlg.headerText,
                   fontSize: 18,
                   fontWeight: FontWeight.w900,
                 ),
@@ -514,20 +547,10 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
           ),
           Positioned(
             right: 0,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: '새로 고침',
-                  onPressed: () async {
-                    try {
-                      await DataManager.instance.loadPaymentRecords();
-                    } catch (_) {}
-                    if (mounted) _loadPaymentData();
-                  },
-                  icon: const Icon(Icons.refresh, color: Colors.white70),
-                ),
-              ],
+            child: IconButton(
+              tooltip: '새로 고침',
+              onPressed: _onRefresh,
+              icon: Icon(Icons.refresh_rounded, color: dlg.closeIcon),
             ),
           ),
         ],
@@ -535,61 +558,113 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     );
   }
 
-  Widget _buildSummaryBar() {
-    Text metric(String label, int count, Color color) {
-      return Text(
-        '$label $count',
-        style: TextStyle(
-          color: color.withOpacity(0.92),
-          fontSize: 13,
-          fontWeight: FontWeight.w800,
-        ),
-      );
-    }
+  Widget _buildSummaryBar(YggDialogColors dlg) {
+    const summaryFontSize = 13.0;
+    const labelWidth = 28.0;
+    const countWidth = 28.0;
+    final labelStyle = TextStyle(
+      color: dlg.textSub,
+      fontSize: summaryFontSize,
+      fontWeight: FontWeight.w700,
+      height: 1.0,
+    );
+    final dotStyle = TextStyle(
+      color: dlg.textSub,
+      fontSize: summaryFontSize,
+      fontWeight: FontWeight.w700,
+      height: 1.0,
+    );
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: _pmPanelBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _pmBorder),
-      ),
-      child: Row(
+    TextStyle countStyle(Color color) => TextStyle(
+          color: color,
+          fontSize: summaryFontSize,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        );
+
+    Widget metric(String label, int count, Color color) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
         children: [
-          const Text('요약', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 10),
-          metric('미납', _unpaidStudents.length, _pmDanger),
-          const SizedBox(width: 10),
-          const Text('·', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 10),
-          metric('예정', _upcomingStudents.length, const Color(0xFF1976D2)),
-          const SizedBox(width: 10),
-          const Text('·', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 10),
-          metric('완료', _paidInRangeStudents.length, _pmAccent),
-          const Spacer(),
-          Text(
-            '납부 ${_paidInRangeStudents.length}/${_totalCount}',
-            style: const TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w800),
+          SizedBox(
+            width: labelWidth,
+            child: Text(
+              label,
+              textAlign: TextAlign.right,
+              style: labelStyle,
+            ),
           ),
-          const SizedBox(width: 12),
-          OutlinedButton.icon(
-            onPressed: _paidInRangeStudents.isEmpty ? null : _showPaidStudentsList,
-            icon: const Icon(Icons.list_alt, size: 18),
-            label: const Text('완료 명단'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white70,
-              side: const BorderSide(color: _pmBorder),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: countWidth,
+            child: Text(
+              '$count',
+              textAlign: TextAlign.right,
+              style: countStyle(color),
             ),
           ),
         ],
+      );
+    }
+
+    Widget dot() {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Text('·', style: dotStyle),
+      );
+    }
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: dlg.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: dlg.cardBorder),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text('요약', style: labelStyle),
+            const SizedBox(width: 12),
+            metric('미납', _unpaidStudents.length, _pmDanger),
+            dot(),
+            metric('예정', _upcomingStudents.length, const Color(0xFF1976D2)),
+            dot(),
+            metric('완료', _paidInRangeStudents.length, kDlgAccent),
+            const Spacer(),
+            Text(
+              '납부 ${_paidInRangeStudents.length}/${_totalCount}',
+              style: TextStyle(
+                color: dlg.textSub,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(width: 12),
+            OutlinedButton.icon(
+              onPressed: _paidInRangeStudents.isEmpty ? null : _showPaidStudentsList,
+              icon: const Icon(Icons.list_alt_rounded, size: 18),
+              label: const Text('완료 명단'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: dlg.textSub,
+                side: BorderSide(color: dlg.border),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildPanel({
+    required YggDialogColors dlg,
     required String title,
     required String subtitle,
     required Color iconColor,
@@ -598,7 +673,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     required ScrollController scrollController,
   }) {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -610,23 +685,37 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                   children: [
                     Text(
                       '$title (${items.length}명)',
-                      style: const TextStyle(color: _pmText, fontSize: 16, fontWeight: FontWeight.w800),
+                      style: TextStyle(
+                        color: dlg.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
-                    Text(subtitle, style: const TextStyle(color: _pmTextSub, fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: dlg.textSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          const Divider(height: 1, color: Color(0x22FFFFFF)),
+          Divider(height: 1, color: dlg.divider),
           const SizedBox(height: 12),
           Expanded(
             child: items.isEmpty
-                ? const Center(
-                    child: Text('대상이 없습니다.', style: TextStyle(color: Colors.white24, fontSize: 13)),
+                ? Center(
+                    child: Text(
+                      '대상이 없습니다.',
+                      style: TextStyle(color: dlg.hint, fontSize: 13),
+                    ),
                   )
                 : Scrollbar(
                     thumbVisibility: true,
@@ -636,13 +725,16 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                       primary: false,
                       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 2,
-                        childAspectRatio: 2.55,
+                        mainAxisExtent: 68,
                         crossAxisSpacing: 10,
                         mainAxisSpacing: 10,
                       ),
                       itemCount: items.length,
                       itemBuilder: (context, index) {
-                        return _buildPaymentStudentCard(items[index], isUnpaid: isUnpaid);
+                        return _buildPaymentStudentCard(
+                          items[index],
+                          isUnpaid: isUnpaid,
+                        );
                       },
                     ),
                   ),
@@ -654,70 +746,108 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    final padding = widget.embeddedInGlassShell
+        ? const EdgeInsets.fromLTRB(18, 12, 18, 16)
+        : const EdgeInsets.fromLTRB(18, 16, 18, 16);
+
+    final body = Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!widget.embeddedInGlassShell) ...[
+            _buildHeader(context, dlg),
+            const SizedBox(height: 10),
+          ],
+          if (widget.embeddedInGlassShell)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _QueryRangeDropdown(
+                    start: _queryStart,
+                    end: _queryEnd,
+                    onChanged: (nextStart, nextEnd) {
+                      _queryStart = nextStart;
+                      _queryEnd = nextEnd;
+                      _loadPaymentData();
+                    },
+                  ),
+                ),
+                IconButton(
+                  tooltip: '새로 고침',
+                  onPressed: _onRefresh,
+                  icon: Icon(Icons.refresh_rounded, color: dlg.closeIcon),
+                ),
+              ],
+            )
+          else
+            _QueryRangeDropdown(
+              start: _queryStart,
+              end: _queryEnd,
+              onChanged: (nextStart, nextEnd) {
+                _queryStart = nextStart;
+                _queryEnd = nextEnd;
+                _loadPaymentData();
+              },
+            ),
+          const SizedBox(height: 8),
+          Divider(height: 1, color: dlg.divider),
+          const SizedBox(height: 14),
+          _buildSummaryBar(dlg),
+          const SizedBox(height: 14),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildPanel(
+                    dlg: dlg,
+                    title: '예정일 지남',
+                    subtitle: '카드를 클릭하면 납부 기록이 저장됩니다',
+                    iconColor: _pmDanger,
+                    items: _unpaidStudents,
+                    isUnpaid: true,
+                    scrollController: _overdueScrollCtrl,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: VerticalDivider(
+                    width: 1,
+                    thickness: 1,
+                    color: dlg.divider,
+                  ),
+                ),
+                Expanded(
+                  child: _buildPanel(
+                    dlg: dlg,
+                    title: '결제 예정',
+                    subtitle: '예정일 전 미결제 학생 목록입니다',
+                    iconColor: const Color(0xFF1976D2),
+                    items: _upcomingStudents,
+                    isUnpaid: false,
+                    scrollController: _upcomingScrollCtrl,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (widget.embeddedInGlassShell) {
+      return body;
+    }
+
     return Dialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 1176,
-        height: 720,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildHeader(context),
-              const SizedBox(height: 10),
-              _QueryRangeDropdown(
-                start: _queryStart,
-                end: _queryEnd,
-                onChanged: (nextStart, nextEnd) {
-                  _queryStart = nextStart;
-                  _queryEnd = nextEnd;
-                  _loadPaymentData();
-                },
-              ),
-              const SizedBox(height: 8),
-              const Divider(height: 1, color: _pmBorder),
-              const SizedBox(height: 14),
-              _buildSummaryBar(),
-              const SizedBox(height: 14),
-              Expanded(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _buildPanel(
-                        title: '예정일 지남',
-                        subtitle: '카드를 클릭하면 납부 기록이 저장됩니다',
-                        iconColor: _pmDanger,
-                        items: _unpaidStudents,
-                        isUnpaid: true,
-                        scrollController: _overdueScrollCtrl,
-                      ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 6),
-                      child: VerticalDivider(
-                        width: 1,
-                        thickness: 1,
-                        color: _pmBorder,
-                      ),
-                    ),
-                    Expanded(
-                      child: _buildPanel(
-                        title: '결제 예정',
-                        subtitle: '예정일 전 미결제 학생 목록입니다',
-                        iconColor: const Color(0xFF1976D2),
-                        items: _upcomingStudents,
-                        isUnpaid: false,
-                        scrollController: _upcomingScrollCtrl,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+        width: _paymentDialogFallbackWidth,
+        height: _paymentDialogMaxHeight,
+        child: body,
       ),
     );
   }
@@ -753,17 +883,18 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
 
   @override
   Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
     final student = widget.studentWithInfo.student;
 
     final due = widget.paymentDate;
     final borderColor = widget.isOverdue
         ? _pmDanger.withOpacity(_isHovered ? 0.9 : 0.55)
-        : (_isHovered ? _pmAccent : _pmBorder.withOpacity(0.9));
+        : (_isHovered ? kDlgAccent : dlg.border);
 
     return Tooltip(
       message: '결제 회차: ${widget.cycle}회차\n결제 예정일: ${due.month}/${due.day}',
-      decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8)),
-      textStyle: const TextStyle(color: Colors.white, fontSize: 13),
+      decoration: BoxDecoration(color: dlg.panelBg, borderRadius: BorderRadius.circular(8)),
+      textStyle: TextStyle(color: dlg.text, fontSize: 13),
       waitDuration: const Duration(milliseconds: 250),
       child: MouseRegion(
         onEnter: (_) => setState(() => _isHovered = true),
@@ -772,61 +903,71 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
           onTap: _processing ? null : () => _handlePaymentTap(context),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
             decoration: BoxDecoration(
-              color: _pmCardBg,
+              color: dlg.fieldBg,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: borderColor, width: 2),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Row(
                   children: [
                     Expanded(
                       child: Text(
                         student.name,
-                        style: const TextStyle(color: _pmText, fontSize: 17, fontWeight: FontWeight.w800),
+                        style: TextStyle(
+                          color: dlg.text,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Text(
                       '${due.month}/${due.day}',
-                      style: const TextStyle(
-                        color: _pmTextSub,
-                        fontSize: 14,
+                      style: TextStyle(
+                        color: dlg.textSub,
+                        fontSize: 13,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Row(
                   children: [
                     Text(
-                      widget.isOverdue ? '미납' : '예정',
-                      style: TextStyle(
-                        color: (widget.isOverdue ? _pmDanger : _pmTextSub).withOpacity(0.95),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('·', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
-                    const SizedBox(width: 8),
-                    Text(
                       '${widget.cycle}회차',
-                      style: const TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        color: dlg.textSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const Spacer(),
                     if (_processing)
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: _pmAccent),
+                      const Padding(
+                        padding: EdgeInsets.only(right: 6),
+                        child: SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: kDlgAccent),
+                        ),
                       ),
+                    Text(
+                      widget.isOverdue ? '미납' : '예정',
+                      style: TextStyle(
+                        color: (widget.isOverdue ? _pmDanger : dlg.textSub).withOpacity(0.95),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -1939,10 +2080,7 @@ class _QueryRangeDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const border = Color(0xFF223131);
-    const bg = Color(0xFF151C21);
-    const text = Color(0xFFEAF2F2);
-    const sub = Color(0xFF9FB3B3);
+    final dlg = YggDialogColors.of(context);
 
     final DateTime s = _dateOnly(start);
     final DateTime e = _dateOnly(end);
@@ -1967,13 +2105,17 @@ class _QueryRangeDropdown extends StatelessWidget {
                   Expanded(
                     child: Text(
                       value,
-                      style: const TextStyle(color: text, fontSize: 16, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: dlg.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   const SizedBox(width: 10),
-                  const Icon(Icons.calendar_month, color: sub, size: 20),
+                  Icon(Icons.calendar_month_rounded, color: dlg.textSub, size: 20),
                 ],
               ),
             ),
@@ -1987,16 +2129,16 @@ class _QueryRangeDropdown extends StatelessWidget {
         value: preset,
         child: Text(
           label,
-          style: const TextStyle(color: text, fontSize: 14, fontWeight: FontWeight.w700),
+          style: TextStyle(color: dlg.text, fontSize: 14, fontWeight: FontWeight.w700),
         ),
       );
     }
 
-    return Container(
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: bg,
+        color: dlg.fieldBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: border, width: 1),
+        border: Border.all(color: dlg.border),
       ),
       child: Row(
         children: [
@@ -2010,12 +2152,19 @@ class _QueryRangeDropdown extends StatelessWidget {
               onChanged(nextStart, nextEnd);
             },
           ),
-          Container(width: 1, height: 42, color: border.withOpacity(0.7)),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 10),
-            child: Text('~', style: TextStyle(color: sub, fontSize: 18, fontWeight: FontWeight.w800)),
+          Container(width: 1, height: 42, color: dlg.divider),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              '~',
+              style: TextStyle(
+                color: dlg.textSub,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ),
-          Container(width: 1, height: 42, color: border.withOpacity(0.7)),
+          Container(width: 1, height: 42, color: dlg.divider),
           dateCell(
             value: _pretty(e),
             onTap: () async {
@@ -2026,15 +2175,15 @@ class _QueryRangeDropdown extends StatelessWidget {
               onChanged(nextStart, nextEnd);
             },
           ),
-          Container(width: 1, height: 42, color: border.withOpacity(0.7)),
+          Container(width: 1, height: 42, color: dlg.divider),
           SizedBox(
             width: 160,
             child: PopupMenuButton<_QueryRangePreset>(
               tooltip: '기간 프리셋',
-              color: kDlgBg,
+              color: dlg.bg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
-                side: BorderSide(color: border.withOpacity(0.9), width: 1),
+                side: BorderSide(color: dlg.border),
               ),
               itemBuilder: (context) => [
                 item(_QueryRangePreset.thisMonth, '이번달'),
@@ -2077,19 +2226,23 @@ class _QueryRangeDropdown extends StatelessWidget {
                 if (nextEnd.isAfter(last)) nextEnd = last;
                 onChanged(_dateOnly(nextStart), _dateOnly(nextEnd));
               },
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 child: Row(
                   children: [
                     Expanded(
                       child: Text(
                         '프리셋',
-                        style: TextStyle(color: text, fontSize: 15, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          color: dlg.text,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    Icon(Icons.arrow_drop_down, color: sub, size: 22),
+                    Icon(Icons.arrow_drop_down_rounded, color: dlg.textSub, size: 22),
                   ],
                 ),
               ),

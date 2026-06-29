@@ -197,6 +197,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   TextbookExplorerController? _explorer;
   final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
       FabStyleScreenTabBarOverlay();
+  final TextbookExplorerFabOverlay _explorerFabOverlay =
+      TextbookExplorerFabOverlay();
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _isDropdownOpen = false;
@@ -2129,6 +2131,25 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       tabs: _resourceTabLabels,
       onTabSelected: _selectResourcesTab,
     );
+    _syncExplorerFabOverlay();
+  }
+
+  void _syncExplorerFabOverlay() {
+    final explorer = _explorer;
+    if (explorer == null) {
+      _explorerFabOverlay.hide();
+      return;
+    }
+    final railWidth = NavigationRailTheme.of(context).minWidth ??
+        FabTabBarTokens.fabBarNavRailDefaultWidth;
+    const treePanelOuterPadding = 12.0;
+    const contentRightPadding = 12.0;
+    _explorerFabOverlay.sync(
+      context,
+      controller: explorer,
+      left: railWidth + treePanelOuterPadding + _folderTreePanelWidth(context),
+      right: contentRightPadding,
+    );
   }
 
   void _openTextbookExplorer({
@@ -2167,6 +2188,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     });
     controller.dispose();
     hideGlobalMemoFloatingBanners.value = false;
+    _explorerFabOverlay.hide();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncFabTabBarOverlay();
     });
@@ -2189,12 +2211,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       hideGlobalMemoFloatingBanners.value = false;
     }
     widget.printController?._notifyStateChanged();
-    _fabTabBarOverlay.sync(
-      context,
-      selectedIndex: _customTabIndex,
-      tabs: _resourceTabLabels,
-      onTabSelected: _selectResourcesTab,
-    );
+    _syncFabTabBarOverlay();
     _loadLayout();
   }
 
@@ -2204,6 +2221,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _explorer?.dispose();
     hideGlobalMemoFloatingBanners.value = false;
     _fabTabBarOverlay.dispose();
+    _explorerFabOverlay.dispose();
     for (final c in _gridScrollCtrls) {
       c.dispose();
     }
@@ -2699,7 +2717,12 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
+                  padding: EdgeInsets.fromLTRB(
+                    0,
+                    12,
+                    12,
+                    _explorer != null ? 0 : 12,
+                  ),
                   child: _explorer != null
                       ? TextbookExplorerContent(controller: _explorer!)
                       : Stack(
@@ -2831,6 +2854,22 @@ const double _folderTreeHighlightInsetVertical = 0;
 const double _textbookCoverA4Ratio = 1.414;
 const double _textbookCardMetaHeight = 77.0;
 const double _textbookCardCoverMetaGap = 14.0;
+const double _textbookGridMaxCardWidth = 240.0;
+const double _textbookGridSpacing = 22.4;
+
+/// 자원 그리드(교재·시험·기타) — 최대 카드 너비 상한, 가로 100% 채움.
+({int columns, double cardWidth}) _fillWidthResourceGridLayout(
+  double availableWidth, {
+  double maxCardWidth = _textbookGridMaxCardWidth,
+  double spacing = _textbookGridSpacing,
+}) {
+  final columns = math.max(
+    1,
+    ((availableWidth + spacing) / (maxCardWidth + spacing)).ceil(),
+  );
+  final cardWidth = (availableWidth - (columns - 1) * spacing) / columns;
+  return (columns: columns, cardWidth: cardWidth);
+}
 const String _examM1RootId = 'exam-folder-M1-naesin';
 const String _examLegacyMiddleSchoolRootId = 'exam-folder-middle-school';
 const List<String> _examCanonicalRootIds = <String>[
@@ -3738,22 +3777,33 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isTextbook = _currentCategory == 'textbook';
-          final double gridCardWidth = isTextbook || isOther ? 240.0 : 290.0;
+          final double spacing = isTextbook || isOther
+              ? _textbookGridSpacing
+              : 16.0;
+          final int cols;
+          final double gridCardWidth;
+          final double gridWidth;
+          if (isTextbook || isOther) {
+            final layout = _fillWidthResourceGridLayout(constraints.maxWidth);
+            cols = layout.columns;
+            gridCardWidth = layout.cardWidth;
+            gridWidth = constraints.maxWidth;
+          } else {
+            gridCardWidth = 290.0;
+            cols = (constraints.maxWidth / (gridCardWidth + spacing))
+                .floor()
+                .clamp(1, 999);
+            gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
+          }
           final double baseCardHeight = isTextbook
               ? (gridCardWidth * _textbookCoverA4Ratio +
                   _textbookCardMetaHeight)
-              : (isOther ? 240.0 : 170.0);
+              : (isOther ? gridCardWidth : 170.0);
           final bool showPrintTest = isTextbook && _kShowBookPrintTestControls;
           final double printBarHeight = showPrintTest ? 36.0 : 0.0;
           final double printBarGap = showPrintTest ? 8.0 : 0.0;
           final double gridCardHeight =
               baseCardHeight + printBarGap + printBarHeight;
-          final double spacing = isTextbook || isOther ? 22.4 : 16.0;
-          final cols = (constraints.maxWidth / (gridCardWidth + spacing))
-              .floor()
-              .clamp(1, 999);
-          final double gridWidth =
-              (cols * gridCardWidth) + ((cols - 1) * spacing);
           Widget buildCardCell(_ResourceFile fi) {
             if (isOther) {
               return SizedBox(
@@ -3881,19 +3931,18 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
 
   Widget _buildExamPresetGrid(int tabSlot) {
     final gridScrollCtrl = _gridScrollCtrls[tabSlot];
-    const double gridCardWidth = 240.0;
-    const double gridCardHeight = 240.0;
-    const double spacing = 22.4;
+    const double spacing = _textbookGridSpacing;
     final selection = parseExamFolderSelection(_selectedFolderIdForTree);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 16, 0),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final cols = (constraints.maxWidth / (gridCardWidth + spacing))
-              .floor()
-              .clamp(1, 999);
-          final gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
+          final layout = _fillWidthResourceGridLayout(constraints.maxWidth);
+          final cols = layout.columns;
+          final gridCardWidth = layout.cardWidth;
+          final gridCardHeight = gridCardWidth;
+          final gridWidth = constraints.maxWidth;
           final presets = _examPresets;
           final rowCount = presets.isEmpty ? 0 : (presets.length / cols).ceil();
           final baseContentHeight = rowCount == 0

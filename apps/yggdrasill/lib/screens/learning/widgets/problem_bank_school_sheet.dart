@@ -288,7 +288,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                   for (final doc in grouped[school]![year]!)
                     SharedFolderTreeNode(
                       id: doc.id,
-                      label: doc.displayTitle,
+                      label: doc.schoolPastTreeLabel,
                       icon: Icons.description_outlined,
                       selectedIcon: Icons.picture_as_pdf_outlined,
                       data: _ProblemBankTreeNodeMeta.document(doc),

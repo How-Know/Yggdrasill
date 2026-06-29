@@ -13,8 +13,8 @@ import '../screens/timetable/views/classes_view.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 import 'dialog_tokens.dart';
+import 'utility_glass_dialog_shell.dart';
 
-const Color _mkPanelBg = Color(0xFF10171A);
 const Color _mkFieldBg = Color(0xFF15171C);
 const Color _mkBorder = Color(0xFF223131);
 const Color _mkText = Color(0xFFEAF2F2);
@@ -22,11 +22,29 @@ const Color _mkTextSub = Color(0xFF9FB3B3);
 const Color _mkAccent = Color(0xFF33A373);
 
 class MakeupQuickDialog extends StatefulWidget {
-  const MakeupQuickDialog({super.key});
+  const MakeupQuickDialog({
+    super.key,
+    this.embeddedInGlassShell = false,
+  });
+
+  /// [UtilityGlassDialogShell] 안에 넣을 때 true — 자체 헤더/배경 생략.
+  final bool embeddedInGlassShell;
 
   @override
   State<MakeupQuickDialog> createState() => _MakeupQuickDialogState();
 }
+
+Future<void> showMakeupRegisterDialog(BuildContext context) {
+  return showUtilityGlassBottomSheet(
+    context: context,
+    title: '보강 등록',
+    icon: Icons.event_repeat_rounded,
+    maxWidth: 560,
+    maxHeight: 520,
+    child: const MakeupQuickDialog(embeddedInGlassShell: true),
+  );
+}
+
 class StudentScheduleListDialog extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
   const StudentScheduleListDialog({super.key, required this.studentWithInfo});
@@ -208,6 +226,12 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
     _refresh();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   DateTime _today() {
     final now = DateTime.now();
     return DateTime(now.year, now.month, now.day);
@@ -335,184 +359,231 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
       ),
     );
     if (saved == true) {
-      // 보강 저장 후 빠른 보강(현재 다이얼로그)도 닫기
+      // 보강 저장 후 보강 등록 다이얼로그도 닫기
       Navigator.of(context).pop();
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: _mkBorder),
-      ),
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      title: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: IconButton(
-              tooltip: '닫기',
-              icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
-              padding: EdgeInsets.zero,
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ),
-          const Expanded(
-            child: Text(
-              '빠른 보강 등록',
-              style: TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
-            ),
-          ),
-        ],
-      ),
-      content: SizedBox(
-        // ✅ 요청: 빠른 보강등록 다이얼로그 크기 -30%
-        width: 504, // 720 * 0.7
-        height: 392, // 560 * 0.7
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Divider(color: _mkBorder, height: 1),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _searchController,
-              onChanged: _onQueryChanged,
-              style: const TextStyle(color: _mkText),
-              decoration: InputDecoration(
-                labelText: '학생 검색',
-                labelStyle: const TextStyle(color: _mkTextSub, fontWeight: FontWeight.w700),
-                hintText: '이름/학교로 검색',
-                hintStyle: const TextStyle(color: Colors.white38),
-                prefixIcon: const Icon(Icons.search, color: _mkTextSub),
-                filled: true,
-                fillColor: _mkFieldBg,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: _mkBorder.withOpacity(0.9)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: _mkAccent, width: 2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: _mkPanelBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _mkBorder),
-                ),
-                child: ValueListenableBuilder<List<AttendanceRecord>>(
-                  valueListenable: DataManager.instance.attendanceRecordsNotifier,
-                  builder: (context, _, __) {
-                    final isSearching = _searchController.text.trim().isNotEmpty;
-                    final items = <StudentWithInfo>[];
-                    final subtitles = <String>[];
-                    if (isSearching) {
-                      for (final s in _filtered) {
-                        items.add(s);
-                        subtitles.add('${s.student.school} · ${s.student.grade}학년');
-                      }
-                    } else {
-                      // 추천 리스트 (최근 무단결석 순)
-                      for (final id in _recommendedStudentIds) {
-                        final s = _allStudents.firstWhere(
-                          (x) => x.student.id == id,
-                          orElse: () => StudentWithInfo(
-                            student: Student(id: id, name: '학생', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-                            basicInfo: StudentBasicInfo(studentId: id),
-                          ),
-                        );
-                        items.add(s);
-                        final absent = _recentAbsentByStudentId[id];
-                        final sub = absent == null
-                            ? s.student.school
-                            : '${s.student.school} · 결석: ${absent.classDateTime.month}/${absent.classDateTime.day} ${absent.classDateTime.hour.toString().padLeft(2, '0')}:${absent.classDateTime.minute.toString().padLeft(2, '0')}';
-                        subtitles.add(sub);
-                      }
-                    }
-                    return ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(color: Color(0x22FFFFFF), height: 1),
-                      itemBuilder: (context, i) {
-                        final s = items[i];
-                        final sub = subtitles[i];
-                        final absentId = isSearching ? null : _recentAbsentByStudentId[s.student.id]?.id;
-                        final Color? classColor = _resolveStudentClassColor(s.student.id);
-                        return InkWell(
-                          onTap: () => _openSchedule(s, absentRecordId: absentId),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            child: Row(
-                              children: [
-                                classColor == null
-                                    ? const SizedBox(width: 10, height: 38)
-                                    : Container(
-                                        width: 10,
-                                        height: 38,
-                                        decoration: BoxDecoration(
-                                          color: classColor,
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                      ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        s.student.name,
-                                        style: const TextStyle(color: _mkText, fontSize: 15, fontWeight: FontWeight.w700),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        sub,
-                                        style: const TextStyle(color: _mkTextSub, fontSize: 12, fontWeight: FontWeight.w600),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                const Icon(Icons.chevron_right, color: _mkTextSub),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
+  Widget _buildSearchField(YggDialogColors dlg) {
+    return TextField(
+      controller: _searchController,
+      onChanged: _onQueryChanged,
+      style: TextStyle(color: dlg.text),
+      decoration: InputDecoration(
+        labelText: '학생 검색',
+        labelStyle: TextStyle(color: dlg.textSub, fontWeight: FontWeight.w700),
+        hintText: '이름/학교로 검색',
+        hintStyle: TextStyle(color: dlg.hint),
+        prefixIcon: Icon(Icons.search_rounded, color: dlg.textSub),
+        filled: true,
+        fillColor: dlg.fieldBg,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: dlg.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kDlgAccent, width: 2),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          style: TextButton.styleFrom(
-            foregroundColor: _mkTextSub,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          ),
-          child: const Text('닫기'),
-        )
-      ],
+    );
+  }
+
+  Widget _buildStudentList(YggDialogColors dlg) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: dlg.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: dlg.cardBorder),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ValueListenableBuilder<List<AttendanceRecord>>(
+          valueListenable: DataManager.instance.attendanceRecordsNotifier,
+          builder: (context, _, __) {
+            final isSearching = _searchController.text.trim().isNotEmpty;
+            final items = <StudentWithInfo>[];
+            final subtitles = <String>[];
+            if (isSearching) {
+              for (final s in _filtered) {
+                items.add(s);
+                subtitles.add('${s.student.school} · ${s.student.grade}학년');
+              }
+            } else {
+              for (final id in _recommendedStudentIds) {
+                final s = _allStudents.firstWhere(
+                  (x) => x.student.id == id,
+                  orElse: () => StudentWithInfo(
+                    student: Student(
+                      id: id,
+                      name: '학생',
+                      school: '',
+                      grade: 0,
+                      educationLevel: EducationLevel.elementary,
+                    ),
+                    basicInfo: StudentBasicInfo(studentId: id),
+                  ),
+                );
+                items.add(s);
+                final absent = _recentAbsentByStudentId[id];
+                final sub = absent == null
+                    ? s.student.school
+                    : '${s.student.school} · 결석: ${absent.classDateTime.month}/${absent.classDateTime.day} ${absent.classDateTime.hour.toString().padLeft(2, '0')}:${absent.classDateTime.minute.toString().padLeft(2, '0')}';
+                subtitles.add(sub);
+              }
+            }
+
+            if (items.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    isSearching ? '검색 결과가 없습니다.' : '최근 결석 학생이 없습니다.',
+                    style: TextStyle(
+                      color: dlg.textSub,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            return ListView.separated(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: items.length,
+              separatorBuilder: (_, __) => Divider(color: dlg.divider, height: 1),
+              itemBuilder: (context, i) {
+                final s = items[i];
+                final sub = subtitles[i];
+                final absentId =
+                    isSearching ? null : _recentAbsentByStudentId[s.student.id]?.id;
+                final Color? classColor = _resolveStudentClassColor(s.student.id);
+                return InkWell(
+                  onTap: () => _openSchedule(s, absentRecordId: absentId),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Row(
+                      children: [
+                        classColor == null
+                            ? const SizedBox(width: 10, height: 38)
+                            : Container(
+                                width: 10,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  color: classColor,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                              ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                s.student.name,
+                                style: TextStyle(
+                                  color: dlg.text,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                sub,
+                                style: TextStyle(
+                                  color: dlg.textSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(Icons.chevron_right_rounded, color: dlg.textSub),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    final padding = widget.embeddedInGlassShell
+        ? const EdgeInsets.fromLTRB(18, 12, 18, 16)
+        : const EdgeInsets.fromLTRB(26, 26, 26, 18);
+    final isSearching = _searchController.text.trim().isNotEmpty;
+
+    final body = Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!widget.embeddedInGlassShell) ...[
+            Row(
+              children: [
+                IconButton(
+                  tooltip: '닫기',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: Icon(Icons.arrow_back_rounded, color: dlg.closeIcon),
+                ),
+                Expanded(
+                  child: Text(
+                    '보강 등록',
+                    style: TextStyle(
+                      color: dlg.headerText,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+          ],
+          _buildSearchField(dlg),
+          const SizedBox(height: 12),
+          if (!isSearching && _recommendedStudentIds.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                '최근 결석',
+                style: TextStyle(
+                  color: dlg.textSub,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          Expanded(child: _buildStudentList(dlg)),
+        ],
+      ),
+    );
+
+    if (widget.embeddedInGlassShell) {
+      return body;
+    }
+
+    return Dialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      insetPadding: const EdgeInsets.all(24),
+      child: SizedBox(
+        width: 560,
+        height: 520,
+        child: body,
+      ),
     );
   }
 }
