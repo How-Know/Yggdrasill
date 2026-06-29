@@ -29,7 +29,10 @@ import WatchConnectivity
   // MARK: - MethodChannel 브리지
 
   private func setupWatchChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else {
+    if watchChannel != nil {
+      return
+    }
+    guard let controller = findFlutterViewController() else {
       // FlutterViewController가 아직 준비되지 않았으면 다음 런루프에서 재시도한다.
       DispatchQueue.main.async { [weak self] in
         self?.setupWatchChannel()
@@ -49,6 +52,28 @@ import WatchConnectivity
       }
     }
     watchChannel = channel
+  }
+
+  private func findFlutterViewController() -> FlutterViewController? {
+    if let controller = window?.rootViewController as? FlutterViewController {
+      return controller
+    }
+    for scene in UIApplication.shared.connectedScenes {
+      guard let windowScene = scene as? UIWindowScene else {
+        continue
+      }
+      for window in windowScene.windows {
+        if let controller = window.rootViewController as? FlutterViewController {
+          return controller
+        }
+        if let controller = window.rootViewController?.children
+          .compactMap({ $0 as? FlutterViewController })
+          .first {
+          return controller
+        }
+      }
+    }
+    return nil
   }
 
   /// Dart -> 네이티브: 오늘 출결 타깃 스냅샷을 최신 1건으로 워치에 반영한다.
@@ -72,8 +97,22 @@ import WatchConnectivity
   /// Watch -> 네이티브 -> Dart: 워치 이벤트를 Flutter로 포워딩하고, 가능하면 응답을 회신한다.
   private func forwardToFlutter(_ message: [String: Any], reply: (([String: Any]) -> Void)?) {
     DispatchQueue.main.async { [weak self] in
+      self?.setupWatchChannel()
       guard let channel = self?.watchChannel else {
-        reply?(["ok": false, "message": "브리지 미준비"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+          self?.setupWatchChannel()
+          guard let channel = self?.watchChannel else {
+            reply?(["ok": false, "message": "브리지 미준비"])
+            return
+          }
+          channel.invokeMethod("onWatchEvent", arguments: message) { res in
+            if let map = res as? [String: Any] {
+              reply?(map)
+            } else {
+              reply?(["ok": true])
+            }
+          }
+        }
         return
       }
       channel.invokeMethod("onWatchEvent", arguments: message) { res in

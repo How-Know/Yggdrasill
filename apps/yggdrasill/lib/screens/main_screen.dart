@@ -763,6 +763,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       ClassContentPrintController();
   final ResourcesPrintController _resourcesPrintController =
       ResourcesPrintController();
+  bool _printControllerSetStateScheduled = false;
   StudentViewType _viewType = StudentViewType.all;
   final List<GroupInfo> _groups = [];
   final List<Student> _students = [];
@@ -1152,28 +1153,51 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   /// className, sessionTypeId)를 그대로 되돌려주므로, iPhone은 재해석 없이
   /// 기존 출결 로직을 호출할 수 있다.
   List<Map<String, dynamic>> _buildWatchAttendanceTargets() {
+    // 사이드시트 렌더링 여부와 무관하게, 호출 시점의 출결 데이터로 직접 계산한다.
+    // (캐시(_cachedWaiting 등)는 사이드시트가 그려질 때만 채워지므로 의존하지 않음)
+    final Map<String, AttendanceRecord> recordBySet = {};
+    final targets = getAttendanceTargetsForDate(
+      _sideSheetAnchorDate,
+      DataManager.instance.attendanceRecords,
+      recordBySet,
+    );
+
     final List<Map<String, dynamic>> items = [];
-    void add(_AttendanceTarget t, String status) {
-      items.add(<String, dynamic>{
+    for (final t in targets) {
+      final AttendanceRecord? rec = recordBySet[t.setId];
+      bool isArrived = (rec?.arrivalTime != null) || (rec?.isPresent ?? false);
+      bool isLeaved = rec?.departureTime != null;
+      if (!isArrived && _attendedSetIds.contains(t.setId)) {
+        isArrived = true;
+      }
+      if (!isLeaved && _leavedSetIds.contains(t.setId)) {
+        isLeaved = true;
+      }
+      final String status =
+          isLeaved ? 'leaved' : (isArrived ? 'attended' : 'waiting');
+      final DateTime? arrival = rec?.arrivalTime ?? _attendTimes[t.setId];
+      final DateTime? departure = rec?.departureTime ?? _leaveTimes[t.setId];
+      // WCSession은 null(NSNull) 값을 전송하지 못하므로 null 키는 넣지 않는다.
+      final Map<String, dynamic> item = <String, dynamic>{
         'setId': t.setId,
         'studentId': t.student.id,
         'name': t.student.name,
         'classDateTime': t.classDateTime.toIso8601String(),
         'classEndTime': t.classDateTime.add(t.duration).toIso8601String(),
         'className': t.classInfo?.name ?? '수업',
-        'sessionTypeId': t.classInfo?.id,
         'status': status,
-      });
-    }
-
-    for (final t in _cachedWaiting) {
-      add(t, 'waiting');
-    }
-    for (final t in _cachedAttended) {
-      add(t, 'attended');
-    }
-    for (final t in _cachedLeaved) {
-      add(t, 'leaved');
+      };
+      final String? sessionTypeId = t.classInfo?.id;
+      if (sessionTypeId != null) {
+        item['sessionTypeId'] = sessionTypeId;
+      }
+      if (arrival != null) {
+        item['arrivalTime'] = arrival.toIso8601String();
+      }
+      if (departure != null) {
+        item['departureTime'] = departure.toIso8601String();
+      }
+      items.add(item);
     }
     return items;
   }
@@ -1980,8 +2004,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _onPrintControllerChanged() {
-    if (!mounted) return;
-    setState(() {});
+    if (!mounted || _printControllerSetStateScheduled) return;
+    _printControllerSetStateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _printControllerSetStateScheduled = false;
+      if (!mounted) return;
+      setState(() {});
+    });
   }
 
   bool get _sideSheetPrintActive {

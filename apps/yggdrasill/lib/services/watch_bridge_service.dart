@@ -48,24 +48,49 @@ class WatchBridgeService {
   /// 현재 오늘 출결 타깃 스냅샷을 워치로 전송(applicationContext).
   Future<void> pushTodayTargets() async {
     if (!_isSupported || !_initialized) return;
+    final payload = _buildTodayTargetsPayload();
+    if (payload == null) return;
+    try {
+      await _channel.invokeMethod<void>('sendSnapshot', payload);
+    } catch (e) {
+      debugPrint('[WatchBridge] sendSnapshot 실패: $e');
+    }
+  }
+
+  Map<String, dynamic>? _buildTodayTargetsPayload() {
     final provider = targetsProvider;
-    if (provider == null) return;
+    if (provider == null) return null;
     List<Map<String, dynamic>> items;
     try {
       items = provider();
     } catch (e) {
       debugPrint('[WatchBridge] targetsProvider 실패: $e');
-      return;
+      return null;
     }
-    try {
-      await _channel.invokeMethod<void>('sendSnapshot', <String, dynamic>{
-        'type': 'todayTargets',
-        'date': DateTime.now().toIso8601String(),
-        'items': items,
-      });
-    } catch (e) {
-      debugPrint('[WatchBridge] sendSnapshot 실패: $e');
-    }
+    // WCSession은 null(NSNull)을 전송하지 못하므로 null 값을 모두 제거한다.
+    final sanitizedItems = items
+        .map((item) => _stripNulls(item))
+        .toList(growable: false);
+    return <String, dynamic>{
+      'ok': true,
+      'type': 'todayTargets',
+      'date': DateTime.now().toIso8601String(),
+      'items': sanitizedItems,
+      'message': '${sanitizedItems.length}명 동기화',
+    };
+  }
+
+  Map<String, dynamic> _stripNulls(Map<String, dynamic> input) {
+    final out = <String, dynamic>{};
+    input.forEach((key, value) {
+      if (value == null) return;
+      if (value is Map<String, dynamic>) {
+        out[key] = _stripNulls(value);
+      } else {
+        out[key] = value;
+      }
+    });
+    return out;
   }
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
@@ -89,6 +114,13 @@ class WatchBridgeService {
   ) async {
     final type = event['type'] as String?;
     switch (type) {
+      case 'requestSnapshot':
+        final payload = _buildTodayTargetsPayload();
+        if (payload == null) {
+          return <String, dynamic>{'ok': false, 'message': '스냅샷 준비 안 됨'};
+        }
+        await pushTodayTargets();
+        return payload;
       case 'attendance':
         return _handleAttendance(event);
       default:
@@ -104,6 +136,9 @@ class WatchBridgeService {
   Future<Map<String, dynamic>> _handleAttendance(
     Map<String, dynamic> event,
   ) async {
+    debugPrint('[WatchBridge] attendance 수신: '
+        'action=${event['action']} studentId=${event['studentId']} '
+        'setId=${event['setId']} classDateTime=${event['classDateTime']}');
     final clientEventId = event['clientEventId'] as String?;
     if (clientEventId != null && _isDuplicate(clientEventId)) {
       return <String, dynamic>{'ok': true, 'message': '이미 처리됨', 'duplicate': true};

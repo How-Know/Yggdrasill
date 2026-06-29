@@ -105,7 +105,14 @@ private struct TargetRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                statusBadge
+                VStack(alignment: .trailing, spacing: 2) {
+                    statusBadge
+                    if let timeLabel = target.timeLabel {
+                        Text(timeLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .disabled(target.status == "leaved")
