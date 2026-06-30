@@ -20,6 +20,8 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     required this.onClearCart,
     required this.onAddToCart,
     required this.onCreate,
+    this.leading = const <Widget>[],
+    this.alignStart = false,
   });
 
   final int cartCount;
@@ -31,6 +33,8 @@ class ProblemBankBottomFabBar extends StatelessWidget {
   final VoidCallback onClearCart;
   final VoidCallback onAddToCart;
   final VoidCallback onCreate;
+  final List<Widget> leading;
+  final bool alignStart;
 
   @override
   Widget build(BuildContext context) {
@@ -38,32 +42,33 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     final palette = FabTabBarTokens.paletteFor(brightness);
     final radius = BorderRadius.circular(FabTabBarTokens.fabBarHeight / 2);
     final disabled = isBusy;
-    return Center(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: palette.boxShadows,
-        ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+    final bar = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: palette.boxShadows,
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+          ),
+          child: Container(
+            height: FabTabBarTokens.fabBarHeight,
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: palette.surface,
+              borderRadius: radius,
             ),
-            child: Container(
-              height: FabTabBarTokens.fabBarHeight,
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: palette.surface,
-                borderRadius: radius,
-              ),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _BottomActionPill(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ...leading,
+                  if (leading.isNotEmpty) const SizedBox(width: 4),
+                  _BottomActionPill(
                       onPressed: disabled ? null : onToggleSelectAll,
                       icon: allVisibleSelected
                           ? Icons.remove_done
@@ -96,8 +101,11 @@ class ProblemBankBottomFabBar extends StatelessWidget {
             ),
           ),
         ),
-      ),
     );
+    if (alignStart) {
+      return Align(alignment: Alignment.centerLeft, child: bar);
+    }
+    return Center(child: bar);
   }
 }
 

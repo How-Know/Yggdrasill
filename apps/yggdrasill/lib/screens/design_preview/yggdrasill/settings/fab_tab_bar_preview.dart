@@ -3257,6 +3257,161 @@ class FabStyleTabBar extends StatelessWidget {
   }
 }
 
+/// [FabStyleTabBar]와 동일 글래스·팔레트의 가로 스크롤 액션 바.
+class FabStyleActionTabBar extends StatelessWidget {
+  const FabStyleActionTabBar({
+    super.key,
+    required this.children,
+    this.height = FabTabBarTokens.fabBarHeight,
+    this.padding = 6,
+  });
+
+  final List<Widget> children;
+  final double height;
+  final double padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final radius = BorderRadius.circular(height / 2);
+
+    return Center(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: palette.boxShadows,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            ),
+            child: Container(
+              height: height,
+              padding: EdgeInsets.all(padding),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: radius,
+              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: children,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// [FabStyleTabBar] 탭과 동일 색·인터랙션( Material 호버 없음 )의 아이콘+라벨 pill.
+class FabStyleActionTabPill extends StatelessWidget {
+  const FabStyleActionTabPill({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.selected = false,
+    this.enabled = true,
+    this.width = 112,
+    this.iconSize = 20,
+    this.barHeight = FabTabBarTokens.fabBarHeight,
+    this.barPadding = 6,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool selected;
+  final bool enabled;
+  final double width;
+  final double iconSize;
+  final double barHeight;
+  final double barPadding;
+
+  static const double _iconLabelGap = 7;
+  static const double _horizontalInset = 12;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final innerHeight = (barHeight - barPadding * 2).clamp(0.0, 9999.0);
+    final baseTextStyle = TextStyle(
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      fontWeight: FontWeight.w600,
+      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+    );
+    final textDirection = Directionality.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final labelPainter = TextPainter(
+      text: TextSpan(text: label, style: baseTextStyle),
+      textDirection: textDirection,
+      maxLines: 1,
+      textScaler: textScaler,
+    )..layout();
+    // [FabStyleTabBar]는 라벨 너비+여백으로 슬롯을 잡는다. 아이콘 pill도 동일 원칙.
+    final resolvedWidth = math.max(
+      width,
+      _horizontalInset * 2 +
+          iconSize +
+          _iconLabelGap +
+          labelPainter.width,
+    );
+    final fg = !enabled
+        ? palette.labelUnselected.withValues(alpha: 0.45)
+        : (selected ? palette.labelSelected : palette.labelUnselected);
+    final bg = selected ? palette.highlight : Colors.transparent;
+
+    return Tooltip(
+      message: label,
+      waitDuration: const Duration(milliseconds: 450),
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: resolvedWidth,
+          height: innerHeight,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(innerHeight / 2),
+            ),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: _horizontalInset),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: iconSize, color: fg),
+                  const SizedBox(width: _iconLabelGap),
+                  AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 200),
+                    style: baseTextStyle.copyWith(color: fg),
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 탭바와 동일한 글래스 스타일 원형 + 버튼 (Preview 전용).
 class FabStyleActionButton extends StatelessWidget {
   final VoidCallback? onPressed;
@@ -3680,14 +3835,21 @@ class FabStyleMenuPill extends StatelessWidget {
 }
 
 /// 설정·자료 등 화면 최상단 공용 페이지 타이틀 (학원정보·교재 등).
+///
+/// [overlay] true면 상단 [previewAcademyTopInset]·하단 여백 없이 좌측 정렬.
+/// 자원 탭·교재 탐색기처럼 `top: previewAcademyTopInset - 12` 오버레이에 쓴다.
 class FabStyleScreenMainTitle extends StatelessWidget {
   final String title;
   final double bottomSpacing;
+  final bool overlay;
+  final int? maxLines;
 
   const FabStyleScreenMainTitle({
     super.key,
     required this.title,
     this.bottomSpacing = FabTabBarTokens.previewAcademyMainTitleToLogoSpacing,
+    this.overlay = false,
+    this.maxLines,
   });
 
   @override
@@ -3695,6 +3857,15 @@ class FabStyleScreenMainTitle extends StatelessWidget {
     final style = FabTabBarTokens.previewAcademyPanelStyleFor(
       Theme.of(context).brightness,
     );
+    if (overlay) {
+      return Text(
+        title,
+        textAlign: TextAlign.left,
+        maxLines: maxLines,
+        overflow: maxLines != null ? TextOverflow.ellipsis : null,
+        style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
+      );
+    }
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,

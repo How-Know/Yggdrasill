@@ -1,16 +1,24 @@
-import 'dart:ui';
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../app_overlays.dart';
+import '../../services/learning_problem_bank_service.dart';
 import '../../services/textbook_explorer_service.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/shared_folder_tree.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../learning/models/problem_bank_export_models.dart';
+import '../learning/widgets/problem_bank_bottom_fab_bar.dart';
+import '../learning/widgets/problem_bank_export_options_fab.dart';
+import '../learning/widgets/problem_bank_export_options_panel.dart';
+import 'textbook_explorer_export_launcher.dart';
 
 enum TbExRightMode { questions, pdf }
 
@@ -59,6 +67,21 @@ class TextbookExplorerController extends ChangeNotifier {
   /// 장바구니(문제은행 핸드오프 대상) selKey, 추가 순서 유지.
   final List<String> cartKeys = <String>[];
 
+  /// 문제은행과 동일한 유형·난이도 필터.
+  final Set<String> activeTypeFilters = <String>{};
+  final Set<String> activeDifficultyFilters = <String>{};
+
+  /// 장바구니에 담긴 문항만 보기.
+  bool showOnlyCart = false;
+
+  LearningProblemExportSettings exportSettings =
+      LearningProblemExportSettings.initial();
+  bool isExporting = false;
+  LearningProblemExportJob? activeExportJob;
+
+  final TextbookExplorerExportLauncher _exportLauncher =
+      TextbookExplorerExportLauncher();
+
   /// selKey -> 문항 조회용.
   final Map<String, TbExItem> _itemBySelKey = <String, TbExItem>{};
 
@@ -69,7 +92,15 @@ class TextbookExplorerController extends ChangeNotifier {
   bool pdfLoading = false;
   bool _pdfRequested = false;
 
+  /// PDF 오버레이 호버 대상. [notifyListeners] 없이 오버레이만 갱신한다.
+  final ValueNotifier<String?> pdfHoverSelKey = ValueNotifier<String?>(null);
+
   Map<int, List<TbExItem>> get itemsByPage => data.itemsByPage;
+
+  void setPdfHover(String? selKey) {
+    if (pdfHoverSelKey.value == selKey) return;
+    pdfHoverSelKey.value = selKey;
+  }
 
   Future<void> load() async {
     loading = true;
@@ -103,6 +134,12 @@ class TextbookExplorerController extends ChangeNotifier {
   }
 
   // PdfViewerController(pdfrx)는 별도 dispose가 필요 없다.
+
+  @override
+  void dispose() {
+    pdfHoverSelKey.dispose();
+    super.dispose();
+  }
 
   void toggleBasicInfo() {
     basicInfoExpanded = !basicInfoExpanded;
@@ -302,7 +339,133 @@ class TextbookExplorerController extends ChangeNotifier {
     return out;
   }
 
+  static String _normalizeDifficultyLabel(String raw) {
+    final compact = raw.trim().replaceAll(RegExp(r'\s+'), '');
+    if (compact == '대표문제') return '대표 문제';
+    return raw.trim();
+  }
+
+  List<TbExItem> get filteredVisibleItems {
+    final base = visibleItems;
+    if (activeTypeFilters.isEmpty && activeDifficultyFilters.isEmpty) {
+      return base;
+    }
+    return base.where((item) {
+      if (activeTypeFilters.isNotEmpty &&
+          !activeTypeFilters.contains(item.typeGroupKey)) {
+        return false;
+      }
+      if (activeDifficultyFilters.isNotEmpty) {
+        final difficulty = _normalizeDifficultyLabel(item.difficultyLabel);
+        if (!activeDifficultyFilters.contains(difficulty)) return false;
+      }
+      return true;
+    }).toList(growable: false);
+  }
+
+  /// 필터·장바구니 보기가 반영된 실제 표시 대상.
+  List<TbExItem> get displayItems {
+    if (!showOnlyCart) return filteredVisibleItems;
+    return cartKeys
+        .map((key) => _itemBySelKey[key])
+        .whereType<TbExItem>()
+        .toList(growable: false);
+  }
+
+  Set<String> get displaySelKeys =>
+      displayItems.map((item) => item.selKey).toSet();
+
+  bool get questionFilterActive =>
+      activeTypeFilters.isNotEmpty || activeDifficultyFilters.isNotEmpty;
+
+  List<String> get typeFilterOptions {
+    final out = <String>{};
+    for (final item in visibleItems) {
+      if (item.typeGroupKind != 'type' || item.typeGroupLabel.isEmpty) {
+        continue;
+      }
+      out.add(item.typeGroupKey);
+    }
+    final list = out.toList();
+    list.sort((a, b) {
+      final aLabel = a.split('|').first.trim();
+      final bLabel = b.split('|').first.trim();
+      return aLabel.compareTo(bLabel);
+    });
+    return list;
+  }
+
+  List<String> get difficultyFilterOptions {
+    const order = <String, int>{
+      '하': 0,
+      '중': 1,
+      '상': 2,
+      '대표 문제': 3,
+      '창의문제': 4,
+      '서술형': 5,
+    };
+    final out = <String>{};
+    for (final item in visibleItems) {
+      final label = _normalizeDifficultyLabel(item.difficultyLabel);
+      if (label.isNotEmpty) out.add(label);
+    }
+    final list = out.toList();
+    list.sort((a, b) {
+      final ai = order[a] ?? 100;
+      final bi = order[b] ?? 100;
+      if (ai != bi) return ai.compareTo(bi);
+      return a.compareTo(b);
+    });
+    return list;
+  }
+
+  bool get allVisibleSelected {
+    final visible = displayItems;
+    return visible.isNotEmpty &&
+        visible.every((item) => selectedKeys.contains(item.selKey));
+  }
+
+  int get makeTargetCount => makeTargetQuestionUids.length;
+
+  List<String> get makeTargetQuestionUids {
+    if (cartKeys.isNotEmpty) {
+      return cartKeys
+          .map((key) => _itemBySelKey[key]?.questionUid.trim() ?? '')
+          .where((uid) => uid.isNotEmpty)
+          .toList(growable: false);
+    }
+    return selectedKeys
+        .map((key) => _itemBySelKey[key]?.questionUid.trim() ?? '')
+        .where((uid) => uid.isNotEmpty)
+        .toList(growable: false);
+  }
+
   bool get hasSelectionFilter => checkedPageKeys.isNotEmpty;
+
+  /// 원본 PDF에 표시할 raw 페이지. 체크된 페이지 + 소단원 전체 선택 시 개념 페이지.
+  Set<int> get visiblePdfRawPages {
+    final out = <int>{};
+    for (final pageKey in checkedPageKeys) {
+      final sep = pageKey.lastIndexOf('#');
+      if (sep < 0) continue;
+      final raw = int.tryParse(pageKey.substring(sep + 1));
+      if (raw != null && raw > 0) out.add(raw);
+    }
+    for (final big in data.units) {
+      for (final mid in big.mids) {
+        for (final small in mid.smalls) {
+          if (!isSmallFullyChecked(small)) continue;
+          out.addAll(small.metadataPageNumbers);
+        }
+      }
+    }
+    return out;
+  }
+
+  List<int> get visiblePdfRawPagesSorted {
+    final pages = visiblePdfRawPages.toList()..sort();
+    return pages;
+  }
 
   /// 우측 상단 FAB 타이틀. 선택 범위가 한 소단원 안이면 소단원명,
   /// 여러 소단원이면 가능한 가장 가까운 공통 중단원/대단원명으로 축약한다.
@@ -346,8 +509,128 @@ class TextbookExplorerController extends ChangeNotifier {
   }
 
   String get currentScopeCountLabel {
-    final count = visibleItems.length;
+    final count = displayItems.length;
     return count <= 0 ? '' : '$count문항';
+  }
+
+  void toggleTypeFilter(String value) {
+    if (!activeTypeFilters.add(value)) {
+      activeTypeFilters.remove(value);
+    }
+    notifyListeners();
+  }
+
+  void toggleDifficultyFilter(String value) {
+    if (!activeDifficultyFilters.add(value)) {
+      activeDifficultyFilters.remove(value);
+    }
+    notifyListeners();
+  }
+
+  void clearQuestionFilters() {
+    if (!questionFilterActive) return;
+    activeTypeFilters.clear();
+    activeDifficultyFilters.clear();
+    notifyListeners();
+  }
+
+  void randomPickFromVisible(int count, BuildContext context) {
+    final pool = displayItems;
+    if (pool.isEmpty) {
+      showAppSnackBar(context, '선택할 문항이 없습니다.');
+      return;
+    }
+    final pickCount = count.clamp(1, pool.length);
+    final shuffled = List<TbExItem>.from(pool)..shuffle(math.Random());
+    selectedKeys
+      ..clear()
+      ..addAll(shuffled.take(pickCount).map((item) => item.selKey));
+    notifyListeners();
+    showAppSnackBar(context, '$pickCount문항을 무작위로 선택했습니다.');
+  }
+
+  void toggleSelectAllVisible() {
+    final visible = displayItems;
+    if (visible.isEmpty) return;
+    final allSelected =
+        visible.every((item) => selectedKeys.contains(item.selKey));
+    for (final item in visible) {
+      if (allSelected) {
+        selectedKeys.remove(item.selKey);
+      } else {
+        selectedKeys.add(item.selKey);
+      }
+    }
+    notifyListeners();
+  }
+
+  void toggleShowOnlyCart(BuildContext context) {
+    if (showOnlyCart) {
+      showOnlyCart = false;
+      notifyListeners();
+      return;
+    }
+    if (cartKeys.isEmpty) {
+      showAppSnackBar(context, '장바구니에 추가된 문항이 없습니다.');
+      return;
+    }
+    showOnlyCart = true;
+    notifyListeners();
+  }
+
+  void clearCart() {
+    if (cartKeys.isEmpty) return;
+    cartKeys.clear();
+    showOnlyCart = false;
+    notifyListeners();
+  }
+
+  void patchExportSettings(LearningProblemExportSettings next) {
+    exportSettings = next;
+    notifyListeners();
+  }
+
+  void setExportLayoutColumns(String value) {
+    final options = maxQuestionsPerPageOptionsOf(value);
+    final current = exportSettings.maxQuestionsPerPageLabel.trim();
+    final parsed = int.tryParse(current);
+    final nextMax = (current == '많이')
+        ? '많이'
+        : (parsed != null && options.contains(parsed))
+            ? '$parsed'
+            : '${options.last}';
+    exportSettings = exportSettings.copyWith(
+      layoutColumnLabel: value,
+      maxQuestionsPerPageLabel: nextMax,
+    );
+    notifyListeners();
+  }
+
+  Future<void> openExportLayoutPreview(BuildContext context) async {
+    final uids = makeTargetQuestionUids;
+    if (uids.isEmpty) {
+      showAppSnackBar(context, '레이아웃 미리보기할 문항을 먼저 선택해주세요.');
+      return;
+    }
+    if (isExporting) return;
+    isExporting = true;
+    notifyListeners();
+    try {
+      await _exportLauncher.openLayoutPreview(
+        context: context,
+        academyId: academyId,
+        questionUids: uids,
+        settings: exportSettings,
+        onSettingsChanged: patchExportSettings,
+        onActiveJobChanged: (job) {
+          activeExportJob = job;
+          notifyListeners();
+        },
+      );
+    } finally {
+      isExporting = false;
+      notifyListeners();
+    }
   }
 
   void toggleSelectKey(String selKey) {
@@ -390,20 +673,23 @@ class TextbookExplorerController extends ChangeNotifier {
   int get cartCount => cartKeys.length;
 
   void addSelectedToCart(BuildContext context) {
-    if (selectedKeys.isEmpty) {
-      showAppSnackBar(context, '먼저 문항을 선택하세요.');
+    final selected = displayItems
+        .where((item) => selectedKeys.contains(item.selKey))
+        .toList(growable: false);
+    if (selected.isEmpty) {
+      showAppSnackBar(context, '추가할 문항을 먼저 체크해주세요.');
       return;
     }
     var added = 0;
-    for (final key in selectedKeys) {
-      if (cartKeys.contains(key)) continue;
-      cartKeys.add(key);
+    for (final item in selected) {
+      if (cartKeys.contains(item.selKey)) continue;
+      cartKeys.add(item.selKey);
       added += 1;
     }
     notifyListeners();
     showAppSnackBar(
       context,
-      added > 0 ? '장바구니에 $added개 담았습니다.' : '이미 담긴 문항입니다.',
+      added > 0 ? '장바구니에 $added문항을 추가했습니다.' : '이미 장바구니에 담긴 문항입니다.',
     );
   }
 
@@ -917,10 +1203,12 @@ class _MiniIconButton extends StatelessWidget {
 // =========================================================== RIGHT CONTENT
 
 /// 교재·시험 카드 그리드와 동일한 상단 타이틀 밴드 높이.
+const double _tbExTitleOverlayTop = FabTabBarTokens.previewAcademyTopInset - 12;
+const double _tbExTitleLineHeight =
+    FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+const double _tbExHeaderBackButtonGap = 16.0;
 const double _tbExScrollTopPadding =
-    (FabTabBarTokens.previewAcademyTopInset - 12) +
-    FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15 +
-    12;
+    _tbExTitleOverlayTop + _tbExTitleLineHeight + 12;
 
 /// 우측 문항 리스트·헤더 좌측 기준선(유형 체크박스 열).
 const double _tbExContentHorizontalInset = 4.0;
@@ -944,40 +1232,48 @@ class TextbookExplorerContent extends StatelessWidget {
         final brightness = Theme.of(context).brightness;
         final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
         return Stack(
+          clipBehavior: Clip.none,
           children: [
             Positioned.fill(
               child: _buildBody(context, style),
             ),
             Positioned(
-              top: FabTabBarTokens.previewAcademyTopInset - 12,
-              left: _tbExContentHorizontalInset,
+              top: _tbExTitleOverlayTop,
+              left: _tbExContentHorizontalInset +
+                  FabTabBarTokens.fabBarHeight +
+                  _tbExHeaderBackButtonGap,
               right: 12,
-              child: _buildHeader(context, style),
+              child: IgnorePointer(
+                child: FabStyleScreenMainTitle(
+                  title: controller.currentScopeTitle,
+                  overlay: true,
+                  maxLines: 1,
+                ),
+              ),
             ),
+            Positioned(
+              top: _tbExTitleOverlayTop +
+                  (_tbExTitleLineHeight - FabTabBarTokens.fabBarHeight) / 2,
+              left: _tbExContentHorizontalInset,
+              child: _SolidCircleActionButton(
+                icon: Icons.arrow_back_rounded,
+                tooltip: '교재 목록으로 돌아가기',
+                size: FabTabBarTokens.fabBarHeight,
+                iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
+                onPressed: () => controller.onClose?.call(),
+              ),
+            ),
+            if (controller.hasSelectionFilter &&
+                !controller.loading &&
+                controller.data.hasQuestions)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: _TbExExportOptionsFab(controller: controller),
+              ),
           ],
         );
       },
-    );
-  }
-
-  Widget _buildHeader(BuildContext context, PreviewAcademyPanelStyle style) {
-    return Row(
-      children: [
-        _SolidCircleActionButton(
-          icon: Icons.arrow_back_rounded,
-          tooltip: '교재 목록으로 돌아가기',
-          size: FabTabBarTokens.fabBarHeight,
-          iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
-          onPressed: () => controller.onClose?.call(),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: _ScopeTitleText(
-            title: controller.currentScopeTitle,
-            style: style,
-          ),
-        ),
-      ],
     );
   }
 
@@ -1023,11 +1319,15 @@ class TextbookExplorerContent extends StatelessWidget {
         ),
       );
     }
-    final items = controller.visibleItems;
+    final items = controller.displayItems;
     if (items.isEmpty) {
       return Center(
         child: Text(
-          '선택한 범위에 표시할 문항이 없습니다.',
+          controller.showOnlyCart
+              ? '장바구니에 표시할 문항이 없습니다.'
+              : controller.questionFilterActive
+                  ? '필터 조건에 맞는 문항이 없습니다.'
+                  : '선택한 범위에 표시할 문항이 없습니다.',
           style: TextStyle(color: style.hint, fontSize: 14),
         ),
       );
@@ -1070,8 +1370,7 @@ class TextbookExplorerContent extends StatelessWidget {
                     children: [
                       for (final item in groupItems)
                         MouseRegion(
-                          onEnter: (_) =>
-                              controller.enterItemDrag(item.selKey),
+                          onEnter: (_) => controller.enterItemDrag(item.selKey),
                           child: Listener(
                             onPointerDown: (event) {
                               if (event.buttons == kPrimaryMouseButton) {
@@ -1176,6 +1475,22 @@ class TextbookExplorerContent extends StatelessWidget {
         ),
       );
     }
+    if (!controller.hasSelectionFilter) {
+      return Center(
+        child: Text(
+          '왼쪽 단원 트리에서 소단원 또는 페이지를 체크하세요.',
+          style: TextStyle(color: style.hint, fontSize: 14),
+        ),
+      );
+    }
+    if (controller.visiblePdfRawPages.isEmpty) {
+      return Center(
+        child: Text(
+          '표시할 페이지가 없습니다.',
+          style: TextStyle(color: style.hint, fontSize: 14),
+        ),
+      );
+    }
     final source = controller.pdfSource;
     if (source == null) {
       return Center(
@@ -1185,90 +1500,303 @@ class TextbookExplorerContent extends StatelessWidget {
         ),
       );
     }
-    return Padding(
-      padding: const EdgeInsets.only(top: _tbExScrollTopPadding),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(
-          FabTabBarTokens.previewAcademyGroupedCardRadius,
-        ),
+    return Positioned.fill(
+      child: Listener(
+        onPointerUp: (_) => controller.finishItemDrag(),
+        onPointerCancel: (_) => controller.cancelItemDrag(),
         child: _PdfViewer(controller: controller),
       ),
     );
   }
 }
 
-class _ScopeTitleText extends StatelessWidget {
-  const _ScopeTitleText({
-    required this.title,
-    required this.style,
-  });
-
-  final String title;
-  final PreviewAcademyPanelStyle style;
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Text(
-        title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
-      ),
-    );
-  }
-}
-
 // =============================================================== PDF VIEWER
-class _PdfViewer extends StatelessWidget {
+class _PdfViewer extends StatefulWidget {
   const _PdfViewer({required this.controller});
 
   final TextbookExplorerController controller;
 
-  PdfPageLayout _layout(List<PdfPage> pages, PdfViewerParams params) {
-    var maxWidth = 0.0;
-    for (final p in pages) {
-      if (p.width > maxWidth) maxWidth = p.width;
+  static const double _colGap = 4.0;
+  static const double _rowGap = 16.0;
+  static const double _pageMargin = 4.0;
+
+  static PdfPageLayout layoutTwoPageSpread(
+    List<PdfPage> pages,
+    PdfViewerParams params,
+    Set<int> visibleRawPages,
+  ) {
+    if (pages.isEmpty) {
+      return PdfPageLayout(
+        pageLayouts: const <Rect>[],
+        documentSize: Size.zero,
+      );
     }
-    final width = maxWidth + params.margin * 2;
-    const pageGap = 18.0;
+
+    final visibleNumbers = visibleRawPages.toList()..sort();
+    final visible = <PdfPage>[
+      for (final pageNumber in visibleNumbers)
+        for (final page in pages)
+          if (page.pageNumber == pageNumber) page,
+    ];
+
+    if (visible.isEmpty) {
+      return PdfPageLayout(
+        pageLayouts: List<Rect>.filled(
+          pages.length,
+          const Rect.fromLTWH(0, 0, 1, 1),
+        ),
+        documentSize: const Size(1, 1),
+      );
+    }
+
+    final colGap = _colGap;
+    final rowGap = _rowGap;
+    final layoutsByPage = <int, Rect>{};
     var y = params.margin;
-    final layouts = <Rect>[];
-    for (final p in pages) {
-      final x = (width - p.width) / 2.0;
-      layouts.add(Rect.fromLTWH(x, y, p.width, p.height));
-      y += p.height + pageGap;
+    var maxRowWidth = 0.0;
+
+    for (var i = 0; i < visible.length; i += 2) {
+      final left = visible[i];
+      final right = (i + 1) < visible.length ? visible[i + 1] : null;
+      final rowWidth =
+          right == null ? left.width : left.width + colGap + right.width;
+      maxRowWidth = math.max(maxRowWidth, rowWidth);
     }
+
+    final totalWidth = math.max(maxRowWidth + params.margin * 2, 1.0);
+
+    for (var i = 0; i < visible.length; i += 2) {
+      final left = visible[i];
+      final right = (i + 1) < visible.length ? visible[i + 1] : null;
+      final rowWidth =
+          right == null ? left.width : left.width + colGap + right.width;
+      final startX = (totalWidth - rowWidth) / 2;
+      layoutsByPage[left.pageNumber] =
+          Rect.fromLTWH(startX, y, left.width, left.height);
+      if (right != null) {
+        layoutsByPage[right.pageNumber] = Rect.fromLTWH(
+          startX + left.width + colGap,
+          y,
+          right.width,
+          right.height,
+        );
+      }
+      final rowHeight = math.max(left.height, right?.height ?? 0);
+      y += rowHeight + rowGap;
+    }
+
+    final documentHeight = math.max(y + params.margin, 1.0);
+
     return PdfPageLayout(
-      pageLayouts: layouts,
-      documentSize: Size(width, y + params.margin),
+      pageLayouts: [
+        for (final page in pages)
+          layoutsByPage[page.pageNumber] ??
+              Rect.fromLTWH(0, documentHeight + page.pageNumber, 1, 1),
+      ],
+      documentSize: Size(totalWidth, documentHeight + pages.length + 1),
     );
   }
 
-  PdfViewerParams _params() {
+  static int initialPageNumber(Set<int> visibleRawPages) {
+    final sorted = visibleRawPages.toList()..sort();
+    return sorted.isEmpty ? 1 : sorted.first;
+  }
+
+  static double spreadFitZoom(
+    PdfDocument document,
+    Set<int> visibleRawPages,
+    Size viewSize, {
+    double margin = _pageMargin,
+    double minScale = 0.1,
+    double maxScale = 8,
+  }) {
+    if (viewSize.width <= 0) return minScale;
+    final layoutParams = PdfViewerParams(margin: margin);
+    final layout = layoutTwoPageSpread(
+      document.pages,
+      layoutParams,
+      visibleRawPages,
+    );
+    final docWidth = layout.documentSize.width;
+    if (docWidth <= 0) return minScale;
+    // 표시 영역 너비에 맞춤 — 가로 스크롤 없음, 높이는 넘치면 세로 스크롤.
+    return (viewSize.width / docWidth).clamp(minScale, maxScale);
+  }
+
+  static Matrix4 widthFitMatrix(
+    PdfDocument document,
+    PdfViewerController ctrl,
+    Set<int> visibleRawPages,
+    Size viewSize,
+  ) {
+    final zoom = spreadFitZoom(document, visibleRawPages, viewSize);
+    final layout = layoutTwoPageSpread(
+      document.pages,
+      PdfViewerParams(margin: _pageMargin),
+      visibleRawPages,
+    );
+    final initialPage = initialPageNumber(visibleRawPages);
+    final pageRect = layout.pageLayouts[initialPage - 1];
+    final anchorY = pageRect.top + pageRect.height * 0.05;
+    return ctrl.calcMatrixFor(
+      Offset(layout.documentSize.width / 2, anchorY),
+      zoom: zoom,
+      viewSize: viewSize,
+    );
+  }
+
+  @override
+  State<_PdfViewer> createState() => _PdfViewerState();
+}
+
+class _PdfViewerState extends State<_PdfViewer> {
+  Set<int> _layoutVisiblePages = const <int>{};
+  Key _viewerKey = const ValueKey<String>('tbex-pdf-empty');
+  bool _widthFitReady = false;
+
+  void _syncViewerKey(Set<int> visiblePages) {
+    if (Set<int>.from(visiblePages).containsAll(_layoutVisiblePages) &&
+        visiblePages.length == _layoutVisiblePages.length) {
+      return;
+    }
+    _layoutVisiblePages = Set<int>.from(visiblePages);
+    final sorted = visiblePages.toList()..sort();
+    _viewerKey = ValueKey<String>('tbex-pdf-${sorted.join(',')}');
+    _widthFitReady = false;
+  }
+
+  Future<void> _applyWidthFit(
+    PdfDocument document,
+    PdfViewerController ctrl,
+    Set<int> visiblePages,
+    Size viewSize,
+  ) async {
+    if (!ctrl.isReady || viewSize.width <= 0) return;
+    final matrix = _PdfViewer.widthFitMatrix(
+      document,
+      ctrl,
+      visiblePages,
+      viewSize,
+    );
+    await ctrl.goTo(matrix, duration: Duration.zero);
+  }
+
+  Future<void> _scheduleWidthFit(
+    PdfDocument document,
+    PdfViewerController ctrl,
+    Set<int> visiblePages,
+    Size viewSize,
+  ) async {
+    // pdfrx 초기화 시 _goToPage가 너비 맞춤 줌을 덮어쓰므로 여러 번 재적용한다.
+    for (final delay in [
+      Duration.zero,
+      const Duration(milliseconds: 16),
+      const Duration(milliseconds: 80),
+      const Duration(milliseconds: 180),
+      const Duration(milliseconds: 360),
+    ]) {
+      await Future<void>.delayed(delay);
+      if (!mounted) return;
+      final latestViewSize =
+          ctrl.isReady && ctrl.viewSize.width > 0 ? ctrl.viewSize : viewSize;
+      if (!ctrl.isReady || latestViewSize.width <= 0) continue;
+      await _applyWidthFit(document, ctrl, visiblePages, latestViewSize);
+    }
+    if (mounted && !_widthFitReady) {
+      setState(() => _widthFitReady = true);
+    }
+  }
+
+  PdfViewerParams _params(
+    Set<int> visibleRawPages,
+    Color backgroundColor,
+    Size hostSize,
+  ) {
+    final initialPage = _PdfViewer.initialPageNumber(visibleRawPages);
+    final fitViewSize = Size(
+      hostSize.width > 0 ? hostSize.width : 1,
+      hostSize.height > 0 ? hostSize.height : 1,
+    );
     return PdfViewerParams(
-      margin: 8,
-      layoutPages: _layout,
+      margin: _PdfViewer._pageMargin,
+      backgroundColor: backgroundColor,
+      layoutPages: (pages, params) =>
+          _PdfViewer.layoutTwoPageSpread(pages, params, visibleRawPages),
       pageAnchor: PdfPageAnchor.top,
+      panAxis: PanAxis.vertical,
+      pageDropShadow: null,
+      panEnabled: !widget.controller.itemDragActive,
       maxScale: 8,
-      minScale: 0.1,
-      calculateInitialZoom: (document, ctrl, fitZoom, coverZoom) => fitZoom,
+      minScale: 0.05,
+      useAlternativeFitScaleAsMinScale: false,
+      calculateInitialPageNumber: (_, __) => initialPage,
+      calculateInitialZoom: (document, ctrl, fitZoom, coverZoom) {
+        return _PdfViewer.spreadFitZoom(
+          document,
+          visibleRawPages,
+          fitViewSize,
+        );
+      },
+      normalizeMatrix: (matrix, viewSize, layout, ctrl) {
+        if (ctrl == null) return matrix;
+        final docWidth = layout.documentSize.width;
+        final zoom = matrix.zoom.clamp(0.05, 8.0);
+        final pos = matrix.calcPosition(viewSize);
+        final scaledW = docWidth * zoom;
+        final hw = viewSize.width / 2 / zoom;
+        final hh = viewSize.height / 2 / zoom;
+        final x = scaledW <= viewSize.width + 1
+            ? docWidth / 2
+            : pos.dx.clamp(hw, docWidth - hw);
+        final minY = hh;
+        final maxY = layout.documentSize.height - hh;
+        final y = minY > maxY
+            ? layout.documentSize.height / 2
+            : pos.dy.clamp(minY, maxY);
+        return ctrl.calcMatrixFor(
+          Offset(x, y),
+          zoom: zoom,
+          viewSize: viewSize,
+        );
+      },
+      onViewerReady: (document, ctrl) {
+        final viewSize = ctrl.isReady && ctrl.viewSize.width > 0
+            ? ctrl.viewSize
+            : fitViewSize;
+        unawaited(_scheduleWidthFit(document, ctrl, visibleRawPages, viewSize));
+      },
+      onViewSizeChanged: (viewSize, oldViewSize, ctrl) {
+        if (!ctrl.isReady || viewSize == oldViewSize) return;
+        ctrl.useDocument(
+          (document) => _applyWidthFit(
+            document,
+            ctrl,
+            visibleRawPages,
+            viewSize,
+          ),
+        );
+      },
       pageOverlaysBuilder: (context, pageRect, page) {
-        final items = controller.itemsByPage[page.pageNumber];
+        if (!visibleRawPages.contains(page.pageNumber)) {
+          return const <Widget>[];
+        }
+        final items = widget.controller.itemsByPage[page.pageNumber];
         if (items == null || items.isEmpty) return const <Widget>[];
+        final displayKeys = widget.controller.displaySelKeys;
         final w = pageRect.width;
         final h = pageRect.height;
         return [
           for (final item in items)
-            if (item.hasRegion)
-              _PdfRegionOverlay(
-                left: w * item.xmin,
-                top: h * item.ymin,
-                width: w * (item.xmax - item.xmin),
-                height: h * (item.ymax - item.ymin),
-                label: item.displayNumber,
-                selected: controller.isSelected(item.selKey),
-                onTap: () => controller.toggleSelectKey(item.selKey),
+            if (item.hasRegion &&
+                !item.isSetHeader &&
+                item.problemNumber.trim().isNotEmpty &&
+                displayKeys.contains(item.selKey))
+              _PdfProblemOverlay(
+                controller: widget.controller,
+                item: item,
+                pageItems: items,
+                pageWidth: w,
+                pageHeight: h,
               ),
         ];
       },
@@ -1277,84 +1805,319 @@ class _PdfViewer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final source = controller.pdfSource!;
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, _) {
-        switch (source.type) {
-          case TextbookPdfSourceType.localFile:
-            final path = source.localPath ?? '';
-            if (path.isEmpty) return const SizedBox.shrink();
-            return PdfViewer.file(
-              path,
-              controller: controller.pdfController,
-              params: _params(),
-            );
-          case TextbookPdfSourceType.legacyUrl:
-          case TextbookPdfSourceType.remoteUrl:
-            final uri = Uri.tryParse(source.url ?? '');
-            if (uri == null) return const SizedBox.shrink();
-            return PdfViewer.uri(
-              uri,
-              controller: controller.pdfController,
-              params: _params(),
-            );
-        }
-      },
+    final source = widget.controller.pdfSource!;
+    final backgroundColor = context.yggSurfaceBase;
+    return ColoredBox(
+      color: backgroundColor,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final hostSize = Size(constraints.maxWidth, constraints.maxHeight);
+          return ListenableBuilder(
+            listenable: widget.controller,
+            builder: (context, _) {
+              final visiblePages = widget.controller.visiblePdfRawPages;
+              _syncViewerKey(visiblePages);
+              final params = _params(visiblePages, backgroundColor, hostSize);
+              final initialPage = _PdfViewer.initialPageNumber(visiblePages);
+              switch (source.type) {
+                case TextbookPdfSourceType.localFile:
+                  final path = source.localPath ?? '';
+                  if (path.isEmpty) return const SizedBox.shrink();
+                  return Opacity(
+                    opacity: _widthFitReady ? 1 : 0,
+                    child: PdfViewer.file(
+                      path,
+                      key: _viewerKey,
+                      initialPageNumber: initialPage,
+                      controller: widget.controller.pdfController,
+                      params: params,
+                    ),
+                  );
+                case TextbookPdfSourceType.legacyUrl:
+                case TextbookPdfSourceType.remoteUrl:
+                  final uri = Uri.tryParse(source.url ?? '');
+                  if (uri == null) return const SizedBox.shrink();
+                  return Opacity(
+                    opacity: _widthFitReady ? 1 : 0,
+                    child: PdfViewer.uri(
+                      uri,
+                      key: _viewerKey,
+                      initialPageNumber: initialPage,
+                      controller: widget.controller.pdfController,
+                      params: params,
+                    ),
+                  );
+              }
+            },
+          );
+        },
+      ),
     );
   }
 }
 
-class _PdfRegionOverlay extends StatelessWidget {
-  const _PdfRegionOverlay({
-    required this.left,
-    required this.top,
-    required this.width,
-    required this.height,
-    required this.label,
-    required this.selected,
-    required this.onTap,
+class _PdfProblemOverlay extends StatelessWidget {
+  const _PdfProblemOverlay({
+    required this.controller,
+    required this.item,
+    required this.pageItems,
+    required this.pageWidth,
+    required this.pageHeight,
   });
 
-  final double left;
-  final double top;
-  final double width;
-  final double height;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
+  final TextbookExplorerController controller;
+  final TbExItem item;
+  final List<TbExItem> pageItems;
+  final double pageWidth;
+  final double pageHeight;
+
+  static const Color _accent = Color(0xFF33A373);
+  static const double _numberPadRatio = 0.03;
+  /// B단계 등 큰 문항에서 쓰는 통일 최대 체크 배지 크기.
+  static const double _checkMaxSize = 40.0;
+
+  /// 최소 = 문항번호 하이라이트 높이, 최대 = 크롭 안에 들어가는 [_checkMaxSize].
+  double _checkBadgeSize(double numberHeight, double hitW, double hitH) {
+    final cropLimit = math.min(hitW, hitH);
+    if (cropLimit <= 0) return numberHeight;
+    final minSize = math.min(numberHeight, cropLimit);
+    final ideal = math.min(_checkMaxSize, cropLimit);
+    return ideal.clamp(minSize, cropLimit);
+  }
+
+  ({double left, double top, double width, double height}) _bboxRect() {
+    if (item.hasNumberRegion) {
+      return (
+        left: pageWidth * item.numberXmin!,
+        top: pageHeight * item.numberYmin!,
+        width: pageWidth * (item.numberXmax! - item.numberXmin!),
+        height: pageHeight * (item.numberYmax! - item.numberYmin!),
+      );
+    }
+    final itemW = pageWidth * (item.xmax - item.xmin);
+    final itemH = pageHeight * (item.ymax - item.ymin);
+    return (
+      left: pageWidth * item.xmin,
+      top: pageHeight * item.ymin,
+      width: math.min(itemW * 0.22, 48.0),
+      height: math.min(itemH * 0.18, 32.0),
+    );
+  }
+
+  /// bbox 안에서 문항번호(숫자)만 — 난이도·서술형 라벨은 제외.
+  ({double left, double top, double width, double height, double fontSize})
+      _numberPaintRect() {
+    final bbox = _bboxRect();
+    final padX = bbox.width * _numberPadRatio;
+    final padY = bbox.height * _numberPadRatio;
+    final fontSize = (bbox.height * 0.62).clamp(5.0, 16.0).toDouble();
+
+    var left = bbox.left - padX;
+    var top = bbox.top - padY;
+    var width = bbox.width + padX * 2;
+    var height = bbox.height + padY * 2;
+
+    if (left < 0) {
+      width += left;
+      left = 0;
+    }
+    if (top < 0) {
+      height += top;
+      top = 0;
+    }
+    if (left + width > pageWidth) {
+      width = pageWidth - left;
+    }
+    if (top + height > pageHeight) {
+      height = pageHeight - top;
+    }
+
+    return (
+      left: left,
+      top: top,
+      width: math.max(width, 1.0),
+      height: math.max(height, 1.0),
+      fontSize: fontSize,
+    );
+  }
+
+  TbExItem? _itemAtPageOffset(Offset pageOffset) {
+    for (final candidate in pageItems.reversed) {
+      if (!candidate.hasRegion ||
+          candidate.isSetHeader ||
+          candidate.problemNumber.trim().isEmpty) {
+        continue;
+      }
+      final rect = Rect.fromLTRB(
+        pageWidth * candidate.xmin,
+        pageHeight * candidate.ymin,
+        pageWidth * candidate.xmax,
+        pageHeight * candidate.ymax,
+      );
+      if (rect.contains(pageOffset)) return candidate;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final border = selected ? const Color(0xFF33A373) : const Color(0x667AA9E6);
-    final fill = selected ? const Color(0x3333A373) : Colors.transparent;
+    final hitLeft = pageWidth * item.xmin;
+    final hitTop = pageHeight * item.ymin;
+    final hitW = pageWidth * (item.xmax - item.xmin);
+    final hitH = pageHeight * (item.ymax - item.ymin);
+    final numberRect = _numberPaintRect();
+    final hlLeft = numberRect.left - hitLeft;
+    final hlTop = numberRect.top - hitTop;
+    final checkSize =
+        _checkBadgeSize(numberRect.height, hitW, hitH);
+
     return Positioned(
-      left: left,
-      top: top,
-      width: width,
-      height: height,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          decoration: BoxDecoration(
-            color: fill,
-            border: Border.all(color: border, width: selected ? 2 : 1),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          padding: const EdgeInsets.only(left: 4, top: 2),
-          alignment: Alignment.topLeft,
-          child: Text(
-            label,
-            style: TextStyle(
-              color:
-                  selected ? const Color(0xFF14361F) : const Color(0xCC7AA9E6),
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
-              height: 1,
+      left: hitLeft,
+      top: hitTop,
+      width: hitW,
+      height: hitH,
+      child: AnimatedBuilder(
+        animation: Listenable.merge([
+          controller,
+          controller.pdfHoverSelKey,
+        ]),
+        builder: (context, _) {
+          final hovered = controller.pdfHoverSelKey.value == item.selKey &&
+              !controller.isItemEffectivelySelected(item.selKey);
+          final selected = controller.isItemEffectivelySelected(item.selKey);
+          return MouseRegion(
+            onEnter: (_) {
+              controller.setPdfHover(item.selKey);
+              controller.enterItemDrag(item.selKey);
+            },
+            onExit: (_) {
+              if (controller.pdfHoverSelKey.value == item.selKey) {
+                controller.setPdfHover(null);
+              }
+            },
+            child: Listener(
+              onPointerDown: (event) {
+                if (event.buttons == kPrimaryMouseButton) {
+                  controller.startItemDrag(item.selKey);
+                }
+              },
+              onPointerMove: (event) {
+                if (!controller.itemDragActive) return;
+                final pageOffset = Offset(
+                  hitLeft + event.localPosition.dx,
+                  hitTop + event.localPosition.dy,
+                );
+                final hoveredItem = _itemAtPageOffset(pageOffset);
+                if (hoveredItem != null) {
+                  controller.enterItemDrag(hoveredItem.selKey);
+                }
+              },
+              onPointerUp: (_) => controller.finishItemDrag(),
+              onPointerCancel: (_) => controller.cancelItemDrag(),
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                dragStartBehavior: DragStartBehavior.down,
+                onTap: () => controller.toggleSelectKey(item.selKey),
+                onPanStart: (_) {
+                  if (!controller.itemDragActive) {
+                    controller.startItemDrag(item.selKey);
+                  }
+                },
+                onPanUpdate: (details) {
+                  final pageOffset = Offset(
+                    hitLeft + details.localPosition.dx,
+                    hitTop + details.localPosition.dy,
+                  );
+                  final hoveredItem = _itemAtPageOffset(pageOffset);
+                  if (hoveredItem != null) {
+                    controller.enterItemDrag(hoveredItem.selKey);
+                  }
+                },
+                onPanEnd: (_) => controller.finishItemDrag(),
+                onPanCancel: controller.cancelItemDrag,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    if (selected)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Center(
+                            child: Container(
+                              width: checkSize,
+                              height: checkSize,
+                              decoration: const BoxDecoration(
+                                color: _accent,
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(
+                                Icons.check,
+                                size: (checkSize * 0.62)
+                                    .clamp(numberRect.height * 0.45, checkSize * 0.72),
+                                weight: 900,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (hovered)
+                      Positioned(
+                        left: hlLeft,
+                        top: hlTop,
+                        width: numberRect.width,
+                        height: numberRect.height,
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: const Color(0x337AA9E6),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (selected)
+                      Positioned(
+                        left: hlLeft,
+                        top: hlTop,
+                        width: numberRect.width,
+                        height: numberRect.height,
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: _accent,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Center(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 2,
+                                  ),
+                                  child: Text(
+                                    item.problemNumber.trim(),
+                                    maxLines: 1,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: numberRect.fontSize,
+                                      fontWeight: FontWeight.w800,
+                                      height: 1,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -1519,6 +2282,197 @@ class _DiffDot extends StatelessWidget {
 }
 
 // ================================================================= FAB BAR
+class TbExModeFabBar {
+  TbExModeFabBar._();
+
+  static const double _compactPillWidth = 88;
+
+  static List<Widget> leadingPills({
+    required TbExRightMode mode,
+    required bool enabled,
+    required VoidCallback onQuestionsMode,
+    required VoidCallback onPdfMode,
+  }) {
+    final disabled = !enabled;
+    return [
+      FabStyleActionTabPill(
+        icon: Icons.grid_view_rounded,
+        label: '문항',
+        selected: mode == TbExRightMode.questions,
+        enabled: !disabled,
+        onTap: onQuestionsMode,
+        width: _compactPillWidth,
+      ),
+      FabStyleActionTabPill(
+        icon: Icons.picture_as_pdf_outlined,
+        label: '원본',
+        selected: mode == TbExRightMode.pdf,
+        enabled: !disabled,
+        onTap: onPdfMode,
+        width: _compactPillWidth,
+      ),
+    ];
+  }
+}
+
+class _TbExExportOptionsFab extends StatelessWidget {
+  const _TbExExportOptionsFab({required this.controller});
+
+  final TextbookExplorerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final busy = controller.isExporting;
+        return ProblemBankExportOptionsFab(
+          isBusy: busy,
+          panel: _TbExExportOptionsPanel(controller: controller),
+          filterButton: ProblemBankFilterMenuButton(
+            disabled: busy,
+            filterActive: controller.questionFilterActive,
+            typeFilterOptions: controller.typeFilterOptions,
+            difficultyFilterOptions: controller.difficultyFilterOptions,
+            selectedTypeFilters: controller.activeTypeFilters,
+            selectedDifficultyFilters: controller.activeDifficultyFilters,
+            visibleQuestionCount: controller.displayItems.length,
+            onToggleTypeFilter: controller.toggleTypeFilter,
+            onToggleDifficultyFilter: controller.toggleDifficultyFilter,
+            onClearFilters: controller.clearQuestionFilters,
+            onRandomPick: (count) =>
+                controller.randomPickFromVisible(count, context),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TbExExportOptionsPanel extends StatelessWidget {
+  const _TbExExportOptionsPanel({required this.controller});
+
+  final TextbookExplorerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final settings = controller.exportSettings;
+        return ProblemBankExportOptionsPanel(
+          settings: settings,
+          selectedCount: controller.makeTargetCount,
+          isBusy: controller.isExporting,
+          isSavingLocally: false,
+          activeJob: controller.activeExportJob,
+          onTemplateChanged: (value) {
+            if (value == '과제형') {
+              controller.patchExportSettings(
+                settings.copyWith(
+                  templateLabel: value,
+                  paperLabel: 'A4',
+                  layoutColumnLabel: '2단',
+                  maxQuestionsPerPageLabel: '4',
+                ),
+              );
+            } else if (value == '모의고사형' || value == '수능형') {
+              controller.patchExportSettings(
+                settings.copyWith(
+                  templateLabel: value,
+                  paperLabel: 'B4',
+                  layoutColumnLabel: '2단',
+                  maxQuestionsPerPageLabel: '4',
+                ),
+              );
+            } else {
+              controller.patchExportSettings(
+                settings.copyWith(templateLabel: value),
+              );
+            }
+          },
+          onPaperChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(paperLabel: value),
+          ),
+          onQuestionModeChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(questionModeLabel: value),
+          ),
+          onLayoutColumnsChanged: controller.setExportLayoutColumns,
+          onMaxQuestionsPerPageChanged: (value) =>
+              controller.patchExportSettings(
+            settings.copyWith(maxQuestionsPerPageLabel: value),
+          ),
+          onFontFamilyChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(fontFamilyLabel: value),
+          ),
+          onFontSizeChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(fontSizeLabel: value),
+          ),
+          onIncludeAnswerSheetChanged: (value) =>
+              controller.patchExportSettings(
+            settings.copyWith(includeAnswerSheet: value),
+          ),
+          onIncludeExplanationChanged: (value) =>
+              controller.patchExportSettings(
+            settings.copyWith(includeExplanation: value),
+          ),
+          onPageMarginChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning: settings.layoutTuning.copyWith(pageMargin: value),
+            ),
+          ),
+          onColumnGapChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning: settings.layoutTuning.copyWith(columnGap: value),
+            ),
+          ),
+          onQuestionGapChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning: settings.layoutTuning.copyWith(questionGap: value),
+            ),
+          ),
+          onNumberLaneWidthChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning:
+                  settings.layoutTuning.copyWith(numberLaneWidth: value),
+            ),
+          ),
+          onNumberGapChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning: settings.layoutTuning.copyWith(numberGap: value),
+            ),
+          ),
+          onHangingIndentChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning:
+                  settings.layoutTuning.copyWith(hangingIndent: value),
+            ),
+          ),
+          onLineHeightChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning: settings.layoutTuning.copyWith(lineHeight: value),
+            ),
+          ),
+          onChoiceSpacingChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              layoutTuning:
+                  settings.layoutTuning.copyWith(choiceSpacing: value),
+            ),
+          ),
+          onTargetDpiChanged: (value) => controller.patchExportSettings(
+            settings.copyWith(
+              figureQuality: settings.figureQuality.copyWith(
+                targetDpi: value,
+                minDpi: math.min(settings.figureQuality.minDpi, value),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class TbExFabBar extends StatelessWidget {
   const TbExFabBar({
     super.key,
@@ -1543,147 +2497,41 @@ class TbExFabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final palette = FabTabBarTokens.paletteFor(brightness);
-    final radius = BorderRadius.circular(FabTabBarTokens.fabBarHeight / 2);
     final disabled = !enabled;
 
-    return Center(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: palette.boxShadows,
+    return FabStyleActionTabBar(
+      children: [
+        FabStyleActionTabPill(
+          icon: Icons.grid_view_rounded,
+          label: '문항',
+          selected: mode == TbExRightMode.questions,
+          enabled: !disabled,
+          onTap: onQuestionsMode,
+          width: 88,
         ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-            ),
-            child: Container(
-              height: FabTabBarTokens.fabBarHeight,
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: palette.surface,
-                borderRadius: radius,
-              ),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _FabPill(
-                      icon: Icons.grid_view_rounded,
-                      label: '문항별',
-                      selected: mode == TbExRightMode.questions,
-                      enabled: !disabled,
-                      onTap: onQuestionsMode,
-                    ),
-                    _FabPill(
-                      icon: Icons.picture_as_pdf_outlined,
-                      label: '원본보기',
-                      selected: mode == TbExRightMode.pdf,
-                      enabled: !disabled,
-                      onTap: onPdfMode,
-                      width: 128,
-                    ),
-                    _FabPill(
-                      icon: Icons.add_rounded,
-                      label: selectedCount > 0 ? '추가 $selectedCount' : '추가',
-                      selected: false,
-                      enabled: !disabled,
-                      onTap: onAdd,
-                      width: selectedCount > 0 ? 128 : 112,
-                    ),
-                    _FabPill(
-                      icon: Icons.shopping_cart_outlined,
-                      label: cartCount > 0 ? '장바구니 $cartCount' : '장바구니',
-                      selected: false,
-                      enabled: !disabled && cartCount > 0,
-                      onTap: onOpenCart,
-                      width: 144,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        FabStyleActionTabPill(
+          icon: Icons.picture_as_pdf_outlined,
+          label: '원본',
+          selected: mode == TbExRightMode.pdf,
+          enabled: !disabled,
+          onTap: onPdfMode,
+          width: 88,
         ),
-      ),
-    );
-  }
-}
-
-class _FabPill extends StatelessWidget {
-  const _FabPill({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.enabled,
-    required this.onTap,
-    this.width = 112,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final bool enabled;
-  final VoidCallback onTap;
-  final double width;
-
-  @override
-  Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final palette = FabTabBarTokens.paletteFor(brightness);
-    final bg = selected ? palette.highlight : Colors.transparent;
-    final fg = !enabled
-        ? palette.labelUnselected.withValues(alpha: 0.45)
-        : (selected ? palette.labelSelected : palette.labelUnselected);
-
-    return Tooltip(
-      message: label,
-      waitDuration: const Duration(milliseconds: 450),
-      child: SizedBox(
-        width: width,
-        height: double.infinity,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: enabled ? onTap : null,
-              borderRadius: BorderRadius.circular(999),
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, size: 20, color: fg),
-                    const SizedBox(width: 7),
-                    Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily:
-                            FabTabBarTokens.previewAcademyLabelFontFamily,
-                        color: fg,
-                        fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        FabStyleActionTabPill(
+          icon: Icons.add_rounded,
+          label: selectedCount > 0 ? '추가 $selectedCount' : '추가',
+          enabled: !disabled,
+          onTap: onAdd,
+          width: selectedCount > 0 ? 128 : 112,
         ),
-      ),
+        FabStyleActionTabPill(
+          icon: Icons.shopping_cart_outlined,
+          label: cartCount > 0 ? '장바구니 $cartCount' : '장바구니',
+          enabled: !disabled && cartCount > 0,
+          onTap: onOpenCart,
+          width: 144,
+        ),
+      ],
     );
   }
 }
@@ -1751,16 +2599,31 @@ class TextbookExplorerFabOverlay {
       child: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
-          return TbExFabBar(
-            mode: controller.mode,
-            cartCount: controller.cartCount,
-            selectedCount: controller.selectedKeys.length,
-            enabled: !controller.loading && controller.data.hasQuestions,
-            onQuestionsMode: () =>
-                controller.switchMode(TbExRightMode.questions),
-            onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
-            onAdd: () => controller.addSelectedToCart(overlayContext),
-            onOpenCart: () => controller.openCart(overlayContext),
+          final enabled = !controller.loading && controller.data.hasQuestions;
+          final busy = controller.isExporting;
+          return Padding(
+            padding: const EdgeInsets.only(left: _tbExContentHorizontalInset),
+            child: ProblemBankBottomFabBar(
+              alignStart: true,
+              leading: TbExModeFabBar.leadingPills(
+                mode: controller.mode,
+                enabled: enabled,
+                onQuestionsMode: () =>
+                    controller.switchMode(TbExRightMode.questions),
+                onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
+              ),
+              cartCount: controller.cartCount,
+              cartActive: controller.showOnlyCart,
+              allVisibleSelected: controller.allVisibleSelected,
+              isBusy: busy || !enabled,
+              onToggleSelectAll: controller.toggleSelectAllVisible,
+              onToggleCart: () =>
+                  controller.toggleShowOnlyCart(overlayContext),
+              onClearCart: controller.clearCart,
+              onAddToCart: () => controller.addSelectedToCart(overlayContext),
+              onCreate: () =>
+                  controller.openExportLayoutPreview(overlayContext),
+            ),
           );
         },
       ),

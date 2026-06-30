@@ -112,6 +112,11 @@ static volatile bool g_students_received = false;
 static uint32_t g_last_list_request_ms = 0;
 static const uint32_t LIST_REQUEST_RETRY_MS = 6000;
 static bool g_first_ui_data_ready = false;
+// 부팅 때 NVS에서 복원된 바인딩이 학생 정보/숙제 데이터를 못 받으면
+// "학생" 기본명 화면에 갇히지 않도록 등원 리스트로 자동 복귀한다.
+static bool g_restored_binding_guard_active = false;
+static uint32_t g_restored_binding_guard_start_ms = 0;
+static const uint32_t RESTORED_BINDING_DATA_TIMEOUT_MS = 30000;
 
 // GROUP_CMD_V2 (server-authoritative group transition) states
 static const char* GROUP_CMD_V2_TARGET_DEVICE = "m5-device-001";
@@ -419,6 +424,12 @@ void onMqttConnect(bool sessionPresent) {
   // Request initial data: 바인딩된 학생이 있으면 student_info 요청, 없으면 list_today 요청
   String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   if (studentId.length() > 0) {
+    if (g_restored_binding_guard_active && g_restored_binding_guard_start_ms == 0) {
+      g_restored_binding_guard_start_ms = millis();
+      Serial.printf("[BIND][GUARD] restored binding data wait start sid=%s timeout=%lums\n",
+                    studentId.c_str(),
+                    (unsigned long)RESTORED_BINDING_DATA_TIMEOUT_MS);
+    }
     // bind가 서버에 도달해야 m5_bind_device + m5_record_arrival(등원)이 실행됨. LittleFS 복원만 한 경우 첫 연결에서 bind 필요.
     if (!g_mqtt_bind_announced) {
       Serial.printf("[MQTT] Re-announcing bind (등원/바인딩 동기화) for: %s\n", studentId.c_str());
@@ -853,6 +864,8 @@ void setup() {
     if (restoredStudentId.length() > 0) {
       studentId = restoredStudentId;
       g_mqtt_bind_announced = false;
+      g_restored_binding_guard_active = true;
+      g_restored_binding_guard_start_ms = 0;
       Serial.printf("[NVS] restored student_id: %s\n", studentId.c_str());
     }
   }
@@ -1025,6 +1038,7 @@ void loop() {
                     (unsigned)json_copy.length());
       ui_port_update_homeworks(arr);
       g_first_ui_data_ready = true;
+      g_restored_binding_guard_active = false;
       publish_homeworks_sync_ack(meta, (unsigned)arr.size());
     } else {
       Serial.printf("[M5SYNC][parse_error] device=%s student=%s err=%s len=%u\n",
@@ -1094,6 +1108,7 @@ void loop() {
         JsonObject info = doc["info"].as<JsonObject>();
         ui_port_update_student_info(info);
         g_first_ui_data_ready = true;
+        g_restored_binding_guard_active = false;
       }
     }
   }
@@ -1104,6 +1119,26 @@ void loop() {
     portEXIT_CRITICAL(&g_hw_mux);
     fw_clear_local_binding_state();
     ui_port_force_unbind();
+    g_restored_binding_guard_active = false;
+    g_restored_binding_guard_start_ms = 0;
+  }
+
+  if (g_restored_binding_guard_active && studentId.length() > 0
+      && !g_first_ui_data_ready && g_restored_binding_guard_start_ms > 0) {
+    uint32_t ageMs = (nowTick >= g_restored_binding_guard_start_ms)
+        ? (nowTick - g_restored_binding_guard_start_ms)
+        : 0;
+    if (ageMs >= RESTORED_BINDING_DATA_TIMEOUT_MS) {
+      Serial.printf("[BIND][GUARD] restored binding stale %lums -> clear local binding and list_today\n",
+                    (unsigned long)ageMs);
+      g_restored_binding_guard_active = false;
+      g_restored_binding_guard_start_ms = 0;
+      g_students_received = false;
+      g_first_ui_data_ready = false;
+      g_last_list_request_ms = 0;
+      fw_clear_local_binding_state();
+      ui_port_force_unbind();
+    }
   }
 
   lv_timer_handler();

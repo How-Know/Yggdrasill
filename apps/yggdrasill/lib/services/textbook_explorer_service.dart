@@ -43,6 +43,10 @@ class TbExItem {
     required this.ymin,
     required this.xmax,
     required this.ymax,
+    this.numberXmin,
+    this.numberYmin,
+    this.numberXmax,
+    this.numberYmax,
     required this.sortOrder,
   });
 
@@ -67,10 +71,26 @@ class TbExItem {
   final double ymin;
   final double xmax;
   final double ymax;
+
+  /// VLM `bbox_1k` — 원본 PDF에 인쇄된 문항번호 영역 [ymin,xmin,ymax,xmax].
+  final double? numberXmin;
+  final double? numberYmin;
+  final double? numberXmax;
+  final double? numberYmax;
   final int sortOrder;
 
   bool get hasUid => questionUid.trim().isNotEmpty;
   bool get hasRegion => xmax > xmin && ymax > ymin;
+  bool get hasNumberRegion {
+    final nx0 = numberXmin;
+    final ny0 = numberYmin;
+    final nx1 = numberXmax;
+    final ny1 = numberYmax;
+    if (nx0 == null || ny0 == null || nx1 == null || ny1 == null) {
+      return false;
+    }
+    return nx1 > nx0 && ny1 > ny0;
+  }
 
   /// 하이라이트/선택용 안정 키. UID가 없으면 페이지/순서 기반 합성 키.
   String get selKey => hasUid ? questionUid : 'r:$rawPage:$sortOrder';
@@ -113,6 +133,10 @@ class TbExItem {
       ymin: ymin,
       xmax: xmax,
       ymax: ymax,
+      numberXmin: numberXmin,
+      numberYmin: numberYmin,
+      numberXmax: numberXmax,
+      numberYmax: numberYmax,
       sortOrder: sortOrder,
     );
   }
@@ -154,13 +178,17 @@ class TbExSmallUnit {
     required this.order,
     required this.items,
     required this.pages,
-  });
+    Set<int>? metadataPageNumbers,
+  }) : metadataPageNumbers = metadataPageNumbers ?? const <int>{};
 
   final String key;
   final String name;
   final int order;
   final List<TbExItem> items;
   final List<TbExPage> pages;
+
+  /// 메타데이터 start/end·page_counts에 포함된 전체 페이지(개념 페이지 포함).
+  final Set<int> metadataPageNumbers;
 
   int get numberedQuestionCount => items
       .where((e) => !e.isSetHeader && e.problemNumber.trim().isNotEmpty)
@@ -312,12 +340,17 @@ class TextbookExplorerService {
   TbExItem? _itemFromRow(Map<String, dynamic> row, int sortOrder) {
     final rawPage = _toInt(row['raw_page']) ?? 0;
     final region = _toIntList(row['item_region_1k']);
+    final numberBbox = _toIntList(row['bbox_1k']);
     final number = '${row['problem_number'] ?? ''}'.trim();
     final isSetHeader = row['is_set_header'] == true;
     if (number.isEmpty && !isSetHeader) return null;
-    double frac(int index) {
-      if (region == null || region.length != 4) return 0;
-      return (region[index] / 1000.0).clamp(0.0, 1.0);
+    double frac(List<int>? box, int index) {
+      if (box == null || box.length != 4) return 0;
+      return (box[index] / 1000.0).clamp(0.0, 1.0);
+    }
+    double? nfrac(List<int>? box, int index) {
+      if (box == null || box.length != 4) return null;
+      return (box[index] / 1000.0).clamp(0.0, 1.0);
     }
 
     return TbExItem(
@@ -336,10 +369,14 @@ class TextbookExplorerService {
       isSetHeader: isSetHeader,
       setFrom: _toInt(row['set_from']),
       setTo: _toInt(row['set_to']),
-      xmin: frac(1),
-      ymin: frac(0),
-      xmax: frac(3),
-      ymax: frac(2),
+      xmin: frac(region, 1),
+      ymin: frac(region, 0),
+      xmax: frac(region, 3),
+      ymax: frac(region, 2),
+      numberXmin: nfrac(numberBbox, 1),
+      numberYmin: nfrac(numberBbox, 0),
+      numberXmax: nfrac(numberBbox, 3),
+      numberYmax: nfrac(numberBbox, 2),
       sortOrder: sortOrder,
     );
   }
@@ -388,7 +425,15 @@ class TextbookExplorerService {
             final list = itemsByKey[key] ?? const <TbExItem>[];
             if (list.isEmpty) continue;
             usedKeys.add(key);
-            smalls.add(_buildSmall(key, small.name, small.order, list));
+            smalls.add(
+              _buildSmall(
+                key,
+                small.name,
+                small.order,
+                list,
+                small.pageNumbers,
+              ),
+            );
           }
           if (smalls.isEmpty) continue;
           mids.add(
@@ -416,8 +461,9 @@ class TextbookExplorerService {
     String key,
     String name,
     int order,
-    List<TbExItem> items,
-  ) {
+    List<TbExItem> items, [
+    Set<int> metadataPageNumbers = const <int>{},
+  ]) {
     final byPage = <int, List<TbExItem>>{};
     int? displayPageOf(int raw) {
       for (final it in items) {
@@ -445,6 +491,7 @@ class TextbookExplorerService {
       order: order,
       items: items,
       pages: pages,
+      metadataPageNumbers: metadataPageNumbers,
     );
   }
 
@@ -541,6 +588,7 @@ class TextbookExplorerService {
                   order: smallOrder,
                   subKey: subKey,
                   name: smallName.isEmpty ? '소단원' : smallName,
+                  pageNumbers: _metadataPagesForSmall(smallMap),
                 ),
               );
             }
@@ -610,6 +658,27 @@ class TextbookExplorerService {
     return null;
   }
 
+  Set<int> _metadataPagesForSmall(Map<String, dynamic> smallMap) {
+    final pages = <int>{};
+    final start = _toInt(smallMap['start_page']);
+    final end = _toInt(smallMap['end_page']);
+    if (start != null && end != null && start > 0 && end >= start) {
+      for (var page = start; page <= end; page += 1) {
+        pages.add(page);
+      }
+    } else if (start != null && start > 0) {
+      pages.add(start);
+    }
+    final pageCounts = smallMap['page_counts'];
+    if (pageCounts is Map) {
+      for (final key in pageCounts.keys) {
+        final page = _toInt(key);
+        if (page != null && page > 0) pages.add(page);
+      }
+    }
+    return pages;
+  }
+
   List<int>? _toIntList(dynamic value) {
     if (value is! List) return null;
     final out = <int>[];
@@ -637,9 +706,14 @@ class _UnitMetaMid {
 }
 
 class _UnitMetaSmall {
-  _UnitMetaSmall(
-      {required this.order, required this.subKey, required this.name});
+  _UnitMetaSmall({
+    required this.order,
+    required this.subKey,
+    required this.name,
+    required this.pageNumbers,
+  });
   final int order;
   final String subKey;
   final String name;
+  final Set<int> pageNumbers;
 }

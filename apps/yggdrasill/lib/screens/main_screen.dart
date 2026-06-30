@@ -231,6 +231,7 @@ class _UtilityToolButton extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: onPressed,
+          hoverColor: Colors.transparent,
           borderRadius: BorderRadius.circular(
             _UtilityToolbarPanel._buttonSize / 2,
           ),
