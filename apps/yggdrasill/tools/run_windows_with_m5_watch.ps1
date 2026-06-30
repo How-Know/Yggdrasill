@@ -4,7 +4,8 @@ param(
   [string]$FlutterDevice = "windows",
   [switch]$PubGet,
   [switch]$SkipPubGet,
-  [string[]]$FlutterArgs = @()
+  [string[]]$FlutterArgs = @(),
+  [switch]$EnableM5Watch
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,12 +13,7 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appDir = Resolve-Path (Join-Path $scriptDir "..")
 $repoRoot = Resolve-Path (Join-Path $appDir "..\..")
-$watchScript = Join-Path $repoRoot "firmware\m5stack\tools\watch_m5_sync_011.ps1"
 $logsDir = Join-Path $repoRoot ".m5-sync-logs"
-
-if (-not (Test-Path $watchScript)) {
-  throw "M5 sync watcher script not found: $watchScript"
-}
 
 if (-not [string]::IsNullOrWhiteSpace($DeviceId)) {
   $DeviceIds = @($DeviceId)
@@ -26,8 +22,6 @@ $DeviceIds = @($DeviceIds | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($DeviceIds.Count -eq 0) {
   throw "At least one M5 device id is required."
 }
-
-New-Item -ItemType Directory -Force $logsDir | Out-Null
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $watchers = @()
@@ -63,44 +57,55 @@ function Start-AlertTailJob {
 }
 }
 
-foreach ($device in $DeviceIds) {
-  $watchLog = Join-Path $logsDir "m5-sync-$device-$stamp.log"
-  $watchErr = Join-Path $logsDir "m5-sync-$device-$stamp.err.log"
-  New-Item -ItemType File -Force $watchLog | Out-Null
-  New-Item -ItemType File -Force $watchErr | Out-Null
-  $watchArgs = @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-File", "`"$watchScript`"",
-    "-DeviceId", $device,
-    "-Wireless"
-  )
-
-  Write-Host "[run] starting M5 sync watcher for $device"
-  Write-Host "[run] watcher log: $watchLog"
-
-  $watchProcess = Start-Process `
-    -FilePath "powershell" `
-    -ArgumentList $watchArgs `
-    -WorkingDirectory $repoRoot `
-    -RedirectStandardOutput $watchLog `
-    -RedirectStandardError $watchErr `
-    -PassThru `
-    -WindowStyle Hidden
-
-  Start-Sleep -Milliseconds 750
-  if ($watchProcess.HasExited) {
-    throw "M5 sync watcher exited during startup for $device. See: $watchErr"
+if ($EnableM5Watch) {
+  $watchScript = Join-Path $repoRoot "firmware\m5stack\tools\watch_m5_sync_011.ps1"
+  if (-not (Test-Path $watchScript)) {
+    throw "M5 sync watcher script not found: $watchScript"
   }
 
-  $alertTailJob = Start-AlertTailJob -Path $watchLog -DeviceId $device
-  $watchers += [pscustomobject]@{
-    DeviceId = $device
-    Process = $watchProcess
-    AlertTailJob = $alertTailJob
-    WatchLog = $watchLog
-    WatchErr = $watchErr
+  New-Item -ItemType Directory -Force $logsDir | Out-Null
+
+  foreach ($device in $DeviceIds) {
+    $watchLog = Join-Path $logsDir "m5-sync-$device-$stamp.log"
+    $watchErr = Join-Path $logsDir "m5-sync-$device-$stamp.err.log"
+    New-Item -ItemType File -Force $watchLog | Out-Null
+    New-Item -ItemType File -Force $watchErr | Out-Null
+    $watchArgs = @(
+      "-NoProfile",
+      "-ExecutionPolicy", "Bypass",
+      "-File", "`"$watchScript`"",
+      "-DeviceId", $device,
+      "-Wireless"
+    )
+
+    Write-Host "[run] starting M5 sync watcher for $device"
+    Write-Host "[run] watcher log: $watchLog"
+
+    $watchProcess = Start-Process `
+      -FilePath "powershell" `
+      -ArgumentList $watchArgs `
+      -WorkingDirectory $repoRoot `
+      -RedirectStandardOutput $watchLog `
+      -RedirectStandardError $watchErr `
+      -PassThru `
+      -WindowStyle Hidden
+
+    Start-Sleep -Milliseconds 750
+    if ($watchProcess.HasExited) {
+      throw "M5 sync watcher exited during startup for $device. See: $watchErr"
+    }
+
+    $alertTailJob = Start-AlertTailJob -Path $watchLog -DeviceId $device
+    $watchers += [pscustomobject]@{
+      DeviceId = $device
+      Process = $watchProcess
+      AlertTailJob = $alertTailJob
+      WatchLog = $watchLog
+      WatchErr = $watchErr
+    }
   }
+} else {
+  Write-Host "[run] M5 sync watchers disabled. Use -EnableM5Watch only for diagnostics."
 }
 
 function Stop-Watcher {

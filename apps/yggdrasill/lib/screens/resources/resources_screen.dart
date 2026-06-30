@@ -2855,7 +2855,7 @@ const double _textbookCoverA4Ratio = 1.414;
 const double _textbookCardMetaHeight = 77.0;
 const double _textbookCardCoverMetaGap = 14.0;
 const double _textbookGridMaxCardWidth = 240.0;
-const double _textbookGridSpacing = 22.4;
+const double _textbookGridSpacing = 20.0;
 
 /// 자원 그리드(교재·시험·기타) — 최대 카드 너비 상한, 가로 100% 채움.
 ({int columns, double cardWidth}) _fillWidthResourceGridLayout(

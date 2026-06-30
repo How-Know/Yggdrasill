@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -8,6 +9,7 @@ import '../../services/textbook_explorer_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/shared_folder_tree.dart';
+import '../../widgets/solid_capsule_action_bar.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 enum TbExRightMode { questions, pdf }
@@ -166,6 +168,111 @@ class TextbookExplorerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool pageDragActive = false;
+  bool pageDragSelectMode = true;
+  Set<String> pageDragBaseKeys = <String>{};
+  final Set<String> pageDragKeys = <String>{};
+
+  bool isPageEffectivelyChecked(String smallKey, int rawPage) {
+    final pageKey = '$smallKey#$rawPage';
+    if (!pageDragActive) return checkedPageKeys.contains(pageKey);
+    if (pageDragKeys.contains(pageKey)) return pageDragSelectMode;
+    return pageDragBaseKeys.contains(pageKey);
+  }
+
+  void startPageDrag(String pageKey) {
+    final selected = checkedPageKeys.contains(pageKey);
+    pageDragActive = true;
+    pageDragSelectMode = !selected;
+    pageDragBaseKeys = Set<String>.from(checkedPageKeys);
+    pageDragKeys
+      ..clear()
+      ..add(pageKey);
+    notifyListeners();
+  }
+
+  void enterPageDrag(String pageKey) {
+    if (!pageDragActive) return;
+    if (pageDragKeys.contains(pageKey)) return;
+    pageDragKeys.add(pageKey);
+    notifyListeners();
+  }
+
+  void finishPageDrag() {
+    if (!pageDragActive) return;
+    final keys = List<String>.from(pageDragKeys);
+    final selected = pageDragSelectMode;
+    pageDragActive = false;
+    pageDragKeys.clear();
+    pageDragBaseKeys = <String>{};
+    if (keys.isNotEmpty) {
+      togglePageKeys(keys, selected);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void cancelPageDrag() {
+    if (!pageDragActive) return;
+    pageDragActive = false;
+    pageDragKeys.clear();
+    pageDragBaseKeys = <String>{};
+    notifyListeners();
+  }
+
+  bool itemDragActive = false;
+  bool itemDragSelectMode = true;
+  bool itemDragSuppressNextTap = false;
+  Set<String> itemDragBaseKeys = <String>{};
+  final Set<String> itemDragKeys = <String>{};
+
+  bool isItemEffectivelySelected(String selKey) {
+    if (!itemDragActive) return selectedKeys.contains(selKey);
+    if (itemDragKeys.contains(selKey)) return itemDragSelectMode;
+    return itemDragBaseKeys.contains(selKey);
+  }
+
+  void startItemDrag(String selKey) {
+    final selected = selectedKeys.contains(selKey);
+    itemDragActive = true;
+    itemDragSelectMode = !selected;
+    itemDragBaseKeys = Set<String>.from(selectedKeys);
+    itemDragKeys
+      ..clear()
+      ..add(selKey);
+    notifyListeners();
+  }
+
+  void enterItemDrag(String selKey) {
+    if (!itemDragActive) return;
+    if (itemDragKeys.contains(selKey)) return;
+    itemDragKeys.add(selKey);
+    notifyListeners();
+  }
+
+  void finishItemDrag() {
+    if (!itemDragActive) return;
+    final keys = List<String>.from(itemDragKeys);
+    final selected = itemDragSelectMode;
+    itemDragActive = false;
+    itemDragKeys.clear();
+    itemDragBaseKeys = <String>{};
+    if (keys.isNotEmpty) {
+      toggleSelectKeys(keys, selected);
+      itemDragSuppressNextTap = true;
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void cancelItemDrag() {
+    if (!itemDragActive) return;
+    itemDragActive = false;
+    itemDragKeys.clear();
+    itemDragBaseKeys = <String>{};
+    notifyListeners();
+  }
+
   /// 체크 상태에 따른 표시 대상 문항(번호 있는 것만).
   List<TbExItem> get visibleItems {
     final out = <TbExItem>[];
@@ -244,7 +351,37 @@ class TextbookExplorerController extends ChangeNotifier {
   }
 
   void toggleSelectKey(String selKey) {
+    if (itemDragSuppressNextTap) {
+      itemDragSuppressNextTap = false;
+      notifyListeners();
+      return;
+    }
     if (!selectedKeys.remove(selKey)) selectedKeys.add(selKey);
+    notifyListeners();
+  }
+
+  void toggleSelectKeys(Iterable<String> keys, bool selected) {
+    for (final key in keys) {
+      if (selected) {
+        selectedKeys.add(key);
+      } else {
+        selectedKeys.remove(key);
+      }
+    }
+    notifyListeners();
+  }
+
+  void toggleTypeGroupSelection(List<TbExItem> items) {
+    if (items.isEmpty) return;
+    final keys = items.map((item) => item.selKey).toList();
+    final allSelected = keys.every(selectedKeys.contains);
+    for (final key in keys) {
+      if (allSelected) {
+        selectedKeys.remove(key);
+      } else {
+        selectedKeys.add(key);
+      }
+    }
     notifyListeners();
   }
 
@@ -350,24 +487,28 @@ class TextbookExplorerTreePanel extends StatelessWidget {
       builder: (context, _) {
         final brightness = Theme.of(context).brightness;
         final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-        return SharedFolderTreePanel(
-          title: controller.bookTitle.trim().isEmpty
-              ? '(이름 없음)'
-              : controller.bookTitle.trim(),
-          subtitle: _subtitle(),
-          reserveSubtitleSlot: true,
-          titleTrailing: _buildTitleTrailing(context, style),
-          reserveTitleTrailingSlot: true,
-          titleTrailingSlotFraction: 0.32,
-          isLoading: controller.loading,
-          emptyMessage: '단원 정보가 없습니다.',
-          nodes: _buildNodes(),
-          selectedNodeId: null,
-          expandedNodeIds: controller.expandedNodeIds,
-          onNodeTap: (node) => _onNodeTap(node),
-          onToggleExpanded: (node) => controller.toggleExpand(node.id),
-          wrapNodeRow: (context, node, depth, row) =>
-              _wrapRow(context, style, node, depth, row),
+        return Listener(
+          onPointerUp: (_) => controller.finishPageDrag(),
+          onPointerCancel: (_) => controller.cancelPageDrag(),
+          child: SharedFolderTreePanel(
+            title: controller.bookTitle.trim().isEmpty
+                ? '(이름 없음)'
+                : controller.bookTitle.trim(),
+            subtitle: _subtitle(),
+            reserveSubtitleSlot: true,
+            titleTrailing: _buildTitleTrailing(context, style),
+            reserveTitleTrailingSlot: true,
+            titleTrailingSlotFraction: 0.32,
+            isLoading: controller.loading,
+            emptyMessage: '단원 정보가 없습니다.',
+            nodes: _buildNodes(),
+            selectedNodeId: null,
+            expandedNodeIds: controller.expandedNodeIds,
+            onNodeTap: (node) => _onNodeTap(node),
+            onToggleExpanded: (node) => controller.toggleExpand(node.id),
+            wrapNodeRow: (context, node, depth, row) =>
+                _wrapRow(context, style, node, depth, row),
+          ),
         );
       },
     );
@@ -467,11 +608,6 @@ class TextbookExplorerTreePanel extends StatelessWidget {
   }
 
   void _onNodeTap(SharedFolderTreeNode node) {
-    final tag = node.data;
-    if (tag is _NodeTag && tag.kind == 'page' && tag.small != null) {
-      controller.togglePage(tag.small!, tag.page!);
-      return;
-    }
     if (node.children.isNotEmpty) {
       controller.toggleExpand(node.id);
     }
@@ -534,7 +670,7 @@ class TextbookExplorerTreePanel extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => controller.togglePageKeys(pageKeys, !selected),
+          onTap: hasChildren ? () => controller.toggleExpand(node.id) : null,
           borderRadius: BorderRadius.circular(999),
           hoverColor: Colors.transparent,
           splashColor: Colors.transparent,
@@ -609,7 +745,9 @@ class TextbookExplorerTreePanel extends StatelessWidget {
   ) {
     const active = Color(0xFF33A373);
     final brightness = Theme.of(context).brightness;
-    final selected = controller.isPageChecked(small.key, page.rawPage);
+    final pageKey = '${small.key}#${page.rawPage}';
+    final selected =
+        controller.isPageEffectivelyChecked(small.key, page.rawPage);
     return Padding(
       padding: EdgeInsets.fromLTRB(
         _treeRowOuterPaddingLeft(depth),
@@ -617,61 +755,126 @@ class TextbookExplorerTreePanel extends StatelessWidget {
         12,
         sharedFolderTreeItemSpacing,
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => controller.togglePage(small, page),
-          borderRadius: BorderRadius.circular(999),
-          hoverColor: Colors.transparent,
-          splashColor: Colors.transparent,
-          child: Ink(
-            decoration: BoxDecoration(
-              color: selected
-                  ? FabTabBarTokens.fabHighlightPillFill(brightness)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 8,
-              vertical: sharedFolderTreeNavRowPaddingVertical,
-            ),
-            child: Row(
-              children: [
-                const SizedBox(width: sharedFolderTreeLeadingWidth),
-                const SizedBox(width: 2),
-                IgnorePointer(
-                  child: Checkbox(
-                    value: selected,
-                    visualDensity: VisualDensity.compact,
-                    side: BorderSide(color: style.border),
-                    activeColor: active,
-                    onChanged: (_) {},
-                  ),
+      child: MouseRegion(
+        onEnter: (_) => controller.enterPageDrag(pageKey),
+        child: Listener(
+          onPointerDown: (event) {
+            if (event.buttons == kPrimaryMouseButton) {
+              controller.startPageDrag(pageKey);
+            }
+          },
+          child: Material(
+            color: Colors.transparent,
+            child: Ink(
+              decoration: BoxDecoration(
+                color: selected
+                    ? FabTabBarTokens.fabHighlightPillFill(brightness)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: sharedFolderTreeNavRowPaddingVertical,
                 ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    '${page.displayPage ?? page.rawPage}쪽',
-                    style: TextStyle(
-                      color: selected ? style.title : style.hint,
-                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                      letterSpacing: -0.1,
+                child: Row(
+                  children: [
+                    const SizedBox(width: sharedFolderTreeLeadingWidth),
+                    const SizedBox(width: 2),
+                    Checkbox(
+                      value: selected,
+                      visualDensity: VisualDensity.compact,
+                      side: BorderSide(color: style.border),
+                      activeColor: active,
+                      onChanged: (_) => controller.togglePage(small, page),
                     ),
-                  ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        '${page.displayPage ?? page.rawPage}쪽',
+                        style: TextStyle(
+                          color: selected ? style.title : style.hint,
+                          fontWeight:
+                              selected ? FontWeight.w800 : FontWeight.w600,
+                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${page.numberedQuestionCount}문항',
+                      style: TextStyle(
+                        color: style.label,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                 ),
-                Text(
-                  '${page.numberedQuestionCount}문항',
-                  style: TextStyle(
-                    color: style.label,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// [SolidCapsuleActionBar]와 동일 토큰의 원형 단일 아이콘 버튼.
+class _SolidCircleActionButton extends StatelessWidget {
+  const _SolidCircleActionButton({
+    required this.icon,
+    required this.onPressed,
+    this.tooltip,
+    this.iconSize = FabTabBarTokens.previewAcademyBaseFontSize + 8,
+    this.size = FabTabBarTokens.fabBarHeight,
+  });
+
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final String? tooltip;
+  final double iconSize;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final fg = SolidCapsuleActionBarTokens.iconColor(brightness);
+
+    final button = Material(
+      color: Colors.transparent,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Icon(icon, size: iconSize, color: fg),
+        ),
+      ),
+    );
+
+    final child = tooltip == null || tooltip!.isEmpty
+        ? button
+        : Tooltip(message: tooltip, child: button);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: SolidCapsuleActionBarTokens.boxShadows(brightness),
+      ),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: SolidCapsuleActionBarTokens.background(brightness),
+          border:
+              Border.all(color: SolidCapsuleActionBarTokens.border(brightness)),
+        ),
+        child: child,
       ),
     );
   }
@@ -712,7 +915,21 @@ class _MiniIconButton extends StatelessWidget {
 }
 
 // =========================================================== RIGHT CONTENT
-const double _tbExHeaderBandHeight = 96;
+
+/// 교재·시험 카드 그리드와 동일한 상단 타이틀 밴드 높이.
+const double _tbExScrollTopPadding =
+    (FabTabBarTokens.previewAcademyTopInset - 12) +
+    FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15 +
+    12;
+
+/// 우측 문항 리스트·헤더 좌측 기준선(유형 체크박스 열).
+const double _tbExContentHorizontalInset = 4.0;
+const double _tbExTypeCheckboxColumnWidth = 18.0;
+const double _tbExTypeCheckboxGap = 2.0;
+const double _tbExTypeLabelInset = _tbExContentHorizontalInset +
+    _tbExTypeCheckboxColumnWidth +
+    _tbExTypeCheckboxGap;
+const double _tbExQuestionCardExtraInset = 4.0;
 
 class TextbookExplorerContent extends StatelessWidget {
   const TextbookExplorerContent({super.key, required this.controller});
@@ -729,14 +946,11 @@ class TextbookExplorerContent extends StatelessWidget {
         return Stack(
           children: [
             Positioned.fill(
-              child: Padding(
-                padding: const EdgeInsets.only(top: _tbExHeaderBandHeight),
-                child: _buildBody(context, style),
-              ),
+              child: _buildBody(context, style),
             ),
             Positioned(
               top: FabTabBarTokens.previewAcademyTopInset - 12,
-              left: 24,
+              left: _tbExContentHorizontalInset,
               right: 12,
               child: _buildHeader(context, style),
             ),
@@ -749,18 +963,20 @@ class TextbookExplorerContent extends StatelessWidget {
   Widget _buildHeader(BuildContext context, PreviewAcademyPanelStyle style) {
     return Row(
       children: [
-        _HeaderCircleButton(
+        _SolidCircleActionButton(
           icon: Icons.arrow_back_rounded,
           tooltip: '교재 목록으로 돌아가기',
-          onTap: () => controller.onClose?.call(),
+          size: FabTabBarTokens.fabBarHeight,
+          iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
+          onPressed: () => controller.onClose?.call(),
         ),
-        const SizedBox(width: 12),
-        _ScopeTitleChip(
-          title: controller.currentScopeTitle,
-          subtitle: controller.currentScopeCountLabel,
-          style: style,
+        const SizedBox(width: 16),
+        Expanded(
+          child: _ScopeTitleText(
+            title: controller.currentScopeTitle,
+            style: style,
+          ),
         ),
-        const Spacer(),
       ],
     );
   }
@@ -821,75 +1037,123 @@ class TextbookExplorerContent extends StatelessWidget {
       grouped.putIfAbsent(item.typeGroupKey, () => <TbExItem>[]).add(item);
     }
     final keys = grouped.keys.toList(growable: false);
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(4, 0, 4, 120),
-      itemCount: keys.length,
-      itemBuilder: (context, index) {
-        final key = keys[index];
-        final groupItems = grouped[key] ?? const <TbExItem>[];
-        return Padding(
-          padding: EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildTypeHeader(style, key, groupItems.length),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  for (final item in groupItems)
-                    _QuestionCard(
-                      item: item,
-                      selected: controller.isSelected(item.selKey),
-                      style: style,
-                      onTap: () => controller.toggleSelectKey(item.selKey),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
+    return Listener(
+      onPointerUp: (_) => controller.finishItemDrag(),
+      onPointerCancel: (_) => controller.cancelItemDrag(),
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(
+          _tbExContentHorizontalInset,
+          _tbExScrollTopPadding,
+          4,
+          120,
+        ),
+        itemCount: keys.length,
+        itemBuilder: (context, index) {
+          final key = keys[index];
+          final groupItems = grouped[key] ?? const <TbExItem>[];
+          return Padding(
+            padding: EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildTypeHeader(style, key, groupItems),
+                const SizedBox(height: 10),
+                Padding(
+                  padding: EdgeInsets.only(
+                    left: _tbExTypeLabelInset -
+                        _tbExContentHorizontalInset +
+                        _tbExQuestionCardExtraInset,
+                  ),
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      for (final item in groupItems)
+                        MouseRegion(
+                          onEnter: (_) =>
+                              controller.enterItemDrag(item.selKey),
+                          child: Listener(
+                            onPointerDown: (event) {
+                              if (event.buttons == kPrimaryMouseButton) {
+                                controller.startItemDrag(item.selKey);
+                              }
+                            },
+                            child: _QuestionCard(
+                              item: item,
+                              selected: controller
+                                  .isItemEffectivelySelected(item.selKey),
+                              style: style,
+                              onTap: () =>
+                                  controller.toggleSelectKey(item.selKey),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
   Widget _buildTypeHeader(
     PreviewAcademyPanelStyle style,
     String key,
-    int count,
+    List<TbExItem> groupItems,
   ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                TbExItem.typeGroupTitleOf(key),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: style.title,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
+    const active = Color(0xFF33A373);
+    final allSelected = groupItems.isNotEmpty &&
+        groupItems.every((item) => controller.isSelected(item.selKey));
+    final anySelected =
+        groupItems.any((item) => controller.isSelected(item.selKey));
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Checkbox(
+                value: allSelected ? true : (anySelected ? null : false),
+                tristate: true,
+                visualDensity: VisualDensity.compact,
+                side: BorderSide(color: style.border),
+                activeColor: active,
+                onChanged: (_) =>
+                    controller.toggleTypeGroupSelection(groupItems),
+              ),
+              const SizedBox(width: 2),
+              Expanded(
+                child: Text(
+                  TbExItem.typeGroupTitleOf(key),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: style.title,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '$count문항',
-              style: TextStyle(
-                color: style.hint,
-                fontWeight: FontWeight.w800,
-                fontSize: 12.5,
+              const SizedBox(width: 8),
+              Text(
+                '${groupItems.length}문항',
+                style: TextStyle(
+                  color: style.hint,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12.5,
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Divider(height: 1, thickness: 1, color: style.divider),
-      ],
+            ],
+          ),
+          const SizedBox(height: 6),
+          Divider(height: 1, thickness: 1, color: style.divider),
+        ],
+      ),
     );
   }
 
@@ -921,119 +1185,35 @@ class TextbookExplorerContent extends StatelessWidget {
         ),
       );
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(
-        FabTabBarTokens.previewAcademyGroupedCardRadius,
-      ),
-      child: _PdfViewer(controller: controller),
-    );
-  }
-}
-
-class _HeaderCircleButton extends StatelessWidget {
-  const _HeaderCircleButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: style.dropdownBackground,
-        shape: const CircleBorder(),
-        elevation: 0,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: FabTabBarTokens.groupedCardBorderFor(brightness),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 14,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Icon(icon, size: 22, color: style.icon),
-          ),
+    return Padding(
+      padding: const EdgeInsets.only(top: _tbExScrollTopPadding),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(
+          FabTabBarTokens.previewAcademyGroupedCardRadius,
         ),
+        child: _PdfViewer(controller: controller),
       ),
     );
   }
 }
 
-class _ScopeTitleChip extends StatelessWidget {
-  const _ScopeTitleChip({
+class _ScopeTitleText extends StatelessWidget {
+  const _ScopeTitleText({
     required this.title,
-    required this.subtitle,
     required this.style,
   });
 
   final String title;
-  final String subtitle;
   final PreviewAcademyPanelStyle style;
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final highlight = FabTabBarTokens.fabHighlightPillFill(brightness);
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 460),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: highlight,
-          borderRadius: BorderRadius.circular(999),
-          border: FabTabBarTokens.groupedCardBorderFor(brightness),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 14,
-              offset: const Offset(0, 5),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: FabTabBarTokens.previewAcademyMainTitleStyle(style)
-                      .copyWith(fontSize: 17),
-                ),
-              ),
-              if (subtitle.isNotEmpty) ...[
-                const SizedBox(width: 10),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: style.hint,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
+    return IgnorePointer(
+      child: Text(
+        title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
       ),
     );
   }

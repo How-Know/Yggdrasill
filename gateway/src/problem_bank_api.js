@@ -5012,9 +5012,13 @@ async function batchRenderThumbnails(res, req) {
   const clientModeMap = body?.questionModeByQuestionUid || {};
   const orderedQuestions = [];
   const qidOrder = [];
+  const unresolvedQuestionIds = [];
   for (const qid of questionIds) {
     const row = rowById.get(qid);
-    if (!row) continue;
+    if (!row) {
+      unresolvedQuestionIds.push(qid);
+      continue;
+    }
     const uid = String(row?.question_uid || row?.id || '').trim();
     const clientMode = clientModeMap[qid] || clientModeMap[uid] || '';
     const mode = (clientMode === 'subjective' || clientMode === 'essay')
@@ -5022,6 +5026,15 @@ async function batchRenderThumbnails(res, req) {
       : inferQuestionModeFromRow(row);
     orderedQuestions.push({ ...row, mode, questionMode: mode });
     qidOrder.push(qid);
+  }
+  if (unresolvedQuestionIds.length > 0 || qidOrder.length !== questionIds.length) {
+    console.warn('[pb-api] batch-thumb unresolved questions', JSON.stringify({
+      requested: questionIds.length,
+      found: qidOrder.length,
+      unresolved: unresolvedQuestionIds.slice(0, 20),
+      unresolvedCount: unresolvedQuestionIds.length,
+      documentId: requestedDocumentId,
+    }));
   }
 
   if (orderedQuestions.length === 0) {
@@ -5153,12 +5166,23 @@ async function batchRenderThumbnails(res, req) {
               .from(BATCH_THUMB_BUCKET)
               .upload(storagePath, cropped, { contentType: 'image/png', upsert: true });
             if (upErr) {
+              console.warn('[pb-api] batch-thumb upload failed', JSON.stringify({
+                questionId: qid,
+                storagePath,
+                message: upErr.message,
+              }));
               thumbnails[qid] = { error: upErr.message };
               return;
             }
             const { data: signedData } = await supa.storage
               .from(BATCH_THUMB_BUCKET)
               .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC);
+            if (!signedData?.signedUrl) {
+              console.warn('[pb-api] batch-thumb signed url missing', JSON.stringify({
+                questionId: qid,
+                storagePath,
+              }));
+            }
             thumbnails[qid] = {
               url: signedData?.signedUrl || '',
               width: BATCH_THUMB_WIDTH_PX,
@@ -5169,6 +5193,17 @@ async function batchRenderThumbnails(res, req) {
       }
 
       await Promise.all(uploadPromises);
+      const thumbnailCount = Object.values(thumbnails)
+        .filter((v) => v && typeof v === 'object' && String(v.url || '').trim())
+        .length;
+      if (thumbnailCount !== qidOrder.length) {
+        console.warn('[pb-api] batch-thumb incomplete response', JSON.stringify({
+          requested: questionIds.length,
+          found: qidOrder.length,
+          thumbnails: thumbnailCount,
+          missingAfterRender: qidOrder.filter((id) => !thumbnails[id]?.url).slice(0, 20),
+        }));
+      }
       sendJson(res, 200, { ok: true, thumbnails, pageCount, questionCount: qidOrder.length });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

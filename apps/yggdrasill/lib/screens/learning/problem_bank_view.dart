@@ -1142,6 +1142,31 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         nextError.remove(qid);
       }
 
+      final missingQuestions = questions.where((q) {
+        final id = q.id.trim();
+        return id.isNotEmpty && !nextUrls.containsKey(id);
+      }).toList(growable: false);
+      if (missingQuestions.isNotEmpty) {
+        final fallbackIds = missingQuestions
+            .map((q) => q.questionUid.trim().isNotEmpty
+                ? q.questionUid.trim()
+                : q.id.trim())
+            .where((id) => id.isNotEmpty)
+            .toList(growable: false);
+        final fallbackMap = await _service.fetchQuestionPreviews(
+          academyId: _academyId!,
+          questionIds: fallbackIds,
+        );
+        if (!mounted) return;
+        for (final entry in fallbackMap.entries) {
+          final qid = uidToId[entry.key.trim()] ?? entry.key.trim();
+          if (qid.isEmpty) continue;
+          nextUrls[qid] = entry.value;
+          nextStatus[qid] = 'completed';
+          nextError.remove(qid);
+        }
+      }
+
       for (final q in questions) {
         final id = q.id.trim();
         if (id.isNotEmpty && !nextUrls.containsKey(id)) {
