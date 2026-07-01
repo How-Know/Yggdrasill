@@ -1457,23 +1457,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     });
   }
 
-  void _randomPickFromVisibleQuestions(int count) {
-    final pool = _visibleQuestions;
-    if (pool.isEmpty) {
-      _showSnack('선택할 문항이 없습니다.');
-      return;
-    }
-    final pickCount = count.clamp(1, pool.length);
-    final shuffled = List<LearningProblemQuestion>.from(pool)
-      ..shuffle(math.Random());
-    setState(() {
-      _selectedQuestionIds
-        ..clear()
-        ..addAll(shuffled.take(pickCount).map((q) => q.id));
-    });
-    _showSnack('$pickCount문항을 무작위로 선택했습니다.');
-  }
-
   void _addSelectedQuestionsToCart() {
     final selected = _visibleQuestions
         .where((q) => _selectedQuestionIds.contains(q.id))
@@ -1854,192 +1837,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           stat('서술형', essayCount, possibleEssayCount),
           const SizedBox(width: 18),
           stat('총', checkedTotal, visibleTotal),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuestionSelectionOptionsPanel({required bool isBusy}) {
-    final checked = _checkedVisibleQuestions;
-    final possibleObjectiveCount =
-        _countQuestionsAllowing(checked, kLearningQuestionModeObjective);
-    final possibleSubjectiveCount =
-        _countQuestionsAllowing(checked, kLearningQuestionModeSubjective);
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
-    final panelBg = isDark ? const Color(0xFF222222) : Colors.white;
-    final border = isDark ? const Color(0xFF333333) : const Color(0xFFD6E1DF);
-    final muted = isDark ? const Color(0xFF9FB3B3) : const Color(0xFF667774);
-    final primary = isDark ? const Color(0xFFEAF2F2) : const Color(0xFF182422);
-    final controlBg =
-        isDark ? const Color(0xFF10171A) : const Color(0xFFF4F8F7);
-
-    Widget actionButton({
-      required String label,
-      required VoidCallback? onPressed,
-    }) {
-      return SizedBox(
-        height: 34,
-        child: OutlinedButton(
-          onPressed: isBusy ? null : onPressed,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: primary,
-            side: BorderSide(color: border),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(999),
-            ),
-          ),
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-          ),
-        ),
-      );
-    }
-
-    Widget dropdown({
-      required String value,
-      required List<String> options,
-      required bool enabled,
-      required ValueChanged<String?> onChanged,
-    }) {
-      return Opacity(
-        opacity: enabled ? 1 : 0.55,
-        child: Container(
-          height: 34,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: controlBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: border),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: value,
-              dropdownColor: isDark ? const Color(0xFF151C21) : Colors.white,
-              iconEnabledColor: muted,
-              style: TextStyle(
-                color: primary,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-              items: options
-                  .map(
-                    (option) => DropdownMenuItem<String>(
-                      value: option,
-                      child: Text(option),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: isBusy || !enabled ? null : onChanged,
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget checkDropdown({
-      required String label,
-      required bool checked,
-      required ValueChanged<bool> onChecked,
-      required String value,
-      required List<String> options,
-      required ValueChanged<String?> onChanged,
-    }) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Checkbox(
-            value: checked,
-            visualDensity: VisualDensity.compact,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            side: BorderSide(color: border),
-            activeColor: const Color(0xFF1A6B5E),
-            onChanged: isBusy ? null : (v) => onChecked(v == true),
-          ),
-          Text(
-            label,
-            style: TextStyle(
-              color: muted,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(width: 6),
-          dropdown(
-            value: value,
-            options: options,
-            enabled: checked,
-            onChanged: onChanged,
-          ),
-        ],
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-      decoration: BoxDecoration(
-        color: panelBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border),
-      ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          actionButton(
-            label: '가능 문항 객관식',
-            onPressed: possibleObjectiveCount == 0
-                ? null
-                : () =>
-                    _setVisibleQuestionsMode(kLearningQuestionModeObjective),
-          ),
-          actionButton(
-            label: '가능 문항 주관식',
-            onPressed: possibleSubjectiveCount == 0
-                ? null
-                : () =>
-                    _setVisibleQuestionsMode(kLearningQuestionModeSubjective),
-          ),
-          const SizedBox(width: 2),
-          Text(
-            '문항순서',
-            style: TextStyle(
-              color: muted,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          checkDropdown(
-            label: '섞기/난이도',
-            checked: _questionOrderShuffleEnabled,
-            onChecked: (checked) =>
-                _applyQuestionOrderControls(shuffleEnabled: checked),
-            value: _questionOrderShuffleMode,
-            options: const <String>[
-              '랜덤',
-              '난이도 오름차순',
-              '난이도 내림차순',
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              _applyQuestionOrderControls(shuffleMode: value);
-            },
-          ),
-          checkDropdown(
-            label: '유형 우선',
-            checked: _questionOrderTypePriorityEnabled,
-            onChecked: (checked) =>
-                _applyQuestionOrderControls(typePriorityEnabled: checked),
-            value: _questionOrderTypePriorityMode,
-            options: const <String>['객관식 먼저', '주관식 먼저'],
-            onChanged: (value) {
-              if (value == null) return;
-              _applyQuestionOrderControls(typePriorityMode: value);
-            },
-          ),
         ],
       ),
     );
@@ -4750,8 +4547,33 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             });
           },
         ),
-        const SizedBox(height: 8),
-        _buildQuestionSelectionOptionsPanel(isBusy: _isExporting),
+        ProblemBankQuestionSelectionOptionsPanel(
+          isBusy: _isExporting,
+          possibleObjectiveCount: _countQuestionsAllowing(
+            _checkedVisibleQuestions,
+            kLearningQuestionModeObjective,
+          ),
+          possibleSubjectiveCount: _countQuestionsAllowing(
+            _checkedVisibleQuestions,
+            kLearningQuestionModeSubjective,
+          ),
+          shuffleEnabled: _questionOrderShuffleEnabled,
+          shuffleMode: _questionOrderShuffleMode,
+          typePriorityEnabled: _questionOrderTypePriorityEnabled,
+          typePriorityMode: _questionOrderTypePriorityMode,
+          onSetObjectiveMode: () =>
+              _setVisibleQuestionsMode(kLearningQuestionModeObjective),
+          onSetSubjectiveMode: () =>
+              _setVisibleQuestionsMode(kLearningQuestionModeSubjective),
+          onShuffleEnabledChanged: (checked) =>
+              _applyQuestionOrderControls(shuffleEnabled: checked),
+          onShuffleModeChanged: (value) =>
+              _applyQuestionOrderControls(shuffleMode: value),
+          onTypePriorityEnabledChanged: (checked) =>
+              _applyQuestionOrderControls(typePriorityEnabled: checked),
+          onTypePriorityModeChanged: (value) =>
+              _applyQuestionOrderControls(typePriorityMode: value),
+        ),
       ],
     );
   }
@@ -4848,11 +4670,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             difficultyFilterOptions: _difficultyFilterOptions,
                             selectedTypeFilters: _activeTypeFilters,
                             selectedDifficultyFilters: _activeDifficultyFilters,
-                            visibleQuestionCount: _visibleQuestions.length,
                             onToggleTypeFilter: _toggleTypeFilter,
                             onToggleDifficultyFilter: _toggleDifficultyFilter,
                             onClearFilters: _clearQuestionFilters,
-                            onRandomPick: _randomPickFromVisibleQuestions,
                           ),
                         ),
                       ),

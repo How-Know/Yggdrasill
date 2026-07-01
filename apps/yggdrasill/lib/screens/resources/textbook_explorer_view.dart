@@ -534,21 +534,6 @@ class TextbookExplorerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void randomPickFromVisible(int count, BuildContext context) {
-    final pool = displayItems;
-    if (pool.isEmpty) {
-      showAppSnackBar(context, '선택할 문항이 없습니다.');
-      return;
-    }
-    final pickCount = count.clamp(1, pool.length);
-    final shuffled = List<TbExItem>.from(pool)..shuffle(math.Random());
-    selectedKeys
-      ..clear()
-      ..addAll(shuffled.take(pickCount).map((item) => item.selKey));
-    notifyListeners();
-    showAppSnackBar(context, '$pickCount문항을 무작위로 선택했습니다.');
-  }
-
   void toggleSelectAllVisible() {
     final visible = displayItems;
     if (visible.isEmpty) return;
@@ -2336,12 +2321,9 @@ class _TbExExportOptionsFab extends StatelessWidget {
             difficultyFilterOptions: controller.difficultyFilterOptions,
             selectedTypeFilters: controller.activeTypeFilters,
             selectedDifficultyFilters: controller.activeDifficultyFilters,
-            visibleQuestionCount: controller.displayItems.length,
             onToggleTypeFilter: controller.toggleTypeFilter,
             onToggleDifficultyFilter: controller.toggleDifficultyFilter,
             onClearFilters: controller.clearQuestionFilters,
-            onRandomPick: (count) =>
-                controller.randomPickFromVisible(count, context),
           ),
         );
       },

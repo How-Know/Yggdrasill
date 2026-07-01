@@ -1,0 +1,477 @@
+{
+  "document_meta": {
+    "total_questions": 13,
+    "page_count": 2,
+    "confidence": "high"
+  },
+  "questions": [
+    {
+      "question_number": "0497",
+      "source_page": 1,
+      "stem": "(x-A)^2=x^2-x+B일 때, 상수 A, B에 대하여 AB의 값을 구하시오.",
+      "question_type": "주관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0498",
+      "source_page": 1,
+      "stem": "다음 중 옳은 것은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "(x-8)^2=x^2+64"
+        },
+        {
+          "label": "②",
+          "text": "(2a+1)^2=4a^2+8a+1"
+        },
+        {
+          "label": "③",
+          "text": "\\left(\\frac{1}{5}x-3\\right)^2=\\frac{1}{25}x^2-\\frac{3}{5}x+9"
+        },
+        {
+          "label": "④",
+          "text": "(-3a+b)^2=9a^2-6a+b^2"
+        },
+        {
+          "label": "⑤",
+          "text": "\\left(-4x-\\frac{1}{2}\\right)^2=16x^2+4x+\\frac{1}{4}"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0499",
+      "source_page": 1,
+      "stem": "보기의 식을 전개한 결과가 같은 것끼리 짝 지은 것을 모두 고르면? (정답 2개)\n[문단]\n[보기시작]\n(ㄱ) (a-b)^2\n(ㄴ) -(a-b)^2\n(ㄷ) (-a-b)^2\n(ㄹ) -(a+b)^2\n(ㅁ) (b-a)^2\n(ㅂ) (a+b)^2\n[보기끝]",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "(ㄱ), (ㅁ)"
+        },
+        {
+          "label": "②",
+          "text": "(ㄴ), (ㄷ)"
+        },
+        {
+          "label": "③",
+          "text": "(ㄴ), (ㄹ)"
+        },
+        {
+          "label": "④",
+          "text": "(ㄷ), (ㅂ)"
+        },
+        {
+          "label": "⑤",
+          "text": "(ㄹ), (ㅁ)"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0500",
+      "source_page": 1,
+      "stem": "한 변의 길이가 각각 a-\\frac{1}{2}b, 3a-b인 두 정사각형의 넓이의 합을 구하시오.",
+      "question_type": "서술형",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0501",
+      "source_page": 1,
+      "stem": "다음 중 옳지 않은 것은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "(x+9)(x-9)=x^2-81"
+        },
+        {
+          "label": "②",
+          "text": "(-4+x)(-4-x)=x^2-16"
+        },
+        {
+          "label": "③",
+          "text": "(-2a+5)(2a+5)=-4a^2+25"
+        },
+        {
+          "label": "④",
+          "text": "(-x-y)(x-y)=y^2-x^2"
+        },
+        {
+          "label": "⑤",
+          "text": "\\left(\\frac{1}{7}y+\\frac{1}{3}\\right)\\left(\\frac{1}{7}y-\\frac{1}{3}\\right)=\\frac{1}{49}y^2-\\frac{1}{9}"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0502",
+      "source_page": 1,
+      "stem": "\\left(a-\\frac{1}{3}x\\right)\\left(\\frac{1}{3}x+a\\right)=-\\frac{1}{9}x^2+4일 때, 양수 a의 값은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "1"
+        },
+        {
+          "label": "②",
+          "text": "2"
+        },
+        {
+          "label": "③",
+          "text": "3"
+        },
+        {
+          "label": "④",
+          "text": "4"
+        },
+        {
+          "label": "⑤",
+          "text": "5"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0503",
+      "source_page": 2,
+      "stem": "(x-3)(x+3)(x^2+9)를 전개하시오.",
+      "question_type": "주관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0504",
+      "source_page": 2,
+      "stem": "(3x+2y)(3x-2y)-2(-x-y)(-x+y)를 계산하면 x^2의 계수는 a, y^2의 계수는 b이다. 이때 a-b의 값은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "5"
+        },
+        {
+          "label": "②",
+          "text": "6"
+        },
+        {
+          "label": "③",
+          "text": "7"
+        },
+        {
+          "label": "④",
+          "text": "8"
+        },
+        {
+          "label": "⑤",
+          "text": "9"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0505",
+      "source_page": 2,
+      "stem": "(x-1)(x+1)(x^2+1)(x^4+1)(x^8+1)=x^a+b일 때, 상수 a, b에 대하여 a-b의 값을 구하시오.",
+      "question_type": "서술형",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0506",
+      "source_page": 2,
+      "stem": "(x-a)(x-5)=x^2-bx+15일 때, 상수 a, b에 대하여 ab의 값을 구하시오.",
+      "question_type": "주관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0507",
+      "source_page": 2,
+      "stem": "\\left(x-\\frac{1}{4}y\\right)\\left(x+\\frac{1}{5}y\\right)=x^2+axy+by^2일 때, 상수 a, b에 대하여 a+b의 값은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "-\\frac{1}{10}"
+        },
+        {
+          "label": "②",
+          "text": "-\\frac{1}{20}"
+        },
+        {
+          "label": "③",
+          "text": "0"
+        },
+        {
+          "label": "④",
+          "text": "\\frac{1}{20}"
+        },
+        {
+          "label": "⑤",
+          "text": "\\frac{1}{10}"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0508",
+      "source_page": 2,
+      "stem": "다음 중 box{~~} 안에 알맞은 수가 나머지 넷과 다른 하나는?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "(a-10)(a+8)=a^2-box{~~}a-80"
+        },
+        {
+          "label": "②",
+          "text": "(x+8)\\left(x-\\frac{1}{4}\\right)=x^2+\\frac{31}{4}x-box{~~}"
+        },
+        {
+          "label": "③",
+          "text": "(x+2)(x-3)=x^2-x-box{~~}"
+        },
+        {
+          "label": "④",
+          "text": "(a-5b)(a+3b)=a^2-box{~~}ab-15b^2"
+        },
+        {
+          "label": "⑤",
+          "text": "\\left(-x+\\frac{3}{4}y\\right)\\left(-x+\\frac{5}{4}y\\right)=x^2-box{~~}xy+\\frac{15}{16}y^2"
+        }
+      ],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0509",
+      "source_page": 2,
+      "stem": "\\left(x+\\frac{2}{3}\\right)(x-2a)를 전개한 식에서 x의 계수가 상수항의 2배일 때, 상수 a의 값을 구하시오.",
+      "question_type": "주관식",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": [
+        "answer"
+      ]
+    },
+    {
+      "question_number": "0510",
+      "source_page": 2,
+      "stem": "(x-4)(x+a)를 전개하면 x^2+bx-24일 때, 오른쪽 그림과 같이 빗변과 밑변의 길이가 각각 a+b, a-b인 직각삼각형의 넓이를 구하시오. (단, a, b는 상수이다.)\n[문단]\n[그림]",
+      "question_type": "서술형",
+      "is_set_question": false,
+      "set_type": null,
+      "sub_questions": [],
+      "choices": [],
+      "answer": {
+        "objective_key": "",
+        "subjective": "",
+        "parts": []
+      },
+      "score": null,
+      "figures": [
+        {
+          "order": 1,
+          "description": "직각삼각형",
+          "bbox_1k": [
+            780,
+            820,
+            870,
+            910
+          ]
+        }
+      ],
+      "tables": [],
+      "flags": [
+        "contains_figure"
+      ],
+      "uncertain_fields": [
+        "answer"
+      ]
+    }
+  ]
+}

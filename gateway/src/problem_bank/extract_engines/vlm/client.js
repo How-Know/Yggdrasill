@@ -130,6 +130,88 @@ export function repairLatexBackslashes(input) {
   return out.join('');
 }
 
+// Gemini 가 responseMimeType=application/json 이어도 가끔 "마지막 닫는 괄호" 를 누락한 채
+// finishReason=STOP 으로 응답을 종료한다 (토큰 절단 아님, 실제 관측된 quirk).
+//   예) "{ ...document_meta..., "questions": [ {..}, {..} ]"  ← 루트 객체의 마지막 '}' 누락.
+// 이 경우 JSON.parse / repairLatexBackslashes / "{...}" 그리디 매칭이 모두 실패한다.
+//
+// closeTruncatedJson 은 문자열 리터럴을 인식하며 열린 '{' / '[' 스택을 추적해,
+//   - 정상 종료(문자열 밖) + 스택 잔여 → 뒤에 닫는 괄호를 붙여 복구 (데이터 보존 우선)
+//   - 문자열 중간/토큰 중간 절단 → "마지막으로 온전히 닫힌 경계" 로 되감고 닫는 괄호를 붙여 복구
+// 두 후보를 순서대로 JSON.parse 로 검증해 성공하는 첫 결과를 반환한다. 모두 실패하면 null.
+export function closeTruncatedJson(input) {
+  if (typeof input !== 'string' || !input) return null;
+  let inStr = false;
+  let esc = false;
+  const stack = []; // 열린 컨테이너의 "닫는 문자" 를 순서대로 보관
+  let safeCut = -1; // 여기서 자르고 닫으면 구조적으로 유효해지는 위치(배타적)
+  let safeStack = null;
+  const markSafe = (idxExclusive) => {
+    safeCut = idxExclusive;
+    safeStack = stack.slice();
+  };
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inStr) {
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === '\\') {
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === '{') {
+      stack.push('}');
+      continue;
+    }
+    if (ch === '[') {
+      stack.push(']');
+      continue;
+    }
+    if (ch === '}' || ch === ']') {
+      stack.pop();
+      markSafe(i + 1); // 컨테이너 닫힘 뒤는 "요소 사이" 안전 경계
+      continue;
+    }
+    if (ch === ',') {
+      markSafe(i); // 쉼표 "앞" 까지가 안전 (불완전한 다음 요소는 버림)
+      continue;
+    }
+  }
+
+  const candidates = [];
+  // 후보 1: 문자열 밖에서 정상 종료 + 스택 잔여 → 전체를 살리고 닫는 괄호만 보정.
+  if (!inStr && stack.length > 0) {
+    let s = input.replace(/[\s,]+$/, '');
+    for (let k = stack.length - 1; k >= 0; k -= 1) s += stack[k];
+    candidates.push(s);
+  }
+  // 후보 2: 마지막 안전 경계로 되감고 그 시점 스택으로 닫기 (문자열/토큰 중간 절단 대응).
+  if (safeCut > 0 && Array.isArray(safeStack) && safeStack.length > 0) {
+    let s = input.slice(0, safeCut).replace(/[\s,]+$/, '');
+    for (let k = safeStack.length - 1; k >= 0; k -= 1) s += safeStack[k];
+    candidates.push(s);
+  }
+  for (const c of candidates) {
+    try {
+      return JSON.parse(c);
+    } catch (_) {
+      // 다음 후보 시도
+    }
+  }
+  return null;
+}
+
 export async function callGeminiWithPdf({
   pdfBuffer,
   model,
@@ -228,8 +310,13 @@ export async function callGeminiWithPdf({
         try {
           parsedJson = JSON.parse(m[0]);
         } catch (_) {
-          // swallow — parsedJson null 로 남아 상위에서 실패 처리.
+          // 다음 단계(닫는 괄호 보정)로.
         }
+      }
+      // 마지막 단계: 모델이 닫는 괄호를 누락/절단한 경우 스택 기반으로 복구.
+      if (!parsedJson) {
+        parsedJson =
+          closeTruncatedJson(repaired) || closeTruncatedJson(modelText);
       }
     }
   }

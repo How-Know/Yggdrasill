@@ -88,16 +88,23 @@ static uint32_t s_sw_start_tick = 0;
 static uint32_t s_sw_elapsed_ms = 0;
 static bool s_sw_running = false;
 static int s_sw_lap_count = 0;
-static uint8_t s_current_volume = 50;
+static const uint8_t DEFAULT_VOLUME = 50;
+static const uint8_t DEFAULT_BRIGHTNESS = 128;
+static uint8_t s_current_volume = DEFAULT_VOLUME;
 static lv_timer_t* s_vibration_timer = nullptr;
 static bool s_vibration_on = false;
 static lv_obj_t* s_brightness_popup = nullptr;
-static uint8_t s_current_brightness = 128;
+static uint8_t s_current_brightness = DEFAULT_BRIGHTNESS;
 static lv_obj_t* s_battery_widget = nullptr;
 static lv_obj_t* s_battery_label = nullptr;
 static lv_obj_t* s_ota_popup = nullptr;
 static lv_obj_t* s_ota_progress_bar = nullptr;
 static lv_obj_t* s_ota_status_label = nullptr;
+static lv_obj_t* s_boot_status_overlay = nullptr;
+static lv_obj_t* s_boot_wifi_label = nullptr;
+static lv_obj_t* s_boot_mqtt_label = nullptr;
+static lv_obj_t* s_boot_list_label = nullptr;
+static lv_obj_t* s_boot_detail_label = nullptr;
 static uint32_t s_last_refresh_ms = 0;
 static String s_pending_bind_student_id = "";
 static String s_pending_bind_student_name = "";
@@ -625,6 +632,60 @@ static void show_student_info_screen(void);
 static void show_stopwatch_screen(void);
 static void close_stopwatch_screen(bool show_hub);
 static void show_bind_confirm_popup(const char* student_id, const char* student_name);
+
+static lv_obj_t* boot_status_label(lv_obj_t* parent, const char* text, uint32_t color, const lv_font_t* font) {
+  lv_obj_t* label = lv_label_create(parent);
+  lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+  if (font) lv_obj_set_style_text_font(label, font, 0);
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label, 280);
+  lv_label_set_text(label, text);
+  return label;
+}
+
+void ui_port_show_boot_status(void) {
+  if (s_boot_status_overlay && lv_obj_is_valid(s_boot_status_overlay)) return;
+  lv_obj_t* parent = s_stage && lv_obj_is_valid(s_stage) ? s_stage : lv_scr_act();
+  s_boot_status_overlay = lv_obj_create(parent);
+  lv_obj_set_size(s_boot_status_overlay, lv_pct(100), lv_pct(100));
+  lv_obj_align(s_boot_status_overlay, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_set_style_bg_color(s_boot_status_overlay, lv_color_hex(0x071012), 0);
+  lv_obj_set_style_bg_opa(s_boot_status_overlay, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_boot_status_overlay, 0, 0);
+  lv_obj_set_style_radius(s_boot_status_overlay, 0, 0);
+  lv_obj_set_style_pad_all(s_boot_status_overlay, 18, 0);
+  lv_obj_set_flex_flow(s_boot_status_overlay, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_boot_status_overlay, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+  lv_obj_clear_flag(s_boot_status_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* title = boot_status_label(s_boot_status_overlay, u8"M5 시작 중", 0xFFFFFF, &kakao_kr_24);
+  lv_obj_set_width(title, 280);
+  s_boot_wifi_label = boot_status_label(s_boot_status_overlay, "WiFi  대기 중", 0xB8C0C2, &kakao_kr_16);
+  s_boot_mqtt_label = boot_status_label(s_boot_status_overlay, "MQTT  대기 중", 0xB8C0C2, &kakao_kr_16);
+  s_boot_list_label = boot_status_label(s_boot_status_overlay, "List  대기 중", 0xB8C0C2, &kakao_kr_16);
+  s_boot_detail_label = boot_status_label(s_boot_status_overlay, "", 0x7F8A8D, &kakao_kr_16);
+  lv_obj_move_foreground(s_boot_status_overlay);
+  screensaver_attach_activity(s_boot_status_overlay);
+}
+
+void ui_port_update_boot_status(const char* wifi, const char* mqtt, const char* list, const char* detail) {
+  if (!s_boot_status_overlay || !lv_obj_is_valid(s_boot_status_overlay)) ui_port_show_boot_status();
+  if (s_boot_wifi_label && lv_obj_is_valid(s_boot_wifi_label)) lv_label_set_text(s_boot_wifi_label, wifi ? wifi : "");
+  if (s_boot_mqtt_label && lv_obj_is_valid(s_boot_mqtt_label)) lv_label_set_text(s_boot_mqtt_label, mqtt ? mqtt : "");
+  if (s_boot_list_label && lv_obj_is_valid(s_boot_list_label)) lv_label_set_text(s_boot_list_label, list ? list : "");
+  if (s_boot_detail_label && lv_obj_is_valid(s_boot_detail_label)) lv_label_set_text(s_boot_detail_label, detail ? detail : "");
+}
+
+void ui_port_hide_boot_status(void) {
+  if (s_boot_status_overlay && lv_obj_is_valid(s_boot_status_overlay)) {
+    lv_obj_del(s_boot_status_overlay);
+  }
+  s_boot_status_overlay = nullptr;
+  s_boot_wifi_label = nullptr;
+  s_boot_mqtt_label = nullptr;
+  s_boot_list_label = nullptr;
+  s_boot_detail_label = nullptr;
+}
 static void show_complete_overlay(void);
 static void close_complete_overlay(void);
 static void hw_perform_card_action(int group_idx);
@@ -2952,24 +3013,39 @@ void ui_port_init() {
   // Load saved brightness/volume/student_id from LittleFS
   String savedStudentId = "";
   if (LittleFS.begin(true)) {
-    File f = LittleFS.open("/brightness.txt", "r");
+    File f;
+#ifdef PROVISION_DEVICE_ID
+    // USB 재배포 시 기기별 잔존 설정을 표준 기본값으로 맞춘다.
+    s_current_brightness = DEFAULT_BRIGHTNESS;
+    s_current_volume = DEFAULT_VOLUME;
+    M5.Display.setBrightness(s_current_brightness);
+    M5.Speaker.setVolume(s_current_volume);
+    File settingsFile = LittleFS.open("/brightness.txt", "w");
+    if (settingsFile) { settingsFile.printf("%d", s_current_brightness); settingsFile.close(); }
+    settingsFile = LittleFS.open("/volume.txt", "w");
+    if (settingsFile) { settingsFile.printf("%d", s_current_volume); settingsFile.close(); }
+    Serial.printf("[INIT] Provision defaults brightness=%d volume=%d\n",
+                  s_current_brightness, s_current_volume);
+#else
+    f = LittleFS.open("/brightness.txt", "r");
     if (f) {
       String val = f.readStringUntil('\n');
       s_current_brightness = val.toInt();
-      if (s_current_brightness == 0) s_current_brightness = 128;
-      M5.Display.setBrightness(s_current_brightness);
+      if (s_current_brightness == 0) s_current_brightness = DEFAULT_BRIGHTNESS;
       Serial.printf("[INIT] Loaded brightness: %d\n", s_current_brightness);
       f.close();
     }
+    M5.Display.setBrightness(s_current_brightness);
     f = LittleFS.open("/volume.txt", "r");
     if (f) {
       String val = f.readStringUntil('\n');
       s_current_volume = val.toInt();
-      if (s_current_volume == 0) s_current_volume = 50;
-      M5.Speaker.setVolume(s_current_volume);
+      if (s_current_volume == 0) s_current_volume = DEFAULT_VOLUME;
       Serial.printf("[INIT] Loaded volume: %d\n", s_current_volume);
       f.close();
     }
+    M5.Speaker.setVolume(s_current_volume);
+#endif
     // 바인딩된 학생 ID 복원
     f = LittleFS.open("/student_id.txt", "r");
     if (f) {

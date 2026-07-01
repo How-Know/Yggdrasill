@@ -52,7 +52,7 @@ class SolidCapsuleActionBar extends StatelessWidget {
     super.key,
     this.child,
     this.children,
-    this.padding = const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+    this.padding = SolidCapsuleActionBar.defaultPadding,
     this.itemSpacing = 22,
     this.borderRadius = 999,
   }) : assert(child != null || children != null);
@@ -62,6 +62,9 @@ class SolidCapsuleActionBar extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final double itemSpacing;
   final double borderRadius;
+
+  static const EdgeInsets defaultPadding =
+      EdgeInsets.symmetric(horizontal: 14, vertical: 8);
 
   @override
   Widget build(BuildContext context) {

@@ -117,7 +117,8 @@ const gatewayState = {
 const BASE_SUBSCRIPTIONS = [
   'academies/+/students/+/homework/+/command',
   'academies/+/devices/+/command',
-  'academies/+/devices/+/presence'
+  'academies/+/devices/+/presence',
+  'academies/+/devices/+/diag'
 ];
 
 const tlsOpts = {};
@@ -667,8 +668,17 @@ client.on('message', async (topic, payload) => {
   gatewayState.lastMessageTs = nowMs();
   gatewayState.lastInboundTopic = topic;
   try {
-    const msg = JSON.parse(payload.toString());
     const parts = topic.split('/');
+    if (parts.length >= 5 && parts[0] === 'academies' && parts[2] === 'devices' && parts[4] === 'diag') {
+      const text = payload.toString();
+      logEvent('info', '[gateway][m5-diag]', {
+        academy_id: parts[1],
+        device_id: parts[3],
+        payload: text.length > 1800 ? `${text.slice(0, 1800)}...` : text
+      });
+      return;
+    }
+    const msg = JSON.parse(payload.toString());
     if (parts.length >= 6 && parts[0] === 'academies' && parts[2] === 'students' && parts[4] === 'homework') {
       if (!validate(msg)) {
         console.warn('[gateway] invalid payload', validate.errors);
