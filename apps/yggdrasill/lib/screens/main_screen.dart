@@ -658,7 +658,8 @@ class _UtilityMemoBottomSheet extends StatelessWidget {
   }
 }
 
-class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
+class _MainScreenState extends State<MainScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   // 디버그 로그 스위치 (사이드 시트 출석 분류)
   // ✅ 기본 OFF: 사이드 시트/출석 쪽 대량 로그는 UI 스레드를 막아 렉을 유발할 수 있음(특히 Windows).
   // 필요 시 실행 옵션으로만 활성화:
@@ -765,6 +766,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final ResourcesPrintController _resourcesPrintController =
       ResourcesPrintController();
   bool _printControllerSetStateScheduled = false;
+  bool _watchSnapshotPushScheduled = false;
   StudentViewType _viewType = StudentViewType.all;
   final List<GroupInfo> _groups = [];
   final List<Student> _students = [];
@@ -1925,6 +1927,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_handleDebugSpaceSnackBarKey);
     setAttendanceAnchorDate(_sideSheetAnchorDate);
     // 과제 데이터 DB에서 1회 로드
@@ -1944,10 +1947,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     requestedMainNavIndex.addListener(_onRequestedMainNavIndexChanged);
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
     DataManager.instance.attendanceRecordsNotifier.addListener(
-      _markSideSheetDirty,
+      _onAttendanceRecordsChanged,
     );
     // Apple Watch에 오늘 출결 타깃 스냅샷을 공급하는 콜백 등록
     WatchBridgeService.instance.targetsProvider = _buildWatchAttendanceTargets;
+    // Watch 단독 동작: 로그인 토큰을 워치로 릴레이한다.
+    WatchBridgeService.instance.pushWatchAuth();
     _utilityToolbarController = AnimationController(
       duration: const Duration(milliseconds: 260),
       reverseDuration: const Duration(milliseconds: 200),
@@ -1996,6 +2001,40 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_ensureM5QuestionSubscription());
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_resyncAttendanceAndPushWatch());
+    }
+  }
+
+  void _onAttendanceRecordsChanged() {
+    _markSideSheetDirty();
+    _scheduleWatchSnapshotPush();
+  }
+
+  void _scheduleWatchSnapshotPush() {
+    if (_watchSnapshotPushScheduled) return;
+    _watchSnapshotPushScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _watchSnapshotPushScheduled = false;
+      if (!mounted) return;
+      WatchBridgeService.instance.pushTodayTargets();
+    });
+  }
+
+  Future<void> _resyncAttendanceAndPushWatch() async {
+    try {
+      await DataManager.instance.loadAttendanceRecords();
+    } catch (_) {
+      // 복귀 동기화 실패 시 기존 로컬 상태를 유지한다.
+    }
+    if (!mounted) return;
+    WatchBridgeService.instance.pushTodayTargets();
+    // 복귀 시 토큰이 갱신됐을 수 있으므로 최신 토큰을 워치로 다시 릴레이한다.
+    WatchBridgeService.instance.pushWatchAuth();
   }
 
   Future<void> _ensureM5QuestionSubscription() async {
@@ -2145,6 +2184,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_handleDebugSpaceSnackBarKey);
     requestedMainNavIndex.removeListener(_onRequestedMainNavIndexChanged);
     // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
@@ -2179,7 +2219,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _classContentPrintController.removeListener(_onPrintControllerChanged);
     _resourcesPrintController.removeListener(_onPrintControllerChanged);
     DataManager.instance.attendanceRecordsNotifier.removeListener(
-      _markSideSheetDirty,
+      _onAttendanceRecordsChanged,
     );
     _utilityToolbarController.dispose();
     _rotationAnimation.dispose();

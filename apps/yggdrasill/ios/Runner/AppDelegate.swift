@@ -47,6 +47,8 @@ import WatchConnectivity
       switch call.method {
       case "sendSnapshot":
         self?.handleSendSnapshot(call.arguments, result: result)
+      case "sendWatchAuth":
+        self?.handleSendWatchAuth(call.arguments, result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -92,6 +94,21 @@ import WatchConnectivity
     } catch {
       result(FlutterError(code: "context_failed", message: error.localizedDescription, details: nil))
     }
+  }
+
+  /// Dart -> 네이티브: Supabase 인증 토큰을 워치로 릴레이한다(단독 동작용).
+  /// transferUserInfo는 도달 불가/백그라운드 상태에서도 큐잉되어 전달이 보장된다.
+  private func handleSendWatchAuth(_ arguments: Any?, result: FlutterResult) {
+    guard WCSession.isSupported() else {
+      result(FlutterError(code: "unsupported", message: "WatchConnectivity 미지원", details: nil))
+      return
+    }
+    guard let payload = arguments as? [String: Any] else {
+      result(FlutterError(code: "bad_args", message: "토큰 형식 오류", details: nil))
+      return
+    }
+    WCSession.default.transferUserInfo(payload)
+    result(nil)
   }
 
   /// Watch -> 네이티브 -> Dart: 워치 이벤트를 Flutter로 포워딩하고, 가능하면 응답을 회신한다.

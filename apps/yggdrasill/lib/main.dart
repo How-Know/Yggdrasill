@@ -766,6 +766,9 @@ void main() async {
   // 마지막 폴백: 내장 상수
   if (supabaseUrl.isEmpty) supabaseUrl = kDefaultSupabaseUrl;
   if (supabaseAnonKey.isEmpty) supabaseAnonKey = kDefaultSupabaseAnonKey;
+  // Watch 토큰 릴레이 등에서 사용할 수 있도록 해석된 접속 정보를 보관.
+  gResolvedSupabaseUrl = supabaseUrl;
+  gResolvedSupabaseAnonKey = supabaseAnonKey;
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   // 서버 전용 모드 플래그(dart-define 또는 OS 환경변수)
   try {
