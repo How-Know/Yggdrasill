@@ -5573,9 +5573,7 @@ extension on _MainScreenState {
             }
           }
           if (entries.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('하위 과제를 1개 이상 추가하세요.')),
-            );
+            _showFloatingSnackBar(context, '하위 과제를 1개 이상 추가하세요.');
             return;
           }
           final selectedFlowId = (result['flowId'] as String?)?.trim();
@@ -5591,9 +5589,7 @@ extension on _MainScreenState {
             }
             if (testFlowId == null || testFlowId.isEmpty) {
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
-              );
+              _showFloatingSnackBar(context, '테스트 플로우를 준비하지 못했습니다.');
               return;
             }
             for (final entry in entries) {
@@ -5619,9 +5615,7 @@ extension on _MainScreenState {
           );
           if (createdItems.isEmpty) {
             if (!context.mounted) return;
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')));
+            _showFloatingSnackBar(context, '그룹 과제 생성에 실패했어요.');
             return;
           }
           if (!context.mounted) return;
@@ -5629,9 +5623,7 @@ extension on _MainScreenState {
           final msg = isReserve
               ? '그룹 예약 과제(하위 ${childCount}개)를 추가했어요.'
               : '그룹 과제(하위 ${childCount}개)를 추가했어요.';
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(msg)));
+          _showFloatingSnackBar(context, msg);
           return;
         }
         final flowId = result['flowId'] as String?;
@@ -5657,9 +5649,7 @@ extension on _MainScreenState {
           }
           if (testFlowId == null || testFlowId.isEmpty) {
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
-            );
+            _showFloatingSnackBar(context, '테스트 플로우를 준비하지 못했습니다.');
             return;
           }
         }
@@ -5754,9 +5744,7 @@ extension on _MainScreenState {
             );
             HomeworkStore.instance.bumpRevision();
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('예약 과제 저장에 실패했어요.')),
-            );
+            _showFloatingSnackBar(context, '예약 과제 저장에 실패했어요.');
             return;
           }
         }
@@ -5767,9 +5755,7 @@ extension on _MainScreenState {
             : (entries.length > 1
                 ? '과제를 ${entries.length}개 추가했어요.'
                 : '과제를 추가했어요.');
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(msg)));
+        _showFloatingSnackBar(context, msg);
       }
     }
 

@@ -87,15 +87,18 @@ static uint32_t g_mqtt_connect_attempt_ms = 0;
 static bool g_mqtt_connect_in_flight = false;
 static uint8_t g_mqtt_connect_stall_count = 0;
 static uint32_t g_last_mqtt_connect_stall_ms = 0;
-static uint32_t g_mqtt_reconnect_backoff_ms = 3000;
-static const uint32_t MQTT_CONNECT_STALL_MS = 25000;
-static const uint32_t MQTT_RECONNECT_BACKOFF_MIN_MS = 3000;
-static const uint32_t MQTT_RECONNECT_BACKOFF_MAX_MS = 20000;
+static uint32_t g_mqtt_reconnect_backoff_ms = 2000;
+static const uint32_t MQTT_CONNECT_STALL_MS = 20000;
+// 안정성 우선: 재시도가 너무 뜸해지지 않도록 상한을 낮게 유지한다.
+static const uint32_t MQTT_RECONNECT_BACKOFF_MIN_MS = 2000;
+static const uint32_t MQTT_RECONNECT_BACKOFF_MAX_MS = 8000;
 static bool g_last_tcp_probe_ok = false;
 static uint32_t g_last_tcp_probe_ms = 0;
 static uint32_t g_last_tcp_probe_elapsed_ms = 0;
 static uint16_t g_tcp_probe_fail_count = 0;
-static const uint32_t MQTT_TCP_PROBE_TIMEOUT_MS = 2500;
+// 느린 경로에서 핸드셰이크 직전 오탐으로 끊기지 않도록 넉넉히 준다.
+static const uint32_t MQTT_TCP_PROBE_TIMEOUT_MS = 4000;
+static bool g_wifi_loop_connected = false;
 static const uint8_t ALERT_VIBRATION_STRENGTH = 102; // 약 4/10 기준(0-255 스케일)
 static uint32_t g_last_boot_status_ui_ms = 0;
 
@@ -131,6 +134,9 @@ static bool g_first_ui_data_ready = false;
 static bool g_restored_binding_guard_active = false;
 static uint32_t g_restored_binding_guard_start_ms = 0;
 static const uint32_t RESTORED_BINDING_DATA_TIMEOUT_MS = 30000;
+// 바인딩을 당일까지만 유지하고 날짜가 바뀌면 자동 정리(좀비 바인딩 방지)
+static uint32_t g_last_bind_day_check_ms = 0;
+static const uint32_t BIND_DAY_CHECK_INTERVAL_MS = 60000;
 
 // GROUP_CMD_V2 (server-authoritative group transition) states
 static const char* GROUP_CMD_V2_TARGET_DEVICE = "m5-device-001";
@@ -262,9 +268,19 @@ static void update_boot_status_ui(bool force = false) {
   String wifiLine = wifiOk
       ? "WiFi  OK  " + WiFi.localIP().toString() + " / RSSI " + String((int)WiFi.RSSI())
       : "WiFi  연결 중...";
-  String mqttLine = mqttOk
-      ? "MQTT  OK"
-      : (wifiOk ? "MQTT  연결 중... " + String(wifiAgeSec) + "초 / retry " + String(g_mqtt_connect_stall_count) : "MQTT  WiFi 대기");
+  String mqttLine;
+  if (mqttOk) {
+    mqttLine = "MQTT  OK";
+  } else if (!wifiOk) {
+    mqttLine = "MQTT  WiFi 대기";
+  } else if (!g_last_tcp_probe_ok && g_last_tcp_probe_ms > 0) {
+    mqttLine = "TCP  FAIL  " + String((unsigned long)g_last_tcp_probe_elapsed_ms) +
+        "ms / fail " + String((unsigned)g_tcp_probe_fail_count);
+  } else if (g_mqtt_connect_in_flight) {
+    mqttLine = "MQTT  연결 중... " + String(mqttAgeSec) + "초";
+  } else {
+    mqttLine = "MQTT  재시도 대기... " + String(wifiAgeSec) + "초";
+  }
   String listLine = g_students_received
       ? "List  OK"
       : (mqttOk ? "List  등원학생 목록 대기" : "List  MQTT 대기");
@@ -302,6 +318,34 @@ static String load_student_id_nvs() {
   prefs.end();
   sid.trim();
   return sid;
+}
+
+static void persist_bind_date_nvs(uint32_t ymd) {
+  Preferences prefs;
+  prefs.begin("m5cfg", false);
+  if (ymd > 0) {
+    prefs.putUInt("bind_date", ymd);
+  } else {
+    prefs.remove("bind_date");
+  }
+  prefs.end();
+}
+
+static uint32_t load_bind_date_nvs() {
+  Preferences prefs;
+  prefs.begin("m5cfg", true);
+  uint32_t ymd = prefs.getUInt("bind_date", 0);
+  prefs.end();
+  return ymd;
+}
+
+// 현재 KST 날짜를 YYYYMMDD로 반환. NTP 미동기화 시 0.
+static uint32_t current_kst_yyyymmdd() {
+  time_t now = time(nullptr);
+  if (now < 1700000000) return 0; // 2023-11 이전이면 시간 미동기화로 간주
+  struct tm tmv;
+  localtime_r(&now, &tmv); // configTime(9h)로 KST 반영됨
+  return (uint32_t)((tmv.tm_year + 1900) * 10000u + (tmv.tm_mon + 1) * 100u + tmv.tm_mday);
 }
 
 static bool is_group_cmd_v2_enabled() {
@@ -424,6 +468,7 @@ void fw_clear_local_binding_state(void) {
     LittleFS.end();
   }
   persist_student_id_nvs("");
+  persist_bind_date_nvs(0);
   studentId = "";
   g_mqtt_bind_announced = false;
   g_group_transition_pending = false;
@@ -605,12 +650,7 @@ static void start_mqtt_connect(const char* reason) {
       nextMqttReconnectMs = millis() + g_mqtt_reconnect_backoff_ms;
       g_mqtt_reconnect_backoff_ms = min(g_mqtt_reconnect_backoff_ms * 2, MQTT_RECONNECT_BACKOFF_MAX_MS);
       if (g_tcp_probe_fail_count > 0 && (g_tcp_probe_fail_count % 3) == 0) {
-        Serial.println("[MQTT][TCP-PROBE] repeated failures -> WiFi reconnect");
-        WiFi.disconnect(false, false);
-        WiFi.begin(WIFI_SSID, WIFI_PASS);
-        g_wifi_connect_start_ms = millis();
-        g_wifi_connected_ms = 0;
-        nextMqttReconnectMs = millis() + 8000;
+        Serial.println("[MQTT][TCP-PROBE] repeated failures -> keep WiFi, retry TCP with backoff");
       }
       update_boot_status_ui(true);
       return;
@@ -653,16 +693,11 @@ static void handle_mqtt_connect_stall(uint32_t now) {
   nextMqttReconnectMs = now + g_mqtt_reconnect_backoff_ms;
   g_mqtt_reconnect_backoff_ms = min(g_mqtt_reconnect_backoff_ms * 2, MQTT_RECONNECT_BACKOFF_MAX_MS);
 
-  // 같은 부팅에서 연속 stall이 쌓이면 AP/LAN 경로 재협상을 유도한다.
+  // WiFi 재협상은 사용 중 화면을 계속 흔들어 더 나쁜 체감을 만든다.
+  // 연결 경로가 막혔더라도 WiFi는 유지하고 MQTT/TCP만 백오프로 재시도한다.
   if (g_mqtt_connect_stall_count >= 3) {
-    Serial.println("[MQTT][CONNECT-STALL] repeated stalls -> WiFi reconnect");
-    WiFi.disconnect(false, false);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    g_wifi_connect_start_ms = now;
-    g_wifi_connected_ms = 0;
+    Serial.println("[MQTT][CONNECT-STALL] repeated stalls -> keep WiFi, retry MQTT with backoff");
     g_mqtt_connect_stall_count = 0;
-    g_mqtt_reconnect_backoff_ms = MQTT_RECONNECT_BACKOFF_MIN_MS;
-    nextMqttReconnectMs = now + 8000;
   }
 }
 
@@ -796,6 +831,7 @@ void fw_commit_bind(const char* studentIdArg) {
   if (!studentIdArg || !*studentIdArg) return;
   studentId = studentIdArg; // track bound student on device
   persist_student_id_nvs(studentId);
+  persist_bind_date_nvs(current_kst_yyyymmdd());
 
   // LittleFS에 바인딩된 학생 ID 저장 (재시작 후 복원용)
   if (LittleFS.begin(true)) {
@@ -845,6 +881,36 @@ void fw_publish_unbind() {
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
   fw_clear_local_binding_state();
   Serial.println("[UNBIND] local binding cleared after publish");
+}
+
+// 바인딩을 당일까지만 유지: 날짜가 바뀌면 자동으로 서버 unbind + 등원 리스트 복귀.
+// 서버에 unbind를 확실히 전달하기 위해 MQTT 연결 상태에서만 정리한다.
+static void handle_bind_day_expiry(uint32_t nowTick) {
+  if (studentId.length() == 0) return;
+  if (!mqtt.connected()) return;
+  if (g_last_bind_day_check_ms != 0 && (nowTick - g_last_bind_day_check_ms) < BIND_DAY_CHECK_INTERVAL_MS) return;
+  g_last_bind_day_check_ms = nowTick;
+
+  uint32_t today = current_kst_yyyymmdd();
+  if (today == 0) return; // 시간 미동기화
+
+  uint32_t bindDate = load_bind_date_nvs();
+  if (bindDate == 0) {
+    // 구버전/시간 미동기 상태에서 저장된 바인딩 -> 오늘로 채택(오탐 방지)
+    persist_bind_date_nvs(today);
+    return;
+  }
+  if (bindDate != today) {
+    Serial.printf("[BIND][DAY] stale binding %lu != today %lu -> auto unbind\n",
+                  (unsigned long)bindDate, (unsigned long)today);
+    g_students_received = false;
+    g_first_ui_data_ready = false;
+    g_last_list_request_ms = 0;
+    g_restored_binding_guard_active = false;
+    g_restored_binding_guard_start_ms = 0;
+    fw_publish_unbind();
+    ui_port_force_unbind();
+  }
 }
 
 void fw_publish_student_info(const char* studentIdArg) {
@@ -1218,6 +1284,27 @@ void loop() {
       Serial.flush();
     }
   }
+
+  bool wifiNowConnected = WiFi.status() == WL_CONNECTED;
+  if (wifiNowConnected && (!g_wifi_loop_connected || g_wifi_connected_ms == 0)) {
+    g_wifi_connected_ms = nowTick;
+    g_wifi_loop_connected = true;
+    Serial.printf("[WiFi] loop connected ip=%s rssi=%d bssid=%s ch=%d\n",
+                  WiFi.localIP().toString().c_str(),
+                  (int)WiFi.RSSI(),
+                  WiFi.BSSIDstr().c_str(),
+                  WiFi.channel());
+    if (!mqtt.connected() && nextMqttReconnectMs == 0) {
+      nextMqttReconnectMs = nowTick + 1000;
+    }
+  } else if (!wifiNowConnected && g_wifi_loop_connected) {
+    g_wifi_loop_connected = false;
+    g_wifi_connected_ms = 0;
+    g_mqtt_connect_in_flight = false;
+    g_mqtt_connect_attempt_ms = 0;
+    nextMqttReconnectMs = nowTick + 5000;
+    Serial.println("[WiFi] loop disconnected -> wait for reconnect");
+  }
   update_boot_status_ui(false);
 
   // homeworks 토픽은 단일 슬롯에 덮어쓰기 → 처리 중·직후에 또 도착한 페이로드를 같은 루프에서 연속 소비
@@ -1347,6 +1434,8 @@ void loop() {
     g_restored_binding_guard_active = false;
     g_restored_binding_guard_start_ms = 0;
   }
+
+  handle_bind_day_expiry(nowTick);
 
   if (g_restored_binding_guard_active && studentId.length() > 0
       && !g_first_ui_data_ready && g_restored_binding_guard_start_ms > 0) {
