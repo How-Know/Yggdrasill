@@ -202,6 +202,12 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     /// iPhone 없이 서버와 직접 통신할 수 있는 상태인지.
     var isStandaloneReady: Bool { api.hasAuth }
 
+    /// iPhone 앱이 실행 중이라 브리지(검증된 경로)를 쓸 수 있는지.
+    /// 이때는 iPhone의 DataManager 로직을 그대로 태워야 데이터가 정확하다.
+    private var iphoneReachable: Bool {
+        WCSession.default.activationState == .activated && WCSession.default.isReachable
+    }
+
     override init() {
         super.init()
         loadCachedTargets()
@@ -221,6 +227,11 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     /// 최신 출결 스냅샷을 요청한다.
     /// 단독 동작 토큰이 있으면 서버에서 직접 조회하고, 없으면 iPhone 브리지로 폴백한다.
     func requestSnapshot() {
+        // iPhone이 켜져 있으면 검증된 브리지 경로를 우선 사용한다.
+        if iphoneReachable {
+            bridgeRequestSnapshot()
+            return
+        }
         if api.hasAuth {
             api.todayTargets { [weak self] result in
                 DispatchQueue.main.async {
@@ -272,6 +283,10 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     }
 
     func requestHomework(for target: WatchTarget) {
+        if iphoneReachable {
+            bridgeRequestHomework(for: target)
+            return
+        }
         if api.hasAuth {
             api.homeworkList(studentId: target.studentId) { [weak self] result in
                 DispatchQueue.main.async {
@@ -322,6 +337,10 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
         progress: Int,
         completion: ((Bool, String) -> Void)? = nil
     ) {
+        if iphoneReachable {
+            bridgeSubmitHomeworkCheck(item, progress: progress, completion: completion)
+            return
+        }
         if api.hasAuth {
             api.homeworkCheck(item: item, progress: progress) { [weak self] result in
                 DispatchQueue.main.async {
@@ -402,6 +421,11 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     /// 등원/하원 이벤트를 iPhone으로 전송한다.
     /// 도달 가능하면 즉시 sendMessage, 아니면 transferUserInfo로 큐잉(백그라운드 보장 전달).
     func sendAttendance(action: String, target: WatchTarget) {
+        // iPhone이 켜져 있으면 검증된 브리지(DataManager) 경로로 기록한다.
+        if iphoneReachable {
+            bridgeSendAttendance(action: action, target: target)
+            return
+        }
         if api.hasAuth {
             // 단독 동작: 서버에 직접 기록. 낙관적 UI는 즉시 반영한다.
             applyQueuedAttendance(action: action, target: target)
