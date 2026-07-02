@@ -1181,6 +1181,9 @@ class _MainScreenState extends State<MainScreen>
       final DateTime? arrival = rec?.arrivalTime ?? _attendTimes[t.setId];
       final DateTime? departure = rec?.departureTime ?? _leaveTimes[t.setId];
       // WCSession은 null(NSNull) 값을 전송하지 못하므로 null 키는 넣지 않는다.
+      // classDateTime은 iPhone 브리지 매칭(getAttendanceRecord는 로컬 시각 필드로
+      // 비교)과 워치 표시를 위해 로컬 ISO로 둔다. 서버 직접 쓰기 시 필요한 UTC 변환은
+      // 워치(WatchAPIClient)가 담당한다.
       final Map<String, dynamic> item = <String, dynamic>{
         'setId': t.setId,
         'studentId': t.student.id,

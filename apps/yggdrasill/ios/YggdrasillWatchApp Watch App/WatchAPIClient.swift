@@ -57,6 +57,29 @@ final class WatchAPIClient {
         }
     }
 
+    /// iPhone이 보낸 (대개 오프셋 없는 로컬) ISO 문자열을 정확한 UTC ISO(Z)로 변환.
+    /// 오프셋이 없으면 워치 기기 로컬(=KST) 기준으로 해석한다.
+    static func toUtcISO(_ value: String) -> String {
+        let out = ISO8601DateFormatter()
+        out.formatOptions = [.withInternetDateTime]
+        out.timeZone = TimeZone(identifier: "UTC")
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: value) { return out.string(from: d) }
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: value) { return out.string(from: d) }
+
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        for pattern in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
+            f.dateFormat = pattern
+            if let d = f.date(from: value) { return out.string(from: d) }
+        }
+        return value
+    }
+
     private func kstToday() -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -110,8 +133,10 @@ final class WatchAPIClient {
             "attAction": action,
             "academyId": auth.academyId,
             "studentId": target.studentId,
-            "classDateTime": target.classDateTime,
-            "classEndTime": target.classEndTime,
+            // 서버 RPC(timestamptz)가 오프셋 없는 로컬 시각을 UTC로 오해하지 않도록
+            // 정확한 UTC ISO(Z)로 변환해 보낸다.
+            "classDateTime": Self.toUtcISO(target.classDateTime),
+            "classEndTime": Self.toUtcISO(target.classEndTime),
             "className": target.className,
             "setId": target.setId,
         ]
