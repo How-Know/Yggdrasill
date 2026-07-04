@@ -101,10 +101,8 @@ static lv_obj_t* s_ota_popup = nullptr;
 static lv_obj_t* s_ota_progress_bar = nullptr;
 static lv_obj_t* s_ota_status_label = nullptr;
 static lv_obj_t* s_boot_status_overlay = nullptr;
-static lv_obj_t* s_boot_wifi_label = nullptr;
-static lv_obj_t* s_boot_mqtt_label = nullptr;
-static lv_obj_t* s_boot_list_label = nullptr;
-static lv_obj_t* s_boot_detail_label = nullptr;
+static lv_obj_t* s_boot_status_label = nullptr;
+static lv_obj_t* s_boot_progress_bar = nullptr;
 static uint32_t s_last_refresh_ms = 0;
 static String s_pending_bind_student_id = "";
 static String s_pending_bind_student_name = "";
@@ -633,15 +631,7 @@ static void show_stopwatch_screen(void);
 static void close_stopwatch_screen(bool show_hub);
 static void show_bind_confirm_popup(const char* student_id, const char* student_name);
 
-static lv_obj_t* boot_status_label(lv_obj_t* parent, const char* text, uint32_t color, const lv_font_t* font) {
-  lv_obj_t* label = lv_label_create(parent);
-  lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
-  if (font) lv_obj_set_style_text_font(label, font, 0);
-  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(label, 280);
-  lv_label_set_text(label, text);
-  return label;
-}
+extern const lv_img_dsc_t academy_logo;
 
 void ui_port_show_boot_status(void) {
   if (s_boot_status_overlay && lv_obj_is_valid(s_boot_status_overlay)) return;
@@ -653,27 +643,66 @@ void ui_port_show_boot_status(void) {
   lv_obj_set_style_bg_opa(s_boot_status_overlay, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(s_boot_status_overlay, 0, 0);
   lv_obj_set_style_radius(s_boot_status_overlay, 0, 0);
-  lv_obj_set_style_pad_all(s_boot_status_overlay, 18, 0);
+  lv_obj_set_style_pad_all(s_boot_status_overlay, 8, 0);
   lv_obj_set_flex_flow(s_boot_status_overlay, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(s_boot_status_overlay, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(s_boot_status_overlay, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(s_boot_status_overlay, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t* title = boot_status_label(s_boot_status_overlay, u8"M5 시작 중", 0xFFFFFF, &kakao_kr_24);
-  lv_obj_set_width(title, 280);
-  s_boot_wifi_label = boot_status_label(s_boot_status_overlay, "WiFi  대기 중", 0xB8C0C2, &kakao_kr_16);
-  s_boot_mqtt_label = boot_status_label(s_boot_status_overlay, "MQTT  대기 중", 0xB8C0C2, &kakao_kr_16);
-  s_boot_list_label = boot_status_label(s_boot_status_overlay, "List  대기 중", 0xB8C0C2, &kakao_kr_16);
-  s_boot_detail_label = boot_status_label(s_boot_status_overlay, "", 0x7F8A8D, &kakao_kr_16);
+  lv_obj_t* logo_shell = lv_obj_create(s_boot_status_overlay);
+  lv_obj_set_size(logo_shell, 126, 126);
+  lv_obj_set_style_radius(logo_shell, 63, 0);
+  lv_obj_set_style_bg_color(logo_shell, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_bg_opa(logo_shell, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(logo_shell, 0, 0);
+  lv_obj_set_style_pad_all(logo_shell, 0, 0);
+  lv_obj_clear_flag(logo_shell, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* logo = lv_img_create(logo_shell);
+  lv_img_set_src(logo, &academy_logo);
+  lv_img_set_zoom(logo, 213);
+  lv_obj_center(logo);
+  lv_obj_set_style_pad_bottom(logo_shell, 8, 0);
+
+  lv_obj_t* name = lv_label_create(s_boot_status_overlay);
+  lv_obj_set_style_text_color(name, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_font(name, &kakao_kr_24, 0);
+  lv_label_set_text(name, u8"정현수학교습소");
+  lv_obj_set_style_pad_bottom(name, 14, 0);
+
+  s_boot_progress_bar = lv_bar_create(s_boot_status_overlay);
+  lv_obj_set_size(s_boot_progress_bar, 220, 8);
+  lv_obj_set_style_radius(s_boot_progress_bar, 4, 0);
+  lv_obj_set_style_bg_color(s_boot_progress_bar, lv_color_hex(0x1E2A2E), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(s_boot_progress_bar, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(s_boot_progress_bar, lv_color_hex(0x35C29A), LV_PART_INDICATOR);
+  lv_obj_set_style_radius(s_boot_progress_bar, 4, LV_PART_INDICATOR);
+  lv_bar_set_range(s_boot_progress_bar, 0, 100);
+  lv_bar_set_value(s_boot_progress_bar, 5, LV_ANIM_OFF);
+  lv_obj_set_style_pad_top(s_boot_progress_bar, 0, 0);
+
+  s_boot_status_label = lv_label_create(s_boot_status_overlay);
+  lv_obj_set_style_text_color(s_boot_status_label, lv_color_hex(0xB8C0C2), 0);
+  lv_obj_set_style_text_font(s_boot_status_label, &kakao_kr_16, 0);
+  lv_label_set_long_mode(s_boot_status_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(s_boot_status_label, 280);
+  lv_obj_set_style_text_align(s_boot_status_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_pad_top(s_boot_status_label, 10, 0);
+  lv_label_set_text(s_boot_status_label, u8"준비 중...");
+
   lv_obj_move_foreground(s_boot_status_overlay);
   screensaver_attach_activity(s_boot_status_overlay);
 }
 
-void ui_port_update_boot_status(const char* wifi, const char* mqtt, const char* list, const char* detail) {
+void ui_port_update_boot_status(const char* status, int progress) {
   if (!s_boot_status_overlay || !lv_obj_is_valid(s_boot_status_overlay)) ui_port_show_boot_status();
-  if (s_boot_wifi_label && lv_obj_is_valid(s_boot_wifi_label)) lv_label_set_text(s_boot_wifi_label, wifi ? wifi : "");
-  if (s_boot_mqtt_label && lv_obj_is_valid(s_boot_mqtt_label)) lv_label_set_text(s_boot_mqtt_label, mqtt ? mqtt : "");
-  if (s_boot_list_label && lv_obj_is_valid(s_boot_list_label)) lv_label_set_text(s_boot_list_label, list ? list : "");
-  if (s_boot_detail_label && lv_obj_is_valid(s_boot_detail_label)) lv_label_set_text(s_boot_detail_label, detail ? detail : "");
+  if (s_boot_status_label && lv_obj_is_valid(s_boot_status_label)) {
+    lv_label_set_text(s_boot_status_label, status ? status : "");
+  }
+  if (s_boot_progress_bar && lv_obj_is_valid(s_boot_progress_bar)) {
+    if (progress < 0) progress = 0;
+    if (progress > 100) progress = 100;
+    lv_bar_set_value(s_boot_progress_bar, progress, LV_ANIM_ON);
+  }
 }
 
 void ui_port_hide_boot_status(void) {
@@ -681,10 +710,8 @@ void ui_port_hide_boot_status(void) {
     lv_obj_del(s_boot_status_overlay);
   }
   s_boot_status_overlay = nullptr;
-  s_boot_wifi_label = nullptr;
-  s_boot_mqtt_label = nullptr;
-  s_boot_list_label = nullptr;
-  s_boot_detail_label = nullptr;
+  s_boot_status_label = nullptr;
+  s_boot_progress_bar = nullptr;
 }
 static void show_complete_overlay(void);
 static void close_complete_overlay(void);

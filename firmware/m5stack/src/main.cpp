@@ -257,45 +257,24 @@ static void update_boot_status_ui(bool force = false) {
 
   bool wifiOk = WiFi.status() == WL_CONNECTED;
   bool mqttOk = mqtt.connected();
-  unsigned long upSec = (unsigned long)(now / 1000);
-  unsigned long wifiAgeSec = (wifiOk && g_wifi_connected_ms > 0 && now >= g_wifi_connected_ms)
-      ? (unsigned long)((now - g_wifi_connected_ms) / 1000)
-      : 0UL;
-  unsigned long mqttAgeSec = (g_mqtt_connect_attempt_ms > 0 && now >= g_mqtt_connect_attempt_ms)
-      ? (unsigned long)((now - g_mqtt_connect_attempt_ms) / 1000)
-      : 0UL;
 
-  String wifiLine = wifiOk
-      ? "WiFi  OK  " + WiFi.localIP().toString() + " / RSSI " + String((int)WiFi.RSSI())
-      : "WiFi  연결 중...";
-  String mqttLine;
-  if (mqttOk) {
-    mqttLine = "MQTT  OK";
-  } else if (!wifiOk) {
-    mqttLine = "MQTT  WiFi 대기";
-  } else if (!g_last_tcp_probe_ok && g_last_tcp_probe_ms > 0) {
-    mqttLine = "TCP  FAIL  " + String((unsigned long)g_last_tcp_probe_elapsed_ms) +
-        "ms / fail " + String((unsigned)g_tcp_probe_fail_count);
-  } else if (g_mqtt_connect_in_flight) {
-    mqttLine = "MQTT  연결 중... " + String(mqttAgeSec) + "초";
+  String status;
+  int progress;
+  if (!wifiOk) {
+    status = u8"WiFi 연결 중...";
+    progress = 20;
+  } else if (!mqttOk) {
+    status = u8"서버 연결 중...";
+    progress = 55;
+  } else if (!g_students_received) {
+    status = u8"학생 목록 불러오는 중...";
+    progress = 85;
   } else {
-    mqttLine = "MQTT  재시도 대기... " + String(wifiAgeSec) + "초";
+    status = u8"완료";
+    progress = 100;
   }
-  String listLine = g_students_received
-      ? "List  OK"
-      : (mqttOk ? "List  등원학생 목록 대기" : "List  MQTT 대기");
-  String detail =
-      "broker=" + String(kMqttHosts[mqttHostIndex]) + ":" + String(MQTT_PORT) +
-      "\nssid=" + String(WIFI_SSID) +
-      "\nboot=" + String(upSec) + "s wifi_age=" + String(wifiAgeSec) +
-      "s mqtt_try=" + String(mqttAgeSec) + "s" +
-      "\ntcp=" + String(g_last_tcp_probe_ok ? "OK" : "FAIL") +
-      " " + String((unsigned long)g_last_tcp_probe_elapsed_ms) + "ms" +
-      " fail=" + String((unsigned)g_tcp_probe_fail_count) +
-      "\nstall=" + String(g_mqtt_connect_stall_count) +
-      " backoff=" + String((unsigned long)g_mqtt_reconnect_backoff_ms) + "ms";
 
-  ui_port_update_boot_status(wifiLine.c_str(), mqttLine.c_str(), listLine.c_str(), detail.c_str());
+  ui_port_update_boot_status(status.c_str(), progress);
 }
 
 void fw_publish_list_homeworks(const char* studentIdArg);
@@ -1133,7 +1112,7 @@ void setup() {
 
   initLvgl();
   ui_port_show_boot_status();
-  ui_port_update_boot_status("WiFi  스캔 준비", "MQTT  WiFi 대기", "List  MQTT 대기", "부팅 진단 화면");
+  ui_port_update_boot_status(u8"WiFi 연결 준비 중...", 10);
   lv_timer_handler();
   // 영문 기본 폰트 사용 (한글 비표시 깨짐 방지). 한글 폰트는 추후 내장 폰트로 교체 예정
   M5.Display.setFont(&fonts::Font0);
@@ -1155,7 +1134,7 @@ void setup() {
   int targetRssi = 0;
   {
     Serial.println("WiFi scanning...");
-    ui_port_update_boot_status("WiFi  AP 스캔 중", "MQTT  WiFi 대기", "List  MQTT 대기", "주변 AP/RSSI/채널 기록 중");
+    ui_port_update_boot_status(u8"WiFi 검색 중...", 15);
     lv_timer_handler();
     int n = WiFi.scanNetworks();
     g_wifi_diag += "scan_nets=" + String(n) + "\n";
