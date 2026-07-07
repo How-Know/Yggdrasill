@@ -1,0 +1,45 @@
+name: yggdrasill_student
+description: >-
+  Yggdrasill 학생용 iPad 앱. M5 단말 기능(등하원·과제·질문·서술과제)을
+  Supabase 직접 통신으로 제공한다. 로그인은 원장 발급 가입코드 +
+  Supabase Auth 이메일/비밀번호(내부 변환) 방식.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.10.1
+  shared_preferences: ^2.3.0
+  http: ^1.4.0
+  yggdrasill_ui:
+    path: ../../packages/yggdrasill_ui
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: KakaoSmallSans
+      fonts:
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Light.ttf
+          weight: 300
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Bold.ttf
+          weight: 700
+    - family: KakaoBigSans
+      fonts:
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
+          weight: 800

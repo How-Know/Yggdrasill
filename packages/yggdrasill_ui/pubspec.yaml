@@ -1,0 +1,23 @@
+name: yggdrasill_ui
+description: >-
+  Yggdrasill 공용 UI 패키지. 학습앱(mneme_flutter)의 디자인 시스템에서
+  공용 모듈을 시범 추출한 것으로, 학생앱 등 신규 앱이 우선 사용하고
+  학습앱은 추후 단계적으로 전환한다.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
