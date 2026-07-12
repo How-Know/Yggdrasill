@@ -156,14 +156,43 @@ export async function detectProblemsOnPage({
       try {
         parsedJson = JSON.parse(repaired);
       } catch (_) {
-        const m = repaired.match(/\{[\s\S]*\}/);
-        if (m) {
+        // 균형 중괄호 추출: 모델이 뒤에 여분의 "}" 나 따옴표를 붙이는 경우
+        // (예: "... } }\"") 그리디 정규식은 마지막 "}" 까지 삼켜 깨지므로,
+        // 첫 "{" 부터 문자열을 고려해 짝이 맞는 지점까지만 잘라낸다.
+        const balanced = extractBalancedJsonObject(repaired);
+        if (balanced) {
           try {
-            parsedJson = JSON.parse(m[0]);
+            parsedJson = JSON.parse(balanced);
           } catch (_) {
             // leave null
           }
         }
+        if (!parsedJson) {
+          const m = repaired.match(/\{[\s\S]*\}/);
+          if (m) {
+            try {
+              parsedJson = JSON.parse(m[0]);
+            } catch (_) {
+              // leave null
+            }
+          }
+        }
+      }
+    }
+    if (!parsedJson) {
+      // 개념 페이지 폴백: 모델이 정상 종료했는데도 개념 설명 페이지에서 JSON을
+      // 깨뜨리는 경우가 잦다(닫는 중괄호 누락/중복). 응답에 빈 items 배열이
+      // 분명히 있으면(문항 없음) 파싱 실패로 502·재시도를 내지 말고 빈 개념
+      // 페이지로 처리한다. (items 가 실제로 있으면 이 폴백은 발동하지 않는다.)
+      if (/"items"\s*:\s*\[\s*\]/.test(modelText)) {
+        const pageKind = /"page_kind"\s*:\s*"([^"]*)"/.exec(modelText);
+        parsedJson = {
+          section: 'unknown',
+          page_kind: pageKind ? pageKind[1] : 'concept_page',
+          page_layout: 'unknown',
+          items: [],
+          notes: 'recovered_empty_page_from_malformed_json',
+        };
       }
     }
     if (!parsedJson) {
@@ -189,6 +218,34 @@ export async function detectProblemsOnPage({
       lastBody,
     ).slice(0, 300)}`,
   );
+}
+
+// 첫 "{" 부터 문자열/이스케이프를 고려해 짝이 맞는 "}" 까지의 JSON 오브젝트를
+// 잘라낸다. 모델이 뒤에 여분 텍스트(예: "} }\"") 를 붙여도 유효 오브젝트만 얻는다.
+// 짝이 맞는 닫힘을 못 찾으면(잘림) null.
+function extractBalancedJsonObject(text) {
+  const src = String(text || '');
+  const start = src.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < src.length; i += 1) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  return null;
 }
 
 function compactErrMsg(err) {

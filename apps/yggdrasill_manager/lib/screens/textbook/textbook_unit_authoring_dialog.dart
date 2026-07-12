@@ -4773,11 +4773,16 @@ class _NumberBadge extends StatelessWidget {
     final color =
         item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFFFF4D4F);
     final groupLabel = item.contentGroupLabel.trim();
+    // 필수유형 유형명(content_group_title). 확인용으로 뱃지에 함께 표시한다.
+    final groupTitle = item.contentGroupTitle.trim();
     final badgeLabel = labelOverride ?? item.label;
     final numberLabel =
         badgeLabel.isEmpty ? item.number : '${item.number} · $badgeLabel';
+    final groupText = groupLabel.isEmpty
+        ? groupTitle
+        : (groupTitle.isEmpty ? groupLabel : '$groupLabel $groupTitle');
     final text =
-        groupLabel.isEmpty ? numberLabel : '$groupLabel · $numberLabel';
+        groupText.isEmpty ? numberLabel : '$groupText · $numberLabel';
     return Positioned(
       left: rect.left,
       top: rect.top,

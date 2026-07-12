@@ -139,6 +139,34 @@ export function repairLatexBackslashes(input) {
 //   - 정상 종료(문자열 밖) + 스택 잔여 → 뒤에 닫는 괄호를 붙여 복구 (데이터 보존 우선)
 //   - 문자열 중간/토큰 중간 절단 → "마지막으로 온전히 닫힌 경계" 로 되감고 닫는 괄호를 붙여 복구
 // 두 후보를 순서대로 JSON.parse 로 검증해 성공하는 첫 결과를 반환한다. 모두 실패하면 null.
+// 첫 "{" 부터 문자열/이스케이프를 고려해 짝이 맞는 "}" 까지의 JSON 오브젝트를
+// 잘라낸다. 모델이 뒤에 여분 텍스트(예: "} }") 를 붙여도 유효 오브젝트만 얻는다.
+// 짝이 맞는 닫힘을 못 찾으면(잘림) null → 이후 closeTruncatedJson 이 처리.
+export function extractBalancedJsonObject(input) {
+  const src = typeof input === 'string' ? input : '';
+  const start = src.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < src.length; i += 1) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 export function closeTruncatedJson(input) {
   if (typeof input !== 'string' || !input) return null;
   let inStr = false;
@@ -305,12 +333,25 @@ export async function callGeminiWithPdf({
     try {
       parsedJson = JSON.parse(repaired);
     } catch (_) {
-      const m = repaired.match(/\{[\s\S]*\}/);
-      if (m) {
+      // 균형 중괄호 추출: 모델이 정상 종료했는데도 JSON 뒤에 여분의 "}" 나
+      // 군더더기를 붙이는 경우(예: "{...} }") 그리디 정규식은 마지막 "}" 까지
+      // 삼켜 깨지므로, 첫 "{" 부터 문자열을 고려해 짝이 맞는 지점까지만 잘라낸다.
+      const balanced = extractBalancedJsonObject(repaired);
+      if (balanced) {
         try {
-          parsedJson = JSON.parse(m[0]);
+          parsedJson = JSON.parse(balanced);
         } catch (_) {
-          // 다음 단계(닫는 괄호 보정)로.
+          // 다음 단계로.
+        }
+      }
+      if (!parsedJson) {
+        const m = repaired.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            parsedJson = JSON.parse(m[0]);
+          } catch (_) {
+            // 다음 단계(닫는 괄호 보정)로.
+          }
         }
       }
       // 마지막 단계: 모델이 닫는 괄호를 누락/절단한 경우 스택 기반으로 복구.
