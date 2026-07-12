@@ -278,12 +278,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         const SizedBox(height: 16),
                         // 설정 카드
-                        Container(
-                          decoration: BoxDecoration(
-                            color: dlg.cardBg,
+                        Material(
+                          color: dlg.cardBg,
+                          shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: dlg.cardBorder),
+                            side: BorderSide(color: dlg.cardBorder),
                           ),
+                          clipBehavior: Clip.antiAlias,
                           child: Column(
                             children: [
                               ValueListenableBuilder<ThemeMode>(

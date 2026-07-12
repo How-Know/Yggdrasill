@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../../../models/student.dart';
@@ -2614,6 +2615,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
                 ),
+                const SizedBox(height: 12),
+                _StudentSignupCodeSection(
+                  studentId: student.id,
+                  studentName: student.name,
+                  outlineColor: outlineColor,
+                  labelStyle: labelStyle,
+                  valueStyle: valueStyle,
+                ),
               ],
             ),
           ),
@@ -3371,6 +3380,264 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
               ],
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 학생용 앱(아이패드) 가입코드를 발급·확인하는 섹션.
+/// 발급된 코드를 학생에게 전달하면, 학생은 앱 가입 화면에서 코드를 입력해 계정을 만든다.
+class _StudentSignupCodeSection extends StatefulWidget {
+  final String studentId;
+  final String studentName;
+  final Color outlineColor;
+  final TextStyle labelStyle;
+  final TextStyle valueStyle;
+
+  const _StudentSignupCodeSection({
+    required this.studentId,
+    required this.studentName,
+    required this.outlineColor,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  @override
+  State<_StudentSignupCodeSection> createState() =>
+      _StudentSignupCodeSectionState();
+}
+
+class _StudentSignupCodeSectionState extends State<_StudentSignupCodeSection> {
+  bool _loading = true;
+  bool _busy = false;
+
+  bool _accountLinked = false;
+  String? _activeCode;
+  DateTime? _expiresAt;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StudentSignupCodeSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _accountLinked = false;
+      _activeCode = null;
+      _expiresAt = null;
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final client = Supabase.instance.client;
+      // 이미 앱 계정이 연결되어 있는지 확인
+      final accounts = await client
+          .from('student_app_accounts')
+          .select('user_id')
+          .eq('student_id', widget.studentId)
+          .limit(1);
+      final linked = (accounts as List).isNotEmpty;
+
+      String? code;
+      DateTime? expiresAt;
+      if (!linked) {
+        // 아직 유효한(미사용·미만료) 코드가 있는지 확인
+        final rows = await client
+            .from('student_signup_codes')
+            .select('code, expires_at')
+            .eq('student_id', widget.studentId)
+            .filter('used_at', 'is', null)
+            .gt('expires_at', DateTime.now().toUtc().toIso8601String())
+            .order('created_at', ascending: false)
+            .limit(1);
+        final list = rows as List;
+        if (list.isNotEmpty) {
+          final row = list.first as Map;
+          code = (row['code'] as String?)?.trim();
+          final exp = row['expires_at'] as String?;
+          if (exp != null) expiresAt = DateTime.tryParse(exp)?.toLocal();
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _accountLinked = linked;
+        _activeCode = code;
+        _expiresAt = expiresAt;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _issueCode() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'student_issue_signup_code',
+        params: {'p_student_id': widget.studentId},
+      );
+      final map = (res is Map) ? res : <String, dynamic>{};
+      if (!mounted) return;
+      if (map['ok'] == true) {
+        showAppSnackBar(context, '가입코드가 발급되었습니다.', useRoot: true);
+        await _load();
+      } else {
+        final err = map['error']?.toString() ?? 'unknown';
+        showAppSnackBar(context, '가입코드 발급에 실패했습니다. ($err)', useRoot: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, '가입코드 발급 중 오류가 발생했습니다.', useRoot: true);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _copyCode() async {
+    final code = _activeCode;
+    if (code == null || code.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: code));
+    if (mounted) {
+      showAppSnackBar(context, '가입코드가 복사되었습니다.', useRoot: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String valueText;
+    Color valueColor = widget.valueStyle.color ?? const Color(0xFFEAF2F2);
+    if (_loading) {
+      valueText = '불러오는 중…';
+      valueColor = const Color(0xFF9FB3B3);
+    } else if (_accountLinked) {
+      valueText = '가입 완료';
+      valueColor = const Color(0xFF33A373);
+    } else if (_activeCode != null && _activeCode!.isNotEmpty) {
+      valueText = _activeCode!;
+      valueColor = const Color(0xFF33A373);
+    } else {
+      valueText = '미발급';
+      valueColor = const Color(0xFF9FB3B3);
+    }
+
+    final bool hasCode =
+        !_loading && !_accountLinked && _activeCode != null && _activeCode!.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: BoxDecoration(
+        color: context.yggSurfaceBase,
+        borderRadius: BorderRadius.circular(14),
+        border:
+            Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.tablet_mac_outlined,
+                  size: 18, color: Color(0xFFB9C8C8)),
+              SizedBox(width: 8),
+              Text(
+                '학생앱 가입코드',
+                style: TextStyle(
+                  color: _studentListPrimaryTextColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text('현재 코드', style: widget.labelStyle),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    valueText,
+                    textAlign: TextAlign.right,
+                    style: widget.valueStyle.copyWith(
+                      color: valueColor,
+                      fontSize: hasCode ? 18 : 15,
+                      letterSpacing: hasCode ? 3 : 0,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (hasCode && _expiresAt != null) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                '${DateFormat('M월 d일 HH:mm').format(_expiresAt!)} 까지 유효',
+                style: widget.labelStyle.copyWith(fontSize: 12.5),
+              ),
+            ),
+          ],
+          if (!_accountLinked) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: (_loading || _busy) ? null : _issueCode,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF33A373),
+                      side: const BorderSide(color: Color(0xFF33A373)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      textStyle: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700),
+                    ),
+                    icon: const Icon(Icons.qr_code_2_outlined, size: 18),
+                    label: Text(hasCode ? '재발급' : '가입코드 발급'),
+                  ),
+                ),
+                if (hasCode) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _busy ? null : _copyCode,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF9FB3B3),
+                        side: const BorderSide(color: Color(0xFF4D5A5A)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        textStyle: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w700),
+                      ),
+                      icon: const Icon(Icons.copy_outlined, size: 18),
+                      label: const Text('복사'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
         ],
       ),
     );

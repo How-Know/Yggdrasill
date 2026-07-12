@@ -4,6 +4,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 import '../services/student_api.dart';
 import 'homework_screen.dart';
 import 'profile_screen.dart';
+import 'textbook_screen.dart';
 
 /// 좌측 NavigationRail + 본문. (아이패드 가로/세로 공통)
 class HomeShell extends StatefulWidget {
@@ -83,6 +84,11 @@ class _HomeShellState extends State<HomeShell> {
                   label: Text('과제'),
                 ),
                 NavigationRailDestination(
+                  icon: Icon(Icons.edit_note_outlined),
+                  selectedIcon: Icon(Icons.edit_note_rounded),
+                  label: Text('교재 풀기'),
+                ),
+                NavigationRailDestination(
                   icon: Icon(Icons.person_outline_rounded),
                   selectedIcon: Icon(Icons.person_rounded),
                   label: Text('내 정보'),
@@ -95,6 +101,7 @@ class _HomeShellState extends State<HomeShell> {
                 index: _index,
                 children: const [
                   HomeworkScreen(),
+                  TextbookScreen(),
                   ProfileScreen(),
                 ],
               ),
