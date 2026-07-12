@@ -18,6 +18,49 @@ export function buildPrompt({
       .map((n) => String(n || '').trim())
       .filter(Boolean)
     : [];
+  const scopeSeries = String(scope?.series || '').trim().toLowerCase();
+  const scopeSubKey = String(scope?.sub_key || '').trim().toUpperCase();
+  // 개념원리(wonri) 전용 규칙. 소단원 슬롯별로 수집 대상 카테고리가 다르고,
+  // 필수유형(B)은 문제 바로 아래에 '풀이' 단락(정답 포함)이 인쇄돼 있다.
+  const wonriLines =
+    scopeSeries === 'wonri'
+      ? [
+          '=== 개념원리 교재 전용 규칙 ===',
+          '이 교재는 개념서(개념원리)다. 한 페이지에 개념 설명, 필수유형 예제, "풀이" 단락,',
+          '"확인 체크" 문항이 섞여 있을 수 있다. 아래 기대 문항번호 목록에 있는 문항만 추출하라.',
+          ...(scopeSubKey === 'B'
+            ? [
+                '이번 소단원은 "필수유형" 이다:',
+                '  - 각 필수유형 예제의 stem 은 **문제 본문만** 담는다. 문제 아래의 "풀이" 단락은',
+                '    stem/sub_questions 에 절대 포함하지 마라.',
+                '  - "풀이" 단락 안에 굵은 글씨로 인쇄된 최종 값이 그 문항의 정답이다.',
+                '    이를 answer.subjective (소문항이 여러 개면 answer.parts) 에 채워라.',
+                '  - 유형 제목 줄(예: "필수유형 01 …")과 개념 요약 박스는 stem 에 넣지 마라.',
+                '  - 페이지 하단의 "확인 체크" 문항은 이 소단원 대상이 아니다. 추출하지 마라.',
+              ]
+            : []),
+          ...(scopeSubKey === 'C'
+            ? [
+                '이번 소단원은 "확인 체크" 다. 필수유형 예제와 "풀이" 단락, 개념 설명은',
+                '추출 대상이 아니다. "확인 체크" 문항만 추출하라. "특강" 페이지 하단의',
+                '확인 체크 문항도 포함한다.',
+              ]
+            : []),
+          ...(scopeSubKey === 'A'
+            ? [
+                '이번 소단원은 "개념원리 익히기" 다. "개념원리 이해" 개념 설명 페이지의',
+                '예제/보기/요약은 추출 대상이 아니다. "개념원리 익히기" 문항만 추출하라.',
+              ]
+            : []),
+          ...(scopeSubKey === 'D'
+            ? [
+                '이번 소단원은 "연습문제" 다. STEP1 / STEP2 / 실력 UP 구간 헤더 문구는',
+                '문항이 아니다. 구간을 건너 이어지는 번호의 문항들만 추출하라.',
+              ]
+            : []),
+          '',
+        ]
+      : [];
   const scopeLines = scope
     ? [
         '=== 교재 소단원 추출 범위 ===',
@@ -29,6 +72,7 @@ export function buildPrompt({
         'questions[].source_page 는 첨부 사본 기준이 아니라 원본 본문 PDF 의 raw page 번호로 적어라.',
         '위 범위 밖의 문항은 questions 에 넣지 마라.',
         '',
+        ...wonriLines,
       ]
     : [];
   const expectedLines = expectedNumbers.length > 0
@@ -143,7 +187,7 @@ export function buildPrompt({
     '       행렬 내부 행 구분은 LaTeX 환경 내부이므로 반드시 "\\\\\\\\" 를 사용하고, 일반 줄바꿈으로 "\\\\\\\\" 를 쓰지는 마라.',
     '[S8] 세트형(하위문항 (1),(2),... 로 구성) 은 다음 규칙을 지킨다:',
     '     - is_set_question = true, sub_questions 배열에 각 소문항을 채운다.',
-    '     - A 기본 다잡기처럼 공통 발문만 공유하고 각 소문항이 따로 풀리면 set_type="independent_set" 이다.',
+    '     - A 파트(기본 다잡기 / 교과서문제 정복하기)처럼 공통 발문만 공유하고 각 소문항이 따로 풀리면 set_type="independent_set" 이다.',
     '     - 앞 소문항 결과가 뒤 소문항 풀이에 필요하거나 HWPX/내신 출처의 번들형 세트이면 set_type="dependent_set" 이다.',
     '     - 일부만 의존하면 set_type="mixed_set" 이다. 판단이 어려우면 dependent_set 으로 둔다.',
     '     - 문제 번호와 붙어 보이는 "(1)", "(2)" 같은 하위문항 번호는 절대 대표 problem_number 에 합치지 않는다.',

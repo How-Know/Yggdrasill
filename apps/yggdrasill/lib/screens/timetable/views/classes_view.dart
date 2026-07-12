@@ -18,6 +18,7 @@ import '../../../models/session_override.dart';
 import '../../../services/consult_inquiry_demand_service.dart';
 import '../../../services/consult_trial_lesson_service.dart';
 import '../../../widgets/schedule_locked_by_makeup_dialog.dart';
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
@@ -1642,8 +1643,16 @@ class _ClassesViewState extends State<ClassesView>
 
                 return Column(
                   children: [
-                    // 상단 시간축(및 요일 헤더)은 고정하고, 본문만 세로 스크롤
-                    Row(
+                    // 상단 시간축(및 요일 헤더)는 고정하고, 본문만 세로 스크롤
+                    Builder(
+                      builder: (context) {
+                        final panelStyle =
+                            FabTabBarTokens.previewAcademyPanelStyleFor(
+                          Theme.of(context).brightness,
+                        );
+                        final axisBorder = panelStyle.divider;
+                        final axisMuted = panelStyle.hint;
+                        return Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         SizedBox(
@@ -1652,16 +1661,14 @@ class _ClassesViewState extends State<ClassesView>
                             height: axisHeaderHeight,
                             decoration: BoxDecoration(
                               border: Border(
-                                bottom: BorderSide(
-                                  color: Colors.white.withOpacity(0.16),
-                                ),
+                                bottom: BorderSide(color: axisBorder),
                               ),
                             ),
                             child: Center(
                               child: Text(
                                 '요일',
                                 style: TextStyle(
-                                  color: Colors.white.withOpacity(0.72),
+                                  color: axisMuted,
                                   fontSize: 14,
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -1680,9 +1687,7 @@ class _ClassesViewState extends State<ClassesView>
                                 height: axisHeaderHeight,
                                 decoration: BoxDecoration(
                                   border: Border(
-                                    bottom: BorderSide(
-                                      color: Colors.white.withOpacity(0.16),
-                                    ),
+                                    bottom: BorderSide(color: axisBorder),
                                   ),
                                 ),
                                 child: Row(
@@ -1699,7 +1704,7 @@ class _ClassesViewState extends State<ClassesView>
                                             style: TextStyle(
                                               color: isNow
                                                   ? const Color(0xFF33A373)
-                                                  : Colors.white70,
+                                                  : axisMuted,
                                               fontSize: 13,
                                               fontWeight: isNow
                                                   ? FontWeight.w700
@@ -1716,6 +1721,8 @@ class _ClassesViewState extends State<ClassesView>
                           ),
                         ),
                       ],
+                    );
+                      },
                     ),
                     Expanded(
                       child: SingleChildScrollView(
@@ -1723,7 +1730,16 @@ class _ClassesViewState extends State<ClassesView>
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            SizedBox(
+                            Builder(
+                              builder: (context) {
+                                final panelStyle =
+                                    FabTabBarTokens.previewAcademyPanelStyleFor(
+                                  Theme.of(context).brightness,
+                                );
+                                final dayBorder = panelStyle.divider;
+                                final dayPrimary = panelStyle.title;
+                                final dayMuted = panelStyle.hint;
+                                return SizedBox(
                               width: dayLabelWidth,
                               child: Column(
                                 children: [
@@ -1732,6 +1748,17 @@ class _ClassesViewState extends State<ClassesView>
                                         widget.selectedDayIndex == dayIdx;
                                     final isToday = dayIdx == todayDayIdx;
                                     final expanded = hasExpandedRow(dayIdx);
+                                    final isWeekend = dayIdx >= 5;
+                                    final Color labelColor;
+                                    if (isSelected) {
+                                      labelColor = dayPrimary;
+                                    } else if (isToday) {
+                                      labelColor = const Color(0xFF33A373);
+                                    } else if (isWeekend) {
+                                      labelColor = dayMuted;
+                                    } else {
+                                      labelColor = dayPrimary;
+                                    }
                                     return Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -1748,8 +1775,7 @@ class _ClassesViewState extends State<ClassesView>
                                                   : Colors.transparent,
                                               border: Border(
                                                 bottom: BorderSide(
-                                                  color: Colors.white
-                                                      .withOpacity(0.1),
+                                                  color: dayBorder,
                                                 ),
                                               ),
                                             ),
@@ -1767,24 +1793,16 @@ class _ClassesViewState extends State<ClassesView>
                                                     child: Text(
                                                       weekLabels[dayIdx],
                                                       style: TextStyle(
-                                                        color: isSelected
-                                                            ? const Color(
-                                                                0xFFEAF2F2)
-                                                            : (isToday
-                                                                ? const Color(
-                                                                    0xFF33A373)
-                                                                : Colors.white
-                                                                    .withOpacity(
-                                                                        0.76)),
+                                                        color: labelColor,
                                                         fontSize: 15,
                                                         fontWeight:
                                                             FontWeight.w700,
                                                       ),
                                                     ),
-                        ),
-                      ),
-                  ],
-                ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                         AnimatedSize(
@@ -1803,6 +1821,8 @@ class _ClassesViewState extends State<ClassesView>
                                   }),
                                 ],
                               ),
+                            );
+                              },
                             ),
                             Expanded(
                               child: SingleChildScrollView(
@@ -1905,8 +1925,11 @@ class _ClassesViewState extends State<ClassesView>
                                                 decoration: BoxDecoration(
                                                   border: Border(
                                                     bottom: BorderSide(
-                                                      color: Colors.white
-                                                          .withOpacity(0.1),
+                                                      color: FabTabBarTokens
+                                                          .previewAcademyPanelStyleFor(
+                                                              Theme.of(context)
+                                                                  .brightness)
+                                                          .divider,
                                                     ),
                                                   ),
                                                 ),
@@ -2214,8 +2237,8 @@ class _ClassesViewState extends State<ClassesView>
             opacity: isExpanded ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 1000),
             child: Wrap(
-              spacing: 5,
-              runSpacing: 10,
+              spacing: 1,
+              runSpacing: 6,
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
                 final studentWithInfo = studentsWithInfo.firstWhere(

@@ -69,6 +69,14 @@ import {
   detectSolutionRefsOnPage,
   normalizeSolutionRefsResult,
 } from './textbook/vlm_solution_refs_client.js';
+import {
+  parseTocPages,
+  normalizeTocResult,
+} from './textbook/vlm_toc_client.js';
+import {
+  extractBodySolutionsOnPage,
+  normalizeBodySolutionsResult,
+} from './textbook/vlm_body_solution_client.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -6089,11 +6097,20 @@ async function handleTextbookVlmDetectProblems(body, res) {
     body?.expected_start_number ?? body?.expectedStartNumber,
   );
   const rawSectionHint = String(body?.section_hint || '').trim();
-  const sectionHint = ['basic_drill', 'type_practice', 'mastery'].includes(
-    rawSectionHint,
-  )
+  const sectionHint = [
+    'basic_drill',
+    'type_practice',
+    'mastery',
+    // 개념원리 전용 섹션 (sub_key A/B/C/D 슬롯 대응).
+    'concept_drill',
+    'type_example',
+    'check',
+    'exercise',
+  ].includes(rawSectionHint)
     ? rawSectionHint
     : '';
+  // 교재 시리즈 (ssen | rpm | wonri). 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
+  const series = String(body?.series || '').trim().toLowerCase();
 
   // Textbook authoring VLM uses operator-entered PDF raw pages directly.
   // page_offset is a learning-app display concern and must not shift VLM ranges.
@@ -6114,6 +6131,8 @@ async function handleTextbookVlmDetectProblems(body, res) {
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
       expectedStartNumber,
+      series,
+      sectionHint,
     });
   } catch (err) {
     const initialMessage = compact(err?.message || err);
@@ -6148,6 +6167,8 @@ async function handleTextbookVlmDetectProblems(body, res) {
         timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
         includeContentGroups: false,
         expectedStartNumber,
+        series,
+        sectionHint,
       });
       usedFallbackPrompt = true;
     } catch (fallbackErr) {
@@ -6186,6 +6207,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   const normalized = normalizeDetectResult(result.parsedJson, {
     sectionHint,
     expectedStartNumber,
+    series,
   });
   sendJson(res, 200, {
     ok: true,
@@ -6198,6 +6220,160 @@ async function handleTextbookVlmDetectProblems(body, res) {
     section: normalized.section,
     page_kind: normalized.page_kind,
     layout: normalized.page_layout,
+    items: normalized.items,
+    notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
+// 목차(차례) 페이지 이미지들에서 단원 트리를 추출한다.
+// body: { images: [{ image_base64, mime_type? }], series? }
+async function handleTextbookVlmParseToc(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'gemini_api_key_missing',
+      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+    });
+    return;
+  }
+  const rawImages = Array.isArray(body?.images) ? body.images : [];
+  const images = [];
+  for (const raw of rawImages) {
+    const b64 = String(raw?.image_base64 || '').trim();
+    if (!b64) continue;
+    const mime = String(raw?.mime_type || 'image/png').trim();
+    if (!TEXTBOOK_VLM_VALID_MIMES.has(mime)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_mime_type: ${mime}`,
+        allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+      });
+      return;
+    }
+    images.push({ imageBase64: b64, mimeType: mime });
+  }
+  if (images.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'missing_images' });
+    return;
+  }
+  if (images.length > 12) {
+    sendJson(res, 413, { ok: false, error: 'too_many_toc_pages', limit: 12 });
+    return;
+  }
+  const series = String(body?.series || '').trim().toLowerCase();
+
+  let result;
+  try {
+    result = await parseTocPages({
+      images,
+      series,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const message = compact(err?.message || err);
+    if (isTextbookVlmQuotaError(message)) {
+      sendJson(res, 429, {
+        ok: false,
+        error: 'vlm_daily_quota_exceeded',
+        message,
+      });
+      return;
+    }
+    sendJson(res, 502, { ok: false, error: 'vlm_toc_failed', message });
+    return;
+  }
+
+  const normalized = normalizeTocResult(result.parsedJson);
+  sendJson(res, 200, {
+    ok: true,
+    big_units: normalized.big_units,
+    notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
+// 개념원리 필수유형: 본문 페이지에서 "풀이" 좌표 + 굵은 정답을 추출한다.
+// body: { image_base64, mime_type?, raw_page, expected_numbers? }
+async function handleTextbookVlmExtractBodySolutions(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'gemini_api_key_missing',
+      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+    });
+    return;
+  }
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_mime_type: ${mimeType}`,
+      allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+    });
+    return;
+  }
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    return;
+  }
+  const expectedNumbers = Array.isArray(body?.expected_numbers)
+    ? body.expected_numbers.map((n) => String(n || '').trim()).filter(Boolean)
+    : [];
+
+  let result;
+  try {
+    result = await extractBodySolutionsOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      displayPage: rawPage,
+      expectedNumbers,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const message = compact(err?.message || err);
+    if (isTextbookVlmQuotaError(message)) {
+      sendJson(res, 429, {
+        ok: false,
+        error: 'vlm_daily_quota_exceeded',
+        message,
+      });
+      return;
+    }
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_body_solutions_failed',
+      message,
+    });
+    return;
+  }
+
+  const normalized = normalizeBodySolutionsResult(result.parsedJson);
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    display_page: rawPage,
     items: normalized.items,
     notes: normalized.notes,
     model: TEXTBOOK_VLM_MODEL,
@@ -6265,6 +6441,11 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   const bigOrder = Number.parseInt(String(body?.big_order ?? ''), 10);
   const midOrder = Number.parseInt(String(body?.mid_order ?? ''), 10);
   const subKeyRaw = String(body?.sub_key || '').trim().toUpperCase();
+  // 개념원리 필수유형(B) 소단원 순번. 그 외 카테고리/시리즈는 0.
+  const subIndexParsed = Number.parseInt(String(body?.sub_index ?? ''), 10);
+  const subIndex = Number.isFinite(subIndexParsed) && subIndexParsed > 0
+    ? subIndexParsed
+    : 0;
   const bigName = body?.big_name != null ? String(body.big_name) : null;
   const midName = body?.mid_name != null ? String(body.mid_name) : null;
   const crops = Array.isArray(body?.crops) ? body.crops : [];
@@ -6289,7 +6470,8 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     sendJson(res, 400, { ok: false, error: 'invalid_unit_order' });
     return;
   }
-  if (!['A', 'B', 'C'].includes(subKeyRaw)) {
+  // A/B/C = 쎈/RPM 3슬롯, D = 개념원리의 연습문제 슬롯 (DB CHECK 와 동일).
+  if (!['A', 'B', 'C', 'D'].includes(subKeyRaw)) {
     sendJson(res, 400, { ok: false, error: `invalid_sub_key: ${subKeyRaw}` });
     return;
   }
@@ -6438,6 +6620,7 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       big_order: bigOrder,
       mid_order: midOrder,
       sub_key: subKeyRaw,
+      sub_index: subIndex,
       big_name: bigName,
       mid_name: midName,
       raw_page: rawPage,
@@ -6445,6 +6628,9 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       section: c.section != null ? String(c.section) : null,
       problem_number: problemNumber,
       label: c.label != null ? String(c.label) : '',
+      // 개념서 문항이름(개념원리 익히기 / 필수유형 / 확인 체크 / STEP1 등).
+      // 난이도(label)와 별개 컬럼. 다른 시리즈는 빈 문자열.
+      item_name: c.item_name != null ? String(c.item_name) : '',
       is_set_header: Boolean(c.is_set_header),
       set_from: Number.isFinite(setFrom) ? setFrom : null,
       set_to: Number.isFinite(setTo) ? setTo : null,
@@ -6481,9 +6667,12 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     .from('textbook_problem_crops')
     .upsert(rows, {
       onConflict:
-        'academy_id,book_id,grade_label,big_order,mid_order,sub_key,problem_number',
+        'academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index,problem_number',
     })
-    .select('id, storage_key, problem_number');
+    // sub_key/raw_page/display_page/section 은 개념원리(wonri) 단일 패스가
+    // 카테고리(sub_key)별 후속 작업(필수유형 본문 정답·풀이 추출, Stage 시드)
+    // 에서 행을 다시 분류하는 데 필요하다.
+    .select('id, storage_key, problem_number, sub_key, sub_index, raw_page, display_page, section');
   if (error) {
     sendJson(res, 500, {
       ok: false,
@@ -6904,6 +7093,7 @@ async function syncTextbookAnswersToProblemBankScope({
   gradeLabel,
   scope,
 }) {
+  const scopeSubIndex = Number.isFinite(scope.sub_index) ? scope.sub_index : 0;
   const { data: run, error: runErr } = await supa
     .from('textbook_pb_extract_runs')
     .select('pb_document_id,status')
@@ -6913,6 +7103,7 @@ async function syncTextbookAnswersToProblemBankScope({
     .eq('big_order', scope.big_order)
     .eq('mid_order', scope.mid_order)
     .eq('sub_key', scope.sub_key)
+    .eq('sub_index', scopeSubIndex)
     .maybeSingle();
   if (runErr) throw new Error(`sync_pb_run_fetch_failed: ${runErr.message || runErr}`);
   const documentId = String(run?.pb_document_id || '').trim();
@@ -6928,7 +7119,8 @@ async function syncTextbookAnswersToProblemBankScope({
     .eq('grade_label', gradeLabel)
     .eq('big_order', scope.big_order)
     .eq('mid_order', scope.mid_order)
-    .eq('sub_key', scope.sub_key);
+    .eq('sub_key', scope.sub_key)
+    .eq('sub_index', scopeSubIndex);
   if (cropErr) throw new Error(`sync_pb_crops_fetch_failed: ${cropErr.message || cropErr}`);
   const cropRows = Array.isArray(crops) ? crops : [];
   const cropIds = cropRows
@@ -7543,6 +7735,13 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
     }
     const contentRegion = parseIntArray(r.content_region_1k, 4);
 
+    // 좌표가 가리키는 PDF 종류. 기본 'sol'(해설 PDF). 개념원리 필수유형처럼
+    // 풀이가 본문에 인쇄된 경우 'body'.
+    const sourceKindRaw = String(r.source_kind || '').trim().toLowerCase();
+    const sourceKind = ['sol', 'body'].includes(sourceKindRaw)
+      ? sourceKindRaw
+      : 'sol';
+
     rows.push({
       crop_id: cropId,
       academy_id: academyId,
@@ -7550,6 +7749,7 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
       display_page: Number.isFinite(displayPage) ? displayPage : null,
       number_region_1k: numberRegion,
       content_region_1k: contentRegion,
+      source_kind: sourceKind,
       edited_at: r.source === 'manual' ? new Date().toISOString() : null,
     });
   }
@@ -7580,7 +7780,19 @@ function parseStageScope(raw) {
   if (!Number.isFinite(bigOrder) || bigOrder < 0) return null;
   if (!Number.isFinite(midOrder) || midOrder < 0) return null;
   if (!subKey) return null;
-  return { big_order: bigOrder, mid_order: midOrder, sub_key: subKey };
+  // 개념원리 필수유형(B) 소단원 순번. 미지정/음수는 0 (그 외 카테고리·시리즈).
+  const subIndexParsed = Number.parseInt(
+    String(raw?.sub_index ?? raw?.subIndex ?? ''),
+    10,
+  );
+  const subIndex =
+    Number.isFinite(subIndexParsed) && subIndexParsed > 0 ? subIndexParsed : 0;
+  return {
+    big_order: bigOrder,
+    mid_order: midOrder,
+    sub_key: subKey,
+    sub_index: subIndex,
+  };
 }
 
 async function fetchTextbookStageStatusRows({ academyId, bookId, gradeLabel, scopes }) {
@@ -8219,6 +8431,23 @@ async function handler(req, res) {
     if (method === 'POST' && url.pathname === '/textbook/vlm/detect-problems') {
       const body = await readJson(req);
       await handleTextbookVlmDetectProblems(body, res);
+      return;
+    }
+
+    // Textbook VLM — 목차(차례) 페이지에서 단원 트리 추출.
+    if (method === 'POST' && url.pathname === '/textbook/vlm/parse-toc') {
+      const body = await readJson(req);
+      await handleTextbookVlmParseToc(body, res);
+      return;
+    }
+
+    // Textbook VLM — 개념원리 필수유형: 본문 페이지 "풀이" 좌표 + 정답 추출.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/vlm/extract-body-solutions'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmExtractBodySolutions(body, res);
       return;
     }
 

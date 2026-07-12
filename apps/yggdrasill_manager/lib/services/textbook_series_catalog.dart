@@ -72,6 +72,47 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       TextbookSubSectionPreset(key: 'C', displayName: 'C 만점도전하기'),
     ],
   ),
+  // 쎈과 구조가 거의 동일한 쌍둥이 교재. A/B/C 파트 이름만 다르고
+  // 난이도 라벨에 상중/중하/중요가 추가된다. C 마지막 페이지는
+  // 왼쪽단 '서술형 주관식'(→서술형) / 오른쪽단 '실력 UP'(→실력) 구성.
+  TextbookSeriesCatalogEntry(
+    key: 'rpm',
+    displayName: 'RPM',
+    defaultTextbookType: '문제집',
+    notes:
+        '한 중단원은 A(교과서문제 정복하기) / B(유형 익히기) / C(시험에 꼭 나오는 문제)로 고정됩니다. '
+        'C 마지막에는 서술형 주관식 / 실력 UP 섹션이 포함될 수 있습니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: 'A 교과서문제 정복하기'),
+      TextbookSubSectionPreset(key: 'B', displayName: 'B 유형 익히기'),
+      TextbookSubSectionPreset(key: 'C', displayName: 'C 시험에 꼭 나오는 문제'),
+    ],
+  ),
+  // 개념원리 개념서. 트리는 책의 대-중-소단원 3계층을 그대로 따른다 (번호 제거):
+  //   대단원 = 책 대단원 (예: "다항식" — "I." 로마숫자 제거)
+  //   중단원 = 책 중단원 (예: "다항식의 연산" — "1." 숫자 제거)
+  //   소단원 = 책 소단원 (예: "다항식의 덧셈과 뺄셈" — "01" 번호 제거)
+  //   "연습문제" 항목은 중단원 끝의 소단원 행으로 들어간다.
+  // 페이지는 소단원 행에만 입력하며, 아래 A~D는 단원이 아니라 문제 카테고리
+  // 슬롯이다 — 페이지 범위는 소단원 입력에서 자동 유도되고(A/B/C = 일반
+  // 소단원 전체 범위, D = 연습문제 행 범위), VLM이 페이지 안에서 카테고리를
+  // 분류한다. 문항 번호가 카테고리별 책 전체 연속 번호라 슬롯을 나눠야
+  // 번호 충돌 없이 정답/추출 매칭이 된다.
+  TextbookSeriesCatalogEntry(
+    key: 'wonri',
+    displayName: '개념원리',
+    defaultTextbookType: '개념서',
+    notes:
+        '개념원리는 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
+        '페이지는 소단원별로만 입력하며, 개념원리 익히기 / 필수유형 / 확인 체크 / 연습문제 '
+        '분류는 VLM이 해당 페이지 안에서 자동으로 나눕니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: '개념원리 익히기'),
+      TextbookSubSectionPreset(key: 'B', displayName: '필수유형'),
+      TextbookSubSectionPreset(key: 'C', displayName: '확인 체크'),
+      TextbookSubSectionPreset(key: 'D', displayName: '연습문제'),
+    ],
+  ),
 ];
 
 TextbookSeriesCatalogEntry? textbookSeriesByKey(String key) {

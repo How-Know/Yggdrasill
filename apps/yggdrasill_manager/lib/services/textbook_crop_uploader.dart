@@ -37,6 +37,7 @@ class TextbookCropUploadItem {
     this.section,
     required this.problemNumber,
     this.label = '',
+    this.itemName = '',
     this.isSetHeader = false,
     this.setFrom,
     this.setTo,
@@ -61,6 +62,11 @@ class TextbookCropUploadItem {
   final String? section;
   final String problemNumber;
   final String label;
+
+  /// 개념서 "문항이름" (개념원리 익히기 / 필수유형 / 확인 체크 / STEP1 등).
+  /// 쎈의 난이도(label)와 별개 컬럼(item_name)에 저장된다. 난이도가 있는
+  /// 시리즈(쎈/RPM)에서는 빈 문자열.
+  final String itemName;
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
@@ -160,7 +166,9 @@ class TextbookCropUploader {
     required String gradeLabel,
     required int bigOrder,
     required int midOrder,
-    required String subKey, // 'A' | 'B' | 'C'
+    required String subKey, // 'A' | 'B' | 'C' | 'D'
+    // 개념원리 필수유형(B) 소단원 순번(중단원 내 0-based). 그 외는 0.
+    int subIndex = 0,
     String? bigName,
     String? midName,
     required List<TextbookCropUploadItem> items,
@@ -189,6 +197,7 @@ class TextbookCropUploader {
         'big_order': bigOrder,
         'mid_order': midOrder,
         'sub_key': subKey,
+        'sub_index': subIndex,
         if (bigName != null && bigName.isNotEmpty) 'big_name': bigName,
         if (midName != null && midName.isNotEmpty) 'mid_name': midName,
         if (regionsOnly) 'regions_only': true,
@@ -249,6 +258,7 @@ class TextbookCropUploader {
         'section': item.section,
       'problem_number': item.problemNumber,
       'label': item.label,
+      if (item.itemName.isNotEmpty) 'item_name': item.itemName,
       'is_set_header': item.isSetHeader,
       if (item.setFrom != null) 'set_from': item.setFrom,
       if (item.setTo != null) 'set_to': item.setTo,

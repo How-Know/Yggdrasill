@@ -23,13 +23,17 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:pdfrx/pdfrx.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_course_catalog.dart';
+import '../../services/textbook_pdf_page_renderer.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
+import '../../services/textbook_vlm_test_service.dart';
+import 'textbook_toc_autofill.dart';
 
 class TextbookRegisterWizard extends StatefulWidget {
   const TextbookRegisterWizard({super.key, this.defaultAcademyId});
@@ -67,11 +71,14 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   final _supabase = Supabase.instance.client;
   final _registry = TextbookBookRegistry();
   final _pdfService = TextbookPdfService();
+  final _vlmService = TextbookVlmTestService();
   static const String _rootFolderValue = '__ROOT__';
 
   int _step = 0;
   bool _submitting = false;
   String? _submitError;
+  bool _tocParsing = false;
+  String? _tocStatus;
 
   // Step 1 fields -----------------------------------------------------------
   String _seriesKey = kTextbookSeriesCatalog.first.key;
@@ -298,9 +305,17 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
       textbookCourseByKey(_selectedCourseKey) ??
       (_courseOptions.isNotEmpty ? _courseOptions.first : null);
 
+  _MidUnitEdit _newMidUnit() {
+    final mid = _MidUnitEdit(series: _series);
+    if (_seriesHasSubUnitRows) {
+      mid.subUnits.add(_SubUnitEdit());
+    }
+    return mid;
+  }
+
   void _addBigUnit({bool silent = false}) {
     final newUnit = _BigUnitEdit();
-    newUnit.middles.add(_MidUnitEdit(series: _series));
+    newUnit.middles.add(_newMidUnit());
     _bigUnits.add(newUnit);
     if (!silent) setState(() {});
   }
@@ -314,7 +329,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
 
   void _addMidUnit(_BigUnitEdit parent) {
     setState(() {
-      parent.middles.add(_MidUnitEdit(series: _series));
+      parent.middles.add(_newMidUnit());
     });
   }
 
@@ -378,6 +393,130 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     return int.tryParse(t);
   }
 
+  /// 개념서(개념원리)는 중단원 아래에 실제 소단원 행(이름+페이지)을 두고,
+  /// A~D 문제 카테고리 슬롯은 소단원 페이지 입력에서 자동 유도한다.
+  bool get _seriesHasSubUnitRows => _seriesKey == 'wonri';
+
+  // ── 목차 자동 인식 ────────────────────────────────────────────────────────
+  //
+  // 본문 PDF의 목차('차례') 페이지 범위를 입력받아 VLM 으로 단원 트리를 읽고
+  // Step 3 의 대/중단원 입력을 자동으로 채운다. 목차에 인쇄된 페이지 숫자와
+  // 사용자가 입력한 페이지 보정값(PDF 페이지 − 인쇄 페이지)으로 소단원
+  // 시작/끝 페이지도 자동으로 채운다 (끝 = 다음 소단원 시작 − 1, 마지막
+  // 항목은 비워 두므로 사용자가 검토·보완한다).
+
+  Future<void> _runTocAutoParse() async {
+    if (_tocParsing) return;
+    final bodyPath = (_bodyPdfPath ?? '').trim();
+    if (bodyPath.isEmpty) {
+      setState(() => _tocStatus = '실패: 2단계에서 본문 PDF를 먼저 선택하세요.');
+      return;
+    }
+    final range = await showTocRangeDialog(context);
+    if (range == null) return;
+    setState(() {
+      _tocParsing = true;
+      _tocStatus = '목차 페이지 렌더링 중...';
+    });
+    try {
+      final doc = await PdfDocument.openFile(bodyPath);
+      try {
+        final start = range.start.clamp(1, doc.pages.length);
+        final end = range.end.clamp(start, doc.pages.length);
+        final images = <Uint8List>[];
+        for (var page = start; page <= end; page += 1) {
+          images.add(await renderPdfPageToPng(
+            document: doc,
+            pageNumber: page,
+            longEdgePx: 1600,
+          ));
+          if (!mounted) return;
+          setState(() =>
+              _tocStatus = '목차 페이지 렌더링 중... ($page / $end)');
+        }
+        if (!mounted) return;
+        setState(() => _tocStatus = 'VLM 목차 분석 중... (${images.length}페이지)');
+        final result = await _vlmService.parseToc(
+          pageImages: images,
+          series: _seriesKey,
+        );
+        if (!mounted) return;
+        final applied =
+            _applyTocResult(result, tocPageOffset: range.pageOffset);
+        setState(() {
+          _tocParsing = false;
+          _tocStatus = applied == null
+              ? '실패: 목차에서 단원을 찾지 못했습니다.'
+              : '목차 인식 완료 · 대단원 ${applied.$1}개 / 중단원 ${applied.$2}개 · '
+                  '페이지 자동 입력됨(보정 ${range.pageOffset >= 0 ? '+' : ''}'
+                  '${range.pageOffset}) — 시작/끝 페이지를 검토하세요'
+                  '${result.notes.isEmpty ? '' : ' · ${result.notes}'}';
+        });
+      } finally {
+        doc.dispose();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _tocParsing = false;
+        _tocStatus = '실패: $e';
+      });
+    }
+  }
+
+  /// VLM 목차 결과를 Step 3 트리에 반영한다. (대단원 수, 중단원 수) 를 반환.
+  ///
+  /// 이름 정리(번호 제거, 카테고리 라벨 필터)와 페이지 자동 채움은
+  /// [buildTocAutofillTree] (공용 로직) 가 처리하고, 여기서는 그 결과를
+  /// 위저드의 편집 모델로 옮기기만 한다.
+  (int, int)? _applyTocResult(TextbookTocParseResult toc,
+      {int tocPageOffset = 0}) {
+    final tree = buildTocAutofillTree(
+      toc,
+      subUnitRows: _seriesHasSubUnitRows,
+      tocPageOffset: tocPageOffset,
+    );
+    if (tree.isEmpty) return null;
+    final newBigs = <_BigUnitEdit>[];
+    for (final big in tree) {
+      final bigEdit = _BigUnitEdit();
+      bigEdit.nameCtrl.text = big.name;
+      for (final mid in big.midUnits) {
+        final midEdit = _MidUnitEdit(series: _series)..nameCtrl.text = mid.name;
+        if (_seriesHasSubUnitRows) {
+          for (final sub in mid.subUnits) {
+            final row = _SubUnitEdit(name: sub.name, isExercise: sub.isExercise);
+            if (sub.startPage != null) row.startCtrl.text = '${sub.startPage}';
+            if (sub.endPage != null) row.endCtrl.text = '${sub.endPage}';
+            midEdit.subUnits.add(row);
+          }
+          if (midEdit.subUnits.isEmpty) {
+            midEdit.subUnits.add(_SubUnitEdit());
+          }
+        }
+        bigEdit.middles.add(midEdit);
+      }
+      if (bigEdit.middles.isEmpty) {
+        bigEdit.middles.add(_MidUnitEdit(series: _series));
+      }
+      newBigs.add(bigEdit);
+    }
+    if (newBigs.isEmpty) return null;
+    var midCount = 0;
+    for (final big in newBigs) {
+      midCount += big.middles.length;
+    }
+    setState(() {
+      for (final big in _bigUnits) {
+        big.dispose();
+      }
+      _bigUnits
+        ..clear()
+        ..addAll(newBigs);
+    });
+    return (newBigs.length, midCount);
+  }
+
   List<BigUnitInput> _buildBigUnitInputs() {
     final out = <BigUnitInput>[];
     for (var i = 0; i < _bigUnits.length; i += 1) {
@@ -386,20 +525,82 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
       for (var m = 0; m < big.middles.length; m += 1) {
         final mid = big.middles[m];
         final subList = <SubSectionInput>[];
-        for (var s = 0; s < mid.subs.length; s += 1) {
-          final sub = mid.subs[s];
-          subList.add(SubSectionInput(
-            order: s,
-            subKey: sub.preset.key,
-            displayName: sub.preset.displayName,
-            startPage: _positiveInt(sub.startCtrl.text),
-            endPage: _positiveInt(sub.endCtrl.text),
-          ));
+        final subUnitList = <SubUnitInput>[];
+        if (_seriesHasSubUnitRows) {
+          // 개념원리: 페이지는 소단원 단위로만 입력받고, A~D 카테고리 슬롯의
+          // 페이지 범위는 소단원 입력에서 자동 유도한다.
+          //   A/B/C(개념원리 익히기·필수유형·확인 체크) = 일반 소단원 전체 범위
+          //   D(연습문제) = "연습문제" 소단원 행 범위
+          int? lessonStart;
+          int? lessonEnd;
+          int? exerciseStart;
+          int? exerciseEnd;
+          var order = 0;
+          for (final subUnit in mid.subUnits) {
+            final name = subUnit.nameCtrl.text.trim();
+            if (name.isEmpty) continue;
+            final start = _positiveInt(subUnit.startCtrl.text);
+            final end = _positiveInt(subUnit.endCtrl.text);
+            subUnitList.add(SubUnitInput(
+              order: order,
+              name: name,
+              startPage: start,
+              endPage: end,
+              isExercise: subUnit.isExercise,
+            ));
+            order += 1;
+            if (subUnit.isExercise) {
+              if (start != null) {
+                exerciseStart = exerciseStart == null
+                    ? start
+                    : (start < exerciseStart ? start : exerciseStart);
+              }
+              if (end != null) {
+                exerciseEnd = exerciseEnd == null
+                    ? end
+                    : (end > exerciseEnd ? end : exerciseEnd);
+              }
+            } else {
+              if (start != null) {
+                lessonStart = lessonStart == null
+                    ? start
+                    : (start < lessonStart ? start : lessonStart);
+              }
+              if (end != null) {
+                lessonEnd = lessonEnd == null
+                    ? end
+                    : (end > lessonEnd ? end : lessonEnd);
+              }
+            }
+          }
+          for (var s = 0; s < mid.subs.length; s += 1) {
+            final sub = mid.subs[s];
+            final isExerciseSlot = sub.preset.key == 'D';
+            subList.add(SubSectionInput(
+              order: s,
+              subKey: sub.preset.key,
+              displayName: sub.preset.displayName,
+              startPage: isExerciseSlot ? exerciseStart : lessonStart,
+              endPage: isExerciseSlot ? exerciseEnd : lessonEnd,
+            ));
+          }
+        } else {
+          for (var s = 0; s < mid.subs.length; s += 1) {
+            final sub = mid.subs[s];
+            subList.add(SubSectionInput(
+              order: s,
+              subKey: sub.preset.key,
+              displayName: sub.preset.displayName,
+              startPage: _positiveInt(sub.startCtrl.text),
+              endPage: _positiveInt(sub.endCtrl.text),
+            ));
+          }
         }
         midList.add(MidUnitInput(
           midOrder: m,
           midName: mid.nameCtrl.text.trim(),
           subs: subList,
+          subUnits: subUnitList,
         ));
       }
       out.add(BigUnitInput(
@@ -907,6 +1108,25 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                 child: _SectionTitle('단원 구조'),
               ),
               OutlinedButton.icon(
+                onPressed: _tocParsing ? null : _runTocAutoParse,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF8AB8E8),
+                  side: const BorderSide(color: Color(0xFF2B3A55)),
+                ),
+                icon: _tocParsing
+                    ? const SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF8AB8E8),
+                        ),
+                      )
+                    : const Icon(Icons.auto_awesome, size: 14),
+                label: const Text('목차 자동 인식'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
                 onPressed: () => _addBigUnit(),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFB3B3B3),
@@ -918,12 +1138,31 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             ],
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20),
+        if (_tocStatus != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+            child: Text(
+              _tocStatus!,
+              style: TextStyle(
+                color: _tocStatus!.startsWith('실패')
+                    ? const Color(0xFFE68A8A)
+                    : const Color(0xFF8AB8E8),
+                fontSize: 11,
+              ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Text(
-            '쎈 교재는 각 중단원이 A 기본다잡기 / B 유형뽀개기 / C 만점도전하기 세 개의 소단원으로 고정됩니다. '
-            '소단원별 시작/끝 페이지만 입력하세요.',
-            style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+            _seriesHasSubUnitRows
+                ? '${_series.displayName} 교재는 대단원 - 중단원 - 소단원 구조입니다. '
+                    '소단원별 시작/끝 페이지만 입력하면 '
+                    '${_series.subPreset.map((p) => p.displayName).join(' / ')} '
+                    '분류는 VLM이 페이지 안에서 자동으로 나눕니다.'
+                : '${_series.displayName} 교재는 각 중단원이 '
+                    '${_series.subPreset.map((p) => p.displayName).join(' / ')} '
+                    '소단원으로 고정됩니다. 소단원별 시작/끝 페이지만 입력하세요.',
+            style: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
           ),
         ),
         const SizedBox(height: 6),
@@ -1067,12 +1306,109 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             ],
           ),
           const SizedBox(height: 8),
-          for (var i = 0; i < mid.subs.length; i += 1) ...[
-            _buildSubSectionRow(mid.subs[i]),
-            if (i < mid.subs.length - 1) const SizedBox(height: 6),
+          if (_seriesHasSubUnitRows) ...[
+            for (var i = 0; i < mid.subUnits.length; i += 1) ...[
+              _buildSubUnitRow(mid, i),
+              if (i < mid.subUnits.length - 1) const SizedBox(height: 6),
+            ],
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () => setState(
+                      () => mid.subUnits.add(_SubUnitEdit())),
+                  icon: const Icon(Icons.add, size: 14),
+                  label: const Text('소단원 추가',
+                      style: TextStyle(fontSize: 11)),
+                ),
+                // 연습문제는 소단원 사이사이에 여러 번 있을 수 있어 항상 노출.
+                TextButton.icon(
+                  onPressed: () => setState(() => mid.subUnits.add(
+                      _SubUnitEdit(name: '연습문제', isExercise: true))),
+                  icon: const Icon(Icons.add_task, size: 14),
+                  label: const Text('연습문제 추가',
+                      style: TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ] else ...[
+            for (var i = 0; i < mid.subs.length; i += 1) ...[
+              _buildSubSectionRow(mid.subs[i]),
+              if (i < mid.subs.length - 1) const SizedBox(height: 6),
+            ],
           ],
         ],
       ),
+    );
+  }
+
+  /// 개념서(개념원리)의 소단원 한 행 — 이름 + 시작/끝 페이지 + 삭제.
+  /// "연습문제" 행은 STEP1/STEP2/실력UP이 있는 연습문제 페이지 범위다.
+  Widget _buildSubUnitRow(_MidUnitEdit mid, int index) {
+    final sub = mid.subUnits[index];
+    return Row(
+      children: [
+        Container(
+          width: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: sub.isExercise
+                ? const Color(0xFF241A1E)
+                : const Color(0xFF1E1A12),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            sub.isExercise ? '연습' : '소단원',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: sub.isExercise
+                  ? const Color(0xFFE68AA9)
+                  : const Color(0xFFEAB968),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 3,
+          child: _buildTextField(
+            sub.nameCtrl,
+            hint: sub.isExercise ? '연습문제' : '소단원 이름',
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildTextField(
+            sub.startCtrl,
+            hint: '시작 페이지',
+            keyboardType: TextInputType.number,
+            inputFormatters: <TextInputFormatter>[
+              FilteringTextInputFormatter.digitsOnly,
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildTextField(
+            sub.endCtrl,
+            hint: '끝 페이지',
+            keyboardType: TextInputType.number,
+            inputFormatters: <TextInputFormatter>[
+              FilteringTextInputFormatter.digitsOnly,
+            ],
+          ),
+        ),
+        const SizedBox(width: 4),
+        IconButton(
+          tooltip: '소단원 삭제',
+          visualDensity: VisualDensity.compact,
+          onPressed: () => setState(() {
+            mid.subUnits.removeAt(index).dispose();
+          }),
+          icon: const Icon(Icons.close, size: 14, color: Color(0xFF9FB3B3)),
+        ),
+      ],
     );
   }
 
@@ -1144,6 +1480,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
               for (final big in _bigUnits) {
                 for (final mid in big.middles) {
                   mid.applyPreset(_series);
+                  if (_seriesHasSubUnitRows && mid.subUnits.isEmpty) {
+                    mid.subUnits.add(_SubUnitEdit());
+                  }
                 }
               }
               if (_textbookType.isEmpty) {
@@ -1742,6 +2081,10 @@ class _MidUnitEdit {
   final TextEditingController nameCtrl = TextEditingController();
   final List<_SubSectionEdit> subs = <_SubSectionEdit>[];
 
+  /// 개념서(개념원리) 전용 — 책의 실제 소단원 행들. 페이지 입력은 이 단위로만
+  /// 받고, A~D 슬롯 페이지는 여기서 자동 유도된다.
+  final List<_SubUnitEdit> subUnits = <_SubUnitEdit>[];
+
   void applyPreset(TextbookSeriesCatalogEntry series) {
     // Preserve whatever numbers the user already typed when switching series.
     final keyed = <String, _SubSectionEdit>{
@@ -1770,6 +2113,9 @@ class _MidUnitEdit {
     for (final s in subs) {
       s.dispose();
     }
+    for (final s in subUnits) {
+      s.dispose();
+    }
   }
 }
 
@@ -1789,6 +2135,26 @@ class _SubSectionEdit {
     endCtrl.dispose();
   }
 }
+
+/// 개념서(개념원리)의 실제 소단원 한 행. [isExercise] 이면 "연습문제" 행으로,
+/// 이 범위가 D(연습문제) 슬롯의 페이지 범위가 된다.
+class _SubUnitEdit {
+  _SubUnitEdit({String? name, this.isExercise = false}) {
+    if (name != null) nameCtrl.text = name;
+  }
+
+  final TextEditingController nameCtrl = TextEditingController();
+  final TextEditingController startCtrl = TextEditingController();
+  final TextEditingController endCtrl = TextEditingController();
+  final bool isExercise;
+
+  void dispose() {
+    nameCtrl.dispose();
+    startCtrl.dispose();
+    endCtrl.dispose();
+  }
+}
+
 
 int? _positiveInt(String raw) {
   final t = raw.trim();

@@ -5,7 +5,11 @@
 //
 // Node >= 18 의 global fetch / AbortController 만 사용한다. 외부 의존성 없음.
 
-import { buildDetectProblemsPrompt, VLM_DETECT_LABELS } from './vlm_detect_prompt.js';
+import {
+  buildDetectProblemsPrompt,
+  VLM_DETECT_LABELS,
+  WONRI_ITEM_CATEGORIES,
+} from './vlm_detect_prompt.js';
 import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
@@ -36,6 +40,8 @@ export async function detectProblemsOnPage({
   timeoutMs = 90000,
   includeContentGroups = true,
   expectedStartNumber = '',
+  series = 'ssen',
+  sectionHint = '',
   maxRetries = DEFAULT_MAX_RETRIES,
 }) {
   const key = String(apiKey || '').trim();
@@ -66,6 +72,8 @@ export async function detectProblemsOnPage({
               pageOffset,
               includeContentGroups,
               expectedStartNumber,
+              series,
+              sectionHint,
             }),
           },
         ],
@@ -199,14 +207,22 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
 
+  const knownSections = [
+    'basic_drill',
+    'type_practice',
+    'mastery',
+    // 개념원리 전용 섹션 (sub_key A/B/C/D 슬롯 대응).
+    'concept_drill',
+    'type_example',
+    'check',
+    'exercise',
+  ];
   const section = String(parsedJson.section || '').trim();
-  out.section = ['basic_drill', 'type_practice', 'mastery', 'unknown'].includes(
-    section,
-  )
+  out.section = [...knownSections, 'unknown'].includes(section)
     ? section
     : 'unknown';
   const sectionHint = String(opts?.sectionHint || '').trim();
-  if (['basic_drill', 'type_practice', 'mastery'].includes(sectionHint)) {
+  if (knownSections.includes(sectionHint)) {
     out.section = sectionHint;
   }
 
@@ -234,6 +250,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     return out;
   }
 
+  const series = String(opts?.series || '').trim().toLowerCase();
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
@@ -264,13 +281,21 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
         raw.content_region ??
         raw.content_bbox,
     );
-    const group =
-      out.section === 'mastery'
-        ? { kind: 'none', label: '', title: '', order: null }
-        : normalizeContentGroup(raw.content_group);
+    // 개념원리 단일 패스: 문항마다 카테고리를 붙인다. 모델이 category 를
+    // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
+    const category = normalizeWonriCategory(raw, label, series);
+    // 유형 그룹(content_group)은 문항 단위로 판단한다.
+    // 개념원리는 B 필수유형(type_example)만 "필수유형 01" 그룹을 갖는다.
+    const groupDisallowed = category
+      ? category !== 'type_example'
+      : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
+    const group = groupDisallowed
+      ? { kind: 'none', label: '', title: '', order: null }
+      : normalizeContentGroup(raw.content_group);
     out.items.push({
       number,
       label,
+      category,
       is_set_header: isSet,
       set_range: setRange,
       content_group: group,
@@ -283,12 +308,60 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       item_region: itemRegion,
     });
   }
+  backfillWonriCategories(out, series);
   backfillMissingItemRegions(out);
   backfillBasicDrillItemRegions(out);
   backfillMissingBboxes(out);
   validateBasicDrillItems(out);
   annotateExpectedBasicDrillStart(out, opts?.expectedStartNumber);
   return out;
+}
+
+// 개념원리 단일 패스 — 문항의 category 를 검증/보정한다.
+// 우선순위: 모델이 준 category → 라벨 기반 추정(필수/STEP/실력).
+function normalizeWonriCategory(raw, label, series) {
+  const value = String(raw?.category ?? '').trim();
+  if (WONRI_ITEM_CATEGORIES.includes(value)) return value;
+  if (series && series !== 'wonri') return '';
+  if (label === '필수') return 'type_example';
+  if (
+    label === 'STEP1' ||
+    label === 'STEP2' ||
+    label === '실력' ||
+    label === '수능기출' ||
+    label === '평가원기출' ||
+    label === '교육청기출'
+  ) {
+    return 'exercise';
+  }
+  return '';
+}
+
+// category 를 못 받은 문항을 같은 페이지의 다수 카테고리(또는 페이지 section)
+// 로 채운다. 개념원리가 아닌 시리즈에는 아무 것도 하지 않는다.
+function backfillWonriCategories(result, series) {
+  if (series !== 'wonri') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+  const missing = result.items.filter((item) => !item.category);
+  if (missing.length === 0) return;
+
+  const counts = new Map();
+  for (const item of result.items) {
+    if (!item.category) continue;
+    counts.set(item.category, (counts.get(item.category) || 0) + 1);
+  }
+  let fallback = '';
+  if (counts.size > 0) {
+    fallback = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  } else if (WONRI_ITEM_CATEGORIES.includes(result.section)) {
+    fallback = result.section;
+  }
+  if (!fallback) return;
+  for (const item of missing) {
+    item.category = fallback;
+  }
+  const suffix = `wonri_category_backfilled=${missing.length}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
 }
 
 function annotateExpectedBasicDrillStart(result, expectedStartNumber) {
@@ -346,6 +419,16 @@ function normalizeDifficultyLabel(input) {
   if (compact.includes('서술형') || compact.includes('논술')) return '서술형';
   if (compact === '대표문제') return '대표 문제';
   if (compact === '교육청기출') return '교육청기출';
+  // 개념원리 연습문제 하단 기출 구간 라벨. "수능 기출"/"수능기출" 등 표기 변형 흡수.
+  if (/^수능기출$/.test(compact)) return '수능기출';
+  if (/^평가원기출$/.test(compact)) return '평가원기출';
+  // RPM/개념원리: "실력 UP" 구간 라벨. 모델이 "실력UP"/"실력 up" 으로 내보내도 "실력" 으로 정규화.
+  if (/^실력(up)?$/i.test(compact)) return '실력';
+  // 개념원리 연습문제: STEP 1 / step1 등 표기 변형을 STEP1/STEP2 로 정규화.
+  const stepMatch = compact.match(/^step0*([12])$/i);
+  if (stepMatch) return `STEP${stepMatch[1]}`;
+  // 개념원리 필수유형: "필수 유형"/"필수유형" 도 "필수" 로 정규화.
+  if (/^필수(유형)?$/.test(compact)) return '필수';
   return ALLOWED_LABELS.has(compact) ? compact : '';
 }
 
@@ -526,7 +609,11 @@ function backfillMissingItemRegions(result) {
   if (result.items.every((item) => Array.isArray(item.item_region))) return;
   const canUseVerticalFallback =
     result.page_kind !== 'concept_page' &&
-    (result.section === 'type_practice' || result.section === 'mastery');
+    (['type_practice', 'mastery', 'type_example', 'check', 'exercise'].includes(
+      result.section,
+    ) ||
+      // 개념원리 단일 패스: 페이지 section 과 무관하게 문항 category 로 판단.
+      result.items.some((item) => Boolean(item.category)));
   if (!canUseVerticalFallback) return;
 
   const itemsWithBbox = result.items.filter((item) => Array.isArray(item.bbox));
@@ -570,7 +657,10 @@ function backfillMissingBboxes(result) {
   if (!result || !Array.isArray(result.items) || result.items.length === 0) return;
   const canUseFallback =
     result.page_kind !== 'concept_page' &&
-    (result.section === 'type_practice' || result.section === 'mastery');
+    (['type_practice', 'mastery', 'type_example', 'check', 'exercise'].includes(
+      result.section,
+    ) ||
+      result.items.some((item) => Boolean(item.category)));
   if (!canUseFallback) return;
 
   let filled = 0;

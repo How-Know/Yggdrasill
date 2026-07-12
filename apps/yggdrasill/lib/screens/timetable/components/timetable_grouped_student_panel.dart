@@ -7,6 +7,7 @@ import '../../../services/data_manager.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import 'student_time_info_dialog.dart';
 import '../../../theme/ygg_semantic_colors.dart';
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 class TimelineExtraCardEntry {
   final Widget card;
@@ -241,8 +242,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
         contentChildren.add(Padding(
           padding: const EdgeInsets.only(left: 14),
           child: Wrap(
-            spacing: 6.4,
-            runSpacing: 6.4,
+            spacing: 2.4,
+            runSpacing: 2.4,
             children: extras,
           ),
         ));
@@ -736,10 +737,14 @@ class _PanelStudentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final nameStyle = const TextStyle(
-        color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
-    final schoolStyle = const TextStyle(
-        color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
+    final brightness = Theme.of(context).brightness;
+    final panelStyle =
+        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final cardBg = panelStyle.groupedCardBackground;
+    final nameStyle = TextStyle(
+        color: panelStyle.title, fontSize: 16, fontWeight: FontWeight.w600);
+    final schoolStyle = TextStyle(
+        color: panelStyle.hint, fontSize: 13, fontWeight: FontWeight.w500);
     String gradeLabel(EducationLevel level, int grade) {
       if (grade <= 0) return '';
       switch (level) {
@@ -769,7 +774,7 @@ class _PanelStudentCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: selected
             ? const Color(0xFF33A373).withOpacity(0.18)
-            : const Color(0xFF15171C),
+            : cardBg,
         borderRadius: BorderRadius.circular(12),
         // ✅ border 폭(=1)을 항상 유지해 하이라이트 시에도 다른 카드들이 "밀리지" 않게 한다.
         border: Border.all(

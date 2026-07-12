@@ -127,8 +127,16 @@ Future<PageAnalysisOutcome> analyzeSinglePageWithRetry({
       );
       final result = await detector(imageBytes: png, rawPage: rawPage);
       final hasItems = result.items.isNotEmpty;
-      final isProblemSection =
-          result.section == 'type_practice' || result.section == 'mastery';
+      // 개념원리(type_example/check/exercise)는 페이지 범위 안에 개념/특강
+      // 페이지가 섞일 수 있으므로 concept_page 로 통과시키고, 문항 페이지인데
+      // items 가 비면 재시도한다 (쎈/RPM 의 type_practice/mastery 와 동일 취급).
+      final isProblemSection = const {
+        'type_practice',
+        'mastery',
+        'type_example',
+        'check',
+        'exercise',
+      }.contains(result.section);
       if (result.pageKind != 'concept_page' && isProblemSection && !hasItems) {
         throw StateError(
           'missing VLM items on ${result.section} page $rawPage',

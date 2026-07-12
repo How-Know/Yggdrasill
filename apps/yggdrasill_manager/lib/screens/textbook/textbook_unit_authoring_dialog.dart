@@ -35,10 +35,13 @@ import '../../services/textbook_crop_uploader.dart';
 import '../../services/textbook_pdf_page_renderer.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
+import '../../services/textbook_vlm_answer_service.dart';
 import '../../services/textbook_vlm_range_runner.dart';
+import '../../services/textbook_vlm_solution_ref_service.dart';
 import '../../services/textbook_vlm_test_service.dart';
 import '../../services/problem_bank_service.dart';
 import 'textbook_authoring_stage_dialog.dart';
+import 'textbook_toc_autofill.dart';
 
 class TextbookUnitAuthoringDialog extends StatefulWidget {
   const TextbookUnitAuthoringDialog({
@@ -101,6 +104,9 @@ class _TextbookUnitAuthoringDialogState
   final _vlmService = TextbookVlmTestService();
   final _cropUploader = TextbookCropUploader();
   final _pbService = ProblemBankService();
+  // 개념원리 필수유형 — 본문 '풀이' 단락에서 정답·해설 좌표를 추출/저장한다.
+  final _answerService = TextbookVlmAnswerService();
+  final _solRefService = TextbookVlmSolutionRefService();
   final _supa = Supabase.instance.client;
 
   PdfDocument? _bodyDocument;
@@ -113,6 +119,167 @@ class _TextbookUnitAuthoringDialogState
   String? _payloadError;
   String _seriesKey = kTextbookSeriesCatalog.first.key;
   final List<_BigUnitEdit> _bigUnits = <_BigUnitEdit>[];
+
+  bool _tocParsing = false;
+  String? _tocStatus;
+
+  // ── 개념원리(wonri) 단일 패스 ─────────────────────────────────────────
+  //
+  // 개념원리는 한 소단원 페이지 안에 개념/개념원리 익히기/필수유형/확인 체크
+  // (/연습문제)가 섞여 순서대로 나온다. 그래서 분석 단위는 카테고리가 아니라
+  // **소단원 행** 이고 (focus.subKey = 'W<rowIndex>'), VLM 은 그 페이지 범위를
+  // 한 번만 훑으면서 문항마다 category 를 붙인다. 저장 시 카테고리를
+  // sub_key(A~D)로 매핑해 분리 업로드한다 — 이후 정답/해설/문제은행 흐름은
+  // 쎈과 동일하다.
+  static const Map<String, String> _kWonriSubKeyByCategory = {
+    'concept_drill': 'A', // 개념원리 익히기
+    'type_example': 'B', // 필수유형
+    'check': 'C', // 확인 체크
+    'exercise': 'D', // 연습문제 (STEP1/STEP2/실력 UP)
+  };
+  static const Map<String, String> _kWonriCategoryBySubKey = {
+    'A': 'concept_drill',
+    'B': 'type_example',
+    'C': 'check',
+    'D': 'exercise',
+  };
+  static const Map<String, String> _kWonriCategoryShortNames = {
+    'concept_drill': '익히기',
+    'type_example': '필수유형',
+    'check': '확인체크',
+    'exercise': '연습문제',
+  };
+
+  bool _wonriBodyChainRunning = false;
+
+  bool _isWonriRowFocus(_SubFocus focus) =>
+      _seriesKey == 'wonri' && focus.subKey.startsWith('W');
+
+  _SubUnitRowEdit? _wonriRowFor(_SubFocus focus) {
+    if (!_isWonriRowFocus(focus)) return null;
+    final index = int.tryParse(focus.subKey.substring(1));
+    if (index == null || index < 0) return null;
+    if (focus.bigIndex < 0 || focus.bigIndex >= _bigUnits.length) return null;
+    final big = _bigUnits[focus.bigIndex];
+    if (focus.midIndex < 0 || focus.midIndex >= big.middles.length) {
+      return null;
+    }
+    final rows = big.middles[focus.midIndex].subUnitRows;
+    return index < rows.length ? rows[index] : null;
+  }
+
+  /// raw_page 가 페이지 범위에 속하는 소단원 행의 포커스 키(`W<idx>`).
+  /// DB에 저장된 크롭(sub_key A~D)을 소단원 작업 단위로 복원할 때 쓴다.
+  String? _wonriRowSubKeyForPage(int bigIndex, int midIndex, int? rawPage) {
+    if (rawPage == null || rawPage <= 0) return null;
+    if (bigIndex < 0 || bigIndex >= _bigUnits.length) return null;
+    final big = _bigUnits[bigIndex];
+    if (midIndex < 0 || midIndex >= big.middles.length) return null;
+    final rows = big.middles[midIndex].subUnitRows;
+    for (var i = 0; i < rows.length; i += 1) {
+      final start = _positiveInt(rows[i].startCtrl.text);
+      final end = _positiveInt(rows[i].endCtrl.text);
+      if (start == null || end == null) continue;
+      if (rawPage >= start && rawPage <= end) return 'W$i';
+    }
+    return null;
+  }
+
+  /// 분석에 실제로 쓸 페이지 범위.
+  /// 개념원리 소단원 포커스면 소단원 행의 범위, 아니면 슬롯(A~C) 입력 범위.
+  (int?, int?) _focusRange(_SubFocus focus) {
+    if (_isWonriRowFocus(focus)) {
+      final row = _wonriRowFor(focus);
+      if (row == null) return (null, null);
+      return (
+        _positiveInt(row.startCtrl.text),
+        _positiveInt(row.endCtrl.text),
+      );
+    }
+    if (focus.bigIndex < 0 || focus.bigIndex >= _bigUnits.length) {
+      return (null, null);
+    }
+    final big = _bigUnits[focus.bigIndex];
+    if (focus.midIndex < 0 || focus.midIndex >= big.middles.length) {
+      return (null, null);
+    }
+    final mid = big.middles[focus.midIndex];
+    if (mid.subs.isEmpty) return (null, null);
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    return (_positiveInt(sub.startCtrl.text), _positiveInt(sub.endCtrl.text));
+  }
+
+  /// 문항의 개념원리 카테고리. VLM 이 붙인 category 를 우선하고,
+  /// 없으면 라벨 → 페이지 section 순으로 보정한다.
+  String _wonriCategoryOfItem(TextbookVlmItem item, String pageSection) {
+    if (_kWonriSubKeyByCategory.containsKey(item.category)) {
+      return item.category;
+    }
+    final label = item.label.trim();
+    if (label == '필수' || label == '필수유형') return 'type_example';
+    if (label == '개념원리 익히기') return 'concept_drill';
+    if (label == '확인 체크' || label == '확인체크') return 'check';
+    const exerciseLabels = {
+      'STEP1',
+      'STEP2',
+      '실력',
+      '실력 UP',
+      '실력UP',
+      '연습문제',
+      '수능기출',
+      '수능 기출',
+      '평가원기출',
+      '평가원 기출',
+      '교육청기출',
+      '교육청 기출',
+    };
+    if (exerciseLabels.contains(label)) return 'exercise';
+    if (_kWonriSubKeyByCategory.containsKey(pageSection)) return pageSection;
+    return '';
+  }
+
+  /// 개념원리 "문항이름" — 쎈의 난이도 자리를 대체하는 사람이 읽는 라벨.
+  /// 카테고리(익히기/필수유형/확인 체크)는 그대로, 연습문제는 구간 라벨
+  /// (STEP1/STEP2/실력 UP/수능·평가원·교육청 기출)을 쓰고 없으면 "연습문제".
+  String _wonriItemName(String category, String rawLabel) {
+    switch (category) {
+      case 'concept_drill':
+        return '개념원리 익히기';
+      case 'type_example':
+        return '필수유형';
+      case 'check':
+        return '확인 체크';
+      case 'exercise':
+        // 원시 라벨(STEP1/실력/수능기출)과 이미 정제된 표기(실력 UP/수능 기출)를
+        // 모두 받아 동일하게 매핑한다 (저장된 크롭 복원 시 idempotent).
+        switch (rawLabel.trim()) {
+          case 'STEP1':
+            return 'STEP1';
+          case 'STEP2':
+            return 'STEP2';
+          case '실력':
+          case '실력 UP':
+          case '실력UP':
+            return '실력 UP';
+          case '수능기출':
+          case '수능 기출':
+            return '수능 기출';
+          case '평가원기출':
+          case '평가원 기출':
+            return '평가원 기출';
+          case '교육청기출':
+          case '교육청 기출':
+            return '교육청 기출';
+          default:
+            return '연습문제';
+        }
+      default:
+        return '';
+    }
+  }
 
   _SubFocus? _focus;
 
@@ -184,6 +351,25 @@ class _TextbookUnitAuthoringDialogState
         final bigEdit = _BigUnitEdit(bigName: big.bigName);
         for (final mid in big.middles) {
           final midEdit = _MidUnitEdit(series: entry, midName: mid.midName);
+          for (final subUnit in mid.subUnits) {
+            final row = _SubUnitRowEdit(
+              name: subUnit.name,
+              isExercise: subUnit.isExercise,
+            );
+            if (subUnit.startPage != null) {
+              row.startCtrl.text = '${subUnit.startPage}';
+            }
+            if (subUnit.endPage != null) {
+              row.endCtrl.text = '${subUnit.endPage}';
+            }
+            if (subUnit.answerStartPage != null) {
+              row.answerStartCtrl.text = '${subUnit.answerStartPage}';
+            }
+            if (subUnit.solutionStartPage != null) {
+              row.solutionStartCtrl.text = '${subUnit.solutionStartPage}';
+            }
+            midEdit.subUnitRows.add(row);
+          }
           for (final sub in mid.subs) {
             for (final slot in midEdit.subs) {
               if (slot.preset.key == sub.subKey) {
@@ -198,6 +384,11 @@ class _TextbookUnitAuthoringDialogState
                 break;
               }
             }
+          }
+          // 개념원리: 소단원 행이 있으면 A~D 슬롯 페이지를 소단원에서 유도한
+          // 값으로 맞춘다 (payload 의 슬롯 값이 비었거나 어긋난 경우 대비).
+          if (entry.key == 'wonri' && midEdit.subUnitRows.isNotEmpty) {
+            _recalcWonriSlotPages(midEdit);
           }
           bigEdit.middles.add(midEdit);
         }
@@ -319,7 +510,7 @@ class _TextbookUnitAuthoringDialogState
       final rows = await _supa
           .from('textbook_problem_crops')
           .select('id, raw_page, display_page, section, problem_number, label, '
-              'is_set_header, set_from, set_to, content_group_kind, '
+              'item_name, is_set_header, set_from, set_to, content_group_kind, '
               'content_group_label, content_group_title, content_group_order, '
               'column_index, bbox_1k, item_region_1k, big_order, mid_order, '
               'sub_key')
@@ -333,12 +524,24 @@ class _TextbookUnitAuthoringDialogState
           .order('problem_number', ascending: true);
       final byFocus = <String, List<Map<String, dynamic>>>{};
       for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+        final bigIndex = int.tryParse('${row['big_order'] ?? ''}') ?? -1;
+        final midIndex = int.tryParse('${row['mid_order'] ?? ''}') ?? -1;
+        if (bigIndex < 0 || midIndex < 0) continue;
+        var subKey = '${row['sub_key'] ?? ''}';
+        // 개념원리: DB의 sub_key 는 카테고리(A~D)지만 작업 단위는 소단원
+        // 행이므로, raw_page 가 속한 소단원 행(W<idx>)으로 재매핑한다.
+        if (_seriesKey == 'wonri') {
+          final rawPage = int.tryParse('${row['raw_page'] ?? ''}');
+          final wonriKey =
+              _wonriRowSubKeyForPage(bigIndex, midIndex, rawPage);
+          if (wonriKey == null) continue;
+          subKey = wonriKey;
+        }
         final focus = _SubFocus(
-          bigIndex: int.tryParse('${row['big_order'] ?? ''}') ?? -1,
-          midIndex: int.tryParse('${row['mid_order'] ?? ''}') ?? -1,
-          subKey: '${row['sub_key'] ?? ''}',
+          bigIndex: bigIndex,
+          midIndex: midIndex,
+          subKey: subKey,
         );
-        if (focus.bigIndex < 0 || focus.midIndex < 0) continue;
         byFocus
             .putIfAbsent(_stateKeyFor(focus), () => <Map<String, dynamic>>[])
             .add(row);
@@ -423,7 +626,14 @@ class _TextbookUnitAuthoringDialogState
         notes: 'saved_crops',
         items: [
           for (final row in entry.value)
-            _vlmItemFromSavedCrop(row, focus.subKey),
+            // 개념원리 W 포커스에서는 행마다 실제 카테고리 sub_key(A~D)가
+            // 다르므로 DB 행의 sub_key 를 우선 사용한다.
+            _vlmItemFromSavedCrop(
+              row,
+              '${row['sub_key'] ?? ''}'.trim().isEmpty
+                  ? focus.subKey
+                  : '${row['sub_key']}'.trim(),
+            ),
         ],
       ));
     }
@@ -444,7 +654,18 @@ class _TextbookUnitAuthoringDialogState
             : rawKind;
     return TextbookVlmItem.fromMap(<String, dynamic>{
       'number': row['problem_number'],
-      'label': row['label'],
+      // 개념원리는 난이도(label)가 비어 있고 문항이름(item_name)에 값이 있다.
+      // 복원 시 문항이름을 라벨 자리에 실어 뱃지/재저장이 그대로 동작하게 한다.
+      'label': _seriesKey == 'wonri'
+          ? ('${row['item_name'] ?? ''}'.trim().isNotEmpty
+              ? row['item_name']
+              : row['label'])
+          : row['label'],
+      // 개념원리: DB 의 section(=카테고리) 또는 sub_key 에서 category 복원.
+      if (_seriesKey == 'wonri')
+        'category': _kWonriSubKeyByCategory.containsKey(section)
+            ? section
+            : (_kWonriCategoryBySubKey[subKey.toUpperCase()] ?? ''),
       'is_set_header': row['is_set_header'],
       'set_range': <String, dynamic>{
         'from': row['set_from'],
@@ -489,6 +710,22 @@ class _TextbookUnitAuthoringDialogState
   }
 
   String _sectionForSubKey(String subKey) {
+    // 개념원리는 슬롯 의미가 문제집(쎈/RPM)과 다르다.
+    // 게이트웨이 vlm_detect_prompt.js 의 WONRI_SECTION_BY_SUB_KEY 와 동일하게 유지.
+    if (_seriesKey == 'wonri') {
+      switch (subKey) {
+        case 'A':
+          return 'concept_drill'; // 개념원리 익히기
+        case 'B':
+          return 'type_example'; // 필수유형
+        case 'C':
+          return 'check'; // 확인 체크
+        case 'D':
+          return 'exercise'; // 연습문제 (STEP1/STEP2/실력 UP)
+        default:
+          return 'unknown';
+      }
+    }
     switch (subKey) {
       case 'A':
         return 'basic_drill';
@@ -499,6 +736,160 @@ class _TextbookUnitAuthoringDialogState
       default:
         return 'unknown';
     }
+  }
+
+  // ------------------------------------------------------- 목차 자동 인식
+  //
+  // 등록 위저드와 동일한 흐름: 본문 PDF의 목차 페이지 범위 + 페이지 보정을
+  // 입력받아 VLM 으로 단원 트리를 읽고, 단원 이름과 페이지 범위를 자동으로
+  // 채운다. 신규행으로 추가한(위저드를 거치지 않은) 책도 여기서 쓸 수 있다.
+  // 적용 후 "단원 구조 저장"을 눌러야 Supabase 에 반영된다.
+
+  Future<void> _runTocAutoParse() async {
+    if (_tocParsing) return;
+    final doc = await _ensurePdf();
+    if (doc == null) {
+      _toast(
+        '본문 PDF를 불러오지 못했습니다'
+        '${_pdfLoadError == null ? '' : ': $_pdfLoadError'}',
+        error: true,
+      );
+      return;
+    }
+    if (!mounted) return;
+    // 이미 입력된 트리가 있으면 덮어쓰기 확인.
+    final hasContent = _bigUnits.any((b) =>
+        b.nameCtrl.text.trim().isNotEmpty ||
+        b.middles.any((m) => m.nameCtrl.text.trim().isNotEmpty));
+    if (hasContent) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          title: const Text('기존 트리 덮어쓰기',
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+          content: const Text(
+            '목차 자동 인식은 현재 단원 트리를 새 결과로 교체합니다. 계속할까요?\n'
+            '(저장 전까지는 Supabase 에 반영되지 않습니다)',
+            style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child:
+                  const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: _kAccent),
+              child: const Text('덮어쓰기'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    final range = await showTocRangeDialog(context);
+    if (range == null) return;
+    setState(() {
+      _tocParsing = true;
+      _tocStatus = '목차 페이지 렌더링 중...';
+    });
+    try {
+      final start = range.start.clamp(1, doc.pages.length);
+      final end = range.end.clamp(start, doc.pages.length);
+      final images = <Uint8List>[];
+      for (var page = start; page <= end; page += 1) {
+        images.add(await renderPdfPageToPng(
+          document: doc,
+          pageNumber: page,
+          longEdgePx: 1600,
+        ));
+        if (!mounted) return;
+        setState(() => _tocStatus = '목차 페이지 렌더링 중... ($page / $end)');
+      }
+      if (!mounted) return;
+      setState(() => _tocStatus = 'VLM 목차 분석 중... (${images.length}페이지)');
+      final result = await _vlmService.parseToc(
+        pageImages: images,
+        series: _seriesKey,
+      );
+      if (!mounted) return;
+      final applied = _applyTocResult(result, tocPageOffset: range.pageOffset);
+      setState(() {
+        _tocParsing = false;
+        _tocStatus = applied == null
+            ? '실패: 목차에서 단원을 찾지 못했습니다.'
+            : '목차 인식 완료 · 대단원 ${applied.$1}개 / 중단원 ${applied.$2}개 · '
+                '페이지 자동 입력됨(보정 ${range.pageOffset >= 0 ? '+' : ''}'
+                '${range.pageOffset}) — 검토 후 "단원 구조 저장"을 누르세요'
+                '${result.notes.isEmpty ? '' : ' · ${result.notes}'}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _tocParsing = false;
+        _tocStatus = '실패: $e';
+      });
+    }
+  }
+
+  /// VLM 목차 결과를 단원 트리에 반영한다. (대단원 수, 중단원 수) 를 반환.
+  ///
+  /// 이름 정리와 페이지 자동 채움은 [buildTocAutofillTree] (공용 로직) 가
+  /// 처리한다. 개념원리(wonri)는 소단원 행을 payload 용으로 보존하고,
+  /// A~D 슬롯 페이지를 소단원 범위에서 유도해 입력칸까지 채운다
+  /// (A/B/C = 일반 소단원 전체 범위, D = 연습문제 행 범위).
+  (int, int)? _applyTocResult(TextbookTocParseResult toc,
+      {int tocPageOffset = 0}) {
+    final entry = _currentSeries();
+    final isWonri = _seriesKey == 'wonri';
+    final tree = buildTocAutofillTree(
+      toc,
+      subUnitRows: isWonri,
+      tocPageOffset: tocPageOffset,
+    );
+    if (tree.isEmpty) return null;
+    final newBigs = <_BigUnitEdit>[];
+    for (final big in tree) {
+      final bigEdit = _BigUnitEdit(bigName: big.name);
+      for (final mid in big.midUnits) {
+        final midEdit = _MidUnitEdit(series: entry, midName: mid.name);
+        if (isWonri) {
+          for (final sub in mid.subUnits) {
+            final row = _SubUnitRowEdit(
+              name: sub.name,
+              isExercise: sub.isExercise,
+            );
+            if (sub.startPage != null) row.startCtrl.text = '${sub.startPage}';
+            if (sub.endPage != null) row.endCtrl.text = '${sub.endPage}';
+            midEdit.subUnitRows.add(row);
+          }
+          _recalcWonriSlotPages(midEdit);
+        }
+        bigEdit.middles.add(midEdit);
+      }
+      if (bigEdit.middles.isEmpty) {
+        bigEdit.middles.add(_MidUnitEdit(series: entry));
+      }
+      newBigs.add(bigEdit);
+    }
+    var midCount = 0;
+    for (final big in newBigs) {
+      midCount += big.middles.length;
+    }
+    setState(() {
+      for (final big in _bigUnits) {
+        big.dispose();
+      }
+      _bigUnits
+        ..clear()
+        ..addAll(newBigs);
+      _focus = null;
+      _selectedProblemKey = null;
+    });
+    return (newBigs.length, midCount);
   }
 
   Future<void> _saveTree() async {
@@ -519,6 +910,48 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
+  /// 소단원 행들의 페이지에서 A~D 슬롯 페이지를 유도해 입력칸을 갱신한다.
+  /// A/B/C(개념원리 익히기·필수유형·확인 체크) = 일반 소단원 전체 범위,
+  /// D(연습문제) = "연습문제" 행 범위.
+  void _recalcWonriSlotPages(_MidUnitEdit mid) {
+    int? lessonStart;
+    int? lessonEnd;
+    int? exerciseStart;
+    int? exerciseEnd;
+    for (final row in mid.subUnitRows) {
+      final start = _positiveInt(row.startCtrl.text);
+      final end = _positiveInt(row.endCtrl.text);
+      if (row.isExercise) {
+        if (start != null) {
+          exerciseStart = exerciseStart == null
+              ? start
+              : (start < exerciseStart ? start : exerciseStart);
+        }
+        if (end != null) {
+          exerciseEnd =
+              exerciseEnd == null ? end : (end > exerciseEnd ? end : exerciseEnd);
+        }
+      } else {
+        if (start != null) {
+          lessonStart = lessonStart == null
+              ? start
+              : (start < lessonStart ? start : lessonStart);
+        }
+        if (end != null) {
+          lessonEnd =
+              lessonEnd == null ? end : (end > lessonEnd ? end : lessonEnd);
+        }
+      }
+    }
+    for (final slot in mid.subs) {
+      final isExerciseSlot = slot.preset.key == 'D';
+      final start = isExerciseSlot ? exerciseStart : lessonStart;
+      final end = isExerciseSlot ? exerciseEnd : lessonEnd;
+      slot.startCtrl.text = start == null ? '' : '$start';
+      slot.endCtrl.text = end == null ? '' : '$end';
+    }
+  }
+
   List<BigUnitInput> _buildBigUnitInputs() {
     final out = <BigUnitInput>[];
     for (var i = 0; i < _bigUnits.length; i += 1) {
@@ -526,6 +959,27 @@ class _TextbookUnitAuthoringDialogState
       final midList = <MidUnitInput>[];
       for (var m = 0; m < big.middles.length; m += 1) {
         final mid = big.middles[m];
+        // 개념원리: 저장 직전에 소단원 행 → A~D 슬롯 페이지를 다시 유도해
+        // 슬롯 입력칸과 payload 가 항상 소단원 입력과 일치하게 한다.
+        if (_seriesKey == 'wonri' && mid.subUnitRows.isNotEmpty) {
+          _recalcWonriSlotPages(mid);
+        }
+        final subUnitList = <SubUnitInput>[];
+        var order = 0;
+        for (final row in mid.subUnitRows) {
+          final name = row.nameCtrl.text.trim();
+          if (name.isEmpty) continue;
+          subUnitList.add(SubUnitInput(
+            order: order,
+            name: name,
+            startPage: _positiveInt(row.startCtrl.text),
+            endPage: _positiveInt(row.endCtrl.text),
+            answerStartPage: _positiveInt(row.answerStartCtrl.text),
+            solutionStartPage: _positiveInt(row.solutionStartCtrl.text),
+            isExercise: row.isExercise,
+          ));
+          order += 1;
+        }
         final subList = <SubSectionInput>[];
         for (var s = 0; s < mid.subs.length; s += 1) {
           final sub = mid.subs[s];
@@ -543,6 +997,7 @@ class _TextbookUnitAuthoringDialogState
           midOrder: m,
           midName: mid.nameCtrl.text.trim(),
           subs: subList,
+          subUnits: subUnitList,
         ));
       }
       out.add(BigUnitInput(
@@ -617,12 +1072,7 @@ class _TextbookUnitAuthoringDialogState
     for (var b = 0; b < _bigUnits.length; b += 1) {
       final big = _bigUnits[b];
       for (var m = 0; m < big.middles.length; m += 1) {
-        for (final sub in big.middles[m].subs) {
-          final focus = _SubFocus(
-            bigIndex: b,
-            midIndex: m,
-            subKey: sub.preset.key,
-          );
+        for (final focus in _midBatchFocuses(b, m)) {
           if (_batchSelection.contains(_stateKeyFor(focus))) {
             out.add(focus);
           }
@@ -634,6 +1084,13 @@ class _TextbookUnitAuthoringDialogState
 
   List<_SubFocus> _midBatchFocuses(int bigIndex, int midIndex) {
     final mid = _bigUnits[bigIndex].middles[midIndex];
+    // 개념원리: 배치 실행 단위는 카테고리 슬롯이 아니라 소단원 행이다.
+    if (_seriesKey == 'wonri') {
+      return [
+        for (var s = 0; s < mid.subUnitRows.length; s += 1)
+          _SubFocus(bigIndex: bigIndex, midIndex: midIndex, subKey: 'W$s'),
+      ];
+    }
     return [
       for (final sub in mid.subs)
         _SubFocus(
@@ -728,7 +1185,8 @@ class _TextbookUnitAuthoringDialogState
   }
 
   Future<String?> _expectedStartNumberForFocus(_SubFocus focus) async {
-    if (focus.subKey != 'A') return null;
+    // 4자리 연속 번호(0001~)는 쎈/RPM A 파트 전용 개념이다.
+    if (focus.subKey != 'A' || _seriesKey == 'wonri') return null;
     try {
       final rows = await _supa
           .from('textbook_problem_crops')
@@ -770,6 +1228,8 @@ class _TextbookUnitAuthoringDialogState
         return 1;
       case 'C':
         return 2;
+      case 'D':
+        return 3;
       default:
         return 99;
     }
@@ -808,14 +1268,7 @@ class _TextbookUnitAuthoringDialogState
   }
 
   Future<void> _runFocusedAnalysis(_SubFocus focus) async {
-    final big = _bigUnits[focus.bigIndex];
-    final mid = big.middles[focus.midIndex];
-    final sub = mid.subs.firstWhere(
-      (s) => s.preset.key == focus.subKey,
-      orElse: () => mid.subs.first,
-    );
-    final displayStartPage = _positiveInt(sub.startCtrl.text);
-    final displayEndPage = _positiveInt(sub.endCtrl.text);
+    final (displayStartPage, displayEndPage) = _focusRange(focus);
     if (displayStartPage == null ||
         displayEndPage == null ||
         displayEndPage < displayStartPage) {
@@ -871,13 +1324,17 @@ class _TextbookUnitAuthoringDialogState
         academyId: widget.academyId,
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
-        sectionHint: _sectionForSubKey(focus.subKey),
+        // 개념원리는 단일 패스: 카테고리 힌트 없이 페이지의 모든 문항을
+        // 감지하고 문항별 category 를 받는다.
+        sectionHint:
+            _seriesKey == 'wonri' ? null : _sectionForSubKey(focus.subKey),
         expectedStartNumber: _expectedStartNumberForPage(
           focus,
           state,
           rawPage,
           expectedStartNumber,
         ),
+        series: _seriesKey,
       );
     }
 
@@ -977,13 +1434,15 @@ class _TextbookUnitAuthoringDialogState
         academyId: widget.academyId,
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
-        sectionHint: _sectionForSubKey(focus.subKey),
+        sectionHint:
+            _seriesKey == 'wonri' ? null : _sectionForSubKey(focus.subKey),
         expectedStartNumber: _expectedStartNumberForPage(
           focus,
           state,
           rawPage,
           expectedStartNumber,
         ),
+        series: _seriesKey,
       );
     }
 
@@ -1044,7 +1503,8 @@ class _TextbookUnitAuthoringDialogState
   }
 
   void _applyScopeGuards(_SubFocus focus) {
-    if (focus.subKey != 'A') return;
+    // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
+    if (focus.subKey != 'A' || _seriesKey == 'wonri') return;
     final state = _ensureSubState(focus);
     if (state.pageResults.isEmpty) return;
     final guarded = _guardBasicDrillRows(
@@ -1316,6 +1776,10 @@ class _TextbookUnitAuthoringDialogState
     final state = _ensureSubState(focus);
     if (state.running || state.uploading) return;
     _applyScopeGuards(focus);
+    if (_isWonriRowFocus(focus)) {
+      await _uploadWonriRowFocus(focus, state);
+      return;
+    }
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
     final edits = _manualEdits[_stateKeyFor(focus)];
@@ -1406,6 +1870,262 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
+  /// 개념원리 단일 패스 저장 — 소단원 분석 결과의 문항을 category 별로
+  /// sub_key(A~D)에 나눠 업로드한다. 이후 정답/해설/문제은행 흐름은
+  /// 쎈과 동일하게 sub_key 단위로 동작한다. 업로드가 끝나면 필수유형(B)
+  /// 문항은 본문 '풀이' 단락에서 정답·풀이 좌표를 자동 추출한다.
+  Future<void> _uploadWonriRowFocus(_SubFocus focus, _SubRunState state) async {
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final edits = _manualEdits[_stateKeyFor(focus)];
+    final itemsBySubKey = <String, List<TextbookCropUploadItem>>{};
+    var skippedNoCategory = 0;
+    // 필수유형은 유형 헤더가 있는 페이지에서만 content_group 이 잡히므로,
+    // 그룹 정보가 빠진 후속 문항은 직전 유형 그룹을 승계한다 (쎈 B 와 동일).
+    _ResolvedContentGroup? lastTypeGroup;
+    final pageRows = state.pageResults.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    for (final row in pageRows) {
+      for (var i = 0; i < row.items.length; i += 1) {
+        final vlm = row.items[i];
+        final edited = edits?[_problemKey(row.rawPage, i)];
+        final region = edited ?? vlm.itemRegion;
+        if (region == null || region.length != 4) continue;
+        final category = _wonriCategoryOfItem(vlm, row.section);
+        if (category.isEmpty) {
+          skippedNoCategory += 1;
+          continue;
+        }
+        final subKey = _kWonriSubKeyByCategory[category]!;
+        var group = const _ResolvedContentGroup.none();
+        if (category == 'type_example') {
+          final rawGroup = _rawContentGroupForItem(vlm, subKey, category);
+          group = rawGroup.kind == 'type' ? rawGroup : (lastTypeGroup ?? rawGroup);
+          if (rawGroup.kind == 'type') lastTypeGroup = rawGroup;
+        }
+        // 필수유형(B)은 소단원마다 번호(01,02...)가 새로 시작한다. 소단원별
+        // 분리는 저장 시 sub_index(= 소단원 순번)로 처리하므로, 번호 자체는
+        // 인쇄된 값을 그대로 쓴다. (익히기/확인체크/연습문제는 중단원 내 연속.)
+        itemsBySubKey
+            .putIfAbsent(subKey, () => <TextbookCropUploadItem>[])
+            .add(TextbookCropUploadItem(
+              rawPage: row.rawPage,
+              displayPage: row.displayPage,
+              section: category,
+              problemNumber: vlm.number,
+              // 개념서는 난이도가 없다. 난이도(label)는 비우고, 문항이름은
+              // 전용 컬럼(itemName)에 저장한다.
+              label: '',
+              itemName: _wonriItemName(category, vlm.label),
+              isSetHeader: vlm.isSetHeader,
+              setFrom: vlm.setFrom,
+              setTo: vlm.setTo,
+              contentGroupKind: group.kind,
+              contentGroupLabel: group.label,
+              contentGroupTitle: group.title,
+              contentGroupOrder: group.order,
+              columnIndex: vlm.column,
+              bbox1k: vlm.bbox,
+              itemRegion1k: region,
+            ));
+      }
+    }
+    final totalItems =
+        itemsBySubKey.values.fold<int>(0, (sum, list) => sum + list.length);
+    if (totalItems == 0) {
+      _toast('저장할 문항 영역이 없습니다', error: true);
+      return;
+    }
+
+    setState(() {
+      state.uploading = true;
+      state.phase = '영역 저장 중... ($totalItems건)';
+      state.error = null;
+      state.uploadResult = null;
+    });
+    try {
+      final allRows = <Map<String, dynamic>>[];
+      var upserted = 0;
+      // 필수유형(B)만 소단원별로 분리 저장한다 (번호가 소단원마다 새로 시작).
+      // 익히기(A)/확인체크(C)/연습문제(D)는 중단원 내 연속 번호라 sub_index=0.
+      final wonriIndex = _wonriRowIndex(focus) ?? 0;
+      for (final subKey in const ['A', 'B', 'C', 'D']) {
+        final items = itemsBySubKey[subKey];
+        if (items == null || items.isEmpty) continue;
+        final categoryName =
+            _kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ??
+                subKey;
+        final result = await _cropUploader.uploadCropBatch(
+          academyId: widget.academyId,
+          bookId: widget.bookId,
+          gradeLabel: widget.gradeLabel,
+          bigOrder: focus.bigIndex,
+          midOrder: focus.midIndex,
+          subKey: subKey,
+          subIndex: subKey == 'B' ? wonriIndex : 0,
+          bigName: big.nameCtrl.text.trim(),
+          midName: mid.nameCtrl.text.trim(),
+          items: items,
+          regionsOnly: true,
+          onProgress: (processed, total) {
+            if (!mounted) return;
+            setState(() {
+              state.phase = '$categoryName 저장 중... $processed / $total';
+            });
+          },
+        );
+        upserted += result.upserted;
+        allRows.addAll(result.rows);
+      }
+      if (!mounted) return;
+      final skippedNote =
+          skippedNoCategory > 0 ? ' · 카테고리 미상 $skippedNoCategory건 제외' : '';
+      setState(() {
+        state.uploading = false;
+        state.uploadResult = TextbookCropBatchResult(
+          upserted: upserted,
+          bucket: 'textbook-crops',
+          rows: allRows,
+        );
+        state.phase = '영역 저장 완료 · $upserted/$totalItems건$skippedNote';
+      });
+      _toast('${_subFocusLabel(focus)} 영역 $upserted건을 서버에 저장했습니다');
+      unawaited(_loadStageStatuses());
+
+      final typeRows = allRows
+          .where((r) => '${r['sub_key'] ?? ''}'.trim().toUpperCase() == 'B')
+          .toList();
+      if (typeRows.isNotEmpty) {
+        unawaited(_runWonriBodySolutionChain(focus, typeRows));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        state.uploading = false;
+        state.error = '$e';
+        state.phase = '영역 저장 실패';
+      });
+    }
+  }
+
+  /// 개념원리 필수유형(B) 자동 체이닝 — 영역 저장 직후 본문 PDF의 "풀이"
+  /// 단락에서 정답(굵은 글씨)과 풀이 좌표를 추출해 정답/해설 테이블에
+  /// 저장한다 (source_kind='body'). 실패해도 영역 저장 자체는 유지된다.
+  Future<void> _runWonriBodySolutionChain(
+    _SubFocus focus,
+    List<Map<String, dynamic>> typeRows,
+  ) async {
+    if (_wonriBodyChainRunning) return;
+    final doc = await _ensurePdf();
+    if (doc == null) return;
+    final byPage = <int, List<Map<String, dynamic>>>{};
+    for (final row in typeRows) {
+      final rawPage = int.tryParse('${row['raw_page'] ?? ''}');
+      final id = '${row['id'] ?? ''}'.trim();
+      if (rawPage == null || rawPage <= 0 || id.isEmpty) continue;
+      byPage.putIfAbsent(rawPage, () => <Map<String, dynamic>>[]).add(row);
+    }
+    if (byPage.isEmpty) return;
+
+    final state = _ensureSubState(focus);
+    setState(() {
+      _wonriBodyChainRunning = true;
+      state.phase = '필수유형 본문 정답·풀이 추출 중...';
+    });
+    final answers = <TextbookAnswerUpload>[];
+    final refs = <TextbookSolutionRefUpload>[];
+    var failedPages = 0;
+    try {
+      final pages = byPage.keys.toList()..sort();
+      for (final rawPage in pages) {
+        if (mounted) {
+          setState(() {
+            state.phase = '필수유형 본문 정답·풀이 추출 중... p$rawPage';
+          });
+        }
+        try {
+          final png = await renderPdfPageToPng(
+            document: doc,
+            pageNumber: rawPage,
+            longEdgePx: _kAnalysisLongEdgePx,
+          );
+          final rowsOnPage = byPage[rawPage]!;
+          final result = await _solRefService.extractBodySolutionsOnPage(
+            imageBytes: png,
+            rawPage: rawPage,
+            expectedNumbers: [
+              for (final r in rowsOnPage) '${r['problem_number'] ?? ''}'.trim(),
+            ],
+          );
+          final idByNumberKey = <String, String>{
+            for (final r in rowsOnPage)
+              textbookAnswerNumberKey('${r['problem_number'] ?? ''}'):
+                  '${r['id']}'.trim(),
+          };
+          final displayPage = int.tryParse(
+            '${rowsOnPage.first['display_page'] ?? ''}',
+          );
+          for (final item in result.items) {
+            final cropId =
+                idByNumberKey[textbookAnswerNumberKey(item.problemNumber)];
+            if (cropId == null || cropId.isEmpty) continue;
+            if (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty) {
+              answers.add(TextbookAnswerUpload(
+                cropId: cropId,
+                answerKind: item.answerKind,
+                answerText: item.answerText,
+                answerLatex2d:
+                    item.answerLatex2d.isEmpty ? null : item.answerLatex2d,
+              ));
+            }
+            refs.add(TextbookSolutionRefUpload(
+              cropId: cropId,
+              rawPage: rawPage,
+              displayPage: displayPage,
+              numberRegion1k: item.numberRegion1k,
+              contentRegion1k: item.contentRegion1k,
+              sourceKind: 'body',
+            ));
+          }
+        } catch (e) {
+          failedPages += 1;
+          debugPrint('[wonri-body-chain] page $rawPage failed: $e');
+        }
+      }
+      var answerCount = 0;
+      var refCount = 0;
+      if (answers.isNotEmpty) {
+        answerCount = await _answerService.batchUpsertAnswers(
+          academyId: widget.academyId,
+          answers: answers,
+        );
+      }
+      if (refs.isNotEmpty) {
+        refCount = await _solRefService.batchUpsertSolutionRefs(
+          academyId: widget.academyId,
+          refs: refs,
+        );
+      }
+      if (!mounted) return;
+      final failNote = failedPages > 0 ? ' · 실패 ${failedPages}p' : '';
+      setState(() {
+        _wonriBodyChainRunning = false;
+        state.phase =
+            '필수유형 본문 추출 완료 · 정답 $answerCount · 풀이 $refCount$failNote';
+      });
+      _toast('필수유형 본문 정답 $answerCount건 · 풀이 좌표 $refCount건 저장$failNote');
+      unawaited(_loadStageStatuses());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _wonriBodyChainRunning = false;
+        state.phase = '필수유형 본문 추출 실패';
+        state.error = '$e';
+      });
+      _toast('필수유형 본문 추출 실패: $e', error: true);
+    }
+  }
+
   Future<void> _runSelectedBatch() async {
     if (_batchRunning) return;
     final selected = _selectedBatchFocuses();
@@ -1466,16 +2186,21 @@ class _TextbookUnitAuthoringDialogState
   String _subFocusLabel(_SubFocus focus) {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
-    final sub = mid.subs.firstWhere(
-      (s) => s.preset.key == focus.subKey,
-      orElse: () => mid.subs.first,
-    );
     final bigName = big.nameCtrl.text.trim().isEmpty
         ? '대${focus.bigIndex + 1}'
         : big.nameCtrl.text.trim();
     final midName = mid.nameCtrl.text.trim().isEmpty
         ? '중${focus.midIndex + 1}'
         : mid.nameCtrl.text.trim();
+    if (_isWonriRowFocus(focus)) {
+      final row = _wonriRowFor(focus);
+      final rowName = row?.nameCtrl.text.trim() ?? '';
+      return '$bigName/$midName/${rowName.isEmpty ? '소단원' : rowName}';
+    }
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
     return '$bigName/$midName/${sub.preset.displayName}';
   }
 
@@ -1488,6 +2213,63 @@ class _TextbookUnitAuthoringDialogState
   }) async {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
+
+    // 개념원리 소단원 포커스: 문항추출 런은 sub_key(A~D) 단위이므로,
+    // 이 소단원 범위로 업로드된 카테고리마다 하나씩 큐에 넣는다.
+    if (_isWonriRowFocus(focus)) {
+      final row = _wonriRowFor(focus);
+      if (row == null) return;
+      final displayStart =
+          displayStartOverride ?? _positiveInt(row.startCtrl.text);
+      final displayEnd = displayEndOverride ?? _positiveInt(row.endCtrl.text);
+      final state = _subStates[_stateKeyFor(focus)];
+      final uploadedSubKeys = <String>{
+        for (final r in state?.uploadResult?.rows ?? const [])
+          '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
+      }..removeWhere((k) => !['A', 'B', 'C', 'D'].contains(k));
+      if (uploadedSubKeys.isEmpty) return;
+      // 필수유형(B)은 소단원별로 별도 추출 런/문서를 만든다 (번호가 소단원마다
+      // 새로 시작). 나머지 카테고리는 중단원 연속이라 sub_index=0.
+      final wonriIndex = _wonriRowIndex(focus) ?? 0;
+      for (final subKey in uploadedSubKeys.toList()..sort()) {
+        await _pbService.createTextbookPdfOnlyExtractRun(
+          academyId: widget.academyId,
+          bookId: widget.bookId,
+          bookName: widget.bookName,
+          gradeLabel: widget.gradeLabel,
+          bigOrder: focus.bigIndex,
+          midOrder: focus.midIndex,
+          subKey: subKey,
+          subIndex: subKey == 'B' ? wonriIndex : 0,
+          seriesKey: _seriesKey,
+          bigName: big.nameCtrl.text.trim(),
+          midName: mid.nameCtrl.text.trim(),
+          subName:
+              _kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ??
+                  subKey,
+          rawPageFrom: displayStart == null
+              ? null
+              : _rawPageForDisplayPage(displayStart),
+          rawPageTo:
+              displayEnd == null ? null : _rawPageForDisplayPage(displayEnd),
+          displayPageFrom: displayStart,
+          displayPageTo: displayEnd,
+          bodyLinkId: widget.linkId,
+          forceNewJob: forceNewJob,
+          pageScoped: pageScoped,
+        );
+        if (!mounted) return;
+        setState(() {
+          _pbExtractStatusBySub[_stateKeyFor(_SubFocus(
+            bigIndex: focus.bigIndex,
+            midIndex: focus.midIndex,
+            subKey: subKey,
+          ))] = 'queued';
+        });
+      }
+      return;
+    }
+
     final sub = mid.subs.firstWhere(
       (s) => s.preset.key == focus.subKey,
       orElse: () => mid.subs.first,
@@ -1507,6 +2289,7 @@ class _TextbookUnitAuthoringDialogState
       bigOrder: focus.bigIndex,
       midOrder: focus.midIndex,
       subKey: focus.subKey,
+      seriesKey: _seriesKey,
       bigName: big.nameCtrl.text.trim(),
       midName: mid.nameCtrl.text.trim(),
       subName: sub.preset.displayName,
@@ -1525,14 +2308,11 @@ class _TextbookUnitAuthoringDialogState
   }
 
   Future<void> _promptAndStartProblemExtraction(_SubFocus focus) async {
-    final big = _bigUnits[focus.bigIndex];
-    final mid = big.middles[focus.midIndex];
-    final sub = mid.subs.firstWhere(
-      (s) => s.preset.key == focus.subKey,
-      orElse: () => mid.subs.first,
-    );
-    final startCtrl = TextEditingController(text: sub.startCtrl.text.trim());
-    final endCtrl = TextEditingController(text: sub.endCtrl.text.trim());
+    final (focusStart, focusEnd) = _focusRange(focus);
+    final startCtrl =
+        TextEditingController(text: focusStart == null ? '' : '$focusStart');
+    final endCtrl =
+        TextEditingController(text: focusEnd == null ? '' : '$focusEnd');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) {
@@ -1656,6 +2436,7 @@ class _TextbookUnitAuthoringDialogState
     if (targets.isEmpty) return;
     final allSeeds = <TextbookAuthoringStageCropSeed>[];
     final scopes = <TextbookAuthoringStageScope>[];
+    final scopeKeys = <String>{};
     for (final focus in targets) {
       final state = _ensureSubState(focus);
       final seeds = _buildStageCropSeeds(focus, state);
@@ -1664,12 +2445,27 @@ class _TextbookUnitAuthoringDialogState
         return;
       }
       allSeeds.addAll(seeds);
-      scopes.add(_stageScopeFor(focus));
+      if (_isWonriRowFocus(focus)) {
+        // 개념원리: 소단원 하나가 카테고리 스코프(A/C/D) 여러 개로 전개된다.
+        // 필수유형(B)은 본문 체이닝으로 정답·풀이가 이미 저장돼 제외.
+        for (final scope in _wonriStageScopesFor(focus)) {
+          final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}';
+          if (scopeKeys.add(key)) scopes.add(scope);
+        }
+      } else {
+        final scope = _stageScopeFor(focus);
+        final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}';
+        if (scopeKeys.add(key)) scopes.add(scope);
+      }
       if (_runProblemExtractionAfterStage1) {
         unawaited(_startPdfOnlyExtractForFocus(focus).catchError((Object e) {
           debugPrint('[textbook-pb-extract] start failed: $e');
         }));
       }
+    }
+    if (scopes.isEmpty) {
+      _toast('정답·해설 단계로 보낼 카테고리가 없습니다 (필수유형은 본문에서 자동 추출됨)');
+      return;
     }
     final first = targets.first;
     final big = _bigUnits[first.bigIndex];
@@ -1678,7 +2474,7 @@ class _TextbookUnitAuthoringDialogState
       _embeddedStage = _EmbeddedStageArgs(
         bigOrder: first.bigIndex,
         midOrder: first.midIndex,
-        subKey: first.subKey,
+        subKey: scopes.first.subKey,
         bigName: big.nameCtrl.text.trim(),
         midName: mid.nameCtrl.text.trim(),
         initialCrops: allSeeds,
@@ -1690,6 +2486,80 @@ class _TextbookUnitAuthoringDialogState
         solutionEndPage: scopes.first.solutionEndPage,
       );
     });
+  }
+
+  /// 개념원리 소단원 포커스 → 정답·해설 단계 스코프 목록.
+  /// 업로드된 카테고리 중 A(익히기)/C(확인체크)/D(연습문제)만 전개하고,
+  /// 정답·해설 시작 페이지는 **소단원 행**에서 입력한 하나의 값을 공유한다
+  /// (쎈은 소단원=A/B/C 이지만 개념서는 소단원 안에 카테고리가 섞여 있어
+  /// 소단원 단위로 한 번만 입력받는다). B(필수유형)는 본문 '풀이' 체이닝으로
+  /// 정답·풀이가 저장돼 답지/해설 단계가 필요 없다.
+  List<TextbookAuthoringStageScope> _wonriStageScopesFor(_SubFocus focus) {
+    final state = _subStates[_stateKeyFor(focus)];
+    final present = <String>{
+      for (final r in state?.uploadResult?.rows ?? const [])
+        '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
+    };
+    final row = _wonriRowFor(focus);
+    if (row == null) return const <TextbookAuthoringStageScope>[];
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final rowName = row.nameCtrl.text.trim().isEmpty
+        ? (row.isExercise ? '연습문제' : '소단원')
+        : row.nameCtrl.text.trim();
+    final answerStart = _positiveInt(row.answerStartCtrl.text);
+    final solutionStart = _positiveInt(row.solutionStartCtrl.text);
+    final answerEnd = _wonriNextRowStageStart(focus, answer: true);
+    final solutionEnd = _wonriNextRowStageStart(focus, answer: false);
+    return [
+      for (final subKey in const ['A', 'C', 'D'])
+        if (present.contains(subKey))
+          TextbookAuthoringStageScope(
+            bigOrder: focus.bigIndex,
+            midOrder: focus.midIndex,
+            subKey: subKey,
+            bigName: big.nameCtrl.text.trim(),
+            midName: mid.nameCtrl.text.trim(),
+            subName: '$rowName · ${_kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ?? subKey}',
+            answerStartPage: answerStart,
+            answerEndPage: answerEnd,
+            solutionStartPage: solutionStart,
+            solutionEndPage: solutionEnd,
+          ),
+    ];
+  }
+
+  /// 개념원리 — 이 소단원 행 다음에 정답/해설 시작 페이지가 입력된 소단원
+  /// 행의 시작 페이지. 정답·해설 스캔 끝 페이지 유도에 쓴다.
+  int? _wonriNextRowStageStart(_SubFocus focus, {required bool answer}) {
+    final wonriIndex = _wonriRowIndex(focus);
+    if (wonriIndex == null) return null;
+    var passed = false;
+    for (var b = 0; b < _bigUnits.length; b += 1) {
+      for (var m = 0; m < _bigUnits[b].middles.length; m += 1) {
+        final rows = _bigUnits[b].middles[m].subUnitRows;
+        for (var i = 0; i < rows.length; i += 1) {
+          final isCurrent =
+              b == focus.bigIndex && m == focus.midIndex && i == wonriIndex;
+          if (isCurrent) {
+            passed = true;
+            continue;
+          }
+          if (!passed) continue;
+          final page = _positiveInt(answer
+              ? rows[i].answerStartCtrl.text
+              : rows[i].solutionStartCtrl.text);
+          if (page != null) return page;
+        }
+      }
+    }
+    return null;
+  }
+
+  int? _wonriRowIndex(_SubFocus focus) {
+    if (!_isWonriRowFocus(focus)) return null;
+    final idx = int.tryParse(focus.subKey.substring(1));
+    return idx;
   }
 
   TextbookAuthoringStageScope _stageScopeFor(_SubFocus focus) {
@@ -1753,6 +2623,9 @@ class _TextbookUnitAuthoringDialogState
     final uploadRows =
         state.uploadResult?.rows ?? const <Map<String, dynamic>>[];
     if (uploadRows.isEmpty) return const <TextbookAuthoringStageCropSeed>[];
+    if (_isWonriRowFocus(focus)) {
+      return _buildWonriStageCropSeeds(focus, state, uploadRows);
+    }
     final scope = _stageScopeFor(focus);
     final seedScopeLabel =
         '${scope.midName.trim().isEmpty ? '중${scope.midOrder + 1}' : scope.midName}/${scope.subName.trim().isEmpty ? scope.subKey : scope.subName}';
@@ -1794,6 +2667,54 @@ class _TextbookUnitAuthoringDialogState
           contentGroupTitle: group.title,
           contentGroupOrder: group.order,
           scopeLabel: seedScopeLabel,
+        ));
+      }
+    }
+    return seeds;
+  }
+
+  /// 개념원리 소단원 포커스용 시드 — 문항 번호가 카테고리마다 1부터 다시
+  /// 시작하므로 `sub_key|번호` 복합 키로 업로드 행과 매칭한다.
+  /// 필수유형(B)은 본문 체이닝으로 정답·풀이가 끝나 시드에서 제외한다.
+  List<TextbookAuthoringStageCropSeed> _buildWonriStageCropSeeds(
+    _SubFocus focus,
+    _SubRunState state,
+    List<Map<String, dynamic>> uploadRows,
+  ) {
+    final mid = _bigUnits[focus.bigIndex].middles[focus.midIndex];
+    final midName = mid.nameCtrl.text.trim().isEmpty
+        ? '중${focus.midIndex + 1}'
+        : mid.nameCtrl.text.trim();
+    final idByKey = <String, String>{};
+    for (final row in uploadRows) {
+      final id = '${row['id'] ?? ''}'.trim();
+      final number = '${row['problem_number'] ?? ''}'.trim();
+      final subKey = '${row['sub_key'] ?? ''}'.trim().toUpperCase();
+      if (id.isNotEmpty && number.isNotEmpty && subKey.isNotEmpty) {
+        idByKey['$subKey|$number'] = id;
+      }
+    }
+    if (idByKey.isEmpty) return const <TextbookAuthoringStageCropSeed>[];
+
+    final seeds = <TextbookAuthoringStageCropSeed>[];
+    final pageRows = state.pageResults.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    for (final row in pageRows) {
+      for (final item in row.items) {
+        final category = _wonriCategoryOfItem(item, row.section);
+        if (category.isEmpty || category == 'type_example') continue;
+        final subKey = _kWonriSubKeyByCategory[category]!;
+        final id = idByKey['$subKey|${item.number}'];
+        if (id == null) continue;
+        seeds.add(TextbookAuthoringStageCropSeed(
+          id: id,
+          problemNumber: item.number,
+          rawPage: row.rawPage,
+          displayPage: row.displayPage,
+          section: category,
+          isSetHeader: item.isSetHeader,
+          scopeLabel:
+              '$midName/${_kWonriCategoryShortNames[category] ?? category}',
         ));
       }
     }
@@ -1842,6 +2763,7 @@ class _TextbookUnitAuthoringDialogState
                   answerEndPage: _embeddedStage!.answerEndPage,
                   solutionStartPage: _embeddedStage!.solutionStartPage,
                   solutionEndPage: _embeddedStage!.solutionEndPage,
+                  seriesKey: _seriesKey,
                   embedded: true,
                   onBack: () {
                     setState(() => _embeddedStage = null);
@@ -1997,6 +2919,56 @@ class _TextbookUnitAuthoringDialogState
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+            child: Row(
+              children: [
+                Expanded(child: _buildSeriesDropdown()),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message:
+                      '본문 PDF의 목차(차례) 페이지를 VLM 으로 읽어 단원 이름과 '
+                      '페이지 범위를 자동으로 채웁니다.\n적용 후 "단원 구조 저장"을 '
+                      '눌러야 반영됩니다.',
+                  child: OutlinedButton.icon(
+                    onPressed: _tocParsing ? null : _runTocAutoParse,
+                    icon: _tocParsing
+                        ? const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: _kTextSub,
+                            ),
+                          )
+                        : const Icon(Icons.auto_awesome,
+                            size: 14, color: _kTextSub),
+                    label: const Text(
+                      '목차 자동 인식',
+                      style: TextStyle(color: _kTextSub, fontSize: 11),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: _kBorder),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_tocStatus?.isNotEmpty == true)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 12, 8),
+              child: Text(
+                _tocStatus!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _tocStatus!.startsWith('실패') ? _kDanger : _kTextSub,
+                  fontSize: 11,
+                ),
+              ),
+            ),
           const Divider(height: 1, color: _kBorder),
           if (_batchRunning || _batchStatus.isNotEmpty)
             Padding(
@@ -2036,6 +3008,57 @@ class _TextbookUnitAuthoringDialogState
 
   TextbookSeriesCatalogEntry _currentSeries() =>
       textbookSeriesByKey(_seriesKey) ?? kTextbookSeriesCatalog.first;
+
+  /// 교재 시리즈 선택. 위저드를 거치지 않고(신규행 추가 등) 만들어진 책은
+  /// payload 에 series 가 없어 기본값(쎈)으로 열리므로, 여기서 바꿔서
+  /// "단원 구조 저장"으로 함께 저장할 수 있게 한다.
+  Widget _buildSeriesDropdown() {
+    return Container(
+      height: 32,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: _kCard,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: textbookSeriesByKey(_seriesKey) == null
+              ? kTextbookSeriesCatalog.first.key
+              : _seriesKey,
+          dropdownColor: _kCard,
+          isExpanded: true,
+          isDense: true,
+          style: const TextStyle(color: _kText, fontSize: 12),
+          items: [
+            for (final entry in kTextbookSeriesCatalog)
+              DropdownMenuItem<String>(
+                value: entry.key,
+                child: Text('시리즈: ${entry.displayName}'),
+              ),
+          ],
+          onChanged: _tocParsing
+              ? null
+              : (value) {
+                  if (value == null || value == _seriesKey) return;
+                  setState(() {
+                    _seriesKey = value;
+                    final entry = _currentSeries();
+                    // 새 시리즈의 A~D 슬롯 프리셋으로 재구성한다.
+                    // (같은 키의 슬롯에 입력된 페이지는 유지)
+                    for (final big in _bigUnits) {
+                      for (final mid in big.middles) {
+                        mid.applyPreset(entry);
+                      }
+                    }
+                    _focus = null;
+                    _selectedProblemKey = null;
+                  });
+                },
+        ),
+      ),
+    );
+  }
 
   Widget _buildBigUnit(int i) {
     final big = _bigUnits[i];
@@ -2158,12 +3181,264 @@ class _TextbookUnitAuthoringDialogState
             ],
           ),
           const SizedBox(height: 6),
-          for (final sub in mid.subs) _buildSubRow(bigIndex, midIndex, sub),
+          if (_seriesKey == 'wonri') ...[
+            // 개념원리: 트리에는 책의 실제 소단원 행만 보인다.
+            // 분석 단위도 소단원 행이다 — 행을 누르면 그 페이지 범위를
+            // 단일 패스로 분석하고, 문항은 카테고리(A~D)별로 자동 분류된다.
+            for (var s = 0; s < mid.subUnitRows.length; s += 1)
+              _buildSubUnitRow(bigIndex, midIndex, mid, s),
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () => setState(
+                      () => mid.subUnitRows.add(_SubUnitRowEdit())),
+                  icon: const Icon(Icons.add, size: 13, color: _kTextSub),
+                  label: const Text('소단원 추가',
+                      style: TextStyle(color: _kTextSub, fontSize: 10)),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(() => mid.subUnitRows.add(
+                      _SubUnitRowEdit(name: '연습문제', isExercise: true))),
+                  icon:
+                      const Icon(Icons.add_task, size: 13, color: _kTextSub),
+                  label: const Text('연습문제 추가',
+                      style: TextStyle(color: _kTextSub, fontSize: 10)),
+                ),
+              ],
+            ),
+          ] else ...[
+            for (final sub in mid.subs) _buildSubRow(bigIndex, midIndex, sub),
+          ],
         ],
       ),
     );
   }
 
+  /// 개념원리 전용 — 책의 실제 소단원 한 행 (이름 + 시작/끝 페이지 + 삭제).
+  /// 행을 누르면 이 소단원 페이지 범위가 분석 패널의 작업 단위가 된다.
+  /// 페이지를 고치면 A~D 카테고리 슬롯 범위가 자동으로 다시 계산된다.
+  Widget _buildSubUnitRow(
+    int bigIndex,
+    int midIndex,
+    _MidUnitEdit mid,
+    int index,
+  ) {
+    final row = mid.subUnitRows[index];
+    final focus = _SubFocus(
+      bigIndex: bigIndex,
+      midIndex: midIndex,
+      subKey: 'W$index',
+    );
+    final key = _stateKeyFor(focus);
+    final selected = _focus != null && _stateKeyFor(_focus!) == key;
+    final batchSelected = _batchSelection.contains(key);
+    final state = _subStates[key];
+    final analyzed = state == null
+        ? 0
+        : state.pageResults.where((r) => r.ok).fold<int>(
+              0,
+              (sum, r) =>
+                  sum +
+                  r.items
+                      .where((it) => (it.itemRegion?.length ?? 0) == 4)
+                      .length,
+            );
+    final uploaded = state?.uploadResult?.upserted ?? 0;
+    final isRunning = state?.running == true || state?.uploading == true;
+    // 정답·해설 진행 배지는 중단원의 카테고리(A/C/D/B) 상태를 합쳐 보여준다
+    // (개념원리는 카테고리 단위로 저장되므로 소단원 행은 그 합계를 반영).
+    final stageStatus = _wonriRowStageStatus(focus);
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      decoration: BoxDecoration(
+        color: selected ? const Color(0xFF1B2B1B) : Colors.transparent,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _focus = focus;
+            _selectedProblemKey = null;
+          });
+          _jumpViewerToFocusStart(focus);
+        },
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Checkbox(
+                  value: batchSelected,
+                  onChanged: _batchRunning
+                      ? null
+                      : (value) => _toggleBatchSub(focus, value == true),
+                  visualDensity: VisualDensity.compact,
+                  side: const BorderSide(color: _kTextSub),
+                ),
+                Container(
+                  width: 44,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: row.isExercise
+                        ? const Color(0xFF241A1E)
+                        : const Color(0xFF16211B),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    row.isExercise ? '연습' : '소단원',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: row.isExercise
+                          ? const Color(0xFFE68AA9)
+                          : const Color(0xFF8FD0AE),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  flex: 3,
+                  child: _textInput(
+                    row.nameCtrl,
+                    hint: row.isExercise ? '연습문제' : '소단원 이름',
+                    dense: true,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 2,
+                  child: _StageProgressChip(
+                    status: stageStatus,
+                    loading: _loadingStageStatuses,
+                    onTap: () => _showStageStatusDialog(focus),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '소단원 삭제',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() {
+                    mid.subUnitRows.removeAt(index).dispose();
+                    _recalcWonriSlotPages(mid);
+                    // 행 삭제로 W 인덱스가 밀리므로 이 중단원의 소단원 상태는
+                    // 통째로 버린다 (저장된 영역은 DB에 남아 재복원 가능).
+                    final prefix = '$bigIndex/$midIndex/W';
+                    _subStates.removeWhere((k, _) => k.startsWith(prefix));
+                    _manualEdits.removeWhere((k, _) => k.startsWith(prefix));
+                    _batchSelection.removeWhere((k) => k.startsWith(prefix));
+                    if (_focus != null &&
+                        _focus!.bigIndex == bigIndex &&
+                        _focus!.midIndex == midIndex &&
+                        _focus!.subKey.startsWith('W')) {
+                      _focus = null;
+                    }
+                  }),
+                  icon: const Icon(Icons.close, size: 12, color: _kTextSub),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const SizedBox(width: 38),
+                Expanded(
+                  child: _textInput(
+                    row.startCtrl,
+                    hint: '시작',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: () => _recalcWonriSlotPages(mid),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: _textInput(
+                    row.endCtrl,
+                    hint: '끝',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: () => _recalcWonriSlotPages(mid),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _SubRowStats(
+                  analyzed: analyzed,
+                  uploaded: uploaded,
+                  running: isRunning,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const SizedBox(width: 38),
+                Expanded(
+                  child: _textInput(
+                    row.answerStartCtrl,
+                    hint: '정답 시작',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: _textInput(
+                    row.solutionStartCtrl,
+                    hint: '해설 시작',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 58),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 개념원리 소단원 행의 정답·해설 진행 배지용 합계 상태.
+  /// 카테고리(A/B/C/D)별 스테이지 상태를 합쳐 하나로 만든다. 없으면 null.
+  TextbookStageScopeStatus? _wonriRowStageStatus(_SubFocus focus) {
+    var found = false;
+    var bd = 0, bt = 0, ad = 0, at = 0, sd = 0, st = 0;
+    for (final k in const ['A', 'B', 'C', 'D']) {
+      final s = _stageStatusBySub[_stateKeyFor(_SubFocus(
+        bigIndex: focus.bigIndex,
+        midIndex: focus.midIndex,
+        subKey: k,
+      ))];
+      if (s == null) continue;
+      found = true;
+      bd += s.bodyDone;
+      bt += s.bodyTotal;
+      ad += s.answerDone;
+      at += s.answerTotal;
+      sd += s.solutionDone;
+      st += s.solutionTotal;
+    }
+    if (!found) return null;
+    return TextbookStageScopeStatus(
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      subKey: 'W',
+      bodyDone: bd,
+      bodyTotal: bt,
+      answerDone: ad,
+      answerTotal: at,
+      solutionDone: sd,
+      solutionTotal: st,
+    );
+  }
+
+  // 쎈/RPM 전용 — 개념원리(wonri)는 트리에 카테고리 행을 그리지 않는다
+  // (분석 패널의 카테고리 칩으로 대체).
   Widget _buildSubRow(int bigIndex, int midIndex, _SubSectionEdit sub) {
     final focus = _SubFocus(
       bigIndex: bigIndex,
@@ -2317,7 +3592,9 @@ class _TextbookUnitAuthoringDialogState
   Future<void> _showStageStatusDialog(_SubFocus focus) async {
     await _loadStageStatuses();
     if (!mounted) return;
-    final status = _stageStatusBySub[_stateKeyFor(focus)];
+    final status = _isWonriRowFocus(focus)
+        ? _wonriRowStageStatus(focus)
+        : _stageStatusBySub[_stateKeyFor(focus)];
     final title = _subFocusLabel(focus);
     await showDialog<void>(
       context: context,
@@ -2439,6 +3716,13 @@ class _TextbookUnitAuthoringDialogState
       if (stage == 'body') {
         _subStates.remove(_stateKeyFor(focus));
         _manualEdits.remove(_stateKeyFor(focus));
+        // 개념원리: 카테고리(A~D) 크롭 삭제는 소단원(W) 작업 상태에도
+        // 반영돼야 하므로 이 중단원의 W 상태를 모두 비운다.
+        if (_seriesKey == 'wonri') {
+          final prefix = '${focus.bigIndex}/${focus.midIndex}/W';
+          _subStates.removeWhere((k, _) => k.startsWith(prefix));
+          _manualEdits.removeWhere((k, _) => k.startsWith(prefix));
+        }
       }
       final affected = result.affectedSubKeys.isEmpty
           ? focus.subKey
@@ -2456,13 +3740,7 @@ class _TextbookUnitAuthoringDialogState
   }
 
   void _jumpViewerToFocusStart(_SubFocus focus) {
-    final big = _bigUnits[focus.bigIndex];
-    final mid = big.middles[focus.midIndex];
-    final sub = mid.subs.firstWhere(
-      (s) => s.preset.key == focus.subKey,
-      orElse: () => mid.subs.first,
-    );
-    final start = _positiveInt(sub.startCtrl.text);
+    final (start, _) = _focusRange(focus);
     if (start == null) return;
     if (!_viewerController.isReady) return;
     final pageCount = _bodyDocument?.pages.length ?? 0;
@@ -2482,13 +3760,16 @@ class _TextbookUnitAuthoringDialogState
       if (selected.isNotEmpty) {
         return _buildBatchSelectionPane(selected);
       }
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Text(
-            '왼쪽에서 소단원(A/B/C)을 선택하면 분석 패널이 열립니다.',
+            _seriesKey == 'wonri'
+                ? '왼쪽에서 소단원 행을 선택하면 분석 패널이 열립니다.\n'
+                    '분석 한 번으로 익히기·필수유형·확인체크·연습문제가 자동 분류됩니다.'
+                : '왼쪽에서 소단원(A/B/C)을 선택하면 분석 패널이 열립니다.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: _kTextSub, fontSize: 13),
+            style: const TextStyle(color: _kTextSub, fontSize: 13),
           ),
         ),
       );
@@ -2500,6 +3781,12 @@ class _TextbookUnitAuthoringDialogState
       (s) => s.preset.key == focus.subKey,
       orElse: () => mid.subs.first,
     );
+    final wonriRow = _wonriRowFor(focus);
+    final focusName = wonriRow != null
+        ? (wonriRow.nameCtrl.text.trim().isEmpty
+            ? (wonriRow.isExercise ? '연습문제' : '소단원')
+            : wonriRow.nameCtrl.text.trim())
+        : sub.preset.displayName;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2512,7 +3799,7 @@ class _TextbookUnitAuthoringDialogState
                 child: Text(
                   '${big.nameCtrl.text.trim().isEmpty ? "대${focus.bigIndex + 1}" : big.nameCtrl.text.trim()} '
                   '› ${mid.nameCtrl.text.trim().isEmpty ? "중${focus.midIndex + 1}" : mid.nameCtrl.text.trim()} '
-                  '› ${sub.preset.displayName}',
+                  '› $focusName',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _kText,
@@ -2524,6 +3811,9 @@ class _TextbookUnitAuthoringDialogState
             ],
           ),
         ),
+        // 개념원리: 소단원 페이지를 한 번만 분석하면 문항이 개념원리 익히기 /
+        // 필수유형 / 확인 체크 / 연습문제로 자동 분류돼 문항이름으로 저장된다.
+        // 정답·해설 시작 페이지는 왼쪽 소단원 행에서 입력한다 (쎈과 동일).
         const Divider(height: 1, color: _kBorder),
         Padding(
           padding: const EdgeInsets.all(12),
@@ -2658,8 +3948,7 @@ class _TextbookUnitAuthoringDialogState
     _SubRunState state,
     _SubSectionEdit sub,
   ) {
-    final start = _positiveInt(sub.startCtrl.text);
-    final end = _positiveInt(sub.endCtrl.text);
+    final (start, end) = _focusRange(focus);
     final readyRange = start != null && end != null && end >= start;
     final hasFailures =
         (state.progress?.failedPages ?? const <int>{}).isNotEmpty;
@@ -2669,8 +3958,11 @@ class _TextbookUnitAuthoringDialogState
     final selectedCount = _selectedBatchFocuses().length;
     final runSelection = selectedCount > 0;
     final canRunAnalysis = runSelection ? !_batchRunning : readyRange;
-    final savedCropCount =
-        _stageStatusBySub[_stateKeyFor(focus)]?.bodyDone ?? 0;
+    // 개념원리 W 포커스는 DB 스테이지 상태가 카테고리(A~D) 키로 잡혀 있어
+    // 이 소단원의 업로드 결과 행 수로 대신 판단한다.
+    final savedCropCount = _isWonriRowFocus(focus)
+        ? (state.uploadResult?.rows.length ?? 0)
+        : _stageStatusBySub[_stateKeyFor(focus)]?.bodyDone ?? 0;
     final canRunProblemExtract = savedCropCount > 0 &&
         !state.running &&
         !state.uploading &&
@@ -3073,7 +4365,14 @@ class _TextbookUnitAuthoringDialogState
       if (bbox == null || bbox.length != 4) continue;
       final rect = _bboxToRect(bbox, pageSize);
       if (rect == null) continue;
-      widgets.add(_NumberBadge(rect: rect, item: item));
+      widgets.add(_NumberBadge(
+        rect: rect,
+        item: item,
+        // 개념서는 난이도가 없으므로 뱃지에 문항이름을 표시한다.
+        labelOverride: _seriesKey == 'wonri'
+            ? _wonriItemName(_wonriCategoryOfItem(item, ''), item.label)
+            : null,
+      ));
     }
     // Top pass: drag handles for the selected region. Drawn last so they
     // stay clickable.
@@ -3254,10 +4553,15 @@ class _TextbookUnitAuthoringDialogState
     bool dense = false,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    VoidCallback? onChanged,
+    bool enabled = true,
   }) {
     return TextField(
       controller: controller,
-      onChanged: (_) => setState(() {}),
+      enabled: enabled,
+      onChanged: (_) => setState(() {
+        onChanged?.call();
+      }),
       keyboardType: keyboardType,
       inputFormatters: inputFormatters,
       style: const TextStyle(color: _kText, fontSize: 12),
@@ -3457,17 +4761,21 @@ class _RegionBox extends StatelessWidget {
 }
 
 class _NumberBadge extends StatelessWidget {
-  const _NumberBadge({required this.rect, required this.item});
+  const _NumberBadge({required this.rect, required this.item, this.labelOverride});
   final Rect rect;
   final TextbookVlmItem item;
+
+  /// 개념서 문항이름처럼 난이도(label) 대신 표시할 라벨. null 이면 item.label 사용.
+  final String? labelOverride;
 
   @override
   Widget build(BuildContext context) {
     final color =
         item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFFFF4D4F);
     final groupLabel = item.contentGroupLabel.trim();
+    final badgeLabel = labelOverride ?? item.label;
     final numberLabel =
-        item.label.isEmpty ? item.number : '${item.number} · ${item.label}';
+        badgeLabel.isEmpty ? item.number : '${item.number} · $badgeLabel';
     final text =
         groupLabel.isEmpty ? numberLabel : '$groupLabel · $numberLabel';
     return Positioned(
@@ -4126,11 +5434,74 @@ class _MidUnitEdit {
   }
   final TextEditingController nameCtrl = TextEditingController();
   final List<_SubSectionEdit> subs = <_SubSectionEdit>[];
+
+  /// 개념서(개념원리)의 실제 소단원 행들 — 책의 소단원/연습문제 이름과
+  /// 페이지 범위를 이 단위로 편집하고, A~D 문제 카테고리 슬롯의 페이지는
+  /// 여기서 자동 유도된다 (A/B/C = 일반 소단원 전체 범위, D = 연습문제 범위).
+  final List<_SubUnitRowEdit> subUnitRows = <_SubUnitRowEdit>[];
+
+  /// 시리즈 변경 시 A~D 슬롯을 새 프리셋으로 재구성한다.
+  /// 같은 키의 슬롯에 이미 입력된 페이지 텍스트는 유지한다.
+  void applyPreset(TextbookSeriesCatalogEntry series) {
+    final keyed = <String, _SubSectionEdit>{
+      for (final s in subs) s.preset.key: s,
+    };
+    final rebuilt = <_SubSectionEdit>[];
+    for (final preset in series.subPreset) {
+      final existing = keyed.remove(preset.key);
+      if (existing == null) {
+        rebuilt.add(_SubSectionEdit(preset: preset));
+        continue;
+      }
+      final next = _SubSectionEdit(preset: preset);
+      next.startCtrl.text = existing.startCtrl.text;
+      next.endCtrl.text = existing.endCtrl.text;
+      next.answerStartCtrl.text = existing.answerStartCtrl.text;
+      next.solutionStartCtrl.text = existing.solutionStartCtrl.text;
+      existing.dispose();
+      rebuilt.add(next);
+    }
+    for (final leftover in keyed.values) {
+      leftover.dispose();
+    }
+    subs
+      ..clear()
+      ..addAll(rebuilt);
+  }
+
   void dispose() {
     nameCtrl.dispose();
     for (final s in subs) {
       s.dispose();
     }
+    for (final s in subUnitRows) {
+      s.dispose();
+    }
+  }
+}
+
+/// 개념서(개념원리)의 소단원 한 행 — 이름 + 시작/끝 페이지.
+/// "연습문제" 행은 STEP1/STEP2/실력UP이 있는 연습문제 페이지 범위다.
+class _SubUnitRowEdit {
+  _SubUnitRowEdit({String? name, this.isExercise = false}) {
+    if (name != null) nameCtrl.text = name;
+  }
+
+  final TextEditingController nameCtrl = TextEditingController();
+  final TextEditingController startCtrl = TextEditingController();
+  final TextEditingController endCtrl = TextEditingController();
+  // 정답/해설 시작 페이지는 소단원 단위로 사용자가 직접 입력한다 (쎈과 동일).
+  // 소단원 안의 익히기·확인체크·연습문제 카테고리는 이 값을 공유한다.
+  final TextEditingController answerStartCtrl = TextEditingController();
+  final TextEditingController solutionStartCtrl = TextEditingController();
+  final bool isExercise;
+
+  void dispose() {
+    nameCtrl.dispose();
+    startCtrl.dispose();
+    endCtrl.dispose();
+    answerStartCtrl.dispose();
+    solutionStartCtrl.dispose();
   }
 }
 

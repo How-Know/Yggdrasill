@@ -32,6 +32,45 @@ class TextbookBookRegistryResult {
   final String? coverPublicUrl;
 }
 
+/// 개념서(개념원리)의 실제 소단원 한 개. 문제 카테고리 슬롯(A~D)과 달리
+/// 책에 인쇄된 소단원("다항식의 덧셈과 뺄셈" 등)이며, 페이지 입력은 이
+/// 단위로만 받는다. "연습문제" 항목은 [isExercise]=true 로 표시되고 D 슬롯
+/// 페이지 범위의 근거가 된다.
+class SubUnitInput {
+  const SubUnitInput({
+    required this.order,
+    required this.name,
+    this.startPage,
+    this.endPage,
+    this.answerStartPage,
+    this.solutionStartPage,
+    this.isExercise = false,
+  });
+
+  final int order;
+  final String name;
+  final int? startPage;
+  final int? endPage;
+
+  /// 답지/해설 PDF에서 이 소단원 문항의 정답·해설이 시작되는 페이지.
+  /// 개념서는 소단원 단위로 입력받아 소단원 안의 카테고리가 공유한다.
+  final int? answerStartPage;
+  final int? solutionStartPage;
+  final bool isExercise;
+
+  Map<String, dynamic> toPayload() {
+    return <String, dynamic>{
+      'name': name,
+      'order_index': order,
+      if (startPage != null) 'start_page': startPage,
+      if (endPage != null) 'end_page': endPage,
+      if (answerStartPage != null) 'answer_start_page': answerStartPage,
+      if (solutionStartPage != null) 'solution_start_page': solutionStartPage,
+      if (isExercise) 'is_exercise': true,
+    };
+  }
+}
+
 /// Minimal description of one 중단원's 소단원 slots. The series catalog only
 /// tells us "which slots exist" (쎈 ⇒ A/B/C); the start/end pages come from
 /// the wizard UI.
@@ -40,17 +79,23 @@ class MidUnitInput {
     required this.midOrder,
     required this.midName,
     required this.subs,
+    this.subUnits = const <SubUnitInput>[],
   });
 
   final int midOrder;
   final String midName;
   final List<SubSectionInput> subs;
 
+  /// 개념서 전용 — 책의 실제 소단원 목록. 문제집(쎈/RPM)은 빈 리스트.
+  final List<SubUnitInput> subUnits;
+
   Map<String, dynamic> toPayload() {
     return <String, dynamic>{
       'name': midName,
       'order_index': midOrder,
       'smalls': subs.map((e) => e.toPayload()).toList(),
+      if (subUnits.isNotEmpty)
+        'sub_units': subUnits.map((e) => e.toPayload()).toList(),
     };
   }
 }
@@ -690,10 +735,33 @@ List<BigUnitInput> bigUnitsFromPayload(
             ));
           }
         }
+        // 개념서의 실제 소단원 목록(있으면). 슬롯과 별개로 보존해서
+        // 단원 저장 라운드트립에서 유실되지 않게 한다.
+        final subUnits = <SubUnitInput>[];
+        final rawSubUnits = mid['sub_units'];
+        if (rawSubUnits is List) {
+          for (var u = 0; u < rawSubUnits.length; u += 1) {
+            final subUnitRaw = rawSubUnits[u];
+            if (subUnitRaw is! Map) continue;
+            final subUnit = Map<String, dynamic>.from(subUnitRaw);
+            final subUnitName = (subUnit['name'] as String?)?.trim() ?? '';
+            if (subUnitName.isEmpty) continue;
+            subUnits.add(SubUnitInput(
+              order: _asInt(subUnit['order_index']) ?? u,
+              name: subUnitName,
+              startPage: _asInt(subUnit['start_page']),
+              endPage: _asInt(subUnit['end_page']),
+              answerStartPage: _asInt(subUnit['answer_start_page']),
+              solutionStartPage: _asInt(subUnit['solution_start_page']),
+              isExercise: subUnit['is_exercise'] == true,
+            ));
+          }
+        }
         middles.add(MidUnitInput(
           midOrder: midOrder,
           midName: midName,
           subs: smalls,
+          subUnits: subUnits,
         ));
       }
     }

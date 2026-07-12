@@ -131,6 +131,36 @@ class TextbookVlmSolutionRefService {
     return TextbookVlmSolutionRefPageResult.fromMap(json);
   }
 
+  /// 개념원리 필수유형 전용 — 본문 PDF 페이지에서 "풀이" 단락 좌표와
+  /// 굵은 글씨 정답을 함께 추출한다. (POST /textbook/vlm/extract-body-solutions)
+  Future<TextbookVlmBodySolutionPageResult> extractBodySolutionsOnPage({
+    required Uint8List imageBytes,
+    required int rawPage,
+    List<String>? expectedNumbers,
+    String mimeType = 'image/png',
+  }) async {
+    final body = <String, dynamic>{
+      'image_base64': base64Encode(imageBytes),
+      'mime_type': mimeType,
+      'raw_page': rawPage,
+      if (expectedNumbers != null && expectedNumbers.isNotEmpty)
+        'expected_numbers': expectedNumbers,
+    };
+    final res = await _http.post(
+      _uri('/textbook/vlm/extract-body-solutions'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'vlm_extract_body_solutions_failed(${res.statusCode}): '
+        '${json['error'] ?? json['message'] ?? res.body}',
+      );
+    }
+    return TextbookVlmBodySolutionPageResult.fromMap(json);
+  }
+
   Future<int> batchUpsertSolutionRefs({
     required String academyId,
     required List<TextbookSolutionRefUpload> refs,
@@ -272,6 +302,7 @@ class TextbookSolutionRefUpload {
     this.displayPage,
     this.contentRegion1k,
     this.source = 'vlm',
+    this.sourceKind = 'sol',
   });
 
   final String cropId;
@@ -283,6 +314,10 @@ class TextbookSolutionRefUpload {
   /// 'vlm' | 'manual'
   final String source;
 
+  /// 좌표가 가리키는 PDF 종류. 'sol' = 해설 PDF(기본),
+  /// 'body' = 본문 PDF (개념원리 필수유형처럼 풀이가 본문에 인쇄된 경우).
+  final String sourceKind;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
         'crop_id': cropId,
         'raw_page': rawPage,
@@ -290,7 +325,103 @@ class TextbookSolutionRefUpload {
         'number_region_1k': numberRegion1k,
         if (contentRegion1k != null) 'content_region_1k': contentRegion1k,
         'source': source,
+        'source_kind': sourceKind,
       };
+}
+
+/// 개념원리 필수유형 본문 추출 결과 한 건 — 풀이 좌표 + 정답.
+class TextbookVlmBodySolutionItem {
+  const TextbookVlmBodySolutionItem({
+    required this.problemNumber,
+    required this.answerKind,
+    required this.answerText,
+    required this.answerLatex2d,
+    required this.numberRegion1k,
+    this.contentRegion1k,
+  });
+
+  final String problemNumber;
+
+  /// 'objective' | 'subjective'
+  final String answerKind;
+  final String answerText;
+  final String answerLatex2d;
+  final List<int> numberRegion1k;
+
+  /// "풀이" 단락 전체 bbox — [ymin, xmin, ymax, xmax] in 0..1000.
+  final List<int>? contentRegion1k;
+
+  factory TextbookVlmBodySolutionItem.fromMap(Map<String, dynamic> map) {
+    int? asIntN(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('$v');
+    }
+
+    List<int>? parseBbox(dynamic raw) {
+      if (raw is! List || raw.length != 4) return null;
+      final out = <int>[];
+      for (final v in raw) {
+        final n = asIntN(v);
+        if (n == null) return null;
+        out.add(n);
+      }
+      return out;
+    }
+
+    final kindRaw = '${map['answer_kind'] ?? ''}'.trim();
+    return TextbookVlmBodySolutionItem(
+      problemNumber: '${map['problem_number'] ?? ''}'.trim(),
+      answerKind: kindRaw == 'objective' ? 'objective' : 'subjective',
+      answerText: '${map['answer_text'] ?? ''}'.trim(),
+      answerLatex2d: '${map['answer_latex_2d'] ?? ''}'.trim(),
+      numberRegion1k: parseBbox(map['number_region']) ?? const [0, 0, 0, 0],
+      contentRegion1k: parseBbox(map['content_region']),
+    );
+  }
+}
+
+class TextbookVlmBodySolutionPageResult {
+  const TextbookVlmBodySolutionPageResult({
+    required this.rawPage,
+    required this.items,
+    required this.notes,
+    required this.elapsedMs,
+    required this.model,
+  });
+
+  final int rawPage;
+  final List<TextbookVlmBodySolutionItem> items;
+  final String notes;
+  final int elapsedMs;
+  final String model;
+
+  factory TextbookVlmBodySolutionPageResult.fromMap(Map<String, dynamic> map) {
+    int asInt(dynamic v) {
+      if (v == null) return 0;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('$v') ?? 0;
+    }
+
+    final rawItems = (map['items'] as List?) ?? const [];
+    final parsed = <TextbookVlmBodySolutionItem>[];
+    for (final r in rawItems) {
+      if (r is Map) {
+        parsed.add(TextbookVlmBodySolutionItem.fromMap(
+          r.map((k, dynamic v) => MapEntry('$k', v)),
+        ));
+      }
+    }
+    return TextbookVlmBodySolutionPageResult(
+      rawPage: asInt(map['raw_page']),
+      items: parsed,
+      notes: '${map['notes'] ?? ''}',
+      elapsedMs: asInt(map['elapsed_ms']),
+      model: '${map['model'] ?? ''}',
+    );
+  }
 }
 
 /// Matches a batch of VLM items against the expected Stage-1 문항번호 set.

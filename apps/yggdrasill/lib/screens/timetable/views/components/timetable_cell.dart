@@ -22,6 +22,7 @@ import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/widgets/schedule_locked_by_makeup_dialog.dart';
 import 'package:mneme_flutter/widgets/dialog_tokens.dart';
 import 'package:mneme_flutter/services/consult_inquiry_demand_service.dart';
+import 'package:mneme_flutter/screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../../components/timetable_content_view.dart';
 import '../../../../models/operating_hours.dart';
 import '../../../../models/session_override.dart';
@@ -1010,10 +1011,15 @@ class TimetableCell extends StatelessWidget {
           child: Stack(
             children: [
               // 배경 및 선택/드래그 하이라이트
-              Builder(builder: (_) {
+              Builder(builder: (context) {
+                final brightness = Theme.of(context).brightness;
+                final panelStyle =
+                    FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
                 final bool showSelected = isSelected && !isBreakTime;
                 final Color backgroundColor = isBreakTime
-                    ? const Color(0xFF1F1F1F)
+                    ? (brightness == Brightness.light
+                        ? const Color(0xFFE8E8E8)
+                        : const Color(0xFF1F1F1F))
                     : isDragHighlight
                         ? const Color(0xFF1976D2).withOpacity(0.18)
                         : showSelected
@@ -1023,9 +1029,7 @@ class TimetableCell extends StatelessWidget {
                                 ? const Color(0xFF33A373).withOpacity(0.12)
                                 : Colors.transparent;
                 final Border border = Border(
-                  left: BorderSide(
-                    color: Colors.white.withOpacity(0.1),
-                  ),
+                  left: BorderSide(color: panelStyle.divider),
                 );
                 return Container(
                   decoration: BoxDecoration(

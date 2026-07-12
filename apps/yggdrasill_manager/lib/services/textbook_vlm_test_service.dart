@@ -81,6 +81,7 @@ class TextbookVlmTestService {
     required String gradeLabel,
     String? sectionHint,
     String? expectedStartNumber,
+    String? series,
     String mimeType = 'image/png',
   }) async {
     final body = <String, dynamic>{
@@ -94,6 +95,8 @@ class TextbookVlmTestService {
         'section_hint': sectionHint!.trim(),
       if ((expectedStartNumber ?? '').trim().isNotEmpty)
         'expected_start_number': expectedStartNumber!.trim(),
+      // 교재 시리즈 키 (ssen | rpm). 게이트웨이가 시리즈별 VLM 프롬프트를 고른다.
+      if ((series ?? '').trim().isNotEmpty) 'series': series!.trim(),
     };
     final res = await _http.post(
       _uri('/textbook/vlm/detect-problems'),
@@ -125,6 +128,127 @@ class TextbookVlmTestService {
     }
     return TextbookVlmDetectResult.fromMap(json);
   }
+
+  /// 목차(차례) 페이지 PNG 들을 한 번에 보내 단원 트리를 추출한다.
+  ///
+  /// 응답은 책에 인쇄된 계층 그대로이며 (대단원 > 중단원 > 소단원),
+  /// 우리 단원 구조로의 매핑(예: 개념원리는 중단원→대단원, 소단원→중단원)은
+  /// 호출자가 시리즈 규칙에 따라 수행한다.
+  Future<TextbookTocParseResult> parseToc({
+    required List<Uint8List> pageImages,
+    String? series,
+    String mimeType = 'image/png',
+  }) async {
+    final body = <String, dynamic>{
+      'images': [
+        for (final bytes in pageImages)
+          <String, dynamic>{
+            'image_base64': base64Encode(bytes),
+            'mime_type': mimeType,
+          },
+      ],
+      if ((series ?? '').trim().isNotEmpty) 'series': series!.trim(),
+    };
+    final res = await _http.post(
+      _uri('/textbook/vlm/parse-toc'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    Map<String, dynamic> json;
+    try {
+      final decoded = jsonDecode(res.body);
+      json = decoded is Map<String, dynamic>
+          ? decoded
+          : (decoded is Map
+              ? decoded.map((k, dynamic v) => MapEntry('$k', v))
+              : <String, dynamic>{});
+    } catch (_) {
+      json = <String, dynamic>{};
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      final detail = <String>[];
+      if (json['error'] != null) detail.add('${json['error']}');
+      if (json['message'] != null) detail.add('${json['message']}');
+      final summary = detail.isEmpty ? res.body : detail.join(' / ');
+      throw Exception('vlm_toc_failed(${res.statusCode}): $summary');
+    }
+    return TextbookTocParseResult.fromMap(json);
+  }
+}
+
+/// `/textbook/vlm/parse-toc` 응답 — 책에 인쇄된 계층 그대로의 단원 트리.
+class TextbookTocParseResult {
+  const TextbookTocParseResult({required this.bigUnits, required this.notes});
+
+  final List<TextbookTocBigUnit> bigUnits;
+  final String notes;
+
+  factory TextbookTocParseResult.fromMap(Map<String, dynamic> map) {
+    final bigs = <TextbookTocBigUnit>[];
+    for (final raw in (map['big_units'] as List?) ?? const []) {
+      if (raw is! Map) continue;
+      final name = '${raw['name'] ?? ''}'.trim();
+      if (name.isEmpty) continue;
+      final mids = <TextbookTocMidUnit>[];
+      for (final rawMid in (raw['mid_units'] as List?) ?? const []) {
+        if (rawMid is! Map) continue;
+        final midName = '${rawMid['name'] ?? ''}'.trim();
+        if (midName.isEmpty) continue;
+        final subs = <TextbookTocSubUnit>[];
+        for (final rawSub in (rawMid['sub_units'] as List?) ?? const []) {
+          if (rawSub is! Map) continue;
+          final subName = '${rawSub['name'] ?? ''}'.trim();
+          if (subName.isEmpty) continue;
+          subs.add(TextbookTocSubUnit(
+            name: subName,
+            page: int.tryParse('${rawSub['page'] ?? ''}'),
+            isExercise: rawSub['is_exercise'] == true || subName == '연습문제',
+          ));
+        }
+        mids.add(TextbookTocMidUnit(
+          name: midName,
+          hasExercise: rawMid['has_exercise'] == true,
+          subUnits: subs,
+        ));
+      }
+      bigs.add(TextbookTocBigUnit(name: name, midUnits: mids));
+    }
+    return TextbookTocParseResult(
+      bigUnits: bigs,
+      notes: '${map['notes'] ?? ''}'.trim(),
+    );
+  }
+}
+
+class TextbookTocBigUnit {
+  const TextbookTocBigUnit({required this.name, required this.midUnits});
+  final String name;
+  final List<TextbookTocMidUnit> midUnits;
+}
+
+class TextbookTocMidUnit {
+  const TextbookTocMidUnit({
+    required this.name,
+    required this.hasExercise,
+    required this.subUnits,
+  });
+  final String name;
+  final bool hasExercise;
+  final List<TextbookTocSubUnit> subUnits;
+}
+
+class TextbookTocSubUnit {
+  const TextbookTocSubUnit({
+    required this.name,
+    this.page,
+    this.isExercise = false,
+  });
+  final String name;
+  final int? page;
+
+  /// "연습문제" 항목 여부. 소단원 사이사이에 여러 번 나올 수 있어
+  /// 위치(순서)가 보존된 채로 전달된다.
+  final bool isExercise;
 }
 
 /// Parsed response of `/textbook/vlm/detect-problems`.
@@ -192,6 +316,11 @@ class TextbookVlmDetectResult {
       'basic_drill',
       'type_practice',
       'mastery',
+      // 개념원리 전용 섹션 (sub_key A/B/C/D 슬롯 대응).
+      'concept_drill',
+      'type_example',
+      'check',
+      'exercise',
       'unknown',
     };
     final section = allowedSections.contains(sec) ? sec : 'unknown';
@@ -242,10 +371,16 @@ class TextbookVlmItem {
     required this.column,
     required this.bbox,
     required this.itemRegion,
+    this.category = '',
   });
 
   final String number;
   final String label;
+
+  /// 개념원리(wonri) 단일 패스 전용 — 문항 카테고리.
+  /// 'concept_drill' | 'type_example' | 'check' | 'exercise' | ''(비-wonri).
+  /// sub_key A~D 슬롯과 1:1 대응한다.
+  final String category;
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
@@ -309,9 +444,18 @@ class TextbookVlmItem {
             ? groupKind
             : 'none';
 
+    const allowedCategories = {
+      'concept_drill',
+      'type_example',
+      'check',
+      'exercise',
+    };
+    final categoryRaw = '${map['category'] ?? ''}'.trim();
+
     return TextbookVlmItem(
       number: number,
       label: '${map['label'] ?? ''}',
+      category: allowedCategories.contains(categoryRaw) ? categoryRaw : '',
       isSetHeader: map['is_set_header'] == true || inferredRange != null,
       setFrom: from,
       setTo: to,
@@ -337,6 +481,7 @@ class TextbookVlmItem {
     return TextbookVlmItem(
       number: number,
       label: label,
+      category: category,
       isSetHeader: isSetHeader,
       setFrom: setFrom,
       setTo: setTo,

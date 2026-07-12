@@ -206,6 +206,10 @@ class ProblemBankService {
     required int bigOrder,
     required int midOrder,
     required String subKey,
+    // 개념원리 필수유형(B) 소단원 순번(중단원 내 0-based). 그 외 카테고리/시리즈는 0.
+    // 소단원마다 별도 추출 런/문서를 만들어 번호 중복을 막는다.
+    int subIndex = 0,
+    String seriesKey = '',
     String bigName = '',
     String midName = '',
     String subName = '',
@@ -235,6 +239,9 @@ class ProblemBankService {
       'mode': 'textbook_pdf_only',
       'book_id': bookId,
       'book_name': bookName,
+      // 교재 시리즈 (ssen | rpm | wonri). 추출 워커가 시리즈별 프롬프트
+      // 규칙(예: 개념원리 필수유형의 '풀이' 단락 제외)을 적용할 때 사용.
+      if (seriesKey.trim().isNotEmpty) 'series': seriesKey.trim(),
       'grade_label': gradeLabel,
       if (course != null) ...<String, dynamic>{
         'grade_key': course.gradeKey,
@@ -244,6 +251,7 @@ class ProblemBankService {
       'big_order': bigOrder,
       'mid_order': midOrder,
       'sub_key': subKey,
+      'sub_index': subIndex,
       'big_name': bigName,
       'mid_name': midName,
       'sub_name': subName,
@@ -261,6 +269,7 @@ class ProblemBankService {
         .eq('big_order', bigOrder)
         .eq('mid_order', midOrder)
         .eq('sub_key', subKey)
+        .eq('sub_index', subIndex)
         .maybeSingle();
     final existingDocId = '${existingRun?['pb_document_id'] ?? ''}'.trim();
     final existingJobId = '${existingRun?['extract_job_id'] ?? ''}'.trim();
@@ -317,7 +326,7 @@ class ProblemBankService {
             'academy_id': academyId,
             'created_by': _client.auth.currentUser?.id,
             'source_filename':
-                '$bookName · $gradeLabel · ${midName.isEmpty ? '중${midOrder + 1}' : midName} · $subName',
+                '$bookName · $gradeLabel · ${midName.isEmpty ? '중${midOrder + 1}' : midName} · $subName${subIndex > 0 ? ' · 소단원${subIndex + 1}' : ''}',
             'source_storage_bucket': 'problem-documents',
             'source_storage_path': '',
             'source_sha256': '',
@@ -414,6 +423,7 @@ class ProblemBankService {
         'big_order': bigOrder,
         'mid_order': midOrder,
         'sub_key': subKey,
+        'sub_index': subIndex,
         'big_name': bigName,
         'mid_name': midName,
         'sub_name': subName,
@@ -437,7 +447,8 @@ class ProblemBankService {
           },
         },
       },
-      onConflict: 'academy_id,book_id,grade_label,big_order,mid_order,sub_key',
+      onConflict:
+          'academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index',
     );
 
     return TextbookProblemBankExtractRunResult(

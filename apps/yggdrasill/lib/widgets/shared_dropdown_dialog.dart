@@ -17,6 +17,7 @@ class SharedDropdownDialog extends StatefulWidget {
     this.disabled = false,
     this.panelMaxWidth = SharedDropdownDialogPanel.defaultMaxWidth,
     this.alignPanelRightToCapsuleBar = false,
+    this.openPanelAboveAnchor = false,
     this.capsuleBarRightPadding = 14,
     this.panelRightExtraOffset = 0,
     this.maxHeightScreenFraction = 2 / 3,
@@ -33,6 +34,8 @@ class SharedDropdownDialog extends StatefulWidget {
   final bool disabled;
   final double panelMaxWidth;
   final bool alignPanelRightToCapsuleBar;
+  /// true면 앵커 위쪽으로 패널을 펼친다(하단 FAB 등).
+  final bool openPanelAboveAnchor;
   final double capsuleBarRightPadding;
   /// 같은 캡슐 바 안 오른쪽 형제 버튼 너비 등 추가 오프셋.
   final double panelRightExtraOffset;
@@ -89,11 +92,23 @@ class _SharedDropdownDialogState extends State<SharedDropdownDialog> {
         );
         final left = (panelRightEdge - panelWidth)
             .clamp(12.0, overlaySize.width - panelWidth - 12);
-        final top = targetRect.bottom +
-            FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
-        final maxPanelHeight = math.min(
-          overlaySize.height * widget.maxHeightScreenFraction,
-          overlaySize.height - top - 16,
+        final panelGap = FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
+        final maxPanelHeight = widget.openPanelAboveAnchor
+            ? math.min(
+                overlaySize.height * widget.maxHeightScreenFraction,
+                math.max(0.0, targetRect.top - panelGap - 16),
+              )
+            : math.min(
+                overlaySize.height * widget.maxHeightScreenFraction,
+                overlaySize.height - targetRect.bottom - panelGap - 16,
+              );
+
+        final panel = Material(
+          color: Colors.transparent,
+          child: widget.panelBuilder(
+            overlayContext,
+            controller.copyWith(maxHeight: maxPanelHeight),
+          ),
         );
 
         return Stack(
@@ -104,18 +119,20 @@ class _SharedDropdownDialogState extends State<SharedDropdownDialog> {
                 onTap: _closeOverlay,
               ),
             ),
-            Positioned(
-              left: left,
-              top: top,
-              width: panelWidth,
-              child: Material(
-                color: Colors.transparent,
-                child: widget.panelBuilder(
-                  overlayContext,
-                  controller.copyWith(maxHeight: maxPanelHeight),
-                ),
+            if (widget.openPanelAboveAnchor)
+              Positioned(
+                left: left,
+                bottom: overlaySize.height - targetRect.top + panelGap,
+                width: panelWidth,
+                child: panel,
+              )
+            else
+              Positioned(
+                left: left,
+                top: targetRect.bottom + panelGap,
+                width: panelWidth,
+                child: panel,
               ),
-            ),
           ],
         );
       },

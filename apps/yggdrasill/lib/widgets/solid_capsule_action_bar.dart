@@ -101,6 +101,59 @@ class SolidCapsuleActionBar extends StatelessWidget {
   }
 }
 
+/// [SolidCapsuleActionBar] 내부 텍스트 버튼.
+class SolidCapsuleTextActionButton extends StatelessWidget {
+  const SolidCapsuleTextActionButton({
+    super.key,
+    this.tooltip,
+    required this.label,
+    this.onPressed,
+    this.selected = false,
+    this.horizontalPadding = 12,
+  });
+
+  final String? tooltip;
+  final String label;
+  final VoidCallback? onPressed;
+  final bool selected;
+  final double horizontalPadding;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final fg = SolidCapsuleActionBarTokens.iconColor(
+      brightness,
+      selected: selected,
+    );
+
+    final button = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: horizontalPadding,
+            vertical: 10,
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+              fontSize: FabTabBarTokens.fabBarLabelFontSize,
+              fontWeight: FontWeight.w600,
+              color: fg,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (tooltip == null || tooltip!.isEmpty) return button;
+    return Tooltip(message: tooltip, child: button);
+  }
+}
+
 /// [SolidCapsuleActionBar] 내부 아이콘 버튼.
 class SolidCapsuleActionButton extends StatelessWidget {
   const SolidCapsuleActionButton({

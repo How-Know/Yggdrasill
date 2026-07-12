@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import '../../models/group_info.dart';
 import '../../models/operating_hours.dart';
 import '../../models/student.dart';
@@ -35,11 +36,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/schedule_store.dart';
 import '../../services/timetable_excel_export_service.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'components/timetable_page_title.dart';
 import 'components/timetable_top_bar.dart';
-import 'components/timetable_search_field.dart';
+import 'components/timetable_action_fab_overlay.dart';
+import 'components/timetable_week_nav_overlay.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../consult/consult_notes_screen.dart';
 import '../../services/consult_note_controller.dart';
 import '../../widgets/dark_panel_route.dart';
+import '../../widgets/solid_capsule_action_bar.dart';
 import '../../widgets/dialog_tokens.dart';
 import 'dart:developer' as dev;
 
@@ -162,6 +167,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
   final TextEditingController _headerSearchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  bool _isSearchExpanded = false;
+  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
+      FabStyleScreenTabBarOverlay();
+  final TimetableActionFabOverlay _actionFabOverlay =
+      TimetableActionFabOverlay();
+  final TimetableWeekNavOverlay _weekNavOverlay = TimetableWeekNavOverlay();
+  final ValueNotifier<bool> _scheduleSidePanelOpen =
+      ValueNotifier<bool>(true);
 
   void _beginCellRenderPerfTrace({
     required int dayIdx,
@@ -765,11 +779,103 @@ class _TimetableScreenState extends State<TimetableScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // 운영시간 로드 후에만 스크롤 이동하도록 변경 (여기서는 호출하지 않음)
-    // if (!_hasScrolledToCurrentTime) {
-    //   WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
-    //   _hasScrolledToCurrentTime = true;
-    // }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncFabOverlays();
+    });
+  }
+
+  void _syncFabOverlays() {
+    _fabTabBarOverlay.sync(
+      context,
+      selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
+      tabs: const ['수업', '일정'],
+      onTabSelected: _onTimetableViewTabSelected,
+    );
+    _weekNavOverlay.sync(
+      context,
+      selectedDate: _selectedDate,
+      onDateChanged: _handleDateChanged,
+      yearNavigation: _viewType == TimetableViewType.schedule,
+    );
+    _actionFabOverlay.sync(
+      context,
+      onAdd: _handleRegistrationButton,
+      onSearchToggle: _toggleSearchFab,
+      onSearchCancel: _collapseSearch,
+      onRoadmap: _showSeasonRoadmapDialog,
+      onExport: _onExportPressed,
+      searchExpanded: _isSearchExpanded,
+      hasSearchQuery: _headerSearchQuery.isNotEmpty,
+      searchController: _headerSearchController,
+      onSearchChanged: _onHeaderSearchChanged,
+      onSearchClear: _clearHeaderSearch,
+      searchFocusNode: _searchFocusNode,
+    );
+  }
+
+  void _onTimetableViewTabSelected(int index) {
+    final previousViewType = _viewType;
+    setState(() {
+      _viewType =
+          (index == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
+    });
+    _syncFabOverlays();
+
+    if (index == 0 && previousViewType != TimetableViewType.classes) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _selectCurrentTimeCell(centerHorizontally: true, preferAnimate: true);
+      });
+    }
+  }
+
+  void _collapseSearch({bool clearQuery = false}) {
+    if (clearQuery) {
+      _headerSearchController.clear();
+      _headerSearchQuery = '';
+      _contentViewKey.currentState?.updateSearchQuery('');
+    }
+    if (!_isSearchExpanded && !clearQuery) return;
+    setState(() => _isSearchExpanded = false);
+    _searchFocusNode.unfocus();
+    _syncFabOverlays();
+  }
+
+  void _toggleSearchFab() {
+    if (_isSearchExpanded) {
+      _collapseSearch();
+      return;
+    }
+    setState(() => _isSearchExpanded = true);
+    _syncFabOverlays();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  void _onHeaderSearchChanged(String value) {
+    final shouldOpenClassSheet =
+        value.trim().isNotEmpty && !_isClassListSheetOpen;
+    final hadText = _headerSearchQuery.isNotEmpty;
+    final hasText = value.isNotEmpty;
+    if (shouldOpenClassSheet || hadText != hasText) {
+      setState(() {
+        _headerSearchQuery = value;
+        if (shouldOpenClassSheet) {
+          _isClassListSheetOpen = true;
+        }
+      });
+      _syncFabOverlays();
+    } else {
+      _headerSearchQuery = value;
+      _actionFabOverlay.markNeedsBuild();
+    }
+    _contentViewKey.currentState?.updateSearchQuery(value);
+  }
+
+  void _clearHeaderSearch() {
+    _collapseSearch(clearQuery: true);
   }
 
   void _scrollToCurrentTime({
@@ -1032,6 +1138,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     });
     // ✅ 주 이동 시 해당 주 time blocks 프리로드(비동기, 중복 호출은 내부에서 방지)
     unawaited(DataManager.instance.ensureStudentTimeBlocksForWeek(date));
+    _syncFabOverlays();
   }
 
   void _handleStudentMenu() {
@@ -1224,150 +1331,83 @@ class _TimetableScreenState extends State<TimetableScreen> {
     }
   }
 
-  Widget _buildHeaderRegisterControls() {
-    const double controlHeight = 48;
-    const double mainButtonWidth = 130; // ✅ 내부 오른쪽 여백(10)만큼 너비도 같이 증가
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          width: mainButtonWidth,
-          height: controlHeight,
-          child: Material(
-            color: const Color(0xFF1B6B63),
-            borderRadius: BorderRadius.circular(controlHeight / 2), // ✅ 알약
-            child: InkWell(
-              borderRadius: BorderRadius.circular(controlHeight / 2),
-              onTap: _handleRegistrationButton,
-              child: Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.max,
-                  children: const [
-                    Icon(Icons.add, color: Colors.white, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      '추가',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHeaderSearchField() {
-    return TimetableSearchField(
-      controller: _headerSearchController,
-      hasText: _headerSearchQuery.isNotEmpty,
-      onChanged: (value) {
-        final shouldOpenClassSheet =
-            value.trim().isNotEmpty && !_isClassListSheetOpen;
-        final hadText = _headerSearchQuery.isNotEmpty;
-        final hasText = value.isNotEmpty;
-        if (shouldOpenClassSheet || hadText != hasText) {
-          setState(() {
-            _headerSearchQuery = value;
-            if (shouldOpenClassSheet) {
-              _isClassListSheetOpen = true;
-            }
-          });
-        } else {
-          // 입력 중에는 전체 시간표 rebuild를 줄이기 위해 state 전파를 최소화
-          _headerSearchQuery = value;
-        }
-        _contentViewKey.currentState?.updateSearchQuery(value);
-      },
-      onClear: () {
-        _headerSearchController.clear();
-        setState(() => _headerSearchQuery = '');
-        _contentViewKey.currentState?.updateSearchQuery('');
-      },
-    );
+  void _toggleClassListSheet() {
+    setState(() {
+      final bool willOpen = !_isClassListSheetOpen;
+      if (!willOpen &&
+          _selectedStartTimeHour == null &&
+          _selectedStartTimeMinute == null) {
+        _selectedCellDayIndex = null;
+        _selectedDayDate = null;
+      }
+      _isClassListSheetOpen = willOpen;
+    });
   }
 
   Widget _buildHeaderActionRow() {
-    const double spacing = 12;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    final hasFilter = _activeFilter != null;
+    return SolidCapsuleActionBar(
       children: [
-        _buildHeaderFilterButton(),
-        const SizedBox(width: spacing),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-          child: IntrinsicWidth(
-            child: _HeaderSelectButton(
-              isSelectMode: _isSelectMode,
-              onModeChanged: (selecting) {
-                setState(() {
-                  _isSelectMode = selecting;
-                  if (!selecting) {
-                    _selectedStudentIds.clear();
-                  }
-                });
-              },
-              onSelectAll: _handleSelectAllStudents,
-            ),
-          ),
+        SolidCapsuleActionButton(
+          tooltip: hasFilter ? '필터 해제' : '필터',
+          icon: Icons.filter_list_rounded,
+          selected: hasFilter,
+          accentWhenSelected: true,
+          onPressed: hasFilter ? _clearFilter : _showFilterDialog,
         ),
-        const SizedBox(width: spacing),
-        _buildHeaderSearchField(),
+        SolidCapsuleActionButton(
+          tooltip: '수업',
+          icon: Symbols.flight,
+          selected: _isClassListSheetOpen,
+          onPressed: _toggleClassListSheet,
+        ),
+        if (!_isSelectMode)
+          SolidCapsuleTextActionButton(
+            tooltip: '선택',
+            label: '선택',
+            onPressed: () {
+              setState(() => _isSelectMode = true);
+            },
+          )
+        else ...[
+          SolidCapsuleActionButton(
+            tooltip: '모두 선택',
+            icon: Icons.done_all_rounded,
+            onPressed: _handleSelectAllStudents,
+          ),
+          SolidCapsuleActionButton(
+            tooltip: '선택 취소',
+            icon: Icons.close_rounded,
+            selected: true,
+            onPressed: () {
+              setState(() {
+                _isSelectMode = false;
+                _selectedStudentIds.clear();
+              });
+            },
+          ),
+        ],
       ],
     );
   }
 
-  Widget _buildHeaderFilterButton() {
-    const double controlHeight = 48;
-    final bool hasFilter = _activeFilter != null;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(controlHeight / 2),
-        onTap: _activeFilter == null ? _showFilterDialog : _clearFilter,
-        child: Container(
-          width: controlHeight,
-          height: controlHeight,
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A2A2A),
-            borderRadius: BorderRadius.circular(controlHeight / 2),
-            border: Border.all(color: Colors.transparent),
-          ),
-          child: Stack(
-            children: [
-              Center(
-                child: Icon(
-                  hasFilter ? Icons.filter_alt : Icons.filter_alt_outlined,
-                  color: hasFilter ? const Color(0xFFEAF2F2) : Colors.white70,
-                  size: 22,
-                ),
-              ),
-              if (hasFilter)
-                Positioned(
-                  top: 10,
-                  right: 10,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFEAF2F2),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
+  Widget _buildScheduleHeaderActionRow() {
+    return ValueListenableBuilder<bool>(
+      valueListenable: _scheduleSidePanelOpen,
+      builder: (context, isOpen, _) {
+        return SolidCapsuleActionBar(
+          children: [
+            SolidCapsuleActionButton(
+              tooltip: isOpen ? '일정·Todo 패널 닫기' : '일정·Todo 패널 열기',
+              icon: isOpen
+                  ? Icons.chevron_right_rounded
+                  : Icons.chevron_left_rounded,
+              selected: isOpen,
+              onPressed: () => _scheduleSidePanelOpen.value = !isOpen,
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1384,10 +1424,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   void _resetSearch() {
-    if (_headerSearchQuery.isNotEmpty) {
-      setState(() => _headerSearchQuery = '');
-      _headerSearchController.clear();
-      _contentViewKey.currentState?.updateSearchQuery('');
+    if (_headerSearchQuery.isNotEmpty || _isSearchExpanded) {
+      _collapseSearch(clearQuery: true);
     }
   }
 
@@ -1730,7 +1768,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
   @override
   void dispose() {
     _removeRegisterDropdownMenu(notify: false);
+    _fabTabBarOverlay.dispose();
+    _weekNavOverlay.dispose();
+    _actionFabOverlay.dispose();
+    _scheduleSidePanelOpen.dispose();
     _headerSearchController.dispose();
+    _searchFocusNode.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -1849,39 +1892,27 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 color: context.yggSurfaceBase, // 프로그램 전체 배경색
                 child: Column(
                   children: [
-                    const SizedBox(height: 8), // TimetableHeader 위 여백
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: EdgeInsets.fromLTRB(
+                        24,
+                        FabTabBarTokens.previewAcademyTopInset - 12,
+                        24,
+                        0,
+                      ),
                       child: TimetableTopBar(
-                        registerControls: _buildHeaderRegisterControls(),
-                        selectedIndex:
-                            (_viewType == TimetableViewType.classes) ? 0 : 1,
-                        onTabSelected: (i) {
-                          final previousViewType = _viewType;
-                          setState(() {
-                            _viewType = (i == 0)
-                                ? TimetableViewType.classes
-                                : TimetableViewType.schedule;
-                          });
-
-                          if (i == 0 &&
-                              previousViewType != TimetableViewType.classes) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (!mounted) return;
-                              _selectCurrentTimeCell(
-                                  centerHorizontally: true,
-                                  preferAnimate: true);
-                            });
-                          }
-                        },
-                        actionRow: _buildHeaderActionRow(),
+                        leading: TimetablePageTitle(
+                          selectedDate: _selectedDate,
+                          onSeasonPressed: _showSeasonRoadmapDialog,
+                        ),
+                        actionRow: _viewType == TimetableViewType.classes
+                            ? _buildHeaderActionRow()
+                            : _buildScheduleHeaderActionRow(),
                       ),
                     ),
                     const SizedBox(height: 12),
                     Expanded(
                       child: _buildContent(),
                     ),
-                    const SizedBox(height: 0),
                   ],
                 ),
               ),
@@ -2068,42 +2099,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
           cellRenderPerfStartUs: _cellRenderPerfStartUs,
           onCellRenderPerfFrame: _finishCellRenderPerfTrace,
           isClassListSheetOpen: _isClassListSheetOpen,
-          header: Padding(
-            padding:
-                const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TimetableHeader(
-                    selectedDate: _selectedDate,
-                    onDateChanged: _handleDateChanged,
-                    selectedDayIndex:
-                        _isStudentRegistrationMode ? null : _selectedDayIndex,
-                    onDaySelected: _onDayHeaderSelected,
-                    isRegistrationMode:
-                        _isStudentRegistrationMode || _isClassRegistrationMode,
-                    onExportPressed: _onExportPressed,
-                    showSeasonChip: true,
-                    onRoadmapPressed: _showSeasonRoadmapDialog,
-                    isClassListSheetOpen: _isClassListSheetOpen,
-                    onClassListSheetToggle: () {
-                      setState(() {
-                        final bool willOpen = !_isClassListSheetOpen;
-                        if (!willOpen &&
-                            _selectedStartTimeHour == null &&
-                            _selectedStartTimeMinute == null) {
-                          _selectedCellDayIndex = null;
-                          _selectedDayDate = null;
-                        }
-                        _isClassListSheetOpen = willOpen;
-                      });
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
           timetableChild: Container(
             width: double.infinity,
             decoration: BoxDecoration(
@@ -2770,6 +2765,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       case TimetableViewType.schedule:
         return ScheduleView(
           selectedDate: _selectedDate,
+          sidePanelOpen: _scheduleSidePanelOpen,
           onDateSelected: (d) => _handleDateChanged(d),
         );
     }
@@ -2796,9 +2792,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           onDaySelected: _onDayHeaderSelected,
           isRegistrationMode:
               _isStudentRegistrationMode || _isClassRegistrationMode,
-          onExportPressed: _onExportPressed,
           showSeasonChip: true,
-          onRoadmapPressed: _showSeasonRoadmapDialog,
+          showWeekNavigator: false,
         ),
         // 등록 안내문구/카운트
         if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
@@ -3301,99 +3296,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
         });
       }
     });
-  }
-}
-
-class _HeaderSelectButton extends StatefulWidget {
-  const _HeaderSelectButton({
-    Key? key,
-    required this.isSelectMode,
-    this.onModeChanged,
-    this.onSelectAll,
-  }) : super(key: key);
-
-  final bool isSelectMode;
-  final ValueChanged<bool>? onModeChanged;
-  final VoidCallback? onSelectAll;
-
-  @override
-  State<_HeaderSelectButton> createState() => _HeaderSelectButtonState();
-}
-
-class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
-  static const double _height = 48;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 200),
-      layoutBuilder: (currentChild, previousChildren) =>
-          currentChild ?? const SizedBox.shrink(),
-      transitionBuilder: (child, animation) =>
-          FadeTransition(opacity: animation, child: child),
-      child: widget.isSelectMode ? _buildExpanded() : _buildSelectButton(),
-    );
-  }
-
-  Widget _buildSelectButton() {
-    return _pillButton(
-      key: const ValueKey('select'),
-      width: 78,
-      child: const Text(
-        '선택',
-        style: TextStyle(
-            color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 16),
-      ),
-      onTap: () => widget.onModeChanged?.call(true),
-    );
-  }
-
-  Widget _buildExpanded() {
-    return Row(
-      key: const ValueKey('expanded'),
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _pillButton(
-          width: 64.4,
-          child: const Text(
-            '모두',
-            style: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.w700,
-                fontSize: 16),
-          ),
-          onTap: widget.onSelectAll ?? () {},
-        ),
-        const SizedBox(width: 8),
-        _pillButton(
-          width: 48,
-          child: const Icon(Icons.close, color: Colors.white, size: 20),
-          onTap: () => widget.onModeChanged?.call(false),
-        ),
-      ],
-    );
-  }
-
-  Widget _pillButton({
-    required Widget child,
-    required VoidCallback onTap,
-    required double width,
-    Key? key,
-  }) {
-    return SizedBox(
-      key: key,
-      height: _height,
-      width: width,
-      child: Material(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(_height / 2),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(_height / 2),
-          onTap: onTap,
-          child: Center(child: child),
-        ),
-      ),
-    );
   }
 }
 

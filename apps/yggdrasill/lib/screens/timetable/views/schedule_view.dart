@@ -11,11 +11,20 @@ import '../../../main.dart'; // rootNavigatorKey
 import '../../../services/exam_mode.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../../widgets/dialog_tokens.dart';
+import '../../../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../../../widgets/solid_capsule_action_bar.dart';
 
 class ScheduleView extends StatefulWidget {
   final DateTime selectedDate;
   final ValueChanged<DateTime>? onDateSelected;
-  const ScheduleView({super.key, required this.selectedDate, this.onDateSelected});
+  final ValueNotifier<bool> sidePanelOpen;
+
+  const ScheduleView({
+    super.key,
+    required this.selectedDate,
+    required this.sidePanelOpen,
+    this.onDateSelected,
+  });
 
   @override
   State<ScheduleView> createState() => _ScheduleViewState();
@@ -46,9 +55,8 @@ class _ScheduleViewState extends State<ScheduleView> {
       final holidays = await HolidayService.fetchKoreanPublicHolidays(year);
       for (final h in holidays) {
         final date = DateTime(h.year, h.month, h.day);
-        final exists = ScheduleStore.instance
-            .eventsOn(date)
-            .any((e) => (e.tags.contains('KR_HOLIDAY') && (e.note ?? '').contains(h.name)));
+        final exists = ScheduleStore.instance.eventsOn(date).any((e) =>
+            (e.tags.contains('KR_HOLIDAY') && (e.note ?? '').contains(h.name)));
         if (exists) continue;
         final id = const Uuid().v4();
         final event = ScheduleEvent(
@@ -89,7 +97,8 @@ class _ScheduleViewState extends State<ScheduleView> {
     final last = DateTime(end.year, end.month, end.day);
     // 메모 입력 다이얼로그
     final note = await _showNoteDialog(context);
-    final title = await SummaryService.summarize(iconKey: _pendingIconKey, tags: _pendingTags, note: note);
+    final title = await SummaryService.summarize(
+        iconKey: _pendingIconKey, tags: _pendingTags, note: note);
     final groupId = ScheduleStore.instance.newGroupId();
     while (!cur.isAfter(last)) {
       final id = const Uuid().v4();
@@ -141,278 +150,361 @@ class _ScheduleViewState extends State<ScheduleView> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned.fill(child: Container(color: kDlgBg)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Row(
-          children: [
-        // Left 3 (split vertically 3:1)
-        Expanded(
-          flex: 3,
-          child: Column(
-            children: [
-              Expanded(
-                flex: 11,
-                child: Container(
-                  margin: const EdgeInsets.only(top: 8),
-                  child: _MonthlyCalendar(
-                    month: DateTime(widget.selectedDate.year, widget.selectedDate.month, 1),
-                    selectedDate: widget.selectedDate,
-                    onSelect: _handleDatePick,
-                    addMode: _isAddMode,
-                    previewStart: _previewStart,
-                    previewEnd: _previewEnd,
-                    onHoverDate: _updatePreview,
-                  ),
-                ),
-              ),
-              if (_isAddMode)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline, color: kDlgTextSub, size: 16),
-                      const SizedBox(width: 6),
-                      const Expanded(
-                        child: Text(
-                          '셀을 클릭하여 날짜를 선택하세요. 범위를 선택하려면 시작 날짜 클릭 후 종료 날짜를 클릭하세요.',
-                          style: TextStyle(color: kDlgTextSub, fontSize: 12),
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final cardDecoration = PreviewAcademyGroupedFieldsCard.cardDecoration(
+      panelStyle,
+      brightness: brightness,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(30, 0, 24, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 상단 날짜카드 → 하단 달력(FAB 아래 영역까지 확장)
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // 날짜카드: 가용 높이의 약 1/3, 화면(영역) 크기에 비례.
+                final cardHeight = constraints.maxHeight / 5;
+                return Column(
+                  children: [
+                    SizedBox(
+                      height: cardHeight,
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: cardDecoration,
+                        child: const _ScheduleTimeline(),
+                      ),
+                    ),
+                    if (_isAddMode)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline,
+                                color: panelStyle.hint, size: 16),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                '셀을 클릭하여 날짜를 선택하세요. 범위를 선택하려면 시작 날짜 클릭 후 종료 날짜를 클릭하세요.',
+                                style: TextStyle(
+                                    color: panelStyle.hint, fontSize: 12),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => setState(() {
+                                _isAddMode = false;
+                                _rangeStart = null;
+                              }),
+                              style: TextButton.styleFrom(
+                                  foregroundColor: panelStyle.hint),
+                              child: const Text('취소'),
+                            ),
+                          ],
                         ),
                       ),
-                      TextButton(
-                        onPressed: () => setState(() { _isAddMode = false; _rangeStart = null; }),
-                        style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                        child: const Text('취소'),
+                    Expanded(
+                      child: _MonthlyCalendar(
+                        month: DateTime(widget.selectedDate.year,
+                            widget.selectedDate.month, 1),
+                        selectedDate: widget.selectedDate,
+                        onSelect: _handleDatePick,
+                        addMode: _isAddMode,
+                        previewStart: _previewStart,
+                        previewEnd: _previewEnd,
+                        onHoverDate: _updatePreview,
                       ),
-                    ],
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Expanded(
-                flex: 2,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: kDlgPanelBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: kDlgBorder),
-                  ),
-                  child: const _ScheduleTimeline(),
-                ),
-              ),
-            ],
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
-        ),
-        const SizedBox(width: 32),
-        // Right 1 (split vertically 1:1)
-        Expanded(
-          flex: 1,
-          child: Column(
-            children: [
-              Expanded(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 8, bottom: 12),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: kDlgPanelBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: kDlgBorder),
-                  ),
-              child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+          ValueListenableBuilder<bool>(
+            valueListenable: widget.sidePanelOpen,
+            builder: (context, isOpen, _) {
+              final panelWidth =
+                  (MediaQuery.sizeOf(context).width * 0.28).clamp(380.0, 520.0);
+              // 오른쪽에서 슬라이드 인/아웃 (AnimatedSize의 폭 리사이즈가 아님).
+              return ClipRect(
+                child: AnimatedAlign(
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeInOutCubic,
+                  alignment: Alignment.centerRight,
+                  widthFactor: isOpen ? 1.0 : 0.0,
+                  heightFactor: 1.0,
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: 32,
+                      bottom:
+                          FabTabBarTokens.fabStyleScreenTabBarBottomPadding - 28,
+                    ),
+                    child: SizedBox(
+                      width: panelWidth,
+                      child: Column(
                         children: [
-              Text(
-                _formatDateYMD(widget.selectedDate),
-                style: const TextStyle(color: kDlgTextSub, fontSize: 19, fontWeight: FontWeight.w600),
-              ),
-                          const Spacer(),
-                       SizedBox(
-                            height: 40,
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(22),
-                                onTap: () async {
-                                  await _startAddFlow();
-                                },
-                                child: Ink(
-                                  decoration: ShapeDecoration(
-                                    color: kDlgAccent,
-                                    shape: StadiumBorder(side: BorderSide(color: Colors.transparent, width: 0)),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
+                          Expanded(
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: cardDecoration,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
                                     children: [
-                                      Icon(Icons.add, color: kDlgText, size: 20),
-                                      SizedBox(width: 8),
-                                      Text('일정 추가', style: TextStyle(color: kDlgText, fontSize: 15, fontWeight: FontWeight.w600)),
+                                      Expanded(
+                                        child: Text(
+                                          _formatDateYMD(widget.selectedDate),
+                                          style: TextStyle(
+                                            color: panelStyle.hint,
+                                            fontSize: 19,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                      Tooltip(
+                                        message: '시험기간 모드',
+                                        child: Switch(
+                                          value: _isExamPeriodMode,
+                                          onChanged: (val) {
+                                            setState(
+                                                () => _isExamPeriodMode = val);
+                                            ExamModeService
+                                                .instance.isOn.value = val;
+                                          },
+                                          activeColor: kDlgAccent,
+                                          inactiveThumbColor: kDlgTextSub,
+                                          inactiveTrackColor: kDlgBorder,
+                                          materialTapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                      ),
                                     ],
                                   ),
-                                ),
+                                  const SizedBox(height: 8),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: SolidCapsuleActionBar(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      children: [
+                                        SolidCapsuleActionButton(
+                                          tooltip: '일정 추가',
+                                          icon: Icons.add_rounded,
+                                          onPressed: _startAddFlow,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Expanded(
+                                    child: ValueListenableBuilder<
+                                        List<ScheduleEvent>>(
+                                      valueListenable:
+                                          ScheduleStore.instance.events,
+                                      builder: (context, events, _) {
+                                        final items = ScheduleStore.instance
+                                            .eventsOn(widget.selectedDate);
+                                        if (items.isEmpty) {
+                                          return const Center(
+                                            child: Text('해당 날짜의 일정이 없습니다.',
+                                                style:
+                                                    TextStyle(color: kDlgTextSub)),
+                                          );
+                                        }
+                                        return ListView.separated(
+                                          itemCount: items.length,
+                                          separatorBuilder: (_, __) =>
+                                              const Divider(
+                                                  color: kDlgBorder, height: 12),
+                                          itemBuilder: (context, i) {
+                                            final e = items[i];
+                                            return _EventTile(event: e);
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Tooltip(
-                            message: '시험기간 모드',
-                            child: Switch(
-                              value: _isExamPeriodMode,
-                              onChanged: (val) {
-                                setState(() => _isExamPeriodMode = val);
-                                ExamModeService.instance.isOn.value = val; // 전역 반영
-                              },
-                              activeColor: kDlgAccent,
-                              inactiveThumbColor: kDlgTextSub,
-                              inactiveTrackColor: kDlgBorder,
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                       Expanded(
-                        child: ValueListenableBuilder<List<ScheduleEvent>>(
-                          valueListenable: ScheduleStore.instance.events,
-                           builder: (context, events, _) {
-                            final items = ScheduleStore.instance.eventsOn(widget.selectedDate);
-                            if (items.isEmpty) {
-                              return const Center(
-                                child: Text('해당 날짜의 일정이 없습니다.', style: TextStyle(color: kDlgTextSub)),
-                              );
-                            }
-                              return ListView.separated(
-                              itemCount: items.length,
-                                separatorBuilder: (_, __) => const Divider(color: kDlgBorder, height: 12),
-                              itemBuilder: (context, i) {
-                                final e = items[i];
-                                  return _EventTile(event: e);
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 0),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: kDlgPanelBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: kDlgBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Todo 리스트', style: TextStyle(color: kDlgText, fontSize: 21, fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          _TodoFilterButton(
-                            label: '전체',
-                            selected: _todoFilter == 'all',
-                            onTap: () { if (_todoFilter != 'all') setState(() => _todoFilter = 'all'); },
-                          ),
-                          const SizedBox(width: 8),
-                          _TodoFilterButton(
-                            label: '미완료',
-                            selected: _todoFilter == 'incomplete',
-                            onTap: () { if (_todoFilter != 'incomplete') setState(() => _todoFilter = 'incomplete'); },
-                          ),
-                          const SizedBox(width: 8),
-                          _TodoFilterButton(
-                            label: '완료',
-                            selected: _todoFilter == 'complete',
-                            onTap: () { if (_todoFilter != 'complete') setState(() => _todoFilter = 'complete'); },
-                          ),
-                          const Spacer(),
-                          TextButton.icon(
-                            style: TextButton.styleFrom(
-                              backgroundColor: kDlgPanelBg,
-                              foregroundColor: kDlgTextSub,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              shape: const StadiumBorder(side: BorderSide(color: kDlgBorder)),
-                            ),
-                            onPressed: () => _openMemoAddDialog(context),
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('추가', style: TextStyle(fontSize: 13)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: ValueListenableBuilder(
-                          valueListenable: DataManager.instance.memosNotifier,
-                            builder: (context, memos, _) {
-                              var list = _expandMemosNextMonths(memos as List<Memo>, months: 3).toList();
-                              if (_todoFilter == 'incomplete') {
-                                list = list.where((m) => !m.dismissed).toList();
-                              } else if (_todoFilter == 'complete') {
-                                list = list.where((m) => m.dismissed).toList();
-                              }
-                            if (list.isEmpty) {
-                              return const Center(child: Text('할 일이 없습니다.', style: TextStyle(color: kDlgTextSub)));
-                            }
-                            return ListView.separated(
-                              itemCount: list.length,
-                              separatorBuilder: (_, __) => const Divider(color: kDlgBorder, height: 12),
-                              itemBuilder: (context, index) {
-                                final m = list[index];
-                                final title = m.summary.isNotEmpty ? m.summary : (m.original.length > 20 ? m.original.substring(0, 20) + '…' : m.original);
-                                return Row(
-                                  children: [
-                                      StatefulBuilder(builder: (context, setRowState) {
-                                        bool checked = m.dismissed;
-                                        return Checkbox(
-                                          value: checked,
-                                          onChanged: (v) async {
-                                            final newVal = v ?? false;
-                                            final updated = m.copyWith(dismissed: newVal, updatedAt: DateTime.now());
-                                            await DataManager.instance.updateMemo(updated);
-                                            setRowState(() {});
+                          Expanded(
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 0),
+                              padding: const EdgeInsets.all(16),
+                              decoration: cardDecoration,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'Todo 리스트',
+                                          style: TextStyle(
+                                            color: panelStyle.title,
+                                            fontSize: 21,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                      SolidCapsuleActionBar(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        children: [
+                                          SolidCapsuleActionButton(
+                                            tooltip: 'Todo 추가',
+                                            icon: Icons.add_rounded,
+                                            onPressed: () =>
+                                                _openMemoAddDialog(context),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      _TodoFilterButton(
+                                        label: '전체',
+                                        selected: _todoFilter == 'all',
+                                        onTap: () {
+                                          if (_todoFilter != 'all') {
+                                            setState(() => _todoFilter = 'all');
+                                          }
+                                        },
+                                      ),
+                                      _TodoFilterButton(
+                                        label: '미완료',
+                                        selected: _todoFilter == 'incomplete',
+                                        onTap: () {
+                                          if (_todoFilter != 'incomplete') {
+                                            setState(() =>
+                                                _todoFilter = 'incomplete');
+                                          }
+                                        },
+                                      ),
+                                      _TodoFilterButton(
+                                        label: '완료',
+                                        selected: _todoFilter == 'complete',
+                                        onTap: () {
+                                          if (_todoFilter != 'complete') {
+                                            setState(() =>
+                                                _todoFilter = 'complete');
+                                          }
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Expanded(
+                                    child: ValueListenableBuilder(
+                                      valueListenable:
+                                          DataManager.instance.memosNotifier,
+                                      builder: (context, memos, _) {
+                                        var list = _expandMemosNextMonths(
+                                                memos as List<Memo>,
+                                                months: 3)
+                                            .toList();
+                                        if (_todoFilter == 'incomplete') {
+                                          list = list
+                                              .where((m) => !m.dismissed)
+                                              .toList();
+                                        } else if (_todoFilter == 'complete') {
+                                          list = list
+                                              .where((m) => m.dismissed)
+                                              .toList();
+                                        }
+                                        if (list.isEmpty) {
+                                          return const Center(
+                                              child: Text('할 일이 없습니다.',
+                                                  style: TextStyle(
+                                                      color: kDlgTextSub)));
+                                        }
+                                        return ListView.separated(
+                                          itemCount: list.length,
+                                          separatorBuilder: (_, __) =>
+                                              const Divider(
+                                                  color: kDlgBorder, height: 12),
+                                          itemBuilder: (context, index) {
+                                            final m = list[index];
+                                            final title = m.summary.isNotEmpty
+                                                ? m.summary
+                                                : (m.original.length > 20
+                                                    ? '${m.original.substring(0, 20)}…'
+                                                    : m.original);
+                                            return Row(
+                                              children: [
+                                                StatefulBuilder(builder:
+                                                    (context, setRowState) {
+                                                  bool checked = m.dismissed;
+                                                  return Checkbox(
+                                                    value: checked,
+                                                    onChanged: (v) async {
+                                                      final newVal = v ?? false;
+                                                      final updated =
+                                                          m.copyWith(
+                                                              dismissed: newVal,
+                                                              updatedAt:
+                                                                  DateTime
+                                                                      .now());
+                                                      await DataManager.instance
+                                                          .updateMemo(updated);
+                                                      setRowState(() {});
+                                                    },
+                                                    checkColor: kDlgText,
+                                                    activeColor: kDlgAccent,
+                                                  );
+                                                }),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(title,
+                                                      style: const TextStyle(
+                                                          color: kDlgTextSub,
+                                                          fontSize: 15)),
+                                                ),
+                                                IconButton(
+                                                  icon: const Icon(Icons.edit,
+                                                      color: kDlgTextSub,
+                                                      size: 18),
+                                                  onPressed: () async {
+                                                    await _openMemoAddDialog(
+                                                        context,
+                                                        initial: m.original);
+                                                  },
+                                                ),
+                                              ],
+                                            );
                                           },
-                                          checkColor: kDlgText,
-                                          activeColor: kDlgAccent,
                                         );
-                                      }),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(title, style: const TextStyle(color: kDlgTextSub, fontSize: 15)),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.edit, color: kDlgTextSub, size: 18),
-                                      onPressed: () async {
-                                        await _openMemoAddDialog(context, initial: m.original);
                                       },
                                     ),
-                                  ],
-                                );
-                              },
-                            );
-                          },
-                        ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                      const SizedBox(height: 12),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              );
+            },
           ),
-        ),
-      ],
+        ],
       ),
-        ),
-      ],
     );
   }
 }
@@ -420,7 +512,8 @@ class _ScheduleViewState extends State<ScheduleView> {
 List<Memo> _expandMemosNextMonths(List<Memo> memos, {int months = 3}) {
   final now = DateTime.now();
   final startDate = DateTime(now.year, now.month, now.day);
-  final endDate = DateTime(startDate.year, startDate.month + months, startDate.day);
+  final endDate =
+      DateTime(startDate.year, startDate.month + months, startDate.day);
 
   List<Memo> expanded = [];
 
@@ -442,9 +535,10 @@ List<Memo> _expandMemosNextMonths(List<Memo> memos, {int months = 3}) {
     }
 
     // 반복 메모 전개(원형만 DB에 있고 전개는 UI)
-    final limitEnd = m.recurrenceEnd != null && _dateOnly(m.recurrenceEnd!).isBefore(endDate)
-        ? _dateOnly(m.recurrenceEnd!)
-        : endDate;
+    final limitEnd =
+        m.recurrenceEnd != null && _dateOnly(m.recurrenceEnd!).isBefore(endDate)
+            ? _dateOnly(m.recurrenceEnd!)
+            : endDate;
     final maxCount = m.recurrenceCount; // null이면 무한
     int emitted = 0;
     final anchor = _dateOnly(m.scheduledAt ?? startDate);
@@ -493,7 +587,8 @@ List<Memo> _expandMemosNextMonths(List<Memo> memos, {int months = 3}) {
         final lastDay = DateTime(cur.year, cur.month + 1, 0).day;
         final dd = day > lastDay ? lastDay : day;
         final candidate = DateTime(cur.year, cur.month, dd);
-        if (!candidate.isBefore(startDate) && !candidate.isAfter(limitEnd)) emit(candidate);
+        if (!candidate.isBefore(startDate) && !candidate.isAfter(limitEnd))
+          emit(candidate);
         if (maxCount != null && emitted >= maxCount) break;
         cur = DateTime(cur.year, cur.month + 1, 1);
       }
@@ -560,7 +655,9 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
           titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
           contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-          title: const Text('메모 추가', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+          title: const Text('메모 추가',
+              style: TextStyle(
+                  color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
@@ -572,10 +669,13 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                     style: const TextStyle(color: kDlgText),
                     minLines: 3,
                     maxLines: 5,
-                    decoration: _scheduleFieldDecoration(hintText: '할 일을 입력하세요'),
+                    decoration:
+                        _scheduleFieldDecoration(hintText: '할 일을 입력하세요'),
                   ),
                   const SizedBox(height: 16),
-                  const Text('반복', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                  const Text('반복',
+                      style: TextStyle(
+                          color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   Container(
                     decoration: BoxDecoration(
@@ -583,7 +683,8 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                       border: Border.all(color: kDlgBorder),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     child: DropdownButton<String>(
                       value: recurrenceType,
                       isExpanded: true,
@@ -595,9 +696,11 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                         DropdownMenuItem(value: 'daily', child: Text('매일')),
                         DropdownMenuItem(value: 'weekly', child: Text('매주')),
                         DropdownMenuItem(value: 'monthly', child: Text('매월')),
-                        DropdownMenuItem(value: 'selected_weekdays', child: Text('선택 요일')),
+                        DropdownMenuItem(
+                            value: 'selected_weekdays', child: Text('선택 요일')),
                       ],
-                      onChanged: (v) => setState(() => recurrenceType = v ?? 'none'),
+                      onChanged: (v) =>
+                          setState(() => recurrenceType = v ?? 'none'),
                     ),
                   ),
                   if (recurrenceType == 'selected_weekdays') ...[
@@ -605,23 +708,34 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                     Wrap(
                       spacing: 8,
                       children: List.generate(7, (i) => i + 1).map((d) {
-                        const names = ['월','화','수','목','금','토','일'];
+                        const names = ['월', '화', '수', '목', '금', '토', '일'];
                         final sel = selectedWeekdays.contains(d);
                         return ChoiceChip(
-                          label: Text(names[d-1]),
+                          label: Text(names[d - 1]),
                           selected: sel,
-                          labelStyle: TextStyle(color: sel ? kDlgText : kDlgTextSub, fontSize: 13),
+                          labelStyle: TextStyle(
+                              color: sel ? kDlgText : kDlgTextSub,
+                              fontSize: 13),
                           selectedColor: kDlgAccent.withOpacity(0.18),
                           backgroundColor: kDlgPanelBg,
-                          side: BorderSide(color: sel ? kDlgAccent : kDlgBorder),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          onSelected: (v) => setState(() { if (v) selectedWeekdays.add(d); else selectedWeekdays.remove(d); }),
+                          side:
+                              BorderSide(color: sel ? kDlgAccent : kDlgBorder),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          onSelected: (v) => setState(() {
+                            if (v)
+                              selectedWeekdays.add(d);
+                            else
+                              selectedWeekdays.remove(d);
+                          }),
                         );
                       }).toList(),
                     ),
                   ],
                   const SizedBox(height: 12),
-                  const Text('종료', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                  const Text('종료',
+                      style: TextStyle(
+                          color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -630,14 +744,22 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                           final picked = await showDatePicker(
                             context: context,
                             firstDate: DateTime.now(),
-                            lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-                            initialDate: endDate ?? DateTime.now().add(const Duration(days: 30)),
+                            lastDate: DateTime.now()
+                                .add(const Duration(days: 365 * 3)),
+                            initialDate: endDate ??
+                                DateTime.now().add(const Duration(days: 30)),
                           );
                           if (picked != null) setState(() => endDate = picked);
                         },
-                        icon: const Icon(Icons.event, color: kDlgTextSub, size: 18),
-                        label: Text(endDate == null ? '종료일(선택)' : '${endDate!.year}.${endDate!.month}.${endDate!.day}', style: const TextStyle(color: kDlgTextSub)),
-                        style: OutlinedButton.styleFrom(side: const BorderSide(color: kDlgBorder)),
+                        icon: const Icon(Icons.event,
+                            color: kDlgTextSub, size: 18),
+                        label: Text(
+                            endDate == null
+                                ? '종료일(선택)'
+                                : '${endDate!.year}.${endDate!.month}.${endDate!.day}',
+                            style: const TextStyle(color: kDlgTextSub)),
+                        style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: kDlgBorder)),
                       ),
                       const SizedBox(width: 10),
                       SizedBox(
@@ -646,7 +768,8 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                           controller: countCtrl,
                           style: const TextStyle(color: kDlgText),
                           keyboardType: TextInputType.number,
-                          decoration: _scheduleFieldDecoration(labelText: '횟수(선택)'),
+                          decoration:
+                              _scheduleFieldDecoration(labelText: '횟수(선택)'),
                         ),
                       ),
                     ],
@@ -692,8 +815,11 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
     dismissed: false,
     createdAt: DateTime.now(),
     updatedAt: DateTime.now(),
-    recurrenceType: (result['recurrenceType'] as String?) == 'none' ? null : result['recurrenceType'] as String?,
-    weekdays: (result['weekdays'] as List<dynamic>?)?.map((e) => e as int).toList(),
+    recurrenceType: (result['recurrenceType'] as String?) == 'none'
+        ? null
+        : result['recurrenceType'] as String?,
+    weekdays:
+        (result['weekdays'] as List<dynamic>?)?.map((e) => e as int).toList(),
     recurrenceEnd: result['endDate'] as DateTime?,
     recurrenceCount: result['count'] as int?,
   );
@@ -714,7 +840,9 @@ Future<String?> _showNoteDialog(BuildContext context) async {
         titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
         contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-        title: const Text('메모 입력', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+        title: const Text('메모 입력',
+            style: TextStyle(
+                color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
         content: SizedBox(
           width: 460,
           child: TextField(
@@ -767,14 +895,18 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
           titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
           contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-          title: const Text('아이콘/색상/태그 선택', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+          title: const Text('아이콘/색상/태그 선택',
+              style: TextStyle(
+                  color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('아이콘', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                const Text('아이콘',
+                    style: TextStyle(
+                        color: kDlgTextSub, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 LayoutBuilder(builder: (context, constraints) {
                   final items = const [
@@ -787,7 +919,8 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                     ['notice', Icons.announcement, '공지'],
                     ['payment', Icons.payments, '납부'],
                   ];
-                  final cellWidth = (constraints.maxWidth - 3 * 12) / 4; // 4 columns, 12 spacing
+                  final cellWidth = (constraints.maxWidth - 3 * 12) /
+                      4; // 4 columns, 12 spacing
                   return Wrap(
                     spacing: 12,
                     runSpacing: 12,
@@ -803,15 +936,20 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
                             color: selected ? kDlgPanelBg : Colors.transparent,
-                            border: Border.all(color: selected ? kDlgAccent : kDlgBorder),
+                            border: Border.all(
+                                color: selected ? kDlgAccent : kDlgBorder),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(icon, color: selected ? kDlgText : kDlgTextSub, size: 24),
+                              Icon(icon,
+                                  color: selected ? kDlgText : kDlgTextSub,
+                                  size: 24),
                               const SizedBox(height: 6),
-                              Text(label, style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
+                              Text(label,
+                                  style: const TextStyle(
+                                      color: kDlgTextSub, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -820,14 +958,26 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                   );
                 }),
                 const SizedBox(height: 12),
-                const Text('색상', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                const Text('색상',
+                    style: TextStyle(
+                        color: kDlgTextSub, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    0xFF1976D2, 0xFFE53935, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00897B,
-                    0xFF546E7A, 0xFFFF7043, 0xFF26C6DA, 0xFF7E57C2, 0xFF66BB6A, 0xFFEC407A,
+                    0xFF1976D2,
+                    0xFFE53935,
+                    0xFF43A047,
+                    0xFFFB8C00,
+                    0xFF8E24AA,
+                    0xFF00897B,
+                    0xFF546E7A,
+                    0xFFFF7043,
+                    0xFF26C6DA,
+                    0xFF7E57C2,
+                    0xFF66BB6A,
+                    0xFFEC407A,
                   ]
                       .map((c) => GestureDetector(
                             onTap: () => setState(() => color = c),
@@ -837,14 +987,20 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                               decoration: BoxDecoration(
                                 color: Color(c),
                                 shape: BoxShape.circle,
-                                border: Border.all(color: (color == c) ? kDlgText : Colors.transparent, width: 2),
+                                border: Border.all(
+                                    color: (color == c)
+                                        ? kDlgText
+                                        : Colors.transparent,
+                                    width: 2),
                               ),
                             ),
                           ))
                       .toList(),
                 ),
                 const SizedBox(height: 12),
-                const Text('태그', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                const Text('태그',
+                    style: TextStyle(
+                        color: kDlgTextSub, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
                 Row(
                   children: [
@@ -852,7 +1008,8 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                       child: TextField(
                         controller: tagCtrl,
                         style: const TextStyle(color: kDlgText),
-                        decoration: _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
+                        decoration:
+                            _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
                         onSubmitted: (_) {
                           final t = tagCtrl.text.trim();
                           if (t.isNotEmpty) {
@@ -866,7 +1023,8 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                      style:
+                          FilledButton.styleFrom(backgroundColor: kDlgAccent),
                       onPressed: () {
                         final t = tagCtrl.text.trim();
                         if (t.isNotEmpty) {
@@ -886,7 +1044,8 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                   runSpacing: 6,
                   children: tags
                       .map((t) => Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
                               color: kDlgPanelBg,
                               borderRadius: BorderRadius.circular(14),
@@ -895,11 +1054,14 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text('#$t', style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
+                                Text('#$t',
+                                    style: const TextStyle(
+                                        color: kDlgTextSub, fontSize: 12)),
                                 const SizedBox(width: 6),
                                 GestureDetector(
                                   onTap: () => setState(() => tags.remove(t)),
-                                  child: const Icon(Icons.close, size: 14, color: kDlgTextSub),
+                                  child: const Icon(Icons.close,
+                                      size: 14, color: kDlgTextSub),
                                 ),
                               ],
                             ),
@@ -917,7 +1079,8 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
             ),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-              onPressed: () => Navigator.pop(context, _MetaResult(iconKey: iconKey, color: color, tags: tags)),
+              onPressed: () => Navigator.pop(context,
+                  _MetaResult(iconKey: iconKey, color: color, tags: tags)),
               child: const Text('다음'),
             ),
           ],
@@ -943,7 +1106,6 @@ class _IconOption extends StatelessWidget {
   }
 }
 
-
 class _EventTile extends StatelessWidget {
   final ScheduleEvent event;
   final bool showGroupActions;
@@ -968,7 +1130,11 @@ class _EventTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(event.title, style: const TextStyle(color: kDlgText, fontSize: 15, fontWeight: FontWeight.w600)),
+                Text(event.title,
+                    style: const TextStyle(
+                        color: kDlgText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600)),
                 if (event.note != null && event.note!.trim().isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
@@ -992,13 +1158,16 @@ class _EventTile extends StatelessWidget {
                       runSpacing: 4,
                       children: event.tags
                           .map((t) => Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
                                   color: kDlgPanelBg,
                                   borderRadius: BorderRadius.circular(10),
                                   border: Border.all(color: kDlgBorder),
                                 ),
-                                child: Text('#$t', style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
+                                child: Text('#$t',
+                                    style: const TextStyle(
+                                        color: kDlgTextSub, fontSize: 12)),
                               ))
                           .toList(),
                     ),
@@ -1017,7 +1186,8 @@ class _EventTile extends StatelessWidget {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.delete_outline, color: kDlgTextSub, size: 18),
+            icon:
+                const Icon(Icons.delete_outline, color: kDlgTextSub, size: 18),
             onPressed: () async => ScheduleStore.instance.deleteEvent(event.id),
           ),
           if (showGroupActions && event.groupId != null)
@@ -1029,7 +1199,8 @@ class _EventTile extends StatelessWidget {
                   final res = await _showEditGroupDialog(context, event);
                   if (res != null && event.groupId != null) {
                     final groupId = event.groupId!;
-                    final events = List<ScheduleEvent>.from(ScheduleStore.instance.events.value)
+                    final events = List<ScheduleEvent>.from(
+                            ScheduleStore.instance.events.value)
                         .where((e) => e.groupId == groupId)
                         .toList();
                     for (final ev in events) {
@@ -1038,7 +1209,9 @@ class _EventTile extends StatelessWidget {
                         groupId: ev.groupId,
                         date: ev.date,
                         title: res.title,
-                        note: res.note?.trim().isEmpty == true ? null : res.note?.trim(),
+                        note: res.note?.trim().isEmpty == true
+                            ? null
+                            : res.note?.trim(),
                         startHour: ev.startHour,
                         startMinute: ev.startMinute,
                         endHour: ev.endHour,
@@ -1057,8 +1230,14 @@ class _EventTile extends StatelessWidget {
                 }
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'edit_group', child: Text('반복 묶음 편집', style: TextStyle(color: kDlgTextSub))),
-                const PopupMenuItem(value: 'delete_group', child: Text('반복 묶음 삭제', style: TextStyle(color: kDlgTextSub))),
+                const PopupMenuItem(
+                    value: 'edit_group',
+                    child:
+                        Text('반복 묶음 편집', style: TextStyle(color: kDlgTextSub))),
+                const PopupMenuItem(
+                    value: 'delete_group',
+                    child:
+                        Text('반복 묶음 삭제', style: TextStyle(color: kDlgTextSub))),
               ],
             ),
         ],
@@ -1092,7 +1271,8 @@ IconData _iconFromKey(String? key) {
   }
 }
 
-Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event) async {
+Future<ScheduleEvent?> _showEditDialog(
+    BuildContext context, ScheduleEvent event) async {
   final titleCtrl = ImeAwareTextEditingController(text: event.title);
   final noteCtrl = ImeAwareTextEditingController(text: event.note ?? '');
   TimeOfDay? start = (event.startHour != null && event.startMinute != null)
@@ -1121,7 +1301,9 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
           titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
           contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-          title: const Text('일정 편집', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+          title: const Text('일정 편집',
+              style: TextStyle(
+                  color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
@@ -1163,7 +1345,9 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Text('아이콘', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                      const Text('아이콘',
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       DropdownButton<String?>(
                         value: iconKey,
@@ -1172,12 +1356,16 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                         items: const [
                           DropdownMenuItem(value: 'holiday', child: Text('휴강')),
                           DropdownMenuItem(value: 'exam', child: Text('시험')),
-                          DropdownMenuItem(value: 'vacation_start', child: Text('방학식')),
-                          DropdownMenuItem(value: 'school_open', child: Text('개학식')),
-                          DropdownMenuItem(value: 'special_lecture', child: Text('특강')),
-                          DropdownMenuItem(value: 'counseling', child: Text('상담')),
-                          DropdownMenuItem(value: 'notice', child: Text('공지')),  
-                          DropdownMenuItem(value: 'payment', child: Text('납부')), 
+                          DropdownMenuItem(
+                              value: 'vacation_start', child: Text('방학식')),
+                          DropdownMenuItem(
+                              value: 'school_open', child: Text('개학식')),
+                          DropdownMenuItem(
+                              value: 'special_lecture', child: Text('특강')),
+                          DropdownMenuItem(
+                              value: 'counseling', child: Text('상담')),
+                          DropdownMenuItem(value: 'notice', child: Text('공지')),
+                          DropdownMenuItem(value: 'payment', child: Text('납부')),
                         ],
                         onChanged: (v) => setState(() => iconKey = v),
                       ),
@@ -1189,7 +1377,9 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text('색상', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                      const Text('색상',
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       GestureDetector(
                         onTap: () async {
@@ -1211,17 +1401,23 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                                   borderRadius: BorderRadius.circular(16),
                                   side: const BorderSide(color: kDlgBorder),
                                 ),
-                                title: const Text('색상 선택', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w800)),
+                                title: const Text('색상 선택',
+                                    style: TextStyle(
+                                        color: kDlgText,
+                                        fontWeight: FontWeight.w800)),
                                 content: Wrap(
                                   spacing: 10,
                                   runSpacing: 10,
                                   children: choices
                                       .map((c) => GestureDetector(
-                                            onTap: () => Navigator.pop(context, c),
+                                            onTap: () =>
+                                                Navigator.pop(context, c),
                                             child: Container(
                                               width: 28,
                                               height: 28,
-                                              decoration: BoxDecoration(color: Color(c), shape: BoxShape.circle),
+                                              decoration: BoxDecoration(
+                                                  color: Color(c),
+                                                  shape: BoxShape.circle),
                                             ),
                                           ))
                                       .toList(),
@@ -1244,7 +1440,9 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text('태그', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                  const Text('태그',
+                      style: TextStyle(
+                          color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -1252,7 +1450,8 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                         child: TextField(
                           controller: tagCtrl,
                           style: const TextStyle(color: kDlgText),
-                          decoration: _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
+                          decoration:
+                              _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
                           onSubmitted: (_) {
                             final t = tagCtrl.text.trim();
                             if (t.isNotEmpty) {
@@ -1266,7 +1465,8 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                        style:
+                            FilledButton.styleFrom(backgroundColor: kDlgAccent),
                         onPressed: () {
                           final t = tagCtrl.text.trim();
                           if (t.isNotEmpty) {
@@ -1286,20 +1486,24 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                     runSpacing: 6,
                     children: tags
                         .map((t) => Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 6),
                               decoration: BoxDecoration(
-                              color: kDlgPanelBg,
+                                color: kDlgPanelBg,
                                 borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: kDlgBorder),
+                                border: Border.all(color: kDlgBorder),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                Text('#$t', style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
+                                  Text('#$t',
+                                      style: const TextStyle(
+                                          color: kDlgTextSub, fontSize: 12)),
                                   const SizedBox(width: 6),
                                   GestureDetector(
                                     onTap: () => setState(() => tags.remove(t)),
-                                  child: const Icon(Icons.close, size: 14, color: kDlgTextSub),
+                                    child: const Icon(Icons.close,
+                                        size: 14, color: kDlgTextSub),
                                   ),
                                 ],
                               ),
@@ -1325,7 +1529,9 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                     id: event.id,
                     date: event.date,
                     title: titleCtrl.text.trim(),
-                    note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+                    note: noteCtrl.text.trim().isEmpty
+                        ? null
+                        : noteCtrl.text.trim(),
                     startHour: start?.hour,
                     startMinute: start?.minute,
                     endHour: end?.hour,
@@ -1351,10 +1557,16 @@ class _GroupEditResult {
   final int? color;
   final List<String> tags;
   final String? iconKey;
-  _GroupEditResult({required this.title, this.note, this.color, required this.tags, this.iconKey});
+  _GroupEditResult(
+      {required this.title,
+      this.note,
+      this.color,
+      required this.tags,
+      this.iconKey});
 }
 
-Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEvent event) async {
+Future<_GroupEditResult?> _showEditGroupDialog(
+    BuildContext context, ScheduleEvent event) async {
   final titleCtrl = ImeAwareTextEditingController(text: event.title);
   final noteCtrl = ImeAwareTextEditingController(text: event.note ?? '');
   int? color = event.color;
@@ -1375,7 +1587,9 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
           titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
           contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-          title: const Text('반복 묶음 편집', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+          title: const Text('반복 묶음 편집',
+              style: TextStyle(
+                  color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
@@ -1397,7 +1611,9 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Text('아이콘', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                      const Text('아이콘',
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       DropdownButton<String?>(
                         value: iconKey,
@@ -1406,10 +1622,14 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                         items: const [
                           DropdownMenuItem(value: 'holiday', child: Text('휴강')),
                           DropdownMenuItem(value: 'exam', child: Text('시험')),
-                          DropdownMenuItem(value: 'vacation_start', child: Text('방학식')),
-                          DropdownMenuItem(value: 'school_open', child: Text('개학식')),
-                          DropdownMenuItem(value: 'special_lecture', child: Text('특강')),
-                          DropdownMenuItem(value: 'counseling', child: Text('상담')),
+                          DropdownMenuItem(
+                              value: 'vacation_start', child: Text('방학식')),
+                          DropdownMenuItem(
+                              value: 'school_open', child: Text('개학식')),
+                          DropdownMenuItem(
+                              value: 'special_lecture', child: Text('특강')),
+                          DropdownMenuItem(
+                              value: 'counseling', child: Text('상담')),
                           DropdownMenuItem(value: 'notice', child: Text('공지')),
                           DropdownMenuItem(value: 'payment', child: Text('납부')),
                         ],
@@ -1420,11 +1640,20 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Text('색상', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                      const Text('색상',
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       GestureDetector(
                         onTap: () async {
-                          final choices = [0xFF1976D2, 0xFFE53935, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00897B];
+                          final choices = [
+                            0xFF1976D2,
+                            0xFFE53935,
+                            0xFF43A047,
+                            0xFFFB8C00,
+                            0xFF8E24AA,
+                            0xFF00897B
+                          ];
                           final picked = await showDialog<int>(
                             context: context,
                             builder: (context) {
@@ -1434,14 +1663,25 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                                   borderRadius: BorderRadius.circular(16),
                                   side: const BorderSide(color: kDlgBorder),
                                 ),
-                                title: const Text('색상 선택', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w800)),
+                                title: const Text('색상 선택',
+                                    style: TextStyle(
+                                        color: kDlgText,
+                                        fontWeight: FontWeight.w800)),
                                 content: Wrap(
                                   spacing: 10,
                                   runSpacing: 10,
-                                  children: choices.map((c) => GestureDetector(
-                                    onTap: () => Navigator.pop(context, c),
-                                    child: Container(width: 28, height: 28, decoration: BoxDecoration(color: Color(c), shape: BoxShape.circle)),
-                                  )).toList(),
+                                  children: choices
+                                      .map((c) => GestureDetector(
+                                            onTap: () =>
+                                                Navigator.pop(context, c),
+                                            child: Container(
+                                                width: 28,
+                                                height: 28,
+                                                decoration: BoxDecoration(
+                                                    color: Color(c),
+                                                    shape: BoxShape.circle)),
+                                          ))
+                                      .toList(),
                                 ),
                               );
                             },
@@ -1461,7 +1701,9 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text('태그', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
+                  const Text('태그',
+                      style: TextStyle(
+                          color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -1469,7 +1711,8 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                         child: TextField(
                           controller: tagCtrl,
                           style: const TextStyle(color: kDlgText),
-                          decoration: _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
+                          decoration:
+                              _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
                           onSubmitted: (_) {
                             final t = tagCtrl.text.trim();
                             if (t.isNotEmpty) {
@@ -1483,7 +1726,8 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                        style:
+                            FilledButton.styleFrom(backgroundColor: kDlgAccent),
                         onPressed: () {
                           final t = tagCtrl.text.trim();
                           if (t.isNotEmpty) {
@@ -1503,9 +1747,11 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                     runSpacing: 6,
                     children: tags
                         .map((t) => Chip(
-                              label: Text(t, style: const TextStyle(color: kDlgTextSub)),
+                              label: Text(t,
+                                  style: const TextStyle(color: kDlgTextSub)),
                               backgroundColor: kDlgPanelBg,
-                              deleteIcon: const Icon(Icons.close, size: 16, color: kDlgTextSub),
+                              deleteIcon: const Icon(Icons.close,
+                                  size: 16, color: kDlgTextSub),
                               onDeleted: () => setState(() => tags.remove(t)),
                             ))
                         .toList(),
@@ -1547,14 +1793,16 @@ class _TimeField extends StatelessWidget {
   final String label;
   final TimeOfDay? time;
   final ValueChanged<TimeOfDay?> onPick;
-  const _TimeField({required this.label, required this.time, required this.onPick});
+  const _TimeField(
+      {required this.label, required this.time, required this.onPick});
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: () async {
         final initial = time ?? const TimeOfDay(hour: 9, minute: 0);
-        final picked = await showTimePicker(context: context, initialTime: initial);
+        final picked =
+            await showTimePicker(context: context, initialTime: initial);
         onPick(picked);
       },
       child: Container(
@@ -1569,7 +1817,9 @@ class _TimeField extends StatelessWidget {
           children: [
             Text(label, style: const TextStyle(color: kDlgTextSub)),
             Text(
-              time == null ? '-' : '${time!.hour.toString().padLeft(2, '0')}:${time!.minute.toString().padLeft(2, '0')}',
+              time == null
+                  ? '-'
+                  : '${time!.hour.toString().padLeft(2, '0')}:${time!.minute.toString().padLeft(2, '0')}',
               style: const TextStyle(color: kDlgText),
             ),
           ],
@@ -1600,6 +1850,9 @@ class _MonthlyCalendar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     final firstDayOfMonth = DateTime(month.year, month.month, 1);
     final firstWeekday = firstDayOfMonth.weekday; // Mon=1..Sun=7
     final leadingEmpty = (firstWeekday - 1) % 7; // 0..6 (Mon start)
@@ -1611,96 +1864,120 @@ class _MonthlyCalendar extends StatelessWidget {
       return DateTime(month.year, month.month, 1 + dayOffset);
     });
 
-    const textStyleDim = TextStyle(color: kDlgTextSub, fontSize: 21, fontWeight: FontWeight.w500);
-    const textStyleNorm = TextStyle(color: kDlgText, fontSize: 21, fontWeight: FontWeight.w700);
-    const dowStyle = TextStyle(color: kDlgTextSub, fontSize: 23, fontWeight: FontWeight.w600);
-    const monthTitleStyle = TextStyle(color: kDlgText, fontSize: 33, fontWeight: FontWeight.w700);
+    // 평일: 기본(다크=흰 / 라이트=검), 주말·다른달: 회색
+    final primary = panelStyle.title;
+    final muted = panelStyle.hint;
+    final dividerColor = panelStyle.divider;
+    TextStyle dayNumberStyle(DateTime date, {required bool isCurrentMonth}) {
+      final isWeekend = date.weekday == DateTime.saturday ||
+          date.weekday == DateTime.sunday;
+      final color = (!isCurrentMonth || isWeekend) ? muted : primary;
+      return TextStyle(
+        color: color,
+        fontSize: 20,
+        fontWeight: isCurrentMonth ? FontWeight.w700 : FontWeight.w500,
+      );
+    }
+
+    TextStyle dowStyleFor(int weekday) {
+      final isWeekend =
+          weekday == DateTime.saturday || weekday == DateTime.sunday;
+      return TextStyle(
+        color: isWeekend ? muted : primary,
+        fontSize: 20,
+        fontWeight: FontWeight.w600,
+      );
+    }
+
+    // 날짜 셀 좌측 패딩과 맞춰 요일·날짜가 같은 수직선에 오도록 함.
+    const double dayLabelLeftInset = 8;
+    const double calendarDividerThickness = 1;
+    const double dowDividerThickness = calendarDividerThickness * 1.5;
+
+    Widget dowLabel(String label, int weekday) {
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.only(left: dayLabelLeftInset),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(label, style: dowStyleFor(weekday)),
+          ),
+        ),
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const SizedBox(height: 8),
         Row(
           children: [
-            IconButton(
-              tooltip: '이전 달',
-              onPressed: () => onSelect?.call(DateTime(month.year, month.month - 1, selectedDate.day.clamp(1, 28))),
-              icon: const Icon(Icons.chevron_left, color: kDlgTextSub),
-              iconSize: 32,
-            ),
-            Expanded(
-              child: GestureDetector(
-                onTap: () async {
-                  final picked = await showDialog<DateTime>(
-                    context: context,
-                    builder: (context) => _MonthYearPickerDialog(initial: month),
-                  );
-                  if (picked != null) onSelect?.call(picked);
-                },
-                child: Center(child: Text('${month.year}년 ${month.month}월', style: monthTitleStyle)),
-              ),
-            ),
-            IconButton(
-              tooltip: '다음 달',
-              onPressed: () => onSelect?.call(DateTime(month.year, month.month + 1, selectedDate.day.clamp(1, 28))),
-              icon: const Icon(Icons.chevron_right, color: kDlgTextSub),
-              iconSize: 32,
-            ),
+            dowLabel('월', DateTime.monday),
+            dowLabel('화', DateTime.tuesday),
+            dowLabel('수', DateTime.wednesday),
+            dowLabel('목', DateTime.thursday),
+            dowLabel('금', DateTime.friday),
+            dowLabel('토', DateTime.saturday),
+            dowLabel('일', DateTime.sunday),
           ],
         ),
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          child: Row(
-            children: const [
-              Expanded(child: Center(child: Text('월', style: dowStyle))),
-              Expanded(child: Center(child: Text('화', style: dowStyle))),
-              Expanded(child: Center(child: Text('수', style: dowStyle))),
-              Expanded(child: Center(child: Text('목', style: dowStyle))),
-              Expanded(child: Center(child: Text('금', style: dowStyle))),
-              Expanded(child: Center(child: Text('토', style: TextStyle(color: Color(0xFF6FA6DD), fontSize: 23, fontWeight: FontWeight.w600)))),
-              Expanded(child: Center(child: Text('일', style: TextStyle(color: Color(0xFFE07B7B), fontSize: 23, fontWeight: FontWeight.w600)))),
-            ],
-          ),
+        const SizedBox(height: 8),
+        Divider(
+          height: dowDividerThickness,
+          thickness: dowDividerThickness,
+          color: dividerColor,
         ),
-        const SizedBox(height: 16),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
               const int rowCount = 6;
-              const double dividerHeight = 1;
+              const double dividerHeight = calendarDividerThickness;
               final double totalDivider = dividerHeight * (rowCount - 1);
-              final double rowHeight = (constraints.maxHeight - totalDivider) / rowCount;
+              final double rowHeight =
+                  (constraints.maxHeight - totalDivider) / rowCount;
 
               Widget buildDayCell(DateTime date) {
                 final isCurrentMonth = date.month == month.month;
-                final isSelected = date.year == selectedDate.year && date.month == selectedDate.month && date.day == selectedDate.day;
-                final textStyle = isCurrentMonth ? textStyleNorm : textStyleDim;
+                final isSelected = date.year == selectedDate.year &&
+                    date.month == selectedDate.month &&
+                    date.day == selectedDate.day;
+                final textStyle =
+                    dayNumberStyle(date, isCurrentMonth: isCurrentMonth);
                 final count = ScheduleStore.instance.eventsCountOn(date);
                 return MouseRegion(
-                  onHover: (_) { if (addMode && onHoverDate != null) onHoverDate!(date); },
+                  onHover: (_) {
+                    if (addMode && onHoverDate != null) onHoverDate!(date);
+                  },
                   child: GestureDetector(
                     onTap: () => onSelect?.call(date),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       margin: const EdgeInsets.symmetric(vertical: 4),
-                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                      padding: const EdgeInsets.fromLTRB(
+                          dayLabelLeftInset, 8, 8, 8),
+                      clipBehavior: Clip.hardEdge,
                       decoration: BoxDecoration(
-                        color: isSelected ? kDlgAccent.withOpacity(0.18) : Colors.transparent,
+                        color: isSelected
+                            ? kDlgAccent.withOpacity(0.18)
+                            : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Stack(
                         children: [
                           Align(
                             alignment: Alignment.topLeft,
-                            child: _buildDayNumber(date, textStyle),
+                            child: Text('${date.day}', style: textStyle),
                           ),
-                          if (addMode && _inRange(date, previewStart, previewEnd))
+                          if (addMode &&
+                              _inRange(date, previewStart, previewEnd))
                             Positioned.fill(
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: kDlgAccent.withOpacity(0.08),
                                   borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(color: kDlgAccent.withOpacity(0.4), width: 1),
+                                  border: Border.all(
+                                      color: kDlgAccent.withOpacity(0.4),
+                                      width: 1),
                                 ),
                               ),
                             ),
@@ -1724,11 +2001,17 @@ class _MonthlyCalendar extends StatelessWidget {
                       SizedBox(
                         height: rowHeight,
                         child: Row(
-                          children: rowDates.map((date) => Expanded(child: buildDayCell(date))).toList(),
+                          children: rowDates
+                              .map(
+                                  (date) => Expanded(child: buildDayCell(date)))
+                              .toList(),
                         ),
                       ),
                       if (row != rowCount - 1)
-                        const Divider(height: dividerHeight, thickness: dividerHeight, color: kDlgBorder),
+                        Divider(
+                            height: dividerHeight,
+                            thickness: dividerHeight,
+                            color: dividerColor),
                     ],
                   );
                 }),
@@ -1765,7 +2048,8 @@ class _EventBadge extends StatelessWidget {
       ),
       child: Text(
         '$count',
-        style: const TextStyle(color: kDlgText, fontSize: 12, fontWeight: FontWeight.w700),
+        style: const TextStyle(
+            color: kDlgText, fontSize: 12, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -1775,25 +2059,36 @@ class _TodoFilterButton extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _TodoFilterButton({required this.label, required this.selected, required this.onTap});
+  const _TodoFilterButton(
+      {required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final borderColor = selected ? kDlgAccent : kDlgBorder;
-    final bgColor = kDlgPanelBg; // 컨테이너 배경색
-    final fgColor = selected ? kDlgText : kDlgTextSub;
+    final brightness = Theme.of(context).brightness;
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final palette = FabTabBarTokens.paletteFor(brightness);
+    final fgColor = selected ? palette.labelSelected : style.hint;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(999),
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: ShapeDecoration(
-          color: bgColor,
-          shape: StadiumBorder(side: BorderSide(color: borderColor, width: 2)),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? palette.highlight : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: FabTabBarTokens.groupedCardBorderFor(brightness),
         ),
-        child: Text(label, style: TextStyle(color: fgColor, fontSize: 12)),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: fgColor,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }
@@ -1813,9 +2108,14 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final groupedBorder =
+        FabTabBarTokens.groupedCardBorderFor(brightness).top.color;
     final all = ScheduleStore.instance.events.value;
     if (all.isEmpty) {
-      return const Center(child: Text('표시할 일정이 없습니다.', style: TextStyle(color: kDlgTextSub)));
+      return const Center(
+          child: Text('표시할 일정이 없습니다.', style: TextStyle(color: kDlgTextSub)));
     }
     final now = DateTime.now();
     final items = List<ScheduleEvent>.from(all)
@@ -1826,7 +2126,8 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
       return d == today;
     });
     if (centerIndex == -1) {
-      centerIndex = items.indexWhere((e) => !DateTime(e.date.year, e.date.month, e.date.day).isBefore(today));
+      centerIndex = items.indexWhere((e) =>
+          !DateTime(e.date.year, e.date.month, e.date.day).isBefore(today));
     }
     if (centerIndex == -1) centerIndex = items.length - 1;
 
@@ -1840,9 +2141,12 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
       builder: (context, constraints) {
         const double cardWidth = 200.0;
         const double gap = 12.0;
+        final showNote = constraints.maxHeight >= 96;
         final double viewport = constraints.maxWidth;
-        final double totalWidth = window.length * cardWidth + math.max(0, window.length - 1) * gap;
-        double target = localCenter * (cardWidth + gap) - (viewport - cardWidth) / 2;
+        final double totalWidth =
+            window.length * cardWidth + math.max(0, window.length - 1) * gap;
+        double target =
+            localCenter * (cardWidth + gap) - (viewport - cardWidth) / 2;
         target = target.clamp(0.0, math.max(0.0, totalWidth - viewport));
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1856,7 +2160,8 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
           final cur = _controller.offset;
           final delta = (target - cur).abs();
           final last = _lastAutoTarget;
-          final bool targetChanged = last == null || (target - last).abs() >= 2.0;
+          final bool targetChanged =
+              last == null || (target - last).abs() >= 2.0;
           if (!targetChanged || delta < 2.0) return;
 
           _autoScrollScheduled = true;
@@ -1864,13 +2169,13 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
           final ms = (180 + (delta / 1200.0 * 180)).clamp(180, 420).round();
           _controller
               .animateTo(
-                target,
-                duration: Duration(milliseconds: ms),
-                curve: Curves.easeOutCubic,
-              )
+            target,
+            duration: Duration(milliseconds: ms),
+            curve: Curves.easeOutCubic,
+          )
               .whenComplete(() {
-                if (mounted) _autoScrollScheduled = false;
-              });
+            if (mounted) _autoScrollScheduled = false;
+          });
         });
 
         return ListView.builder(
@@ -1885,46 +2190,80 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
             final bool isPast = eventDate.isBefore(today);
             final Color borderColor = e.tags.contains('KR_HOLIDAY')
                 ? const Color(0xFFE07B7B)
-                : (isCenter ? kDlgAccent : (isUpcoming ? kDlgBorder : kDlgBorder.withOpacity(0.6)));
-            final Color titleColor = isCenter ? kDlgText : (isUpcoming ? kDlgText : kDlgTextSub);
-            final Color subColor = isCenter ? kDlgTextSub : kDlgTextSub.withOpacity(isPast ? 0.7 : 0.9);
+                : (isCenter
+                    ? kDlgAccent
+                    : (isUpcoming
+                        ? groupedBorder
+                        : groupedBorder.withOpacity(0.6)));
+            final Color titleColor = isCenter
+                ? panelStyle.title
+                : (isUpcoming ? panelStyle.title : panelStyle.hint);
+            final Color subColor = isCenter
+                ? panelStyle.hint
+                : panelStyle.hint.withOpacity(isPast ? 0.7 : 0.9);
             return Container(
               width: cardWidth,
               margin: EdgeInsets.only(right: i == window.length - 1 ? 0 : gap),
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: kDlgPanelBg,
-                borderRadius: BorderRadius.circular(12),
+                color: panelStyle.groupedCardBackground,
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: borderColor,
-                  width: isCenter ? 3 : 2,
+                  color: isCenter ? borderColor : groupedBorder,
+                  width: isCenter ? 2 : 0.5,
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+              child: ScrollConfiguration(
+                behavior:
+                    ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                child: SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(width: 6, height: 6, decoration: BoxDecoration(color: e.color != null ? Color(e.color!) : kDlgAccent, shape: BoxShape.circle)),
-                      const SizedBox(width: 8),
-                      Text('${e.date.month}.${e.date.day}', style: TextStyle(color: subColor, fontWeight: FontWeight.w600)),
-                      const Spacer(),
-                      Icon(_iconFromKey(e.iconKey), color: subColor, size: 16),
+                      Row(
+                        children: [
+                          Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                  color: e.color != null
+                                      ? Color(e.color!)
+                                      : kDlgAccent,
+                                  shape: BoxShape.circle)),
+                          const SizedBox(width: 8),
+                          Text('${e.date.month}.${e.date.day}',
+                              style: TextStyle(
+                                  color: subColor,
+                                  fontWeight: FontWeight.w600)),
+                          const Spacer(),
+                          Icon(_iconFromKey(e.iconKey),
+                              color: subColor, size: 16),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(_singleWord(e.title),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: titleColor,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700)),
+                      if (showNote &&
+                          e.note != null &&
+                          e.note!.trim().isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            _clipToChars(_oneSentence(e.note!.trim()), 60),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: subColor, fontSize: 12),
+                          ),
+                        ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(_singleWord(e.title), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: titleColor, fontSize: 14, fontWeight: FontWeight.w700)),
-                  if (e.note != null && e.note!.trim().isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        _clipToChars(_oneSentence(e.note!.trim()), 60),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: subColor, fontSize: 12),
-                      ),
-                    ),
-                ],
+                ),
               ),
             );
           },
@@ -1944,62 +2283,53 @@ class _DayEventsOverlay extends StatelessWidget {
     if (events.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(left: 2, right: 2, top: 30, bottom: 2),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // 대략적인 한 이벤트 스트라이프의 높이를 계산하여 표시 가능한 개수 산정
-          // 제목 1줄(약 18) + 요약 2줄(약 30) + 패딩/간격(약 12) ≈ 60
-          const double estimatedEventHeight = 60;
-          const double moreIconHeight = 20;
-          double available = constraints.maxHeight;
-          int maxCount = (available - moreIconHeight) ~/ estimatedEventHeight;
-          if (maxCount < 1) maxCount = 1;
-          if (maxCount > 3) maxCount = 3;
-          final toShow = events.take(maxCount).toList();
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ...toShow.map((e) => _EventStripe(
-                    title: _singleWord(e.title),
-                    subtitle: (e.note != null && e.note!.trim().isNotEmpty)
-                        ? e.note!.trim()
-                        : null,
-                    color: e.color,
-                    iconKey: e.iconKey,
-                  )),
-              if (events.length > toShow.length)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: GestureDetector(
-                      onTap: () => _showDayEventsModal(date),
-                      child: const Icon(Icons.more_horiz, color: kDlgTextSub, size: 16),
-                    ),
-                  ),
-                ),
-            ],
-          );
-        },
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: ListView.builder(
+          padding: EdgeInsets.zero,
+          primary: false,
+          itemCount: events.length,
+          itemBuilder: (context, index) {
+            final e = events[index];
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _showDayEventsModal(date),
+              child: _EventStripe(
+                title: _singleWord(e.title),
+                subtitle: (e.note != null && e.note!.trim().isNotEmpty)
+                    ? e.note!.trim()
+                    : null,
+                color: e.color,
+                iconKey: e.iconKey,
+              ),
+            );
+          },
+        ),
       ),
     );
   }
 }
 
 class _EventStripe extends StatelessWidget {
-  final String title;      // 한 단어
-  final String? subtitle;  // 한 문장 요약
+  final String title; // 한 단어
+  final String? subtitle; // 한 문장 요약
   final int? color;
   final String? iconKey;
-  const _EventStripe({required this.title, this.subtitle, required this.color, this.iconKey});
+  const _EventStripe(
+      {required this.title, this.subtitle, required this.color, this.iconKey});
 
   @override
   Widget build(BuildContext context) {
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     final Color indicatorColor = iconKey == 'holiday'
         ? const Color(0xFFE07B7B)
         : (color != null ? Color(color!) : kDlgAccent);
     final BoxDecoration? holidayDeco = iconKey == 'holiday'
-        ? BoxDecoration(color: const Color(0x22E07B7B), borderRadius: BorderRadius.circular(6))
+        ? BoxDecoration(
+            color: const Color(0x22E07B7B),
+            borderRadius: BorderRadius.circular(6))
         : null;
     return Container(
       margin: const EdgeInsets.only(bottom: 5),
@@ -2009,18 +2339,28 @@ class _EventStripe extends StatelessWidget {
           children: [
             Container(
               width: 5,
-              decoration: BoxDecoration(color: indicatorColor, borderRadius: BorderRadius.circular(2)),
+              decoration: BoxDecoration(
+                  color: indicatorColor,
+                  borderRadius: BorderRadius.circular(2)),
             ),
             const SizedBox(width: 6),
             Expanded(
               child: Container(
                 decoration: holidayDeco,
-                padding: holidayDeco != null ? const EdgeInsets.symmetric(horizontal: 6, vertical: 4) : EdgeInsets.zero,
+                padding: holidayDeco != null
+                    ? const EdgeInsets.symmetric(horizontal: 6, vertical: 4)
+                    : EdgeInsets.zero,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kDlgText, fontSize: 13, fontWeight: FontWeight.w700)),
+                    Text(title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: panelStyle.title,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700)),
                     if (subtitle != null && subtitle!.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -2028,7 +2368,8 @@ class _EventStripe extends StatelessWidget {
                           subtitle!,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+                          style:
+                              TextStyle(color: panelStyle.hint, fontSize: 12),
                         ),
                       ),
                   ],
@@ -2041,6 +2382,7 @@ class _EventStripe extends StatelessWidget {
     );
   }
 }
+
 String _iconLabel(String? key) {
   switch (key) {
     case 'holiday':
@@ -2076,7 +2418,8 @@ String _singleWord(String s) {
 }
 
 String _oneSentence(String s) {
-  final cleaned = s.replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  final cleaned =
+      s.replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   final idx = cleaned.indexOf(RegExp(r'[.!?]'));
   if (idx != -1) return cleaned.substring(0, idx + 1);
   return cleaned;
@@ -2099,17 +2442,6 @@ String _formatDateYMD(DateTime d) {
   return '${d.year}.${d.month}.${d.day}';
 }
 
-Widget _buildDayNumber(DateTime date, TextStyle base) {
-  Color color = base.color ?? kDlgTextSub;
-  // 월=1..일=7
-  if (date.weekday == DateTime.saturday) {
-    color = const Color(0xFF7FB2E5); // 살짝 채도/명도 업
-  } else if (date.weekday == DateTime.sunday) {
-    color = const Color(0xFFE07B7B); // 살짝 채도/명도 업
-  }
-  return Text('${date.day}', style: base.copyWith(color: color));
-}
-
 String _cleanSummary(String summary, String? iconLabel) {
   var s = summary;
   if (iconLabel != null && iconLabel.isNotEmpty) {
@@ -2121,7 +2453,8 @@ String _cleanSummary(String summary, String? iconLabel) {
 }
 
 Future<void> _showDayEventsModal(DateTime date) async {
-  final context = rootNavigatorKey.currentContext ?? WidgetsBinding.instance.focusManager.primaryFocus?.context;
+  final context = rootNavigatorKey.currentContext ??
+      WidgetsBinding.instance.focusManager.primaryFocus?.context;
   if (context == null) return;
   final items = ScheduleStore.instance.eventsOn(date);
   await showDialog(
@@ -2136,16 +2469,21 @@ Future<void> _showDayEventsModal(DateTime date) async {
         titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
         contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-        title: Text('${date.year}.${date.month}.${date.day} 일정', style: const TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+        title: Text('${date.year}.${date.month}.${date.day} 일정',
+            style: const TextStyle(
+                color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
         content: SizedBox(
           width: 560,
           height: 420,
           child: items.isEmpty
-              ? const Center(child: Text('일정이 없습니다.', style: TextStyle(color: kDlgTextSub)))
+              ? const Center(
+                  child:
+                      Text('일정이 없습니다.', style: TextStyle(color: kDlgTextSub)))
               : ListView.separated(
                   itemCount: items.length,
                   separatorBuilder: (_, __) => const Divider(color: kDlgBorder),
-                  itemBuilder: (context, idx) => _EventTile(event: items[idx], showGroupActions: true),
+                  itemBuilder: (context, idx) =>
+                      _EventTile(event: items[idx], showGroupActions: true),
                 ),
         ),
         actions: [
@@ -2159,100 +2497,3 @@ Future<void> _showDayEventsModal(DateTime date) async {
     },
   );
 }
-
-class _MonthYearPickerDialog extends StatefulWidget {
-  final DateTime initial;
-  const _MonthYearPickerDialog({required this.initial});
-
-  @override
-  State<_MonthYearPickerDialog> createState() => _MonthYearPickerDialogState();
-}
-
-class _MonthYearPickerDialogState extends State<_MonthYearPickerDialog> {
-  late int _year;
-  late int _month;
-
-  @override
-  void initState() {
-    super.initState();
-    _year = widget.initial.year;
-    _month = widget.initial.month;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: kDlgBorder),
-      ),
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      title: const Text('년/월 선택', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
-      content: SizedBox(
-        width: 420,
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('연도', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  DropdownButton<int>(
-                    value: _year,
-                    dropdownColor: kDlgPanelBg,
-                    style: const TextStyle(color: kDlgText),
-                    items: List.generate(25, (i) => _year - 12 + i)
-                        .map((y) => DropdownMenuItem(value: y, child: Text('$y년')))
-                        .toList(),
-                    onChanged: (v) => setState(() => _year = v ?? _year),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('월', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  DropdownButton<int>(
-                    value: _month,
-                    dropdownColor: kDlgPanelBg,
-                    style: const TextStyle(color: kDlgText),
-                    items: List.generate(12, (i) => i + 1)
-                        .map((m) => DropdownMenuItem(value: m, child: Text('$m월')))
-                        .toList(),
-                    onChanged: (v) => setState(() => _month = v ?? _month),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-          child: const Text('취소'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-          onPressed: () => Navigator.pop(context, DateTime(_year, _month, 1)),
-          child: const Text('이동'),
-        ),
-      ],
-    );
-  }
-}
-
-
-
-

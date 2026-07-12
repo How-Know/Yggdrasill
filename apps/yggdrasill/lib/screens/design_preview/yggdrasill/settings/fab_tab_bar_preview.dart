@@ -3264,11 +3264,13 @@ class FabStyleActionTabBar extends StatelessWidget {
     required this.children,
     this.height = FabTabBarTokens.fabBarHeight,
     this.padding = 6,
+    this.centered = true,
   });
 
   final List<Widget> children;
   final double height;
   final double padding;
+  final bool centered;
 
   @override
   Widget build(BuildContext context) {
@@ -3276,38 +3278,38 @@ class FabStyleActionTabBar extends StatelessWidget {
     final palette = FabTabBarTokens.paletteFor(brightness);
     final radius = BorderRadius.circular(height / 2);
 
-    return Center(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: palette.boxShadows,
-        ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-              sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+    final bar = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: palette.boxShadows,
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+            sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
+          ),
+          child: Container(
+            height: height,
+            padding: EdgeInsets.all(padding),
+            decoration: BoxDecoration(
+              color: palette.surface,
+              borderRadius: radius,
             ),
-            child: Container(
-              height: height,
-              padding: EdgeInsets.all(padding),
-              decoration: BoxDecoration(
-                color: palette.surface,
-                borderRadius: radius,
-              ),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: children,
-                ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: children,
               ),
             ),
           ),
         ),
       ),
     );
+    if (!centered) return bar;
+    return Center(child: bar);
   }
 }
 
@@ -3320,6 +3322,7 @@ class FabStyleActionTabPill extends StatelessWidget {
     required this.onTap,
     this.selected = false,
     this.enabled = true,
+    this.iconOnly = false,
     this.width = 112,
     this.iconSize = 20,
     this.barHeight = FabTabBarTokens.fabBarHeight,
@@ -3331,6 +3334,8 @@ class FabStyleActionTabPill extends StatelessWidget {
   final VoidCallback onTap;
   final bool selected;
   final bool enabled;
+  /// true면 아이콘만 중앙 정렬(라벨·간격 슬롯 없음).
+  final bool iconOnly;
   final double width;
   final double iconSize;
   final double barHeight;
@@ -3338,6 +3343,7 @@ class FabStyleActionTabPill extends StatelessWidget {
 
   static const double _iconLabelGap = 7;
   static const double _horizontalInset = 12;
+  static const double _iconOnlyHorizontalInset = 8;
 
   @override
   Widget build(BuildContext context) {
@@ -3357,17 +3363,38 @@ class FabStyleActionTabPill extends StatelessWidget {
       textScaler: textScaler,
     )..layout();
     // [FabStyleTabBar]는 라벨 너비+여백으로 슬롯을 잡는다. 아이콘 pill도 동일 원칙.
-    final resolvedWidth = math.max(
-      width,
-      _horizontalInset * 2 +
-          iconSize +
-          _iconLabelGap +
-          labelPainter.width,
-    );
+    final resolvedWidth = iconOnly
+        ? _iconOnlyHorizontalInset * 2 + iconSize
+        : math.max(
+            width,
+            _horizontalInset * 2 +
+                iconSize +
+                _iconLabelGap +
+                labelPainter.width,
+          );
     final fg = !enabled
         ? palette.labelUnselected.withValues(alpha: 0.45)
         : (selected ? palette.labelSelected : palette.labelUnselected);
     final bg = selected ? palette.highlight : Colors.transparent;
+
+    final pillBody = iconOnly
+        ? Center(child: Icon(icon, size: iconSize, color: fg))
+        : Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: iconSize, color: fg),
+              const SizedBox(width: _iconLabelGap),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                style: baseTextStyle.copyWith(color: fg),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          );
 
     return Tooltip(
       message: label,
@@ -3386,24 +3413,11 @@ class FabStyleActionTabPill extends StatelessWidget {
               borderRadius: BorderRadius.circular(innerHeight / 2),
             ),
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: _horizontalInset),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, size: iconSize, color: fg),
-                  const SizedBox(width: _iconLabelGap),
-                  AnimatedDefaultTextStyle(
-                    duration: const Duration(milliseconds: 200),
-                    style: baseTextStyle.copyWith(color: fg),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
+              padding: EdgeInsets.symmetric(
+                horizontal:
+                    iconOnly ? _iconOnlyHorizontalInset : _horizontalInset,
               ),
+              child: pillBody,
             ),
           ),
         ),

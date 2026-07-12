@@ -52,7 +52,6 @@ class _LearningScreenState extends State<LearningScreen> {
     requestedLearningTab.removeListener(_onRequestedLearningTabChanged);
     _tabOverlay.dispose();
     ExamModeService.instance.suppressExamActionCluster.value = false;
-    hideGlobalMemoFloatingBanners.value = false;
     super.dispose();
   }
 

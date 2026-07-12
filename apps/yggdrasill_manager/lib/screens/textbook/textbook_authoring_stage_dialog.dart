@@ -54,6 +54,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.answerEndPage,
     this.solutionStartPage,
     this.solutionEndPage,
+    this.seriesKey = '',
     this.embedded = false,
     this.onBack,
     this.onStageChanged,
@@ -75,6 +76,10 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final int? answerEndPage;
   final int? solutionStartPage;
   final int? solutionEndPage;
+
+  /// 시리즈 키('ssen'/'rpm'/'wonri' 등). 개념원리 필수유형(B)은 정답·풀이가
+  /// 본문 PDF에 인쇄돼 있어 Stage 2/3 흐름이 본문 추출로 바뀐다.
+  final String seriesKey;
   final bool embedded;
   final VoidCallback? onBack;
   final VoidCallback? onStageChanged;
@@ -99,6 +104,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     int? answerEndPage,
     int? solutionStartPage,
     int? solutionEndPage,
+    String seriesKey = '',
   }) {
     return showDialog<void>(
       context: context,
@@ -120,6 +126,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
         answerEndPage: answerEndPage,
         solutionStartPage: solutionStartPage,
         solutionEndPage: solutionEndPage,
+        seriesKey: seriesKey,
       ),
     );
   }
@@ -256,6 +263,20 @@ class _TextbookAuthoringStageDialogState
   final Map<String, _SolRefDraft> _solRefsByCropId = <String, _SolRefDraft>{};
   final List<String> _solRefMissing = <String>[];
 
+  // --- 개념원리 필수유형(wonri B): 본문 PDF에서 정답+풀이 좌표 추출 ------
+  bool _loadingBodyPdf = false;
+  String? _bodyPdfError;
+  PdfDocument? _bodyDocument;
+  final Map<int, Uint8List> _bodyPagePngCache = <int, Uint8List>{};
+  static final Map<String, TextbookVlmBodySolutionPageResult>
+      _bodyVlmPageCache = <String, TextbookVlmBodySolutionPageResult>{};
+
+  /// 개념원리(wonri)의 B(필수유형) 슬롯 여부. 이 경우 정답과 풀이가 모두
+  /// 본문 PDF의 "풀이" 단락에 있으므로 Stage 2/3 VLM이 본문 추출로 대체된다.
+  bool get _isWonriEssential =>
+      widget.seriesKey.trim().toLowerCase() == 'wonri' &&
+      widget.subKey.trim().toUpperCase() == 'B';
+
   bool _savingSolRefs = false;
   bool _loadingPbRuns = false;
   final Map<String, String> _pbRunStatusByKey = <String, String>{};
@@ -281,6 +302,7 @@ class _TextbookAuthoringStageDialogState
     _tab.dispose();
     _answerDocument?.dispose();
     _solutionDocument?.dispose();
+    _bodyDocument?.dispose();
     super.dispose();
   }
 
@@ -434,7 +456,7 @@ class _TextbookAuthoringStageDialogState
     final rows = await _supa
         .from('textbook_problem_solution_refs')
         .select('crop_id, raw_page, display_page, number_region_1k, '
-            'content_region_1k')
+            'content_region_1k, source_kind')
         .inFilter('crop_id', ids);
     final list = (rows as List).cast<Map<String, dynamic>>();
     _solRefsByCropId.clear();
@@ -553,10 +575,79 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
+  /// 개념원리 필수유형 전용 — 본문 PDF(kind='body')를 내려받아 연다.
+  Future<PdfDocument?> _ensureBodyPdf() async {
+    if (_bodyDocument != null) return _bodyDocument;
+    if (_loadingBodyPdf) return null;
+    setState(() {
+      _loadingBodyPdf = true;
+      _bodyPdfError = null;
+    });
+    try {
+      final target = await _pdfService.requestDownloadUrl(
+        academyId: widget.academyId,
+        fileId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+        kind: 'body',
+        requireMigratedStorage: true,
+      );
+      final url = target.url;
+      if (url.isEmpty) throw Exception('empty_download_url');
+      final tempDir = await getTemporaryDirectory();
+      final safeBook = widget.bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final file = File(p.join(
+        tempDir.path,
+        'stage_${safeBook}_${widget.gradeLabel}_body.pdf',
+      ));
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('pdf_download_failed(${res.statusCode})');
+      }
+      await file.writeAsBytes(res.bodyBytes, flush: true);
+      final doc = await PdfDocument.openFile(file.path);
+      if (!mounted) {
+        doc.dispose();
+        return null;
+      }
+      setState(() {
+        _bodyDocument = doc;
+        _bodyPagePngCache.clear();
+        _loadingBodyPdf = false;
+      });
+      return doc;
+    } catch (e) {
+      if (!mounted) return null;
+      setState(() {
+        _loadingBodyPdf = false;
+        _bodyPdfError = '$e';
+      });
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _bodyPagePng(int page) async {
+    final doc = _bodyDocument;
+    if (doc == null) return null;
+    if (page < 1 || page > doc.pages.length) return null;
+    final cached = _bodyPagePngCache[page];
+    if (cached != null) return cached;
+    final png = await renderPdfPageToPng(
+      document: doc,
+      pageNumber: page,
+      longEdgePx: _kVlmLongEdgePx,
+    );
+    _bodyPagePngCache[page] = png;
+    return png;
+  }
+
   // --------------------------------------------------------------- stage 2
 
   Future<void> _runAnswerVlm() async {
     if (_runningAnswerVlm) return;
+    if (_isWonriEssential) {
+      await _runBodySolutionVlm();
+      return;
+    }
     final doc = await _ensureAnswerPdf();
     if (doc == null) return;
     if (_crops.isEmpty) {
@@ -1170,6 +1261,10 @@ class _TextbookAuthoringStageDialogState
 
   Future<void> _runSolutionRefVlm() async {
     if (_runningSolRefVlm) return;
+    if (_isWonriEssential) {
+      await _runBodySolutionVlm();
+      return;
+    }
     final doc = await _ensureSolutionPdf();
     if (doc == null) return;
     if (_crops.isEmpty) {
@@ -1322,6 +1417,192 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
+  /// 개념원리 필수유형(wonri B) 전용 — 본문 PDF의 각 문항 페이지에서 "풀이"
+  /// 단락 좌표와 굵은 글씨 정답을 한 번에 추출해 Stage 2(정답)와
+  /// Stage 3(해설 좌표, source_kind='body')를 함께 채운다.
+  Future<void> _runBodySolutionVlm() async {
+    if (_runningAnswerVlm || _runningSolRefVlm) return;
+    final doc = await _ensureBodyPdf();
+    if (doc == null) {
+      if (_bodyPdfError != null) {
+        _toast('본문 PDF 로드 실패: $_bodyPdfError', error: true);
+      }
+      return;
+    }
+    if (_crops.isEmpty) {
+      _toast('문항 번호가 비어 있어 본문 추출을 실행할 수 없습니다', error: true);
+      return;
+    }
+
+    // 정답 또는 풀이 좌표가 아직 없는 크롭만 대상으로 한다.
+    final candidates = _crops.where((c) => !c.isSetHeader).toList();
+    final targets = candidates.where((c) {
+      final hasAnswer =
+          _answersByCropId[c.id]?.answerText.trim().isNotEmpty == true;
+      final hasSolRef = _solRefsByCropId.containsKey(c.id);
+      return !(hasAnswer && hasSolRef);
+    }).toList();
+    final savedCount = candidates.length - targets.length;
+    if (targets.isEmpty) {
+      setState(() {
+        _answerStatus = '본문 추출 생략 · 저장된 정답/풀이 $savedCount개';
+        _solRefStatus = _answerStatus;
+      });
+      return;
+    }
+    final pageless =
+        targets.where((c) => c.rawPage == null || c.rawPage! <= 0).toList();
+    final byPage = <int, List<_StageCrop>>{};
+    for (final c in targets) {
+      final page = c.rawPage;
+      if (page == null || page <= 0) continue;
+      byPage.putIfAbsent(page, () => <_StageCrop>[]).add(c);
+    }
+    if (byPage.isEmpty) {
+      _toast('대상 문항에 본문 페이지 정보(raw_page)가 없습니다', error: true);
+      return;
+    }
+    final pages = byPage.keys.toList()..sort();
+
+    setState(() {
+      _runningAnswerVlm = true;
+      _runningSolRefVlm = true;
+      _answerProgress = 0;
+      _solRefProgress = 0;
+      _answerStatus = '본문 PDF에서 필수유형 정답·풀이 추출 중…';
+      _solRefStatus = _answerStatus;
+    });
+
+    var newAnswers = 0;
+    var newSolRefs = 0;
+    final missing = <String>[];
+    final pageErrors = <String>[];
+    try {
+      for (var i = 0; i < pages.length; i += 1) {
+        final page = pages[i];
+        if (!mounted) return;
+        final pageCrops = byPage[page]!;
+        setState(() {
+          _answerStatus =
+              '본문 p$page 분석 중… (${i + 1}/${pages.length}) · 저장 $savedCount개';
+          _solRefStatus = _answerStatus;
+        });
+        Uint8List? png;
+        try {
+          png = await _bodyPagePng(page);
+        } catch (e) {
+          debugPrint('[wonri-body] render failed page=$page err=$e');
+        }
+        if (png == null) {
+          pageErrors.add('p$page: 본문 페이지 렌더 실패');
+          missing.addAll(pageCrops.map((c) => c.problemNumber));
+          continue;
+        }
+        final expectedNumbers = <String>[
+          for (final c in pageCrops)
+            if (c.problemNumber.isNotEmpty) c.problemNumber,
+        ];
+        TextbookVlmBodySolutionPageResult res;
+        final cacheKey =
+            '${_vlmPageCacheKey('body', page)}|${_expectedCacheKey(expectedNumbers)}';
+        final cached = _bodyVlmPageCache[cacheKey];
+        try {
+          res = cached ??
+              await _solRefService.extractBodySolutionsOnPage(
+                imageBytes: png,
+                rawPage: page,
+                expectedNumbers: expectedNumbers,
+              );
+          _bodyVlmPageCache[cacheKey] = res;
+        } catch (e) {
+          debugPrint('[wonri-body] vlm failed page=$page err=$e');
+          pageErrors.add('p$page: VLM 실패 $e');
+          missing.addAll(pageCrops.map((c) => c.problemNumber));
+          continue;
+        }
+        final itemByKey = <String, TextbookVlmBodySolutionItem>{
+          for (final it in res.items)
+            if (textbookAnswerNumberKey(it.problemNumber).isNotEmpty)
+              textbookAnswerNumberKey(it.problemNumber): it,
+        };
+        if (!mounted) return;
+        setState(() {
+          for (final c in pageCrops) {
+            final it = itemByKey[textbookAnswerNumberKey(c.problemNumber)];
+            if (it == null) {
+              missing.add(c.problemNumber);
+              continue;
+            }
+            final hasAnswer =
+                _answersByCropId[c.id]?.answerText.trim().isNotEmpty == true;
+            if (!hasAnswer && it.answerText.isNotEmpty) {
+              _answersByCropId[c.id] = _AnswerDraft(
+                cropId: c.id,
+                problemNumber: c.problemNumber,
+                kind: it.answerKind,
+                answerText: it.answerText,
+                answerLatex2d: it.answerLatex2d.isEmpty
+                    ? it.answerText
+                    : it.answerLatex2d,
+                source: 'vlm',
+                rawPage: page,
+                dirty: true,
+              );
+              newAnswers += 1;
+            }
+            if (!_solRefsByCropId.containsKey(c.id) &&
+                it.contentRegion1k != null) {
+              _solRefsByCropId[c.id] = _SolRefDraft(
+                cropId: c.id,
+                problemNumber: c.problemNumber,
+                rawPage: page,
+                displayPage: c.displayPage,
+                numberRegion1k: it.numberRegion1k,
+                contentRegion1k: it.contentRegion1k,
+                source: 'vlm',
+                sourceKind: 'body',
+                dirty: true,
+              );
+              newSolRefs += 1;
+            }
+          }
+          final progress = (i + 1) / pages.length;
+          _answerProgress = progress;
+          _solRefProgress = progress;
+        });
+      }
+
+      missing.addAll(pageless.map((c) => c.problemNumber));
+      if (!mounted) return;
+      setState(() {
+        _answerMissing
+          ..clear()
+          ..addAll(missing);
+        _solRefMissing
+          ..clear()
+          ..addAll(missing);
+        _runningAnswerVlm = false;
+        _runningSolRefVlm = false;
+        final head =
+            '본문 추출 완료 · 정답 $newAnswers개 · 풀이 좌표 $newSolRefs개 · 저장 $savedCount개';
+        final tail = <String>[
+          if (missing.isNotEmpty) '누락 ${missing.length}개',
+          if (pageErrors.isNotEmpty) pageErrors.take(2).join(' / '),
+        ];
+        _answerStatus = tail.isEmpty ? head : '$head · ${tail.join(' · ')}';
+        _solRefStatus = _answerStatus;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _runningAnswerVlm = false;
+        _runningSolRefVlm = false;
+        _answerStatus = '본문 추출 실패: $e';
+        _solRefStatus = _answerStatus;
+      });
+    }
+  }
+
   Future<bool> _saveSolutionRefs() async {
     if (_savingSolRefs) return false;
     final uploads = <TextbookSolutionRefUpload>[];
@@ -1333,6 +1614,7 @@ class _TextbookAuthoringStageDialogState
         numberRegion1k: d.numberRegion1k,
         contentRegion1k: d.contentRegion1k,
         source: d.source,
+        sourceKind: d.sourceKind,
       ));
     }
     if (uploads.isEmpty) {
@@ -1566,7 +1848,7 @@ class _TextbookAuthoringStageDialogState
                           ),
                         )
                       : const Icon(Icons.auto_awesome, size: 14),
-                  label: const Text('정답 VLM 실행'),
+                  label: Text(_isWonriEssential ? '본문 정답·풀이 추출' : '정답 VLM 실행'),
                   style: FilledButton.styleFrom(backgroundColor: _kAccent),
                 ),
                 const SizedBox(width: 8),
@@ -2094,7 +2376,7 @@ class _TextbookAuthoringStageDialogState
                           ),
                         )
                       : const Icon(Icons.location_searching, size: 14),
-                  label: const Text('해설 VLM 실행'),
+                  label: Text(_isWonriEssential ? '본문 정답·풀이 추출' : '해설 VLM 실행'),
                   style: FilledButton.styleFrom(backgroundColor: _kAccent),
                 ),
                 const SizedBox(width: 8),
@@ -3155,6 +3437,7 @@ class _SolRefDraft {
     this.displayPage,
     this.contentRegion1k,
     this.source = 'vlm',
+    this.sourceKind = 'sol',
     this.dirty = false,
   });
 
@@ -3165,6 +3448,9 @@ class _SolRefDraft {
   List<int> numberRegion1k;
   List<int>? contentRegion1k;
   String source;
+
+  /// 'sol' = 해설 PDF 좌표(기본), 'body' = 본문 PDF 좌표(개념원리 필수유형).
+  String sourceKind;
   bool dirty;
 
   factory _SolRefDraft.fromRow(Map<String, dynamic> r) {
@@ -3197,6 +3483,7 @@ class _SolRefDraft {
       return out;
     }
 
+    final sourceKindRaw = '${r['source_kind'] ?? ''}'.trim().toLowerCase();
     return _SolRefDraft(
       cropId: '${r['crop_id'] ?? ''}',
       problemNumber: '',
@@ -3204,6 +3491,7 @@ class _SolRefDraft {
       displayPage: asIntN(r['display_page']),
       numberRegion1k: parseBboxReq(r['number_region_1k']),
       contentRegion1k: parseBbox(r['content_region_1k']),
+      sourceKind: sourceKindRaw == 'body' ? 'body' : 'sol',
     );
   }
 }

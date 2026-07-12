@@ -163,6 +163,10 @@ final GlobalKey<OverlayState> fabDropdownOverlayKey = GlobalKey<OverlayState>();
 final ValueNotifier<bool> hideGlobalMemoFloatingBanners =
     ValueNotifier<bool>(false);
 
+/// 왼쪽 출석 슬라이드시트가 차지하는 너비(열림·닫힘 애니메이션 중간값 포함).
+final ValueNotifier<double> leftSideSheetClipWidthNotifier =
+    ValueNotifier<double>(0);
+
 /// 홈(수업 내용) 채점 모드 활성 시 true. FAB 숨김에 사용.
 final ValueNotifier<bool> gradingModeActive = ValueNotifier<bool>(false);
 

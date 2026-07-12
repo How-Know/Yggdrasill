@@ -23,6 +23,7 @@ import '../../../services/consult_trial_lesson_service.dart';
 import '../../consult/consult_notes_screen.dart';
 import '../../../services/consult_note_controller.dart';
 import '../../../widgets/dark_panel_route.dart';
+import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../../../widgets/schedule_locked_by_makeup_dialog.dart';
 import '../../../theme/ygg_semantic_colors.dart';
 import '../../../widgets/dialog_tokens.dart';
@@ -735,8 +736,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                             padding:
                                                 const EdgeInsets.only(left: 14),
                                             child: Wrap(
-                                              spacing: 6.4,
-                                              runSpacing: 6.4,
+                                              spacing: 2.4,
+                                              runSpacing: 2.4,
                                               children: [
                                                 ...extras,
                                                 ...list.map(
@@ -4332,7 +4333,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
             padding: const EdgeInsets.only(top: 16.0),
             child: Wrap(
               spacing: 0,
-              runSpacing: 6.4,
+              runSpacing: 2.4,
               children: noSession
                   .map((info) => _buildDraggableStudentCard(
                         info,
@@ -4383,8 +4384,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   ),
                   const SizedBox(height: 4),
                   Wrap(
-                    spacing: 6.4,
-                    runSpacing: 6.4,
+                    spacing: 2.4,
+                    runSpacing: 2.4,
                     children: (() {
                       final sessionStudents = sessionMap[sessionId]!;
                       sessionStudents.sort(
@@ -4425,10 +4426,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
     bool highlighted = false,
     VoidCallback? onTap,
   }) {
-    final nameStyle = const TextStyle(
-        color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
-    final schoolStyle = const TextStyle(
-        color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
+    final brightness = Theme.of(context).brightness;
+    final panelStyle =
+        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final cardBg = panelStyle.groupedCardBackground;
+    final nameStyle = TextStyle(
+        color: panelStyle.title, fontSize: 16, fontWeight: FontWeight.w600);
+    final schoolStyle = TextStyle(
+        color: panelStyle.hint, fontSize: 13, fontWeight: FontWeight.w500);
     final schoolLabel =
         info.student.school.isNotEmpty ? info.student.school : '';
     // 주어진 override(요일/시간/SET 기준 색상)만 사용, 없으면 투명 처리해 다른 SET 색상 퍼짐을 방지
@@ -4442,7 +4447,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       decoration: BoxDecoration(
         color: selected
             ? const Color(0xFF33A373).withOpacity(0.18)
-            : const Color(0xFF15171C),
+            : cardBg,
         borderRadius: BorderRadius.circular(12),
         // ✅ border 폭(=1)을 항상 유지해 하이라이트 시에도 다른 카드들이 "밀리지" 않게 한다.
         border: Border.all(
@@ -4730,8 +4735,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 Padding(
                   padding: const EdgeInsets.only(left: 14),
                   child: Wrap(
-                    spacing: 6.4,
-                    runSpacing: 6.4,
+                    spacing: 2.4,
+                    runSpacing: 2.4,
                     children: [
                       // 보강 카드 먼저
                       ...makeupCards.map(

@@ -1,0 +1,3 @@
+-- placeholder: 이 버전은 다른 환경에서 원격 DB에 이미 적용됨.
+-- 로컬 파일이 없어 `supabase db push`가 막히는 것을 풀기 위한 빈 파일이다.
+-- (원격 migration history에 이미 존재하므로 이 파일의 내용은 실행되지 않는다)
