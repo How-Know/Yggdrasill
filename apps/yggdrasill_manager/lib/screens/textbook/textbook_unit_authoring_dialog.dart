@@ -150,7 +150,12 @@ class _TextbookUnitAuthoringDialogState
     'exercise': '연습문제',
   };
 
-  bool _wonriBodyChainRunning = false;
+  /// 개념원리 필수유형 본문 정답·풀이 추출 대기열.
+  ///
+  /// 영역 저장은 소단원별로 빠르게 연속 완료될 수 있다. 기존에는 첫 소단원의
+  /// 본문 체인이 실행 중이면 뒤 소단원 체인을 즉시 return 해 영구 누락시켰다.
+  /// 모든 요청을 이 tail 뒤에 연결해 소단원 순서대로 반드시 한 번씩 실행한다.
+  Future<void> _wonriBodyChainTail = Future<void>.value();
 
   bool _isWonriRowFocus(_SubFocus focus) =>
       _seriesKey == 'wonri' && focus.subKey.startsWith('W');
@@ -1352,6 +1357,8 @@ class _TextbookUnitAuthoringDialogState
             displayPage: outcome.result.displayPage,
             section: outcome.result.section,
             pageKind: outcome.result.pageKind,
+            conceptDrillHeaderVisible:
+                outcome.result.conceptDrillHeaderVisible,
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
@@ -1461,6 +1468,8 @@ class _TextbookUnitAuthoringDialogState
             displayPage: outcome.result.displayPage,
             section: outcome.result.section,
             pageKind: outcome.result.pageKind,
+            conceptDrillHeaderVisible:
+                outcome.result.conceptDrillHeaderVisible,
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
@@ -1503,14 +1512,23 @@ class _TextbookUnitAuthoringDialogState
   }
 
   void _applyScopeGuards(_SubFocus focus) {
-    // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
-    if (focus.subKey != 'A' || _seriesKey == 'wonri') return;
     final state = _ensureSubState(focus);
     if (state.pageResults.isEmpty) return;
-    final guarded = _guardBasicDrillRows(
-      state.pageResults,
-      startRawPage: _rawStartPageForFocus(focus),
-    );
+    late final List<_PageAnalysisRow> guarded;
+    if (_seriesKey == 'wonri') {
+      // 개념원리 일반 소단원은 정확한 "개념원리 익히기" 헤더가 처음
+      // 확인되기 전까지 전부 개념 페이지다. 연습문제 행은 STEP 구조라 제외.
+      final row = _wonriRowFor(focus);
+      if (row == null || row.isExercise) return;
+      guarded = _guardWonriRowsBeforeConceptDrillHeader(state.pageResults);
+    } else {
+      // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
+      if (focus.subKey != 'A') return;
+      guarded = _guardBasicDrillRows(
+        state.pageResults,
+        startRawPage: _rawStartPageForFocus(focus),
+      );
+    }
     if (_samePageRows(state.pageResults, guarded)) return;
     state.pageResults
       ..clear()
@@ -1527,6 +1545,43 @@ class _TextbookUnitAuthoringDialogState
       );
       return index < 0 || index >= row.items.length;
     });
+  }
+
+  /// 개념원리 일반 소단원의 최초 "개념원리 익히기" 인쇄 헤더 전 페이지를
+  /// 강제로 concept_page 로 만든다. VLM 이 개념 번호/예제 번호를 문항으로
+  /// 오인해도 이 경계를 통과하기 전에는 저장될 수 없다.
+  List<_PageAnalysisRow> _guardWonriRowsBeforeConceptDrillHeader(
+    List<_PageAnalysisRow> rows,
+  ) {
+    final successful = rows.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    int? firstHeaderPage;
+    for (final row in successful) {
+      if (row.conceptDrillHeaderVisible) {
+        firstHeaderPage = row.rawPage;
+        break;
+      }
+    }
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      final beforeHeader =
+          row.ok && (firstHeaderPage == null || row.rawPage < firstHeaderPage);
+      if (!beforeHeader) {
+        out.add(row);
+        continue;
+      }
+      if (row.items.isEmpty && row.pageKind == 'concept_page') {
+        out.add(row);
+        continue;
+      }
+      out.add(_rowWithGuardedItems(
+        row,
+        const <TextbookVlmItem>[],
+        row.items.length,
+        reason: 'wonri_before_concept_drill_header_filtered',
+      ));
+    }
+    return out;
   }
 
   int? _rawStartPageForFocus(_SubFocus focus) {
@@ -1634,6 +1689,7 @@ class _TextbookUnitAuthoringDialogState
         displayPage: row.displayPage,
         section: row.section,
         pageKind: 'concept_page',
+        conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
         notes: _appendGuardNote(notes, 'concept_page:auto_guarded'),
         items: const <TextbookVlmItem>[],
       );
@@ -1643,6 +1699,7 @@ class _TextbookUnitAuthoringDialogState
       displayPage: row.displayPage,
       section: row.section,
       pageKind: row.pageKind == 'concept_page' ? 'mixed' : row.pageKind,
+      conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
       notes: notes,
       items: kept,
     );
@@ -1996,7 +2053,7 @@ class _TextbookUnitAuthoringDialogState
           .where((r) => '${r['sub_key'] ?? ''}'.trim().toUpperCase() == 'B')
           .toList();
       if (typeRows.isNotEmpty) {
-        unawaited(_runWonriBodySolutionChain(focus, typeRows));
+        await _enqueueWonriBodySolutionChain(focus, typeRows);
       }
     } catch (e) {
       if (!mounted) return;
@@ -2011,11 +2068,27 @@ class _TextbookUnitAuthoringDialogState
   /// 개념원리 필수유형(B) 자동 체이닝 — 영역 저장 직후 본문 PDF의 "풀이"
   /// 단락에서 정답(굵은 글씨)과 풀이 좌표를 추출해 정답/해설 테이블에
   /// 저장한다 (source_kind='body'). 실패해도 영역 저장 자체는 유지된다.
+  Future<void> _enqueueWonriBodySolutionChain(
+    _SubFocus focus,
+    List<Map<String, dynamic>> typeRows,
+  ) {
+    final next = _wonriBodyChainTail.then(
+      (_) => _runWonriBodySolutionChain(focus, typeRows),
+    );
+    // 한 요청의 예외가 이후 대기 요청까지 끊지 않도록 tail 은 항상 정상화한다.
+    _wonriBodyChainTail = next.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('[wonri-body-chain] queued task failed: $error');
+      },
+    );
+    return next;
+  }
+
   Future<void> _runWonriBodySolutionChain(
     _SubFocus focus,
     List<Map<String, dynamic>> typeRows,
   ) async {
-    if (_wonriBodyChainRunning) return;
     final doc = await _ensurePdf();
     if (doc == null) return;
     final byPage = <int, List<Map<String, dynamic>>>{};
@@ -2029,7 +2102,6 @@ class _TextbookUnitAuthoringDialogState
 
     final state = _ensureSubState(focus);
     setState(() {
-      _wonriBodyChainRunning = true;
       state.phase = '필수유형 본문 정답·풀이 추출 중...';
     });
     final answers = <TextbookAnswerUpload>[];
@@ -2109,7 +2181,6 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       final failNote = failedPages > 0 ? ' · 실패 ${failedPages}p' : '';
       setState(() {
-        _wonriBodyChainRunning = false;
         state.phase =
             '필수유형 본문 추출 완료 · 정답 $answerCount · 풀이 $refCount$failNote';
       });
@@ -2118,7 +2189,6 @@ class _TextbookUnitAuthoringDialogState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _wonriBodyChainRunning = false;
         state.phase = '필수유형 본문 추출 실패';
         state.error = '$e';
       });
@@ -2449,7 +2519,11 @@ class _TextbookUnitAuthoringDialogState
         // 개념원리: 소단원 하나가 카테고리 스코프(A/C/D) 여러 개로 전개된다.
         // 필수유형(B)은 본문 체이닝으로 정답·풀이가 이미 저장돼 제외.
         for (final scope in _wonriStageScopesFor(focus)) {
-          final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}';
+          // A/C/D는 sub_key를 중단원 전체가 공유한다. 실제 소단원 행까지
+          // 포함해야 뒤 소단원의 정답·해설 범위가 중복으로 버려지지 않는다.
+          final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}/'
+              '${scope.unitRowIndex ?? -1}/'
+              '${scope.bodyStartPage ?? 0}-${scope.bodyEndPage ?? 0}';
           if (scopeKeys.add(key)) scopes.add(scope);
         }
       } else {
@@ -2511,6 +2585,9 @@ class _TextbookUnitAuthoringDialogState
     final solutionStart = _positiveInt(row.solutionStartCtrl.text);
     final answerEnd = _wonriNextRowStageStart(focus, answer: true);
     final solutionEnd = _wonriNextRowStageStart(focus, answer: false);
+    final rowIndex = _wonriRowIndex(focus);
+    final bodyStart = _positiveInt(row.startCtrl.text);
+    final bodyEnd = _positiveInt(row.endCtrl.text);
     return [
       for (final subKey in const ['A', 'C', 'D'])
         if (present.contains(subKey))
@@ -2521,6 +2598,9 @@ class _TextbookUnitAuthoringDialogState
             bigName: big.nameCtrl.text.trim(),
             midName: mid.nameCtrl.text.trim(),
             subName: '$rowName · ${_kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ?? subKey}',
+            unitRowIndex: rowIndex,
+            bodyStartPage: bodyStart,
+            bodyEndPage: bodyEnd,
             answerStartPage: answerStart,
             answerEndPage: answerEnd,
             solutionStartPage: solutionStart,
@@ -5348,6 +5428,7 @@ class _PageAnalysisRow {
     this.displayPage = 0,
     this.section = 'unknown',
     this.pageKind = 'unknown',
+    this.conceptDrillHeaderVisible = false,
     this.notes = '',
     List<TextbookVlmItem>? items,
   }) : items = items ?? const <TextbookVlmItem>[];
@@ -5357,6 +5438,7 @@ class _PageAnalysisRow {
     required int displayPage,
     required String section,
     required String pageKind,
+    bool conceptDrillHeaderVisible = false,
     required String notes,
     required List<TextbookVlmItem> items,
   }) {
@@ -5366,6 +5448,7 @@ class _PageAnalysisRow {
       displayPage: displayPage,
       section: section,
       pageKind: pageKind,
+      conceptDrillHeaderVisible: conceptDrillHeaderVisible,
       notes: notes,
       items: items,
     );
@@ -5391,6 +5474,7 @@ class _PageAnalysisRow {
   final int displayPage;
   final String section;
   final String pageKind;
+  final bool conceptDrillHeaderVisible;
   final String notes;
   final List<TextbookVlmItem> items;
 
@@ -5406,6 +5490,7 @@ class _PageAnalysisRow {
         lower.contains('basic_drill_candidate_filtered') ||
         lower.contains('basic_drill_sequence_filtered') ||
         lower.contains('basic_drill_start_page_filtered') ||
+        lower.contains('wonri_before_concept_drill_header_filtered') ||
         lower.contains('basic_drill_expected_start_missing') ||
         lower.contains('basic_drill_expected_start_mismatch');
   }

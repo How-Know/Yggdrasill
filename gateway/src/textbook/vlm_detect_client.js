@@ -258,6 +258,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   const out = {
     section: 'unknown',
     page_kind: 'unknown',
+    concept_drill_header_visible: false,
     page_layout: 'unknown',
     items: [],
     notes: '',
@@ -295,6 +296,10 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   )
     ? pageKind
     : 'unknown';
+  // 개념원리 일반 소단원의 개념→문항 경계 판정용. 모델이 정확한
+  // "개념원리 익히기" 인쇄 문구를 확인했다고 명시한 경우에만 true.
+  out.concept_drill_header_visible =
+    parsedJson.concept_drill_header_visible === true;
 
   if (
     out.page_kind === 'concept_page' ||

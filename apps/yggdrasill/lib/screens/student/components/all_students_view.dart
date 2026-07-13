@@ -30,6 +30,8 @@ import '../../../widgets/dialog_tokens.dart';
 import '../../../widgets/textbook_flow_link_action.dart';
 import '../../../app_overlays.dart';
 import '../../../theme/ygg_semantic_colors.dart';
+import '../../../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../../../widgets/solid_capsule_action_bar.dart';
 import 'student_promotion_dialog.dart';
 import 'student_notification_consent_dialog.dart';
 import 'package:uuid/uuid.dart';
@@ -925,13 +927,21 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           flex: 2,
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final brightness = Theme.of(context).brightness;
+              final panelStyle =
+                  FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+              final cardDecoration =
+                  PreviewAcademyGroupedFieldsCard.cardDecoration(
+                panelStyle,
+                brightness: brightness,
+              );
               return Container(
                 constraints: const BoxConstraints(
                   minWidth: 624,
                   maxWidth: 624,
                 ),
                 padding: const EdgeInsets.only(
-                    left: 34, right: 24, top: 24, bottom: 24),
+                    left: 34, right: 24, top: 12, bottom: 24),
                 decoration: BoxDecoration(
                   color: context.yggSurfaceBase,
                   borderRadius: BorderRadius.circular(16),
@@ -948,11 +958,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             minHeight: _studentHeaderHeight,
                           ),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 32, vertical: 19),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF223131),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                              horizontal: 24, vertical: 16),
+                          decoration: cardDecoration,
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -960,18 +967,18 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
-                                  const Icon(Icons.people_alt_outlined,
-                                      color: Colors.white70, size: 32),
-                                  const SizedBox(width: 16),
+                                  Icon(Icons.people_alt_outlined,
+                                      color: panelStyle.hint, size: 28),
+                                  const SizedBox(width: 14),
                                   Text(
                                     '학생 현황',
-                                    style: const TextStyle(
-                                      color: _studentListPrimaryTextColor,
-                                      fontSize: 32,
-                                      fontWeight: FontWeight.w600,
+                                    style: TextStyle(
+                                      color: panelStyle.title,
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                  const SizedBox(width: 15),
+                                  const SizedBox(width: 12),
                                   ValueListenableBuilder<int>(
                                     valueListenable: DataManager
                                         .instance.studentPausePeriodsRevision,
@@ -985,9 +992,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                           .length;
                                       return Text(
                                         ' $activeCount명',
-                                        style: const TextStyle(
-                                          color: _studentListMutedTextColor,
-                                          fontSize: 22,
+                                        style: TextStyle(
+                                          color: panelStyle.hint,
+                                          fontSize: 18,
                                         ),
                                       );
                                     },
@@ -1000,82 +1007,66 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 children: [
                                   Text(
                                     '업데이트 ${DateFormat('MM.dd').format(DateTime.now())}',
-                                    style: const TextStyle(
-                                      color: _studentListMutedTextColor,
-                                      fontSize: 16,
+                                    style: TextStyle(
+                                      color: panelStyle.hint,
+                                      fontSize: 14,
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
-                                  SizedBox(
-                                    width: 48,
-                                    height: 48,
-                                    child: IconButton(
-                                      tooltip: '학년 올리기',
-                                      onPressed: () {
-                                        showDialog<bool>(
-                                          context: context,
-                                          barrierDismissible: false,
-                                          builder: (context) =>
-                                              StudentPromotionDialog(
-                                            students:
-                                                DataManager.instance.students,
-                                          ),
-                                        );
-                                      },
-                                      icon: const Icon(Symbols.exposure_plus_1,
-                                          color: Colors.white70, size: 26),
-                                      splashRadius: 22,
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                          minWidth: 32, minHeight: 32),
+                                  const SizedBox(width: 8),
+                                  SolidCapsuleActionBar(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
                                     ),
-                                  ),
-                                  const SizedBox(width: 1.4),
-                                  SizedBox(
-                                    width: 48,
-                                    height: 48,
-                                    child: IconButton(
-                                      tooltip: '알람',
-                                      onPressed: () {
-                                        showDialog<void>(
-                                          context: context,
-                                          builder: (context) =>
-                                              const StudentNotificationConsentDialog(),
-                                        );
-                                      },
-                                      icon: const Icon(Symbols.notifications,
-                                          color: Colors.white70, size: 26),
-                                      style: IconButton.styleFrom(
-                                        overlayColor: Colors.transparent,
+                                    itemSpacing: 6,
+                                    children: [
+                                      SolidCapsuleActionButton(
+                                        tooltip: '학년 올리기',
+                                        icon: Symbols.exposure_plus_1,
+                                        iconSize: 22,
+                                        hitSize: 36,
+                                        onPressed: () {
+                                          showDialog<bool>(
+                                            context: context,
+                                            barrierDismissible: false,
+                                            builder: (context) =>
+                                                StudentPromotionDialog(
+                                              students: DataManager
+                                                  .instance.students,
+                                            ),
+                                          );
+                                        },
                                       ),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                          minWidth: 32, minHeight: 32),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 1.4),
-                                  SizedBox(
-                                    width: 48,
-                                    height: 48,
-                                    child: IconButton(
-                                      tooltip: '엑셀 내보내기(준비중)',
-                                      onPressed: () {
-                                        // TODO: 학생현황 엑셀 내보내기 기능 연결
-                                      },
-                                      icon: const Icon(Symbols.output,
-                                          color: Colors.white70, size: 26),
-                                      splashRadius: 22,
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                          minWidth: 32, minHeight: 32),
-                                    ),
+                                      SolidCapsuleActionButton(
+                                        tooltip: '알람',
+                                        icon: Symbols.notifications,
+                                        iconSize: 22,
+                                        hitSize: 36,
+                                        onPressed: () {
+                                          showDialog<void>(
+                                            context: context,
+                                            builder: (context) =>
+                                                const StudentNotificationConsentDialog(),
+                                          );
+                                        },
+                                      ),
+                                      SolidCapsuleActionButton(
+                                        tooltip: '엑셀 내보내기(준비중)',
+                                        icon: Symbols.output,
+                                        iconSize: 22,
+                                        hitSize: 36,
+                                        onPressed: () {
+                                          // TODO: 학생현황 엑셀 내보내기 기능 연결
+                                        },
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
                             ],
                           ),
                         ),
-                        const SizedBox(height: 27),
+                        const SizedBox(height: 20),
                         const SizedBox(height: 5),
                         Expanded(
                           child: GestureDetector(
@@ -1115,13 +1106,16 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           flex: 1,
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final brightness = Theme.of(context).brightness;
+              final panelStyle =
+                  FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
               return Container(
                 margin: const EdgeInsets.only(right: 10),
                 constraints: const BoxConstraints(
                   minWidth: 424,
                   maxWidth: 424,
                 ),
-                padding: const EdgeInsets.only(top: 24),
+                padding: const EdgeInsets.only(top: 12),
                 decoration: BoxDecoration(
                   color: context.yggSurfaceBase,
                   borderRadius: BorderRadius.circular(16),
@@ -1143,8 +1137,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 Padding(
                                   padding: const EdgeInsets.only(left: 12),
                                   child: SizedBox(
-                                    width: 32,
-                                    height: 32,
+                                    width: 36,
+                                    height: 36,
                                     child: IconButton(
                                       tooltip: '그룹 보기',
                                       onPressed: () => setState(() =>
@@ -1154,65 +1148,63 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                         _showGroupOverlay
                                             ? Icons.chevron_left
                                             : Icons.chevron_right,
-                                        color: _studentListPrimaryTextColor,
-                                        size: 32,
+                                        color: panelStyle.title,
+                                        size: 28,
                                       ),
                                       padding: EdgeInsets.zero,
                                       constraints:
                                           const BoxConstraints.tightFor(
-                                              width: 32, height: 32),
-                                      splashRadius: 16,
+                                              width: 36, height: 36),
+                                      splashRadius: 18,
                                       visualDensity: VisualDensity.compact,
                                     ),
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                const Icon(Icons.groups_rounded,
-                                    color: _studentListPrimaryTextColor,
-                                    size: 32),
+                                Icon(Icons.groups_rounded,
+                                    color: panelStyle.title, size: 28),
                                 const SizedBox(width: 12),
-                                const Text(
+                                Text(
                                   '그룹',
                                   style: TextStyle(
-                                    color: _studentListPrimaryTextColor,
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.w600,
+                                    color: panelStyle.title,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
                                 const Spacer(),
-                                SizedBox(
-                                  width: 32,
-                                  height: 32,
-                                  child: IconButton(
-                                    tooltip: '그룹 추가',
-                                    onPressed: () async {
-                                      final result =
-                                          await showDialog<GroupInfo>(
-                                        context: context,
-                                        builder: (context) =>
-                                            GroupRegistrationDialog(
-                                          onSave: (_) {},
-                                        ),
-                                      );
-                                      if (result != null) {
-                                        widget.onGroupAdded(result);
-                                      }
-                                    },
-                                    icon: const Icon(Icons.add_rounded,
-                                        size: 32,
-                                        color: _studentListPrimaryTextColor),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints.tightFor(
-                                        width: 32, height: 32),
-                                    splashRadius: 16,
-                                    visualDensity: VisualDensity.compact,
+                                SolidCapsuleActionBar(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
                                   ),
+                                  children: [
+                                    SolidCapsuleActionButton(
+                                      tooltip: '그룹 추가',
+                                      icon: Icons.add_rounded,
+                                      iconSize: 22,
+                                      hitSize: 36,
+                                      onPressed: () async {
+                                        final result =
+                                            await showDialog<GroupInfo>(
+                                          context: context,
+                                          builder: (context) =>
+                                              GroupRegistrationDialog(
+                                            onSave: (_) {},
+                                          ),
+                                        );
+                                        if (result != null) {
+                                          widget.onGroupAdded(result);
+                                        }
+                                      },
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
                           ),
                         ),
-                        const SizedBox(height: 27),
+                        const SizedBox(height: 20),
                         const SizedBox(height: 5),
                         Expanded(
                           flex: 3,
@@ -1388,16 +1380,21 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     final Color borderColor =
                         highlight ? groupInfo.color : Colors.transparent;
                     final Color indicatorColor = groupInfo.color;
+                    final panelStyle =
+                        FabTabBarTokens.previewAcademyPanelStyleFor(
+                      Theme.of(context).brightness,
+                    );
+                    final cardBg = panelStyle.groupedCardBackground;
 
                     // ✅ 수업카드(_ClassCard)와 동일한 "모양/사이즈/텍스트 높이 정렬"을 그룹에도 적용
-                    const titleStyle = TextStyle(
-                      color: _studentListPrimaryTextColor,
+                    final titleStyle = TextStyle(
+                      color: panelStyle.title,
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
                       height: 1.15,
                     );
-                    const descStyle = TextStyle(
-                      color: Colors.white70,
+                    final descStyle = TextStyle(
+                      color: panelStyle.hint,
                       fontSize: 14,
                       height: 1.15,
                     );
@@ -1415,7 +1412,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
                     final cardBody = Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF15171C),
+                        color: cardBg,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: borderColor, width: 2),
                       ),

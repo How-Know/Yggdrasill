@@ -12,6 +12,7 @@ import '../../services/homework_store.dart';
 import '../../services/homework_test_grading_result_service.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
+import '../../services/textbook_concept_units.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../models/education_level.dart';
@@ -1275,51 +1276,43 @@ class HomeworkQuickAddProxyDialogState
             .compareTo(_orderIndex(b['order_index'])));
         for (final m in mids) {
           final midOrder = _orderIndex(m['order_index']);
+          // 개념서(개념원리)면 sub_units(실제 소단원), 그 외면 smalls.
+          final isConcept = midHasSubUnits(m);
           final mid = _MidUnitSelectionNode(
             name: (m['name'] as String?)?.trim().isNotEmpty == true
                 ? (m['name'] as String).trim()
                 : '중단원',
             orderIndex: midOrder,
+            isConcept: isConcept,
           );
-          final smallsRaw = m['smalls'];
-          if (smallsRaw is List) {
-            final smalls = smallsRaw
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList();
-            smalls.sort((a, b) => _orderIndex(a['order_index'])
-                .compareTo(_orderIndex(b['order_index'])));
-            for (final s in smalls) {
-              final smallOrder = _orderIndex(s['order_index']);
-              final start = _toInt(s['start_page']);
-              final end = _toInt(s['end_page']);
-              final Map<int, int> pageCounts = <int, int>{};
-              final countsRaw = s['page_counts'];
-              if (countsRaw is Map) {
-                countsRaw.forEach((k, v) {
-                  final rawPage = _toInt(k);
-                  final c = _toInt(v);
-                  if (rawPage == null || c == null) return;
-                  pageCounts[rawPage] = (pageCounts[rawPage] ?? 0) + c;
-                });
-              }
-              mid.smalls.add(
-                _SmallUnitSelectionNode(
-                  name: (s['name'] as String?)?.trim().isNotEmpty == true
-                      ? (s['name'] as String).trim()
-                      : '소단원',
-                  orderIndex: smallOrder,
-                  subKey: _fallbackSubKey('${s['sub_key'] ?? ''}', smallOrder),
-                  startPage: start,
-                  endPage: end,
-                  pageCounts: pageCounts,
-                  locked: false,
-                  draftBlocked: false,
-                  finishedAt: null,
-                  completedCount: 0,
-                ),
-              );
+          for (final s in displaySubUnitsForMid(m)) {
+            final smallOrder = s.order;
+            final Map<int, int> pageCounts = <int, int>{};
+            final countsRaw = s.raw['page_counts'];
+            if (countsRaw is Map) {
+              countsRaw.forEach((k, v) {
+                final rawPage = _toInt(k);
+                final c = _toInt(v);
+                if (rawPage == null || c == null) return;
+                pageCounts[rawPage] = (pageCounts[rawPage] ?? 0) + c;
+              });
             }
+            mid.smalls.add(
+              _SmallUnitSelectionNode(
+                name: s.name,
+                orderIndex: smallOrder,
+                subKey: s.subKey.isNotEmpty
+                    ? s.subKey
+                    : _fallbackSubKey('', smallOrder),
+                startPage: s.startPage,
+                endPage: s.endPage,
+                pageCounts: pageCounts,
+                locked: false,
+                draftBlocked: false,
+                finishedAt: null,
+                completedCount: 0,
+              ),
+            );
           }
           big.middles.add(mid);
         }
@@ -1415,8 +1408,34 @@ class HomeworkQuickAddProxyDialogState
       final byPage = countsBySmall.putIfAbsent(key, () => <int, int>{});
       byPage[region.displayPage] = (byPage[region.displayPage] ?? 0) + 1;
     }
+    // 개념서는 중단원별 문항 페이지 카운트를 모아 소단원 페이지 범위로 배분.
+    final countsByMid = <String, Map<int, int>>{};
+    for (final region in regions) {
+      if (region.isSetHeader) continue;
+      final key = '${region.bigOrder}|${region.midOrder}';
+      final byPage = countsByMid.putIfAbsent(key, () => <int, int>{});
+      byPage[region.displayPage] = (byPage[region.displayPage] ?? 0) + 1;
+    }
     for (final big in units) {
       for (final mid in big.middles) {
+        if (mid.isConcept) {
+          final byPage =
+              countsByMid['${big.orderIndex}|${mid.orderIndex}'] ??
+                  const <int, int>{};
+          for (final entry in byPage.entries) {
+            final page = entry.key;
+            for (final small in mid.smalls) {
+              final start = small.startPage;
+              if (start == null) continue;
+              final end = small.endPage ?? start;
+              if (page >= start && page <= end) {
+                small.pageCounts[page] = entry.value;
+                break;
+              }
+            }
+          }
+          continue;
+        }
         for (final small in mid.smalls) {
           final byPage = countsBySmall[
               '${big.orderIndex}|${mid.orderIndex}|${small.subKey}'];
@@ -7875,11 +7894,19 @@ class _BigUnitSelectionNode {
 class _MidUnitSelectionNode {
   final String name;
   final int orderIndex;
+
+  /// 개념서(개념원리)면 true — 소단원은 sub_units 이고 문항 카운트는
+  /// sub_key 가 아니라 페이지 범위로 배분한다.
+  final bool isConcept;
   final List<_SmallUnitSelectionNode> smalls = <_SmallUnitSelectionNode>[];
   bool selected = false;
   bool explicitSelected = false;
 
-  _MidUnitSelectionNode({required this.name, required this.orderIndex});
+  _MidUnitSelectionNode({
+    required this.name,
+    required this.orderIndex,
+    this.isConcept = false,
+  });
 }
 
 class _SmallUnitSelectionNode {

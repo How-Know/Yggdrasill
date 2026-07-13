@@ -6219,6 +6219,8 @@ async function handleTextbookVlmDetectProblems(body, res) {
     content_group_fallback: usedFallbackPrompt,
     section: normalized.section,
     page_kind: normalized.page_kind,
+    concept_drill_header_visible:
+      normalized.concept_drill_header_visible === true,
     layout: normalized.page_layout,
     items: normalized.items,
     notes: normalized.notes,

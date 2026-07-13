@@ -144,6 +144,9 @@ class TextbookAuthoringStageScope {
     this.bigName = '',
     this.midName = '',
     this.subName = '',
+    this.unitRowIndex,
+    this.bodyStartPage,
+    this.bodyEndPage,
     this.answerStartPage,
     this.answerEndPage,
     this.solutionStartPage,
@@ -156,6 +159,12 @@ class TextbookAuthoringStageScope {
   final String bigName;
   final String midName;
   final String subName;
+
+  /// 개념원리의 실제 소단원 행 순번과 본문 표시 페이지 범위.
+  /// A/C/D는 DB sub_index가 0으로 공유되므로 이 범위로 문항을 소단원별 분리한다.
+  final int? unitRowIndex;
+  final int? bodyStartPage;
+  final int? bodyEndPage;
   final int? answerStartPage;
   final int? answerEndPage;
   final int? solutionStartPage;
@@ -384,8 +393,9 @@ class _TextbookAuthoringStageDialogState
             ),
           ];
     final out = <Map<String, dynamic>>[];
+    final seenIds = <String>{};
     for (final scope in scopes) {
-      final rows = await _supa
+      dynamic query = _supa
           .from('textbook_problem_crops')
           .select(select)
           .eq('academy_id', widget.academyId)
@@ -393,10 +403,21 @@ class _TextbookAuthoringStageDialogState
           .eq('grade_label', widget.gradeLabel)
           .eq('big_order', scope.bigOrder)
           .eq('mid_order', scope.midOrder)
-          .eq('sub_key', scope.subKey)
+          .eq('sub_key', scope.subKey);
+      // 개념원리 A/C/D는 sub_index=0을 중단원 전체가 공유하므로 실제
+      // 소단원의 본문 표시 페이지 범위로 크롭을 분리한다.
+      if (scope.bodyStartPage != null && scope.bodyStartPage! > 0) {
+        query = query.gte('display_page', scope.bodyStartPage!);
+      }
+      if (scope.bodyEndPage != null && scope.bodyEndPage! > 0) {
+        query = query.lte('display_page', scope.bodyEndPage!);
+      }
+      final rows = await query
           .order('raw_page', ascending: true)
           .order('problem_number', ascending: true);
       for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+        final id = '${row['id'] ?? ''}'.trim();
+        if (id.isNotEmpty && !seenIds.add(id)) continue;
         out.add(<String, dynamic>{
           ...row,
           'scope_label': _scopeLabel(scope),
@@ -2619,18 +2640,28 @@ class _TextbookAuthoringStageDialogState
     required bool answer,
     required int pageCount,
   }) {
+    final rangedScopes = _activeScopes.where((scope) {
+      final start =
+          answer ? scope.answerStartPage : scope.solutionStartPage;
+      return start != null && start > 0;
+    }).toList();
     final starts = <int>[
-      for (final scope in _activeScopes)
-        if ((answer ? scope.answerStartPage : scope.solutionStartPage) != null)
-          answer ? scope.answerStartPage! : scope.solutionStartPage!,
-    ].where((page) => page > 0).toList();
+      for (final scope in rangedScopes)
+        answer ? scope.answerStartPage! : scope.solutionStartPage!,
+    ];
     final ends = <int>[
-      for (final scope in _activeScopes)
+      for (final scope in rangedScopes)
         if ((answer ? scope.answerEndPage : scope.solutionEndPage) != null)
           answer ? scope.answerEndPage! : scope.solutionEndPage!,
     ].where((page) => page > 0).toList();
     final start = starts.isEmpty ? 1 : starts.reduce(math.min);
-    final end = ends.isEmpty ? pageCount : ends.reduce(math.max);
+    // 선택 범위의 마지막 소단원 뒤 시작 페이지가 아직 입력되지 않았으면
+    // 열린 범위다. 앞 소단원들의 end만으로 잘라 마지막 문항을 누락시키지
+    // 말고 PDF 끝까지 허용한다(모든 기대 번호를 찾으면 루프는 즉시 종료).
+    final hasOpenEndedScope = rangedScopes.any((scope) =>
+        (answer ? scope.answerEndPage : scope.solutionEndPage) == null);
+    final end =
+        ends.isEmpty || hasOpenEndedScope ? pageCount : ends.reduce(math.max);
     final clampedStart = start.clamp(1, pageCount);
     final clampedEnd = end.clamp(clampedStart, pageCount);
     return (start: clampedStart, end: clampedEnd);

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/data_manager.dart';
 import '../services/tenant_service.dart';
+import '../services/textbook_concept_units.dart';
 import '../services/textbook_pdf_service.dart';
 import 'dialog_tokens.dart';
 import 'latex_text_renderer.dart';
@@ -161,26 +162,16 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
                 : '중단원',
             orderIndex: _orderIndex(m['order_index']),
           );
-          final smallsRaw = m['smalls'];
-          if (smallsRaw is List) {
-            final smalls = smallsRaw
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList();
-            smalls.sort((a, b) => _orderIndex(a['order_index'])
-                .compareTo(_orderIndex(b['order_index'])));
-            for (final s in smalls) {
-              mid.smalls.add(
-                _SmallUnitNode(
-                  name: (s['name'] as String?)?.trim().isNotEmpty == true
-                      ? (s['name'] as String).trim()
-                      : '소단원',
-                  orderIndex: _orderIndex(s['order_index']),
-                  startPage: _toInt(s['start_page']),
-                  endPage: _toInt(s['end_page']),
-                ),
-              );
-            }
+          // 개념서(개념원리)면 sub_units(실제 소단원), 그 외면 smalls.
+          for (final s in displaySubUnitsForMid(m)) {
+            mid.smalls.add(
+              _SmallUnitNode(
+                name: s.name,
+                orderIndex: s.order,
+                startPage: s.startPage,
+                endPage: s.endPage,
+              ),
+            );
           }
           big.middles.add(mid);
         }

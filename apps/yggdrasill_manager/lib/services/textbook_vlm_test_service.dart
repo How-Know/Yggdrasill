@@ -260,6 +260,7 @@ class TextbookVlmDetectResult {
     required this.pageOffsetFound,
     required this.section,
     required this.pageKind,
+    required this.conceptDrillHeaderVisible,
     required this.layout,
     required this.items,
     required this.notes,
@@ -283,6 +284,10 @@ class TextbookVlmDetectResult {
   /// Concept-only A pages are intentionally returned with zero items so the
   /// UI can mark the page without persisting a fake problem region.
   final String pageKind;
+
+  /// 이 페이지에 정확한 인쇄 문구 "개념원리 익히기"가 실제로 보이는지.
+  /// 개념원리 일반 소단원에서 개념 페이지와 문항 시작 경계를 결정한다.
+  final bool conceptDrillHeaderVisible;
 
   /// 'two_column' | 'one_column' | 'unknown'
   final String layout;
@@ -344,6 +349,8 @@ class TextbookVlmDetectResult {
       pageOffsetFound: map['page_offset_found'] == true,
       section: section,
       pageKind: pageKind,
+      conceptDrillHeaderVisible:
+          map['concept_drill_header_visible'] == true,
       layout: '${map['layout'] ?? 'unknown'}',
       items: synthesis.items,
       notes: notes,

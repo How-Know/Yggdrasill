@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import '../../models/session_override.dart';
 import '../../models/attendance_record.dart';
@@ -19,13 +17,17 @@ import 'components/school_view.dart';
 import 'components/date_view.dart';
 import 'student_course_detail_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import '../../widgets/pill_tab_selector.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/solid_capsule_action_bar.dart';
+import '../../widgets/shared_dropdown_dialog.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../timetable/components/timetable_top_bar.dart';
 import 'components/tendency_webview.dart';
 import 'components/student_registration_status_dialog.dart';
+import 'components/student_action_fab_overlay.dart';
 // removed student_details_dialog
 import '../../models/payment_record.dart';
 import '../../models/student_time_block.dart';
@@ -37,10 +39,6 @@ import 'package:uuid/uuid.dart';
 import 'components/attendance_indicator.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../app_overlays.dart';
-
-const Color _studentPrimaryTextColor = Color(0xFFEAF2F2);
-const Color _studentMutedTextColor = Color(0xFFD0DDDD);
-const Color _studentAccentColor = Color(0xFF1B6B63);
 
 // 릴리즈 빌드에서 디버그 로그가 남지 않도록(assert 제거로 함께 제거)
 void _dlog(String message) {
@@ -64,15 +62,16 @@ class StudentScreenState extends State<StudentScreen> {
   final TextEditingController _searchController =
       ImeAwareTextEditingController();
   String _searchQuery = '';
-  // 학생 탭 상단: 검색 확장 상태
+  // 학생 탭: 검색 확장 상태 (하단 FAB)
   bool _isSearchExpanded = false;
   final FocusNode _searchFocusNode = FocusNode();
-  final GlobalKey _toolsDropdownAnchorKey = GlobalKey();
-  OverlayEntry? _toolsDropdownEntry;
-  bool _toolsDropdownOpen = false;
   final Set<GroupInfo> _expandedGroups = {};
   int _customTabIndex = 0;
   Map<String, Set<String>>? _activeFilter;
+
+  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
+      FabStyleScreenTabBarOverlay();
+  final StudentActionFabOverlay _actionFabOverlay = StudentActionFabOverlay();
 
   // 출석 관리 관련 상태 변수들
   StudentWithInfo? _selectedStudent;
@@ -132,9 +131,18 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncFabOverlays();
+    });
+  }
+
+  @override
   void dispose() {
+    _fabTabBarOverlay.dispose();
+    _actionFabOverlay.dispose();
     _searchFocusNode.dispose();
-    _removeToolsDropdown();
     _searchController.dispose();
     super.dispose();
   }
@@ -146,8 +154,85 @@ class StudentScreenState extends State<StudentScreen> {
     blockRightSideSheetOpen.value = isTendencyTab;
   }
 
+  void _onStudentTabSelected(int i) {
+    setState(() {
+      _customTabIndex = i;
+      if (i != 0) {
+        _isSearchExpanded = false;
+        _searchController.clear();
+        _searchQuery = '';
+      }
+    });
+    _syncMemoFloatingVisibility();
+    _syncFabOverlays();
+  }
+
+  void _syncFabOverlays() {
+    _fabTabBarOverlay.sync(
+      context,
+      selectedIndex: _customTabIndex,
+      tabs: const ['학생', '성향'],
+      onTabSelected: _onStudentTabSelected,
+    );
+    _actionFabOverlay.sync(
+      context,
+      visible: _customTabIndex == 0,
+      onAdd: showStudentRegistrationDialog,
+      onSearchToggle: _toggleSearchFab,
+      onSearchCancel: _collapseSearch,
+      searchExpanded: _isSearchExpanded,
+      hasSearchQuery: _searchQuery.isNotEmpty,
+      searchController: _searchController,
+      onSearchChanged: _onHeaderSearchChanged,
+      onSearchClear: _clearHeaderSearch,
+      searchFocusNode: _searchFocusNode,
+    );
+  }
+
+  void _toggleSearchFab() {
+    setState(() {
+      _isSearchExpanded = !_isSearchExpanded;
+      if (!_isSearchExpanded) {
+        _searchController.clear();
+        _searchQuery = '';
+      }
+    });
+    _syncFabOverlays();
+    if (_isSearchExpanded) {
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (mounted) _searchFocusNode.requestFocus();
+      });
+    } else {
+      FocusScope.of(context).unfocus();
+    }
+  }
+
+  void _collapseSearch() {
+    setState(() {
+      _isSearchExpanded = false;
+      _searchController.clear();
+      _searchQuery = '';
+    });
+    FocusScope.of(context).unfocus();
+    _syncFabOverlays();
+  }
+
+  void _onHeaderSearchChanged(String value) {
+    setState(() => _searchQuery = value);
+    _actionFabOverlay.markNeedsBuild();
+  }
+
+  void _clearHeaderSearch() {
+    setState(() {
+      _searchController.clear();
+      _searchQuery = '';
+    });
+    FocusScope.of(context).requestFocus(_searchFocusNode);
+    _actionFabOverlay.markNeedsBuild();
+  }
+
   List<StudentWithInfo> filterStudents(List<StudentWithInfo> students) {
-    if (!_isSearchExpanded || _searchQuery.isEmpty) return students;
+    if (_searchQuery.isEmpty) return students;
     return students
         .where((studentWithInfo) => studentWithInfo.student.name
             .toLowerCase()
@@ -164,340 +249,6 @@ class StudentScreenState extends State<StudentScreen> {
     Navigator.of(context).push(
       DarkPanelRoute(
         child: StudentCourseDetailScreen(studentWithInfo: studentWithInfo),
-      ),
-    );
-  }
-
-  Widget _buildSearchButton({double? maxExpandedWidth}) {
-    const double controlHeight = 48;
-    final double expandedWidth = maxExpandedWidth != null
-        ? math.max(controlHeight, maxExpandedWidth)
-        : 160;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
-      height: controlHeight,
-      width: _isSearchExpanded ? expandedWidth : controlHeight,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(controlHeight / 2),
-        border: Border.all(color: Colors.transparent),
-      ),
-      child: Row(
-        mainAxisAlignment: _isSearchExpanded
-            ? MainAxisAlignment.start
-            : MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          if (_isSearchExpanded) const SizedBox(width: 5),
-          Transform.translate(
-            offset: _isSearchExpanded ? Offset.zero : const Offset(1, 0),
-            child: IconButton(
-              visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-              padding: _isSearchExpanded
-                  ? const EdgeInsets.only(left: 8)
-                  : EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              icon: const Icon(Icons.search, color: Colors.white70, size: 22),
-              onPressed: () {
-                setState(() {
-                  _isSearchExpanded = !_isSearchExpanded;
-                });
-                if (_isSearchExpanded) {
-                  Future.delayed(const Duration(milliseconds: 50), () {
-                    _searchFocusNode.requestFocus();
-                  });
-                } else {
-                  setState(() {
-                    _searchController.clear();
-                    _searchQuery = '';
-                  });
-                  FocusScope.of(context).unfocus();
-                }
-              },
-            ),
-          ),
-          if (_isSearchExpanded) const SizedBox(width: 10),
-          if (_isSearchExpanded)
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: TextField(
-                  controller: _searchController,
-                  focusNode: _searchFocusNode,
-                  style: const TextStyle(
-                      color: _studentPrimaryTextColor, fontSize: 16.5),
-                  decoration: const InputDecoration(
-                    hintText: '검색',
-                    hintStyle: TextStyle(
-                        color: _studentMutedTextColor, fontSize: 16.5),
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  onChanged: (value) {
-                    setState(() {
-                      _searchQuery = value;
-                    });
-                  },
-                ),
-              ),
-            ),
-          if (_isSearchExpanded && _searchQuery.isNotEmpty)
-            IconButton(
-              visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-              padding: const EdgeInsets.only(right: 10),
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              tooltip: '지우기',
-              icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
-              onPressed: () {
-                setState(() {
-                  _searchController.clear();
-                  _searchQuery = '';
-                });
-                FocusScope.of(context).requestFocus(_searchFocusNode);
-              },
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFilterButton() {
-    const double controlHeight = 48;
-    final hasFilter = _activeFilter != null;
-    Future<void> openDialog() async {
-      final result = await showDialog<Map<String, Set<String>>>(
-        context: context,
-        builder: (context) => StudentFilterDialog(initialFilter: _activeFilter),
-      );
-      if (!mounted) return;
-      // ✅ result == null: 취소/필터 없음(초기화 포함) → 필터 해제
-      setState(() => _activeFilter = result);
-    }
-
-    // ✅ 모양은 예전 스타일(검색 버튼과 동일한 pill)로 롤백
-    return GestureDetector(
-      onTap: openDialog,
-      onLongPress:
-          hasFilter ? () => setState(() => _activeFilter = null) : null,
-      child: Container(
-        width: controlHeight,
-        height: controlHeight,
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(controlHeight / 2),
-          border: Border.all(color: Colors.transparent),
-        ),
-        child: Stack(
-          children: [
-            Center(
-              child: Icon(
-                hasFilter ? Icons.filter_alt : Icons.filter_alt_outlined,
-                color: hasFilter
-                    ? _studentPrimaryTextColor
-                    : _studentMutedTextColor,
-                size: 24,
-              ),
-            ),
-            if (hasFilter)
-              const Positioned(
-                top: 8,
-                right: 8,
-                child: SizedBox(
-                  width: 9,
-                  height: 9,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: _studentPrimaryTextColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToolsButton() {
-    const double controlHeight = 48;
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 150),
-      opacity: _toolsDropdownOpen ? 0 : 1,
-      child: IgnorePointer(
-        ignoring: _toolsDropdownOpen,
-        child: GestureDetector(
-          key: _toolsDropdownAnchorKey,
-          onTap: () {
-            if (_toolsDropdownOpen) {
-              _removeToolsDropdown();
-            } else {
-              _showToolsDropdown();
-            }
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: controlHeight,
-            height: controlHeight,
-            decoration: BoxDecoration(
-              color: const Color(0xFF2A2A2A),
-              borderRadius: BorderRadius.circular(controlHeight / 2),
-            ),
-            child: Icon(
-              Icons.menu,
-              color: _toolsDropdownOpen
-                  ? _studentPrimaryTextColor.withOpacity(0.8)
-                  : _studentPrimaryTextColor,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showToolsDropdown() {
-    final overlay = Overlay.of(context);
-    if (overlay == null) return;
-    final renderBox = _toolsDropdownAnchorKey.currentContext?.findRenderObject()
-        as RenderBox?;
-    if (renderBox == null) return;
-    final overlayBox = overlay.context.findRenderObject() as RenderBox;
-    final Offset origin = renderBox.localToGlobal(Offset.zero);
-    final Size buttonSize = renderBox.size;
-    const double menuWidth = 220;
-    const double menuHeight = 208;
-    double left = origin.dx + buttonSize.width - menuWidth;
-    const double dropdownTopOffset = 6;
-    double top = origin.dy - dropdownTopOffset;
-    left = left.clamp(8.0, overlayBox.size.width - menuWidth - 8);
-    top = top.clamp(8.0, overlayBox.size.height - menuHeight - 8);
-
-    _toolsDropdownEntry = OverlayEntry(
-      builder: (context) {
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _removeToolsDropdown,
-                child: const SizedBox.shrink(),
-              ),
-            ),
-            Positioned(
-              left: left,
-              top: top,
-              child: TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0.0, end: 1.0),
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                builder: (context, value, child) {
-                  return Transform.translate(
-                    offset: Offset(0, (1 - value) * -12),
-                    child: Opacity(
-                      opacity: value,
-                      child: child,
-                    ),
-                  );
-                },
-                child: _buildToolsDropdownPanel(),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-    overlay.insert(_toolsDropdownEntry!);
-    setState(() => _toolsDropdownOpen = true);
-  }
-
-  void _removeToolsDropdown() {
-    _toolsDropdownEntry?.remove();
-    _toolsDropdownEntry = null;
-    if (_toolsDropdownOpen) {
-      setState(() => _toolsDropdownOpen = false);
-    }
-  }
-
-  Widget _buildToolsDropdownPanel() {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        width: 220,
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF3A3F44)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.25),
-              blurRadius: 24,
-              offset: const Offset(0, 16),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildToolsMenuItem(
-              icon: Icons.dashboard_outlined,
-              label: '수강 현황',
-              onTap: () {
-                _removeToolsDropdown();
-                _openClassStatus();
-              },
-            ),
-            const Divider(height: 16, color: Color(0xFF3D4348)),
-            _buildToolsMenuItem(
-              icon: Icons.check_circle_outline,
-              label: '출석 현황',
-              onTap: () {
-                _removeToolsDropdown();
-                _openAttendanceStatus();
-              },
-            ),
-            const Divider(height: 16, color: Color(0xFF3D4348)),
-            _buildToolsMenuItem(
-              icon: Icons.how_to_reg_outlined,
-              label: '등록 현황',
-              onTap: () {
-                _removeToolsDropdown();
-                _openRegistrationStatusDialog();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToolsMenuItem({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
-        child: Row(
-          children: [
-            Icon(icon, color: _studentPrimaryTextColor, size: 22),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: _studentPrimaryTextColor,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -522,43 +273,6 @@ class StudentScreenState extends State<StudentScreen> {
     await showDialog<void>(
       context: context,
       builder: (_) => const StudentRegistrationStatusDialog(),
-    );
-  }
-
-  Widget _buildStudentAddSplitButton() {
-    // ✅ 시간메뉴 상단 "+ 추가" 버튼과 동일한 알약 스타일
-    const double controlHeight = 48;
-    const double mainButtonWidth = 130;
-    return SizedBox(
-      width: mainButtonWidth,
-      height: controlHeight,
-      child: Material(
-        color: _studentAccentColor,
-        borderRadius: BorderRadius.circular(controlHeight / 2),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(controlHeight / 2),
-          onTap: showStudentRegistrationDialog,
-          child: const Padding(
-            padding: EdgeInsets.only(right: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.max,
-              children: [
-                Icon(Icons.add, color: Colors.white, size: 20),
-                SizedBox(width: 8),
-                Text(
-                  '추가',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 
@@ -786,103 +500,48 @@ class StudentScreenState extends State<StudentScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+
     return Scaffold(
       backgroundColor: context.yggSurfaceBase,
       body: Column(
         children: [
-          const SizedBox(height: 0),
-          const SizedBox(height: 8),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              children: [
-                const SizedBox(height: 0),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 1,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 200),
-                          child: _customTabIndex == 0
-                              ? _buildStudentAddSplitButton()
-                              : const SizedBox.shrink(),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 2,
-                      child: Align(
-                        alignment: Alignment.center,
-                        child: PillTabSelector(
-                          selectedIndex: _customTabIndex,
-                          tabs: const ['학생', '성향'],
-                          onTabSelected: (i) {
-                            setState(() {
-                              _customTabIndex = i;
-                            });
-                            _syncMemoFloatingVisibility();
-                          },
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 1,
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: _customTabIndex == 0
-                            ? ConstrainedBox(
-                                constraints:
-                                    const BoxConstraints(maxWidth: 260),
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    const double controlHeight = 48;
-                                    const double spacing = 12;
-                                    final double reservedWidth =
-                                        (controlHeight * 2) + (spacing * 2);
-                                    final double availableForSearch =
-                                        (constraints.maxWidth - reservedWidth)
-                                            .clamp(controlHeight,
-                                                constraints.maxWidth);
-                                    return Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        _buildToolsButton(),
-                                        const SizedBox(width: spacing),
-                                        _buildFilterButton(),
-                                        const SizedBox(width: spacing),
-                                        _buildSearchButton(
-                                            maxExpandedWidth:
-                                                availableForSearch),
-                                      ],
-                                    );
-                                  },
-                                ),
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+            padding: EdgeInsets.fromLTRB(
+              24,
+              FabTabBarTokens.previewAcademyTopInset - 12,
+              24,
+              0,
+            ),
+            child: TimetableTopBar(
+              leading: Text(
+                '학생',
+                style: FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle),
+              ),
+              actionRow: _customTabIndex == 0
+                  ? _buildHeaderActionRow()
+                  : const SizedBox.shrink(),
             ),
           ),
-          const SizedBox(height: 1),
-          if (_customTabIndex == 0) const SizedBox(height: 20),
+          const SizedBox(height: 12),
           Expanded(
             child: Builder(
               builder: (context) {
                 if (_customTabIndex == 0) {
-                  return _buildAllStudentsView();
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom:
+                          FabTabBarTokens.fabStyleScreenTabBarBottomPadding - 28,
+                    ),
+                    child: _buildAllStudentsView(),
+                  );
                 } else {
                   // 성향 → 웹 설문 임베드
                   return Container(
                     margin: const EdgeInsets.only(right: 24),
                     decoration: BoxDecoration(
-                      // ✅ 학생 탭 기본 배경과 동일하게 맞춰
-                      // 탭바/상단바/웹 사이 "중복 디바이더"처럼 보이는 경계감을 줄인다.
                       color: context.yggSurfaceBase,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.transparent, width: 1),
@@ -898,6 +557,134 @@ class StudentScreenState extends State<StudentScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildHeaderActionRow() {
+    final hasFilter = _activeFilter != null;
+    final brightness = Theme.of(context).brightness;
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final hoverOverlay = brightness == Brightness.dark
+        ? FabTabBarTokens.previewAcademyMenuGlassHoverOverlayDark
+        : FabTabBarTokens.previewAcademyMenuGlassHoverOverlayLight;
+
+    return SolidCapsuleActionBar(
+      children: [
+        SharedDropdownDialog(
+          panelMaxWidth: 280,
+          alignPanelRightToCapsuleBar: true,
+          panelBuilder: (context, controller) {
+            return SharedDropdownDialogPanel(
+              title: '도구',
+              maxHeight: controller.maxHeight,
+              onClose: controller.close,
+              body: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SharedDropdownDialogMenuRow(
+                    selected: false,
+                    style: style,
+                    hoverOverlay: hoverOverlay,
+                    onTap: () {
+                      controller.close();
+                      _openClassStatus();
+                    },
+                    child: Row(
+                      children: [
+                        Icon(Icons.dashboard_outlined,
+                            size: 20, color: style.icon),
+                        const SizedBox(width: 10),
+                        Text(
+                          '수강 현황',
+                          style: FabTabBarTokens.previewMenuItemTextStyle(style)
+                              .copyWith(
+                            fontSize: SharedDropdownDialogPanel.contentFontSize,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SharedDropdownDialogMenuRow(
+                    selected: false,
+                    style: style,
+                    hoverOverlay: hoverOverlay,
+                    onTap: () {
+                      controller.close();
+                      _openAttendanceStatus();
+                    },
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline,
+                            size: 20, color: style.icon),
+                        const SizedBox(width: 10),
+                        Text(
+                          '출석 현황',
+                          style: FabTabBarTokens.previewMenuItemTextStyle(style)
+                              .copyWith(
+                            fontSize: SharedDropdownDialogPanel.contentFontSize,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SharedDropdownDialogMenuRow(
+                    selected: false,
+                    style: style,
+                    hoverOverlay: hoverOverlay,
+                    onTap: () {
+                      controller.close();
+                      _openRegistrationStatusDialog();
+                    },
+                    child: Row(
+                      children: [
+                        Icon(Icons.how_to_reg_outlined,
+                            size: 20, color: style.icon),
+                        const SizedBox(width: 10),
+                        Text(
+                          '등록 현황',
+                          style: FabTabBarTokens.previewMenuItemTextStyle(style)
+                              .copyWith(
+                            fontSize: SharedDropdownDialogPanel.contentFontSize,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+          childBuilder: (context, controller) => SolidCapsuleActionButton(
+            tooltip: '도구',
+            icon: Icons.menu_rounded,
+            selected: controller.isOpen,
+            onPressed: controller.toggle,
+          ),
+        ),
+        SolidCapsuleActionButton(
+          tooltip: hasFilter ? '필터 해제' : '필터',
+          icon: Icons.filter_list_rounded,
+          selected: hasFilter,
+          accentWhenSelected: true,
+          onPressed: () async {
+            if (hasFilter) {
+              setState(() => _activeFilter = null);
+              return;
+            }
+            final result = await showDialog<Map<String, Set<String>>>(
+              context: context,
+              builder: (context) =>
+                  StudentFilterDialog(initialFilter: _activeFilter),
+            );
+            if (!mounted) return;
+            setState(() => _activeFilter = result);
+          },
+        ),
+      ],
     );
   }
 

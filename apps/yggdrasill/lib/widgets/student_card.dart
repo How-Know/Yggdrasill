@@ -10,6 +10,7 @@ import '../services/data_manager.dart';
 import '../main.dart';
 import '../screens/student/student_profile_page.dart';
 import '../screens/student/student_course_detail_screen.dart';
+import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'dark_panel_route.dart';
 
 const Color _studentCardHighlight = Color(0xFF33A373);
@@ -230,11 +231,15 @@ class _StudentCardWithCheckboxDelayState
   @override
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final cardBg = panelStyle.groupedCardBackground;
     final cardCoreInner = Card(
-      color: const Color(0xFF15171C),
+      color: cardBg,
       margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
-      elevation: 6,
-      shadowColor: Colors.black.withOpacity(0.4),
+      elevation: 0,
+      shadowColor: Colors.transparent,
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10.0),
@@ -269,8 +274,8 @@ class _StudentCardWithCheckboxDelayState
                 child: Text(
                   student.name,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Color(0xFFEAF2F2),
+                  style: TextStyle(
+                    color: panelStyle.title,
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                   ),
@@ -287,7 +292,7 @@ class _StudentCardWithCheckboxDelayState
                     onChanged: widget.onCheckboxChanged,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(6)),
-                    side: BorderSide(color: Colors.grey.shade500, width: 1.2),
+                    side: BorderSide(color: panelStyle.hint, width: 1.2),
                     fillColor: MaterialStateProperty.resolveWith((states) =>
                         states.contains(MaterialState.selected)
                             ? Colors.blue.shade400

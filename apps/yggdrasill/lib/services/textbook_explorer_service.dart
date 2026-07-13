@@ -2,6 +2,7 @@ import '../screens/learning/models/problem_bank_export_models.dart';
 import 'data_manager.dart';
 import 'learning_problem_bank_service.dart';
 import 'tenant_service.dart';
+import 'textbook_concept_units.dart';
 
 /// 문항 응답 유형(객관식/주관식/서술형) 표시용.
 enum TbAnswerKind { objective, subjective, essay, unknown }
@@ -403,9 +404,12 @@ class TextbookExplorerService {
 
   List<TbExBigUnit> _buildUnits(dynamic payload, List<TbExItem> items) {
     final itemsByKey = <String, List<TbExItem>>{};
+    final itemsByMid = <String, List<TbExItem>>{};
     for (final item in items) {
       final key = '${item.bigOrder}|${item.midOrder}|${item.subKey}';
       itemsByKey.putIfAbsent(key, () => <TbExItem>[]).add(item);
+      final midKey = '${item.bigOrder}|${item.midOrder}';
+      itemsByMid.putIfAbsent(midKey, () => <TbExItem>[]).add(item);
     }
     for (final list in itemsByKey.values) {
       list.sort(_compareItems);
@@ -420,20 +424,59 @@ class TextbookExplorerService {
         final mids = <TbExMidUnit>[];
         for (final mid in big.mids) {
           final smalls = <TbExSmallUnit>[];
-          for (final small in mid.smalls) {
-            final key = '${big.order}|${mid.order}|${small.subKey}';
-            final list = itemsByKey[key] ?? const <TbExItem>[];
-            if (list.isEmpty) continue;
-            usedKeys.add(key);
-            smalls.add(
-              _buildSmall(
-                key,
-                small.name,
-                small.order,
-                list,
-                small.pageNumbers,
-              ),
-            );
+          if (mid.isConcept) {
+            // 개념서: 문항을 sub_key 가 아니라 소단원(sub_units) 페이지 범위로
+            // 매핑한다. 한 소단원에 개념원리 익히기/필수유형/확인 체크/연습문제
+            // 문항이 페이지 기준으로 모인다.
+            final midKey = '${big.order}|${mid.order}';
+            final midItems = itemsByMid[midKey] ?? const <TbExItem>[];
+            if (midItems.isNotEmpty) {
+              final buckets =
+                  List<List<TbExItem>>.generate(mid.smalls.length, (_) => []);
+              final ranges = mid.smalls
+                  .map((s) => _ConceptRange(s.startPage, s.endPage))
+                  .toList(growable: false);
+              for (final it in midItems) {
+                final page = it.displayPage ?? it.rawPage;
+                final idx = _conceptBucketForPage(ranges, page);
+                if (idx != null) buckets[idx].add(it);
+              }
+              for (var si = 0; si < mid.smalls.length; si += 1) {
+                final small = mid.smalls[si];
+                final list = buckets[si];
+                if (list.isEmpty) continue;
+                list.sort(_compareItems);
+                smalls.add(
+                  _buildSmall(
+                    '${big.order}|${mid.order}|${small.subKey}',
+                    small.name,
+                    small.order,
+                    list,
+                    small.pageNumbers,
+                  ),
+                );
+              }
+              // 이 중단원의 모든 sub_key 문항을 소비 처리(leftover 방지).
+              for (final entry in itemsByKey.keys) {
+                if (entry.startsWith('$midKey|')) usedKeys.add(entry);
+              }
+            }
+          } else {
+            for (final small in mid.smalls) {
+              final key = '${big.order}|${mid.order}|${small.subKey}';
+              final list = itemsByKey[key] ?? const <TbExItem>[];
+              if (list.isEmpty) continue;
+              usedKeys.add(key);
+              smalls.add(
+                _buildSmall(
+                  key,
+                  small.name,
+                  small.order,
+                  list,
+                  small.pageNumbers,
+                ),
+              );
+            }
           }
           if (smalls.isEmpty) continue;
           mids.add(
@@ -546,6 +589,19 @@ class TextbookExplorerService {
     }
   }
 
+  /// 페이지가 속한 소단원 버킷 인덱스. 겹치지 않는 범위 가정, 첫 매칭 반환.
+  int? _conceptBucketForPage(List<_ConceptRange> ranges, int page) {
+    if (page <= 0) return null;
+    for (var i = 0; i < ranges.length; i += 1) {
+      final r = ranges[i];
+      final start = r.start;
+      if (start == null) continue;
+      final end = r.end ?? start;
+      if (page >= start && page <= end) return i;
+    }
+    return null;
+  }
+
   int _compareItems(TbExItem a, TbExItem b) {
     final an = int.tryParse(a.problemNumber);
     final bn = int.tryParse(b.problemNumber);
@@ -574,30 +630,29 @@ class TextbookExplorerService {
           if (midMap.isEmpty) continue;
           final midOrder = _toInt(midMap['order_index']) ?? mi;
           final midName = '${midMap['name'] ?? ''}'.trim();
+          // 개념서면 sub_units(실제 소단원), 그 외면 smalls(A~D)를 소단원으로.
+          final isConcept = midHasSubUnits(midMap);
+          final display = displaySubUnitsForMid(midMap);
           final smalls = <_UnitMetaSmall>[];
-          final smallsRaw = midMap['smalls'];
-          if (smallsRaw is List) {
-            for (var si = 0; si < smallsRaw.length; si += 1) {
-              final smallMap = _asMap(smallsRaw[si]);
-              if (smallMap.isEmpty) continue;
-              final smallOrder = _toInt(smallMap['order_index']) ?? si;
-              final subKey = '${smallMap['sub_key'] ?? ''}'.trim();
-              final smallName = '${smallMap['name'] ?? ''}'.trim();
-              smalls.add(
-                _UnitMetaSmall(
-                  order: smallOrder,
-                  subKey: subKey,
-                  name: smallName.isEmpty ? '소단원' : smallName,
-                  pageNumbers: _metadataPagesForSmall(smallMap),
-                ),
-              );
-            }
+          for (var si = 0; si < display.length; si += 1) {
+            final d = display[si];
+            smalls.add(
+              _UnitMetaSmall(
+                order: d.order,
+                subKey: d.subKey,
+                name: d.name,
+                pageNumbers: _metadataPagesForSmall(d.raw),
+                startPage: d.startPage,
+                endPage: d.endPage,
+              ),
+            );
           }
           mids.add(
             _UnitMetaMid(
               order: midOrder,
               name: midName.isEmpty ? '중단원 ${midOrder + 1}' : midName,
               smalls: smalls,
+              isConcept: isConcept,
             ),
           );
         }
@@ -691,6 +746,12 @@ class TextbookExplorerService {
   }
 }
 
+class _ConceptRange {
+  _ConceptRange(this.start, this.end);
+  final int? start;
+  final int? end;
+}
+
 class _UnitMetaBig {
   _UnitMetaBig({required this.order, required this.name, required this.mids});
   final int order;
@@ -699,10 +760,19 @@ class _UnitMetaBig {
 }
 
 class _UnitMetaMid {
-  _UnitMetaMid({required this.order, required this.name, required this.smalls});
+  _UnitMetaMid({
+    required this.order,
+    required this.name,
+    required this.smalls,
+    this.isConcept = false,
+  });
   final int order;
   final String name;
   final List<_UnitMetaSmall> smalls;
+
+  /// 개념서(개념원리)면 true. 이 경우 소단원은 sub_units 이고 문항은
+  /// sub_key 가 아니라 페이지 범위로 소단원에 매핑한다.
+  final bool isConcept;
 }
 
 class _UnitMetaSmall {
@@ -711,9 +781,15 @@ class _UnitMetaSmall {
     required this.subKey,
     required this.name,
     required this.pageNumbers,
+    this.startPage,
+    this.endPage,
   });
   final int order;
   final String subKey;
   final String name;
   final Set<int> pageNumbers;
+
+  /// 개념서 소단원의 교과서 표시 페이지 범위(문항 매핑용).
+  final int? startPage;
+  final int? endPage;
 }

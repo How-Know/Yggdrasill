@@ -11,6 +11,7 @@ import '../../models/student_flow.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
+import '../../services/textbook_concept_units.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
@@ -627,20 +628,21 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           ),
         );
 
-        final smallsRaw = midMap['smalls'];
-        if (smallsRaw is! List) continue;
+        // 개념서(개념원리)면 sub_units(실제 소단원)를, 그 외면 smalls(A~D)를
+        // 소단원으로 쓴다. 개념서는 문항이 sub_key 가 아니라 페이지 범위로
+        // 소단원에 매핑되므로 sub_key 필터를 끈다.
+        final isConcept = midHasSubUnits(midMap);
+        final displaySmalls = displaySubUnitsForMid(midMap);
+        if (displaySmalls.isEmpty) continue;
         for (var smallIndex = 0;
-            smallIndex < smallsRaw.length;
+            smallIndex < displaySmalls.length;
             smallIndex += 1) {
-          final smallMap = _mapFromDynamic(smallsRaw[smallIndex]);
-          if (smallMap.isEmpty) continue;
-          final smallOrder =
-              _metadataOrderIndex(smallMap['order_index'], smallIndex);
-          final subKey = _fallbackPrivateMaterialSubKey(
-            '${smallMap['sub_key'] ?? ''}',
-            smallOrder,
-          );
-          final smallName = '${smallMap['name'] ?? ''}'.trim();
+          final d = displaySmalls[smallIndex];
+          final smallOrder = d.order;
+          final subKey = d.subKey.isNotEmpty
+              ? d.subKey
+              : _fallbackPrivateMaterialSubKey('', smallOrder);
+          final smallName = d.name;
           final small = mid.smalls.putIfAbsent(
             '$smallOrder|$subKey|$smallName',
             () => _PrivateMaterialSmallBuilder(
@@ -651,7 +653,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             ),
           );
 
-          final pages = _metadataPagesForSmall(smallMap);
+          final pages = _metadataPagesForSmall(d.raw);
           final visiblePages = pages
               .where((page) => questionsByPage.containsKey(page))
               .toList(growable: false)
@@ -664,6 +666,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     bigOrder: bigOrder,
                     midOrder: midOrder,
                     subKey: subKey,
+                    ignoreSubKey: isConcept,
                   ),
                 )
                 .toList(growable: false);
@@ -761,6 +764,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     required int bigOrder,
     required int midOrder,
     required String subKey,
+    bool ignoreSubKey = false,
   }) {
     final refSubKey = ref.subKey.trim();
     final hasScope =
@@ -768,6 +772,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (!hasScope) return true;
     if (ref.bigOrder != null && ref.bigOrder != bigOrder) return false;
     if (ref.midOrder != null && ref.midOrder != midOrder) return false;
+    // 개념서: 소단원이 sub_units 라 sub_key 대신 페이지 범위로 매핑한다.
+    if (ignoreSubKey) return true;
     if (refSubKey.isNotEmpty && refSubKey != subKey.trim()) return false;
     return true;
   }

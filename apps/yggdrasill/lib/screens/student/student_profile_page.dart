@@ -16,6 +16,7 @@ import '../../services/student_flow_store.dart';
 import '../../services/student_behavior_assignment_store.dart';
 import '../../services/learning_behavior_card_service.dart';
 import '../../services/tag_preset_service.dart';
+import '../../services/textbook_concept_units.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
 import '../../widgets/dialog_tokens.dart';
@@ -3329,23 +3330,12 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
       );
       for (final mid in mids) {
         final midOrder = _orderIndex(mid['order_index']);
-        final smallsRaw = mid['smalls'];
-        if (smallsRaw is! List) continue;
-        final smalls = smallsRaw
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
-        smalls.sort(
-          (a, b) => _orderIndex(a['order_index'])
-              .compareTo(_orderIndex(b['order_index'])),
-        );
-        for (final small in smalls) {
-          final smallOrder = _orderIndex(small['order_index']);
+        // 개념서(개념원리)면 sub_units(실제 소단원), 그 외면 smalls.
+        for (final d in displaySubUnitsForMid(mid)) {
+          final smallOrder = d.order;
           final pages = <int>{};
-          final start = _toInt(small['start_page']);
-          final end = _toInt(small['end_page']);
-          _addPageRange(pages, start, end);
-          final counts = small['page_counts'];
+          _addPageRange(pages, d.startPage, d.endPage);
+          final counts = d.raw['page_counts'];
           if (counts is Map) {
             for (final key in counts.keys) {
               final page = _toInt(key);
@@ -3863,30 +3853,16 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
             ? (midRaw['name'] as String).trim()
             : '중단원';
 
-        final smallsRaw = midRaw['smalls'];
-        final smallsList = smallsRaw is List
-            ? smallsRaw
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList()
-            : <Map<String, dynamic>>[];
-        smallsList.sort(
-          (a, b) => _orderIndex(a['order_index'])
-              .compareTo(_orderIndex(b['order_index'])),
-        );
-
+        // 개념서(개념원리)면 sub_units(실제 소단원), 그 외면 smalls.
         final smalls = <_ChecklistSmallNode>[];
-        for (final smallRaw in smallsList) {
-          final smallOrder = _orderIndex(smallRaw['order_index']);
-          final smallName =
-              (smallRaw['name'] as String?)?.trim().isNotEmpty == true
-                  ? (smallRaw['name'] as String).trim()
-                  : '소단원';
-          final startPage = _toInt(smallRaw['start_page']);
-          final endPage = _toInt(smallRaw['end_page']);
+        for (final d in displaySubUnitsForMid(midRaw)) {
+          final smallOrder = d.order;
+          final smallName = d.name;
+          final startPage = d.startPage;
+          final endPage = d.endPage;
           final pages = <int>{};
           _addPageRange(pages, startPage, endPage);
-          final pageCounts = smallRaw['page_counts'];
+          final pageCounts = d.raw['page_counts'];
           if (pageCounts is Map) {
             for (final key in pageCounts.keys) {
               final page = _toInt(key);
