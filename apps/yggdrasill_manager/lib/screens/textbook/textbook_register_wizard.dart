@@ -431,8 +431,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             longEdgePx: 1600,
           ));
           if (!mounted) return;
-          setState(() =>
-              _tocStatus = '목차 페이지 렌더링 중... ($page / $end)');
+          setState(() => _tocStatus = '목차 페이지 렌더링 중... ($page / $end)');
         }
         if (!mounted) return;
         setState(() => _tocStatus = 'VLM 목차 분석 중... (${images.length}페이지)');
@@ -441,8 +440,12 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           series: _seriesKey,
         );
         if (!mounted) return;
-        final applied =
-            _applyTocResult(result, tocPageOffset: range.pageOffset);
+        final applied = await _applyTocResult(
+          result,
+          document: doc,
+          tocPageOffset: range.pageOffset,
+        );
+        if (!mounted) return;
         setState(() {
           _tocParsing = false;
           _tocStatus = applied == null
@@ -450,6 +453,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
               : '목차 인식 완료 · 대단원 ${applied.$1}개 / 중단원 ${applied.$2}개 · '
                   '페이지 자동 입력됨(보정 ${range.pageOffset >= 0 ? '+' : ''}'
                   '${range.pageOffset}) — 시작/끝 페이지를 검토하세요'
+                  '${applied.$3}'
                   '${result.notes.isEmpty ? '' : ' · ${result.notes}'}';
         });
       } finally {
@@ -469,14 +473,52 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   /// 이름 정리(번호 제거, 카테고리 라벨 필터)와 페이지 자동 채움은
   /// [buildTocAutofillTree] (공용 로직) 가 처리하고, 여기서는 그 결과를
   /// 위저드의 편집 모델로 옮기기만 한다.
-  (int, int)? _applyTocResult(TextbookTocParseResult toc,
-      {int tocPageOffset = 0}) {
+  Future<(int, int, String)?> _applyTocResult(
+    TextbookTocParseResult toc, {
+    required PdfDocument document,
+    int tocPageOffset = 0,
+  }) async {
     final tree = buildTocAutofillTree(
       toc,
       subUnitRows: _seriesHasSubUnitRows,
       tocPageOffset: tocPageOffset,
+      lastRawPage: document.pages.length,
     );
     if (tree.isEmpty) return null;
+    var partStatus = '';
+    if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+      final report = await autofillProblemBookPartRanges(
+        tree,
+        classify: (rawPages) async {
+          final images = <TextbookRpmSectionImage>[];
+          for (final rawPage in rawPages) {
+            images.add(TextbookRpmSectionImage(
+              rawPage: rawPage,
+              bytes: await renderPdfPageToPng(
+                document: document,
+                pageNumber: rawPage,
+                longEdgePx: 1100,
+              ),
+            ));
+          }
+          final result = await _vlmService.classifyProblemBookSections(
+            images: images,
+            series: _seriesKey,
+          );
+          return result.pages;
+        },
+        onProgress: (message) {
+          if (mounted) setState(() => _tocStatus = message);
+        },
+      );
+      if (report.incompleteMids.isNotEmpty) {
+        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} 경계 미확인: '
+            '${report.incompleteMids.join(', ')}';
+      } else {
+        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} '
+            'A/B/C ${report.completedMids}개 중단원 자동 분리';
+      }
+    }
     final newBigs = <_BigUnitEdit>[];
     for (final big in tree) {
       final bigEdit = _BigUnitEdit();
@@ -485,13 +527,22 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         final midEdit = _MidUnitEdit(series: _series)..nameCtrl.text = mid.name;
         if (_seriesHasSubUnitRows) {
           for (final sub in mid.subUnits) {
-            final row = _SubUnitEdit(name: sub.name, isExercise: sub.isExercise);
+            final row =
+                _SubUnitEdit(name: sub.name, isExercise: sub.isExercise);
             if (sub.startPage != null) row.startCtrl.text = '${sub.startPage}';
             if (sub.endPage != null) row.endCtrl.text = '${sub.endPage}';
             midEdit.subUnits.add(row);
           }
           if (midEdit.subUnits.isEmpty) {
             midEdit.subUnits.add(_SubUnitEdit());
+          }
+        }
+        if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+          for (final sub in midEdit.subs) {
+            final range = mid.rpmPartRanges[sub.preset.key];
+            if (range == null) continue;
+            sub.startCtrl.text = '${range.startPage}';
+            sub.endCtrl.text = '${range.endPage}';
           }
         }
         bigEdit.middles.add(midEdit);
@@ -514,7 +565,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         ..clear()
         ..addAll(newBigs);
     });
-    return (newBigs.length, midCount);
+    return (newBigs.length, midCount, partStatus);
   }
 
   List<BigUnitInput> _buildBigUnitInputs() {
@@ -1315,19 +1366,17 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             Row(
               children: [
                 TextButton.icon(
-                  onPressed: () => setState(
-                      () => mid.subUnits.add(_SubUnitEdit())),
+                  onPressed: () =>
+                      setState(() => mid.subUnits.add(_SubUnitEdit())),
                   icon: const Icon(Icons.add, size: 14),
-                  label: const Text('소단원 추가',
-                      style: TextStyle(fontSize: 11)),
+                  label: const Text('소단원 추가', style: TextStyle(fontSize: 11)),
                 ),
                 // 연습문제는 소단원 사이사이에 여러 번 있을 수 있어 항상 노출.
                 TextButton.icon(
-                  onPressed: () => setState(() => mid.subUnits.add(
-                      _SubUnitEdit(name: '연습문제', isExercise: true))),
+                  onPressed: () => setState(() => mid.subUnits
+                      .add(_SubUnitEdit(name: '연습문제', isExercise: true))),
                   icon: const Icon(Icons.add_task, size: 14),
-                  label: const Text('연습문제 추가',
-                      style: TextStyle(fontSize: 11)),
+                  label: const Text('연습문제 추가', style: TextStyle(fontSize: 11)),
                 ),
               ],
             ),
@@ -2154,7 +2203,6 @@ class _SubUnitEdit {
     endCtrl.dispose();
   }
 }
-
 
 int? _positiveInt(String raw) {
   final t = raw.trim();

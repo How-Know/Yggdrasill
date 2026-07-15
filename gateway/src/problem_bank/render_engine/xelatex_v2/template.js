@@ -6892,6 +6892,108 @@ function estimateAssignmentSlotFillRatio(question) {
   return estimatedLines / 22;
 }
 
+// ─── 측정 기반(2-pass) 슬롯 배치 ───
+//
+// XeLaTeX 측정 패스(buildSlotMeasureDocumentLatex)가 문항별 실제 조판 높이(pt)를
+// 계산해 온 경우, 휴리스틱(estimateAssignmentSlotFillRatio) 대신 이 패커가
+// 페이지/컬럼 배치를 결정한다.
+//
+// 핵심 규칙 (사용자 요구):
+//   문항이 슬롯 안에 물리적으로 들어가더라도, 측정 높이가
+//   `fillRatio × 슬롯높이` 를 넘으면 "문항간 최소 간격 미확보" 로 보고
+//   그 슬롯에 배치하지 않는다 → 해당 문항이 컬럼을 독차지 (슬롯 1개 = 컬럼 전체).
+//
+//   슬롯 높이는 computePerSlotHeightExprs 와 동일한 비율(하단 절반 1.1배)로 계산.
+//   컬럼에 문항이 1개만 배치되면 최종 렌더에서 그 문항 슬롯 = 컬럼 전체 높이이므로
+//   fillRatio 를 초과한 문항도 겹침 없이 안전하게 담긴다.
+function chunkQuestionsByMeasuredHeights(
+  questions,
+  heightsPt,
+  {
+    slotsPerColumn = 2,
+    columnsPerPage = 2,
+    slotGapPt = 8,
+    fillRatio = 0.7,
+    // (pageNo: 1-based) => 그 페이지 컬럼 전체 높이(pt). 제목페이지는 더 작다.
+    columnHeightPtForPage,
+  } = {},
+) {
+  const list = Array.isArray(questions) ? questions : [];
+  const pages = [];
+  const pageColumnCounts = [];
+  let pageColumns = [];
+  let curCol = [];
+  let pageNo = 1;
+
+  const slotHeightPt = (H, pos) => {
+    const n = Math.max(1, slotsPerColumn);
+    if (n === 1) return H;
+    const lowerStart = Math.floor(n / 2);
+    const nums = Array.from({ length: n }, (_, k) => (k >= lowerStart ? 11 : 10));
+    const sum = nums.reduce((a, b) => a + b, 0);
+    const usable = H - (n - 1) * slotGapPt;
+    return usable * (nums[Math.min(Math.max(pos, 0), n - 1)] / sum);
+  };
+
+  const flushPage = () => {
+    if (pageColumns.length === 0) return;
+    const flat = [];
+    const counts = [];
+    for (const c of pageColumns) {
+      flat.push(...c);
+      counts.push(c.length);
+    }
+    pages.push(flat);
+    pageColumnCounts.push({
+      left: Math.max(1, counts[0] || 0),
+      right: Math.max(0, counts[1] || 0),
+    });
+    pageColumns = [];
+    pageNo += 1;
+  };
+  const closeColumn = () => {
+    if (curCol.length === 0) return;
+    pageColumns.push(curCol);
+    curCol = [];
+    if (pageColumns.length >= columnsPerPage) flushPage();
+  };
+  const columnHeight = () => {
+    const raw = Number(
+      typeof columnHeightPtForPage === 'function' ? columnHeightPtForPage(pageNo) : NaN,
+    );
+    return Number.isFinite(raw) && raw > 0 ? Math.max(120, raw) : 650;
+  };
+
+  for (let i = 0; i < list.length; i += 1) {
+    const q = list[i];
+    const rawH = Number(heightsPt?.[i]);
+    const H = columnHeight();
+    // 측정값이 없는 문항은 보수적으로 "컬럼 독차지" 취급.
+    const h = Number.isFinite(rawH) && rawH > 0 ? rawH : H;
+    const pos = curCol.length;
+    const fitsHere = pos < slotsPerColumn && h <= fillRatio * slotHeightPt(H, pos);
+    if (pos === 0) {
+      curCol.push(q);
+      // 첫 슬롯 기준조차 못 맞추면 컬럼 독차지로 즉시 마감.
+      if (!fitsHere || slotsPerColumn === 1) closeColumn();
+      continue;
+    }
+    if (fitsHere) {
+      curCol.push(q);
+      if (curCol.length >= slotsPerColumn) closeColumn();
+      continue;
+    }
+    // 현재 슬롯에 최소 간격 미확보 → 컬럼 마감 후 새 컬럼(다음 페이지일 수 있음)에서 재평가.
+    closeColumn();
+    const H2 = columnHeight();
+    curCol.push(q);
+    if (h > fillRatio * slotHeightPt(H2, 0) || slotsPerColumn === 1) closeColumn();
+  }
+  closeColumn();
+  flushPage();
+  return { pages, pageColumnCounts };
+}
+
 function chunkQuestionsForAssignmentGrid(questions) {
   const list = Array.isArray(questions) ? questions : [];
   const pages = [];
@@ -7931,6 +8033,72 @@ function parsePageColumnOverrides(raw) {
   return out;
 }
 
+// ─── 측정 패스 문서 생성 ───
+//
+// 본문 렌더와 동일한 preamble/폰트/컬럼폭 조건으로 각 visual block(문항·세트그룹)을
+// 조판해 실제 높이(\ht+\dp)를 `\jobname.hgt` 파일에 기록한다. 페이지는 생성하지 않는다.
+//
+// 기록 형식 (한 줄에 하나):
+//   COLW:<pt>pt        — 컬럼 폭 (참고용)
+//   NORMALH:<pt>pt     — 일반 페이지 \textheight
+//   TITLEH:<pt>pt      — 제목페이지 geometry 의 \textheight
+//   Q<i>:<ht>pt:<dp>pt — visualQList[i] 의 조판 높이/깊이
+function buildSlotMeasureDocumentLatex(visualQList, {
+  preamble,
+  paper,
+  isAssignmentProfile,
+  effectiveStemSizePt,
+  assignmentAboveNumberFontPt,
+  hideQuestionNumber,
+  questionNumberPlacement,
+  questionNumberFormat,
+  includeQuestionScore,
+  questionScoreByQuestionId,
+}) {
+  const parts = [preamble];
+  parts.push('\\begin{document}');
+  if (isAssignmentProfile) {
+    const leadPt = Math.max(effectiveStemSizePt * 1.18, effectiveStemSizePt + 1).toFixed(2);
+    parts.push(`\\fontsize{${effectiveStemSizePt.toFixed(2)}pt}{${leadPt}pt}\\selectfont`);
+  }
+  parts.push('\\raggedright');
+  parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
+  parts.push('\\newwrite\\YggSlotHgtOut');
+  parts.push('\\immediate\\openout\\YggSlotHgtOut=\\jobname.hgt');
+  parts.push('\\newbox\\YggSlotMeasureBox');
+  parts.push('\\immediate\\write\\YggSlotHgtOut{COLW:\\the\\dimexpr 0.4775\\linewidth-4pt\\relax}');
+  parts.push('\\immediate\\write\\YggSlotHgtOut{NORMALH:\\the\\textheight}');
+  // 제목페이지 geometry 의 textheight 도 측정 (buildDocumentTexSource 의 titleGeom 과 동일 값).
+  const titleTopMm = isAssignmentProfile ? '36.81mm' : '52.59mm';
+  const titleHeadSepPt = isAssignmentProfile ? '27.08pt' : '38.68pt';
+  const titleHMargin = isAssignmentProfile ? '11.34mm' : '14mm';
+  const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
+    + `,hmargin=${titleHMargin},top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
+  parts.push(`\\YggNewGeometryNoClear{${titleGeom}}`);
+  parts.push('\\immediate\\write\\YggSlotHgtOut{TITLEH:\\the\\textheight}');
+  parts.push('\\YggRestoreGeometryNoClear');
+  visualQList.forEach((q, i) => {
+    const body = renderOneQuestion(q, {
+      showQuestionNumber: !hideQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+      stemSizePt: effectiveStemSizePt,
+      aboveNumberFontPtOverride: assignmentAboveNumberFontPt,
+      includeQuestionScore,
+      questionScoreByQuestionId,
+      sectionLabel: null,
+      layoutColumns: 2,
+    });
+    parts.push('\\setbox\\YggSlotMeasureBox=\\hbox{\\begin{minipage}[t]{\\dimexpr 0.4775\\linewidth-4pt\\relax}');
+    parts.push(body);
+    parts.push('\\end{minipage}}');
+    parts.push(`\\immediate\\write\\YggSlotHgtOut{Q${i}:\\the\\ht\\YggSlotMeasureBox:\\the\\dp\\YggSlotMeasureBox}`);
+  });
+  parts.push('\\immediate\\closeout\\YggSlotHgtOut');
+  parts.push('\\end{document}');
+  return parts.join('\n');
+}
+
 export function buildDocumentTexSource(questions, options = {}) {
   const {
     paper = 'B4',
@@ -7983,6 +8151,11 @@ export function buildDocumentTexSource(questions, options = {}) {
     pairAnchorOffsets = null,
     pairAnchor2Pass = false,
     layoutMeta = null,
+    // 측정 패스 모드: 페이지를 만들지 않고 문항별 조판 높이만 .hgt 로 기록하는 문서 생성.
+    slotHeightMeasure = false,
+    // 측정 패스 결과. { heightsPt: number[], normalColumnHeightPt, titleColumnHeightPt, fillRatio }
+    //   있으면 mock/assignment 그리드 배치를 휴리스틱 대신 측정 높이 기반으로 결정한다.
+    measuredSlotPlan = null,
   } = options;
 
   const logoEnabled = includeAcademyLogo && !!academyLogoPath;
@@ -8074,6 +8247,23 @@ export function buildDocumentTexSource(questions, options = {}) {
     parts.push('\\end{document}');
     return parts.join('\n');
   }
+  // 측정 패스: visualQList(그룹핑/분할 반영 후) 를 최종 렌더와 동일한 조건으로 조판해
+  //   높이만 기록하는 문서를 반환. 최종 패스와 같은 입력이므로 visualQList 순서가 보장된다.
+  if (slotHeightMeasure) {
+    return buildSlotMeasureDocumentLatex(visualQList, {
+      preamble,
+      paper,
+      isAssignmentProfile,
+      effectiveStemSizePt,
+      assignmentAboveNumberFontPt,
+      hideQuestionNumber,
+      questionNumberPlacement,
+      questionNumberFormat,
+      includeQuestionScore,
+      questionScoreByQuestionId,
+    });
+  }
+
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
   const isMock = isMockExamProfile || isAssignmentProfile;
   const effectiveLayoutMeta = layoutMeta && typeof layoutMeta === 'object' ? layoutMeta : null;
@@ -8139,6 +8329,20 @@ export function buildDocumentTexSource(questions, options = {}) {
     const overrides = parsePageColumnOverrides(pageColumnQuestionCounts);
     const hasOverrides = Object.keys(overrides).length > 0;
 
+    // 측정 기반 배치 사용 가능 여부.
+    //   - 클라이언트 명시 배치(overrides)가 있으면 그것이 항상 우선.
+    //   - 측정 높이 배열 길이가 visualQList 와 일치해야 함 (측정/최종 패스 동일 입력 보장).
+    const measuredHeights = Array.isArray(measuredSlotPlan?.heightsPt)
+      ? measuredSlotPlan.heightsPt
+      : null;
+    const measuredNormalH = Number(measuredSlotPlan?.normalColumnHeightPt);
+    const canUseMeasuredPlan = !hasOverrides
+      && measuredHeights
+      && measuredHeights.length === visualQList.length
+      && Number.isFinite(measuredNormalH)
+      && measuredNormalH > 0
+      && leftSlots === rightSlots;
+
     let pages;
     let assignmentPageColumnCounts = null;
     if (hasOverrides) {
@@ -8151,6 +8355,47 @@ export function buildDocumentTexSource(questions, options = {}) {
         pages.push(visualQList.slice(cursor, cursor + perPage));
         cursor += perPage;
         pageNo += 1;
+      }
+    } else if (canUseMeasuredPlan) {
+      const measuredTitleH = Number(measuredSlotPlan?.titleColumnHeightPt);
+      const titleH = Number.isFinite(measuredTitleH) && measuredTitleH > 0
+        ? measuredTitleH
+        : measuredNormalH;
+      const fillRatio = (() => {
+        const raw = Number(measuredSlotPlan?.fillRatio);
+        if (!Number.isFinite(raw) || raw <= 0) return 0.7;
+        const norm = raw > 1 ? raw / 100 : raw;
+        return Math.min(0.95, Math.max(0.4, norm));
+      })();
+      // 페이지별 컬럼 높이: renderMockGridPageLatex 의 실제 계산식을 그대로 재현.
+      //   - 제목페이지     : titleGeom textheight - 8pt
+      //   - 첫 페이지(일반) : \pagegoal-\pagetotal-4pt ≈ textheight - 약간 → -6pt 보수 근사
+      //   - 일반 페이지    : textheight
+      const columnHeightPtForPage = (pageNo) => {
+        const th = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
+        if (th) return titleH - 8;
+        if (pageNo === 1) return measuredNormalH - 6;
+        return measuredNormalH;
+      };
+      const measuredPlanResult = chunkQuestionsByMeasuredHeights(
+        visualQList,
+        measuredHeights,
+        {
+          slotsPerColumn: Math.max(1, leftSlots),
+          columnsPerPage: 2,
+          slotGapPt: 8,
+          fillRatio,
+          columnHeightPtForPage,
+        },
+      );
+      pages = measuredPlanResult.pages;
+      assignmentPageColumnCounts = measuredPlanResult.pageColumnCounts;
+      if (effectiveLayoutMeta) {
+        effectiveLayoutMeta.slotPlacement = {
+          source: 'measured',
+          fillRatio,
+          pageColumnCounts: measuredPlanResult.pageColumnCounts,
+        };
       }
     } else if (isAssignmentProfile && qPerPage === 4) {
       const assignmentPlan = chunkQuestionsForAssignmentGrid(visualQList);

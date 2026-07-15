@@ -537,8 +537,7 @@ class _TextbookUnitAuthoringDialogState
         // 행이므로, raw_page 가 속한 소단원 행(W<idx>)으로 재매핑한다.
         if (_seriesKey == 'wonri') {
           final rawPage = int.tryParse('${row['raw_page'] ?? ''}');
-          final wonriKey =
-              _wonriRowSubKeyForPage(bigIndex, midIndex, rawPage);
+          final wonriKey = _wonriRowSubKeyForPage(bigIndex, midIndex, rawPage);
           if (wonriKey == null) continue;
           subKey = wonriKey;
         }
@@ -782,8 +781,7 @@ class _TextbookUnitAuthoringDialogState
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child:
-                  const Text('취소', style: TextStyle(color: Colors.white70)),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
@@ -821,7 +819,12 @@ class _TextbookUnitAuthoringDialogState
         series: _seriesKey,
       );
       if (!mounted) return;
-      final applied = _applyTocResult(result, tocPageOffset: range.pageOffset);
+      final applied = await _applyTocResult(
+        result,
+        document: doc,
+        tocPageOffset: range.pageOffset,
+      );
+      if (!mounted) return;
       setState(() {
         _tocParsing = false;
         _tocStatus = applied == null
@@ -829,6 +832,7 @@ class _TextbookUnitAuthoringDialogState
             : '목차 인식 완료 · 대단원 ${applied.$1}개 / 중단원 ${applied.$2}개 · '
                 '페이지 자동 입력됨(보정 ${range.pageOffset >= 0 ? '+' : ''}'
                 '${range.pageOffset}) — 검토 후 "단원 구조 저장"을 누르세요'
+                '${applied.$3}'
                 '${result.notes.isEmpty ? '' : ' · ${result.notes}'}';
       });
     } catch (e) {
@@ -846,16 +850,54 @@ class _TextbookUnitAuthoringDialogState
   /// 처리한다. 개념원리(wonri)는 소단원 행을 payload 용으로 보존하고,
   /// A~D 슬롯 페이지를 소단원 범위에서 유도해 입력칸까지 채운다
   /// (A/B/C = 일반 소단원 전체 범위, D = 연습문제 행 범위).
-  (int, int)? _applyTocResult(TextbookTocParseResult toc,
-      {int tocPageOffset = 0}) {
+  Future<(int, int, String)?> _applyTocResult(
+    TextbookTocParseResult toc, {
+    required PdfDocument document,
+    int tocPageOffset = 0,
+  }) async {
     final entry = _currentSeries();
     final isWonri = _seriesKey == 'wonri';
     final tree = buildTocAutofillTree(
       toc,
       subUnitRows: isWonri,
       tocPageOffset: tocPageOffset,
+      lastRawPage: document.pages.length,
     );
     if (tree.isEmpty) return null;
+    var partStatus = '';
+    if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+      final report = await autofillProblemBookPartRanges(
+        tree,
+        classify: (rawPages) async {
+          final images = <TextbookRpmSectionImage>[];
+          for (final rawPage in rawPages) {
+            images.add(TextbookRpmSectionImage(
+              rawPage: rawPage,
+              bytes: await renderPdfPageToPng(
+                document: document,
+                pageNumber: rawPage,
+                longEdgePx: 1100,
+              ),
+            ));
+          }
+          final result = await _vlmService.classifyProblemBookSections(
+            images: images,
+            series: _seriesKey,
+          );
+          return result.pages;
+        },
+        onProgress: (message) {
+          if (mounted) setState(() => _tocStatus = message);
+        },
+      );
+      if (report.incompleteMids.isNotEmpty) {
+        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} 경계 미확인: '
+            '${report.incompleteMids.join(', ')}';
+      } else {
+        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} '
+            'A/B/C ${report.completedMids}개 중단원 자동 분리';
+      }
+    }
     final newBigs = <_BigUnitEdit>[];
     for (final big in tree) {
       final bigEdit = _BigUnitEdit(bigName: big.name);
@@ -872,6 +914,14 @@ class _TextbookUnitAuthoringDialogState
             midEdit.subUnitRows.add(row);
           }
           _recalcWonriSlotPages(midEdit);
+        }
+        if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+          for (final slot in midEdit.subs) {
+            final range = mid.rpmPartRanges[slot.preset.key];
+            if (range == null) continue;
+            slot.startCtrl.text = '${range.startPage}';
+            slot.endCtrl.text = '${range.endPage}';
+          }
         }
         bigEdit.middles.add(midEdit);
       }
@@ -894,7 +944,7 @@ class _TextbookUnitAuthoringDialogState
       _focus = null;
       _selectedProblemKey = null;
     });
-    return (newBigs.length, midCount);
+    return (newBigs.length, midCount, partStatus);
   }
 
   Future<void> _saveTree() async {
@@ -933,8 +983,9 @@ class _TextbookUnitAuthoringDialogState
               : (start < exerciseStart ? start : exerciseStart);
         }
         if (end != null) {
-          exerciseEnd =
-              exerciseEnd == null ? end : (end > exerciseEnd ? end : exerciseEnd);
+          exerciseEnd = exerciseEnd == null
+              ? end
+              : (end > exerciseEnd ? end : exerciseEnd);
         }
       } else {
         if (start != null) {
@@ -1357,8 +1408,7 @@ class _TextbookUnitAuthoringDialogState
             displayPage: outcome.result.displayPage,
             section: outcome.result.section,
             pageKind: outcome.result.pageKind,
-            conceptDrillHeaderVisible:
-                outcome.result.conceptDrillHeaderVisible,
+            conceptDrillHeaderVisible: outcome.result.conceptDrillHeaderVisible,
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
@@ -1468,8 +1518,7 @@ class _TextbookUnitAuthoringDialogState
             displayPage: outcome.result.displayPage,
             section: outcome.result.section,
             pageKind: outcome.result.pageKind,
-            conceptDrillHeaderVisible:
-                outcome.result.conceptDrillHeaderVisible,
+            conceptDrillHeaderVisible: outcome.result.conceptDrillHeaderVisible,
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
@@ -1957,7 +2006,8 @@ class _TextbookUnitAuthoringDialogState
         var group = const _ResolvedContentGroup.none();
         if (category == 'type_example') {
           final rawGroup = _rawContentGroupForItem(vlm, subKey, category);
-          group = rawGroup.kind == 'type' ? rawGroup : (lastTypeGroup ?? rawGroup);
+          group =
+              rawGroup.kind == 'type' ? rawGroup : (lastTypeGroup ?? rawGroup);
           if (rawGroup.kind == 'type') lastTypeGroup = rawGroup;
         }
         // 필수유형(B)은 소단원마다 번호(01,02...)가 새로 시작한다. 소단원별
@@ -2181,8 +2231,7 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       final failNote = failedPages > 0 ? ' · 실패 ${failedPages}p' : '';
       setState(() {
-        state.phase =
-            '필수유형 본문 추출 완료 · 정답 $answerCount · 풀이 $refCount$failNote';
+        state.phase = '필수유형 본문 추출 완료 · 정답 $answerCount · 풀이 $refCount$failNote';
       });
       _toast('필수유형 본문 정답 $answerCount건 · 풀이 좌표 $refCount건 저장$failNote');
       unawaited(_loadStageStatuses());
@@ -2314,9 +2363,8 @@ class _TextbookUnitAuthoringDialogState
           seriesKey: _seriesKey,
           bigName: big.nameCtrl.text.trim(),
           midName: mid.nameCtrl.text.trim(),
-          subName:
-              _kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ??
-                  subKey,
+          subName: _kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ??
+              subKey,
           rawPageFrom: displayStart == null
               ? null
               : _rawPageForDisplayPage(displayStart),
@@ -2597,7 +2645,8 @@ class _TextbookUnitAuthoringDialogState
             subKey: subKey,
             bigName: big.nameCtrl.text.trim(),
             midName: mid.nameCtrl.text.trim(),
-            subName: '$rowName · ${_kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ?? subKey}',
+            subName:
+                '$rowName · ${_kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ?? subKey}',
             unitRowIndex: rowIndex,
             bodyStartPage: bodyStart,
             bodyEndPage: bodyEnd,
@@ -3006,8 +3055,7 @@ class _TextbookUnitAuthoringDialogState
                 Expanded(child: _buildSeriesDropdown()),
                 const SizedBox(width: 8),
                 Tooltip(
-                  message:
-                      '본문 PDF의 목차(차례) 페이지를 VLM 으로 읽어 단원 이름과 '
+                  message: '본문 PDF의 목차(차례) 페이지를 VLM 으로 읽어 단원 이름과 '
                       '페이지 범위를 자동으로 채웁니다.\n적용 후 "단원 구조 저장"을 '
                       '눌러야 반영됩니다.',
                   child: OutlinedButton.icon(
@@ -3270,17 +3318,16 @@ class _TextbookUnitAuthoringDialogState
             Row(
               children: [
                 TextButton.icon(
-                  onPressed: () => setState(
-                      () => mid.subUnitRows.add(_SubUnitRowEdit())),
+                  onPressed: () =>
+                      setState(() => mid.subUnitRows.add(_SubUnitRowEdit())),
                   icon: const Icon(Icons.add, size: 13, color: _kTextSub),
                   label: const Text('소단원 추가',
                       style: TextStyle(color: _kTextSub, fontSize: 10)),
                 ),
                 TextButton.icon(
-                  onPressed: () => setState(() => mid.subUnitRows.add(
-                      _SubUnitRowEdit(name: '연습문제', isExercise: true))),
-                  icon:
-                      const Icon(Icons.add_task, size: 13, color: _kTextSub),
+                  onPressed: () => setState(() => mid.subUnitRows
+                      .add(_SubUnitRowEdit(name: '연습문제', isExercise: true))),
+                  icon: const Icon(Icons.add_task, size: 13, color: _kTextSub),
                   label: const Text('연습문제 추가',
                       style: TextStyle(color: _kTextSub, fontSize: 10)),
                 ),
@@ -4841,7 +4888,8 @@ class _RegionBox extends StatelessWidget {
 }
 
 class _NumberBadge extends StatelessWidget {
-  const _NumberBadge({required this.rect, required this.item, this.labelOverride});
+  const _NumberBadge(
+      {required this.rect, required this.item, this.labelOverride});
   final Rect rect;
   final TextbookVlmItem item;
 
@@ -4861,8 +4909,7 @@ class _NumberBadge extends StatelessWidget {
     final groupText = groupLabel.isEmpty
         ? groupTitle
         : (groupTitle.isEmpty ? groupLabel : '$groupLabel $groupTitle');
-    final text =
-        groupText.isEmpty ? numberLabel : '$groupText · $numberLabel';
+    final text = groupText.isEmpty ? numberLabel : '$groupText · $numberLabel';
     return Positioned(
       left: rect.left,
       top: rect.top,

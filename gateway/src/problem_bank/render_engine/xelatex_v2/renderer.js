@@ -725,6 +725,38 @@ export async function renderAnswerWithXeLatex({
 
 // --- Full document -> PDF buffer ---
 
+// 측정 패스가 남긴 `measure.hgt` 를 파싱한다.
+//   Q<i>:<ht>pt:<dp>pt / NORMALH:<pt>pt / TITLEH:<pt>pt / COLW:<pt>pt
+// 반환: { heightsPt, normalColumnHeightPt, titleColumnHeightPt, columnWidthPt } | null
+function parseSlotMeasureFile(hgtPath) {
+  if (!fs.existsSync(hgtPath)) return null;
+  const text = fs.readFileSync(hgtPath, 'utf-8');
+  const heightsPt = [];
+  let normalH = null;
+  let titleH = null;
+  let colW = null;
+  for (const line of text.split(/\r?\n/)) {
+    let m = line.match(/^Q(\d+):(-?[\d.]+)pt:(-?[\d.]+)pt/);
+    if (m) {
+      heightsPt[Number(m[1])] = Number(m[2]) + Number(m[3]);
+      continue;
+    }
+    m = line.match(/^NORMALH:(-?[\d.]+)pt/);
+    if (m) { normalH = Number(m[1]); continue; }
+    m = line.match(/^TITLEH:(-?[\d.]+)pt/);
+    if (m) { titleH = Number(m[1]); continue; }
+    m = line.match(/^COLW:(-?[\d.]+)pt/);
+    if (m) { colW = Number(m[1]); continue; }
+  }
+  if (heightsPt.length === 0 || !Number.isFinite(normalH) || normalH <= 0) return null;
+  return {
+    heightsPt,
+    normalColumnHeightPt: normalH,
+    titleColumnHeightPt: Number.isFinite(titleH) && titleH > 0 ? titleH : normalH,
+    columnWidthPt: Number.isFinite(colW) ? colW : null,
+  };
+}
+
 export async function renderPdfWithXeLatex({
   questions,
   renderConfig,
@@ -847,6 +879,56 @@ export async function renderPdfWithXeLatex({
       ...extra,
     });
 
+    // ─── 슬롯 높이 측정 패스 (2-pass 자동 배치) ───
+    //
+    // 문항별 실제 조판 높이를 XeLaTeX 로 측정한 뒤, 그 값으로 페이지/컬럼 배치를
+    // 결정한다 (fillRatio 초과 시 컬럼 독차지 → 문항간 최소 간격 보장).
+    //   - 클라이언트가 pageColumnQuestionCounts 를 명시하면 측정 생략 (수동 배치 우선).
+    //   - 실패 시 기존 휴리스틱 배치로 자동 폴백.
+    const slotMeasureDisabled =
+      process.env.PB_DISABLE_SLOT_MEASURE_2PASS === '1' ||
+      renderConfig?.disableSlotMeasure2Pass === true ||
+      renderConfig?.slotMeasure2Pass === false;
+    const clientColumnCounts = renderConfig?.pageColumnQuestionCounts;
+    const hasClientColumnCounts =
+      Array.isArray(clientColumnCounts) && clientColumnCounts.length > 0;
+    const shouldMeasureSlots =
+      !slotMeasureDisabled &&
+      isMockProfile &&
+      cols >= 2 &&
+      !hasClientColumnCounts &&
+      renderConfig?.reviewPdf !== true &&
+      renderConfig?.review_pdf !== true;
+
+    if (shouldMeasureSlots) {
+      try {
+        const measureTexPath = path.join(workDir, 'measure.tex');
+        const measureTex = buildTex({ slotHeightMeasure: true });
+        fs.writeFileSync(measureTexPath, measureTex, 'utf-8');
+        await runXeLatex(measureTexPath, workDir);
+        const parsed = parseSlotMeasureFile(path.join(workDir, 'measure.hgt'));
+        if (parsed && parsed.heightsPt.length > 0) {
+          const rawRatio = Number(renderConfig?.slotFillRatio);
+          baseBuildOptions.measuredSlotPlan = {
+            ...parsed,
+            fillRatio: Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : 0.7,
+          };
+          console.log('[pb-xelatex-doc] slot measure ok', {
+            questions: parsed.heightsPt.filter((h) => Number.isFinite(h)).length,
+            normalColumnHeightPt: parsed.normalColumnHeightPt,
+            titleColumnHeightPt: parsed.titleColumnHeightPt,
+          });
+        } else {
+          console.warn('[pb-xelatex-doc] slot measure produced no heights, using heuristic');
+        }
+      } catch (err) {
+        console.warn(
+          '[pb-xelatex-doc] slot measure failed, falling back to heuristic:',
+          err?.message || err,
+        );
+      }
+    }
+
     const pairAnchor2PassDisabled =
       process.env.PB_DISABLE_PAIR_ANCHOR_2PASS === '1' ||
       renderConfig?.disablePairAnchor2Pass === true ||
@@ -951,7 +1033,15 @@ export async function renderPdfWithXeLatex({
       },
       titlePageIndices: titlePageIndices.length > 0 ? titlePageIndices : [1],
       titlePageHeaders,
-      pageColumnQuestionCounts: [],
+      // 측정 기반 자동 배치가 적용된 경우 최종 페이지/컬럼 배치를 노출.
+      pageColumnQuestionCounts: Array.isArray(layoutMeta?.slotPlacement?.pageColumnCounts)
+        ? layoutMeta.slotPlacement.pageColumnCounts.map((one, idx) => ({
+            page: idx + 1,
+            left: one.left,
+            right: one.right,
+          }))
+        : [],
+      slotPlacement: layoutMeta?.slotPlacement || null,
       exportQuestions: questions || [],
       // V2 파이프라인이 자기 자신을 V2 라고 보고. 클라이언트(Flutter) 가 응답의
       //   mathEngine 과 요청 mathEngine 을 비교해 mismatch 시 미리보기를 차단하기 때문에

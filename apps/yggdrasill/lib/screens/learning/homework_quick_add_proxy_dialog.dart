@@ -11,13 +11,17 @@ import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
 import '../../services/homework_test_grading_result_service.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/student_textbook_active_store.dart';
 import '../../services/tenant_service.dart';
 import '../../services/textbook_concept_units.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/latex_text_renderer.dart';
+import '../../widgets/utility_glass_dialog_shell.dart';
 import '../../models/education_level.dart';
+import '../../models/student.dart';
 import '../../models/student_flow.dart';
 import '../../utils/naesin_exam_context.dart';
+import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
@@ -75,6 +79,7 @@ class HomeworkQuickAddProxyDialogState
   String _rangePickerMode = 'page';
   List<_LinkedTextbook> _linkedTextbooks = const <_LinkedTextbook>[];
   List<_LinkedTextbook> _allLinkedTextbooks = const <_LinkedTextbook>[];
+  Map<String, bool> _textbookActiveOverrides = const <String, bool>{};
   String? _selectedLinkedBookKey;
   List<_BigUnitSelectionNode> _units = const <_BigUnitSelectionNode>[];
   List<_TextbookProblemRegion> _problemRegions =
@@ -275,6 +280,7 @@ class HomeworkQuickAddProxyDialogState
     }
     _initNaesinFilterDefaults();
     unawaited(_loadNaesinLinkedCellKeys());
+    unawaited(_loadTextbookActiveOverrides());
     unawaited(_loadAllFlowLinkedBooks());
     _handleFlowChanged(
       preferredLinkedBookKey:
@@ -1032,6 +1038,73 @@ class HomeworkQuickAddProxyDialogState
     return links;
   }
 
+  Future<void> _loadTextbookActiveOverrides() async {
+    try {
+      final values = await StudentTextbookActiveStore.instance
+          .loadForStudent(widget.studentId);
+      if (!mounted) return;
+      setState(() => _textbookActiveOverrides = values);
+    } catch (_) {
+      // 마이그레이션 적용 전에도 현재 과정 기반 기본값으로 동작한다.
+    }
+  }
+
+  int _flowOrder(String flowId) {
+    for (final flow in widget.flows) {
+      if (flow.id == flowId) return flow.orderIndex;
+    }
+    return 1 << 20;
+  }
+
+  Student? get _student {
+    for (final entry in DataManager.instance.students) {
+      if (entry.student.id == widget.studentId) return entry.student;
+    }
+    return null;
+  }
+
+  int? _gradeOrdinalFromLabel(String raw) {
+    final label = raw.replaceAll(' ', '');
+    final student = _student;
+    final match = RegExp(r'([1-6])').firstMatch(label);
+    final grade = int.tryParse(match?.group(1) ?? '');
+    if (grade == null) return null;
+    if (label.contains('초')) return grade;
+    if (label.contains('중')) return 6 + grade;
+    if (label.contains('고') ||
+        label.contains('공통수학') ||
+        label.contains('수학I') ||
+        label.contains('수학Ⅱ')) {
+      return 9 + grade.clamp(1, 3);
+    }
+    if (student == null) return null;
+    return switch (student.educationLevel) {
+      EducationLevel.elementary => grade,
+      EducationLevel.middle => 6 + grade.clamp(1, 3),
+      EducationLevel.high => 9 + grade.clamp(1, 3),
+    };
+  }
+
+  int? get _studentGradeOrdinal {
+    final student = _student;
+    if (student == null) return null;
+    return switch (student.educationLevel) {
+      EducationLevel.elementary => student.grade,
+      EducationLevel.middle => 6 + student.grade,
+      EducationLevel.high => 9 + student.grade.clamp(1, 3),
+    };
+  }
+
+  bool _defaultTextbookActive(_LinkedTextbook link) {
+    final bookOrdinal = _gradeOrdinalFromLabel(link.gradeLabel);
+    final studentOrdinal = _studentGradeOrdinal;
+    if (bookOrdinal == null || studentOrdinal == null) return true;
+    return bookOrdinal >= studentOrdinal;
+  }
+
+  bool _isTextbookActive(_LinkedTextbook link) =>
+      _textbookActiveOverrides[link.key] ?? _defaultTextbookActive(link);
+
   Future<void> _loadAllFlowLinkedBooks() async {
     if (!mounted) return;
     setState(() => _loadingAllFlowTextbooks = true);
@@ -1049,7 +1122,13 @@ class HomeworkQuickAddProxyDialogState
       }
       if (!mounted) return;
       out.sort((a, b) {
-        final byFlow = a.flowName.compareTo(b.flowName);
+        final aGrade = _gradeOrdinalFromLabel(a.gradeLabel) ?? (1 << 20);
+        final bGrade = _gradeOrdinalFromLabel(b.gradeLabel) ?? (1 << 20);
+        final byGrade = aGrade.compareTo(bGrade);
+        if (byGrade != 0) return byGrade;
+        final byLabel = a.gradeLabel.compareTo(b.gradeLabel);
+        if (byLabel != 0) return byLabel;
+        final byFlow = _flowOrder(a.flowId).compareTo(_flowOrder(b.flowId));
         if (byFlow != 0) return byFlow;
         if (a.orderIndex != b.orderIndex)
           return a.orderIndex.compareTo(b.orderIndex);
@@ -1419,9 +1498,8 @@ class HomeworkQuickAddProxyDialogState
     for (final big in units) {
       for (final mid in big.middles) {
         if (mid.isConcept) {
-          final byPage =
-              countsByMid['${big.orderIndex}|${mid.orderIndex}'] ??
-                  const <int, int>{};
+          final byPage = countsByMid['${big.orderIndex}|${mid.orderIndex}'] ??
+              const <int, int>{};
           for (final entry in byPage.entries) {
             final page = entry.key;
             for (final small in mid.smalls) {
@@ -6702,6 +6780,139 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Future<void> _showActiveTextbooksDialog() async {
+    final groups = <String, List<_LinkedTextbook>>{};
+    for (final link in _allLinkedTextbooks) {
+      groups.putIfAbsent(link.gradeLabel, () => <_LinkedTextbook>[]).add(link);
+    }
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.all(24),
+          child: UtilityGlassDialogShell(
+            title: '활성 교재',
+            icon: Icons.menu_book_rounded,
+            preferredWidth: 680,
+            maxHeight: 720,
+            child: StatefulBuilder(
+              builder: (context, setModalState) {
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  children: [
+                    const Text(
+                      '현재 학년보다 이전 과정 교재는 기본적으로 꺼집니다. '
+                      '필요한 교재는 언제든 다시 켤 수 있습니다.',
+                      style: TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (groups.isEmpty) _buildNoticeCard('등록된 교재가 없습니다.'),
+                    for (final entry in groups.entries) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10, bottom: 6),
+                        child: Text(
+                          entry.key,
+                          style: const TextStyle(
+                            color: kDlgText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: kDlgPanelBg,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: kDlgBorder),
+                        ),
+                        child: Column(
+                          children: [
+                            for (var i = 0; i < entry.value.length; i++) ...[
+                              if (i > 0)
+                                const Divider(
+                                  height: 1,
+                                  color: kDlgBorder,
+                                ),
+                              Builder(
+                                builder: (context) {
+                                  final link = entry.value[i];
+                                  final enabled = _isTextbookActive(link);
+                                  return SwitchListTile(
+                                    value: enabled,
+                                    activeThumbColor: kDlgAccent,
+                                    title: Text(
+                                      link.bookName,
+                                      style: const TextStyle(
+                                        color: kDlgText,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      link.flowName,
+                                      style: const TextStyle(
+                                        color: kDlgTextSub,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    onChanged: _isChildAddMode
+                                        ? null
+                                        : (next) async {
+                                            setState(() {
+                                              _textbookActiveOverrides = {
+                                                ..._textbookActiveOverrides,
+                                                link.key: next,
+                                              };
+                                              if (!next &&
+                                                  _selectedLinkedBookKey ==
+                                                      link.key) {
+                                                _selectedLinkedBookKey = null;
+                                                _units = const [];
+                                              }
+                                            });
+                                            setModalState(() {});
+                                            try {
+                                              await StudentTextbookActiveStore
+                                                  .instance
+                                                  .setEnabled(
+                                                studentId: widget.studentId,
+                                                flowId: link.flowId,
+                                                bookId: link.bookId,
+                                                gradeLabel: link.gradeLabel,
+                                                enabled: next,
+                                              );
+                                            } catch (_) {
+                                              if (mounted) {
+                                                _showDialogSnackBar(
+                                                  '활성 교재 설정을 저장하지 못했습니다.',
+                                                );
+                                              }
+                                            }
+                                          },
+                                  );
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildFlowBookPicker() {
     if (_loadingAllFlowTextbooks) {
       return const Column(
@@ -6733,6 +6944,13 @@ class HomeworkQuickAddProxyDialogState
     final testFlow = _testFlow;
     final visibleLinks = _allLinkedTextbooks
         .where((link) => !_isChildAddMode || link.flowId == _flowId)
+        .where(
+          (link) =>
+              _isTextbookActive(link) ||
+              (_isChildAddMode &&
+                  lockedBookKey != null &&
+                  _bookIdentity(link) == lockedBookKey),
+        )
         .toList(growable: false);
     final hasLockedCandidate = lockedBookKey != null &&
         visibleLinks.any((link) => _bookIdentity(link) == lockedBookKey);
@@ -6816,13 +7034,30 @@ class HomeworkQuickAddProxyDialogState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          '출처 선택',
-          style: TextStyle(
-            color: kDlgTextSub,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w700,
-          ),
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                '교재 선택',
+                style: TextStyle(
+                  color: kDlgTextSub,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed:
+                  _loadingAllFlowTextbooks ? null : _showActiveTextbooksDialog,
+              icon: const Icon(Icons.tune_rounded, size: 17),
+              label: const Text('활성 교재'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: kDlgText,
+                side: const BorderSide(color: kDlgBorder),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         Wrap(
@@ -7269,16 +7504,11 @@ class HomeworkQuickAddProxyDialogState
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const YggDialogSectionHeader(
-            icon: Icons.task_alt,
-            title: '과제 정보',
-          ),
-          const SizedBox(height: 8),
-          _buildFlowSelectorButtons(enabled: !hasBookSelection),
+          _buildFlowBookPicker(),
           const SizedBox(height: 12),
           const Divider(height: 1, thickness: 1, color: kDlgBorder),
           const SizedBox(height: 12),
-          _buildFlowBookPicker(),
+          _buildFlowSelectorButtons(enabled: !hasBookSelection),
           const SizedBox(height: 18),
           const Divider(height: 1, thickness: 1, color: kDlgBorder),
           const SizedBox(height: 18),
@@ -7310,47 +7540,100 @@ class HomeworkQuickAddProxyDialogState
       );
     }
 
+    // 숙제 검사(분실/잊음/확인)와 동일: FAB 탭바 알약 높이·글자 크기.
+    const actionButtonHeight = FabTabBarTokens.fabBarHeight - 12;
+    final dlgColors = YggDialogColors.of(context);
+
+    Widget actionChip({
+      required String label,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(actionButtonHeight / 2),
+          onTap: onTap,
+          child: Container(
+            height: actionButtonHeight,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: dlgColors.chipBg,
+              borderRadius: BorderRadius.circular(actionButtonHeight / 2),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: dlgColors.chipText,
+                fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget confirmButton({
+      required String label,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(actionButtonHeight / 2),
+          onTap: onTap,
+          child: Container(
+            height: actionButtonHeight,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: kDlgAccent,
+              borderRadius: BorderRadius.circular(actionButtonHeight / 2),
+            ),
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     Widget primaryActions() {
       if (showNaesinStandalone) {
         return Row(
-          mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, null),
-              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-              child: const Text('취소'),
+            const Spacer(),
+            actionChip(
+              label: '취소',
+              onTap: () => Navigator.pop(context, null),
             ),
           ],
         );
       }
       return Row(
-        mainAxisAlignment: MainAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, null),
-            style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-            child: const Text('취소'),
+          actionChip(
+            label: '취소',
+            onTap: () => Navigator.pop(context, null),
           ),
-          const SizedBox(width: 8),
-          if (!_isChildAddMode && !showNaesinStandalone) ...[
-            OutlinedButton(
-              onPressed: () => _submit(action: 'reserve'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: kDlgText,
-                side: const BorderSide(color: kDlgBorder),
-                minimumSize: const Size(0, 40),
-              ),
-              child: const Text('예약'),
+          if (!_isChildAddMode) ...[
+            const SizedBox(width: 6),
+            actionChip(
+              label: '예약',
+              onTap: () => _submit(action: 'reserve'),
             ),
-            const SizedBox(width: 8),
           ],
-          FilledButton(
-            onPressed: () => _submit(action: 'add'),
-            style: FilledButton.styleFrom(
-              backgroundColor: kDlgAccent,
-              minimumSize: const Size(0, 40),
-            ),
-            child: Text(_isChildAddMode ? '하위 과제 추가' : '과제 내기'),
+          const Spacer(),
+          confirmButton(
+            label: _isChildAddMode ? '하위 과제 추가' : '과제 내기',
+            onTap: () => _submit(action: 'add'),
           ),
         ],
       );
@@ -7446,27 +7729,42 @@ class HomeworkQuickAddProxyDialogState
       );
     }
 
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      insetPadding: EdgeInsets.symmetric(
-        horizontal: showNaesinPanel ? 24 : 40,
-        vertical: showNaesinPanel ? 8 : 24,
+    final horizontalInset = showNaesinPanel ? 24.0 : 40.0;
+    final shellWidth = math
+        .min(targetDialogWidth + 48, mediaSize.width - horizontalInset * 2)
+        .toDouble();
+    final shellHeight = math
+        .min(targetDialogHeight + 72, mediaSize.height * 0.92)
+        .toDouble();
+    // 보강/PDF/메모와 같이 하단 정렬 글래스 시트로 표시한다.
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      alignment: Alignment.bottomCenter,
+      insetPadding: EdgeInsets.fromLTRB(
+        horizontalInset,
+        0,
+        horizontalInset,
+        18,
       ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: Text(
-        showNaesinStandalone
+      child: UtilityGlassDialogShell(
+        title: showNaesinStandalone
             ? '기출 선택'
             : (_isChildAddMode ? '하위 과제 추가' : '과제 추가'),
-        style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+        icon: Icons.assignment_add,
+        preferredWidth: shellWidth,
+        maxHeight: shellHeight,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 130),
+            curve: Curves.easeOutQuad,
+            width: targetDialogWidth,
+            constraints: BoxConstraints(maxHeight: targetDialogHeight),
+            child: dialogContent(),
+          ),
+        ),
       ),
-      content: AnimatedContainer(
-        duration: const Duration(milliseconds: 130),
-        curve: Curves.easeOutQuad,
-        width: targetDialogWidth,
-        constraints: BoxConstraints(maxHeight: targetDialogHeight),
-        child: dialogContent(),
-      ),
-      contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
     );
   }
 }

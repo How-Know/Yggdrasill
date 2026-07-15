@@ -74,6 +74,10 @@ import {
   normalizeTocResult,
 } from './textbook/vlm_toc_client.js';
 import {
+  classifyRpmSectionPages,
+  normalizeRpmSectionResult,
+} from './textbook/vlm_rpm_section_client.js';
+import {
   extractBodySolutionsOnPage,
   normalizeBodySolutionsResult,
 } from './textbook/vlm_body_solution_client.js';
@@ -750,7 +754,7 @@ const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v3_choicesinfigure_01';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_slotmeasure_01';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const DEFAULT_TITLE_PAGE_GOAL_TEXT = '다시 풀기';
 
@@ -6297,6 +6301,106 @@ async function handleTextbookVlmParseToc(body, res) {
   sendJson(res, 200, {
     ok: true,
     big_units: normalized.big_units,
+    appendix_boundary_page: normalized.appendix_boundary_page,
+    notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
+// 쎈/RPM 중단원 본문 이미지 묶음에서 A/B/C 파트 경계를 경량 분류한다.
+// body: { images: [{ image_base64, mime_type?, raw_page }], series? }
+async function handleTextbookVlmClassifyRpmSections(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, { ok: false, error: 'gemini_api_key_missing' });
+    return;
+  }
+  const rawImages = Array.isArray(body?.images) ? body.images : [];
+  if (rawImages.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'missing_images' });
+    return;
+  }
+  const seriesRaw = String(body?.series || 'rpm').trim().toLowerCase();
+  const series = seriesRaw === 'ssen' || seriesRaw === 'rpm' ? seriesRaw : '';
+  if (!series) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_problem_book_series: ${seriesRaw}`,
+      allowed: ['ssen', 'rpm'],
+    });
+    return;
+  }
+  if (rawImages.length > 24) {
+    sendJson(res, 413, {
+      ok: false,
+      error: 'too_many_rpm_section_pages',
+      limit: 24,
+    });
+    return;
+  }
+  const images = [];
+  for (const raw of rawImages) {
+    const imageBase64 = String(raw?.image_base64 || '').trim();
+    const mimeType = String(raw?.mime_type || 'image/png').trim();
+    const rawPage = Number.parseInt(String(raw?.raw_page ?? ''), 10);
+    if (!imageBase64) continue;
+    if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_mime_type: ${mimeType}`,
+        allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+      });
+      return;
+    }
+    if (!Number.isFinite(rawPage) || rawPage <= 0) {
+      sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+      return;
+    }
+    images.push({ imageBase64, mimeType, rawPage });
+  }
+  if (images.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'missing_images' });
+    return;
+  }
+
+  let result;
+  try {
+    result = await classifyRpmSectionPages({
+      images,
+      series,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const message = compact(err?.message || err);
+    if (isTextbookVlmQuotaError(message)) {
+      sendJson(res, 429, {
+        ok: false,
+        error: 'vlm_daily_quota_exceeded',
+        message,
+      });
+      return;
+    }
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_rpm_section_failed',
+      message,
+    });
+    return;
+  }
+
+  const normalized = normalizeRpmSectionResult(
+    result.parsedJson,
+    images.map((image) => image.rawPage),
+  );
+  sendJson(res, 200, {
+    ok: true,
+    pages: normalized.pages,
     notes: normalized.notes,
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
@@ -8440,6 +8544,26 @@ async function handler(req, res) {
     if (method === 'POST' && url.pathname === '/textbook/vlm/parse-toc') {
       const body = await readJson(req);
       await handleTextbookVlmParseToc(body, res);
+      return;
+    }
+
+    // Textbook VLM — 쎈/RPM 중단원 본문의 A/B/C 파트 경계 분류.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/vlm/classify-problem-book-sections'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmClassifyRpmSections(body, res);
+      return;
+    }
+
+    // 구 RPM 전용 경로 호환.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/vlm/classify-rpm-sections'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmClassifyRpmSections(body, res);
       return;
     }
 

@@ -174,14 +174,65 @@ class TextbookVlmTestService {
     }
     return TextbookTocParseResult.fromMap(json);
   }
+
+  /// 쎈/RPM 중단원 본문 페이지 묶음의 A/B/C 파트를 경량 분류한다.
+  ///
+  /// 문항 좌표는 추출하지 않고 `유형 익히기`/`시험에 꼭 나오는 문제`
+  /// 시작 헤더와 페이지별 파트만 반환한다. 한 호출은 최대 24페이지다.
+  Future<TextbookRpmSectionParseResult> classifyProblemBookSections({
+    required List<TextbookRpmSectionImage> images,
+    required String series,
+    String mimeType = 'image/png',
+  }) async {
+    final body = <String, dynamic>{
+      'images': [
+        for (final image in images)
+          <String, dynamic>{
+            'image_base64': base64Encode(image.bytes),
+            'mime_type': mimeType,
+            'raw_page': image.rawPage,
+          },
+      ],
+      'series': series.trim().toLowerCase(),
+    };
+    final res = await _http.post(
+      _uri('/textbook/vlm/classify-problem-book-sections'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    Map<String, dynamic> json;
+    try {
+      final decoded = jsonDecode(res.body);
+      json = decoded is Map<String, dynamic>
+          ? decoded
+          : (decoded is Map
+              ? decoded.map((k, dynamic v) => MapEntry('$k', v))
+              : <String, dynamic>{});
+    } catch (_) {
+      json = <String, dynamic>{};
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      final detail = <String>[];
+      if (json['error'] != null) detail.add('${json['error']}');
+      if (json['message'] != null) detail.add('${json['message']}');
+      final summary = detail.isEmpty ? res.body : detail.join(' / ');
+      throw Exception('vlm_rpm_section_failed(${res.statusCode}): $summary');
+    }
+    return TextbookRpmSectionParseResult.fromMap(json);
+  }
 }
 
 /// `/textbook/vlm/parse-toc` 응답 — 책에 인쇄된 계층 그대로의 단원 트리.
 class TextbookTocParseResult {
-  const TextbookTocParseResult({required this.bigUnits, required this.notes});
+  const TextbookTocParseResult({
+    required this.bigUnits,
+    required this.notes,
+    this.appendixBoundaryPage,
+  });
 
   final List<TextbookTocBigUnit> bigUnits;
   final String notes;
+  final int? appendixBoundaryPage;
 
   factory TextbookTocParseResult.fromMap(Map<String, dynamic> map) {
     final bigs = <TextbookTocBigUnit>[];
@@ -207,6 +258,7 @@ class TextbookTocParseResult {
         }
         mids.add(TextbookTocMidUnit(
           name: midName,
+          page: int.tryParse('${rawMid['page'] ?? ''}'),
           hasExercise: rawMid['has_exercise'] == true,
           subUnits: subs,
         ));
@@ -216,6 +268,8 @@ class TextbookTocParseResult {
     return TextbookTocParseResult(
       bigUnits: bigs,
       notes: '${map['notes'] ?? ''}'.trim(),
+      appendixBoundaryPage:
+          int.tryParse('${map['appendix_boundary_page'] ?? ''}'),
     );
   }
 }
@@ -231,8 +285,10 @@ class TextbookTocMidUnit {
     required this.name,
     required this.hasExercise,
     required this.subUnits,
+    this.page,
   });
   final String name;
+  final int? page;
   final bool hasExercise;
   final List<TextbookTocSubUnit> subUnits;
 }
@@ -249,6 +305,60 @@ class TextbookTocSubUnit {
   /// "연습문제" 항목 여부. 소단원 사이사이에 여러 번 나올 수 있어
   /// 위치(순서)가 보존된 채로 전달된다.
   final bool isExercise;
+}
+
+class TextbookRpmSectionImage {
+  const TextbookRpmSectionImage({
+    required this.rawPage,
+    required this.bytes,
+  });
+
+  final int rawPage;
+  final Uint8List bytes;
+}
+
+class TextbookRpmSectionPage {
+  const TextbookRpmSectionPage({
+    required this.rawPage,
+    required this.section,
+    required this.typePracticeHeaderVisible,
+    required this.masteryHeaderVisible,
+  });
+
+  final int rawPage;
+  final String section;
+  final bool typePracticeHeaderVisible;
+  final bool masteryHeaderVisible;
+}
+
+class TextbookRpmSectionParseResult {
+  const TextbookRpmSectionParseResult({
+    required this.pages,
+    required this.notes,
+  });
+
+  final List<TextbookRpmSectionPage> pages;
+  final String notes;
+
+  factory TextbookRpmSectionParseResult.fromMap(Map<String, dynamic> map) {
+    final pages = <TextbookRpmSectionPage>[];
+    for (final raw in (map['pages'] as List?) ?? const []) {
+      if (raw is! Map) continue;
+      final rawPage = int.tryParse('${raw['raw_page'] ?? ''}');
+      if (rawPage == null || rawPage <= 0) continue;
+      pages.add(TextbookRpmSectionPage(
+        rawPage: rawPage,
+        section: '${raw['section'] ?? 'unknown'}'.trim(),
+        typePracticeHeaderVisible: raw['type_practice_header_visible'] == true,
+        masteryHeaderVisible: raw['mastery_header_visible'] == true,
+      ));
+    }
+    pages.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    return TextbookRpmSectionParseResult(
+      pages: pages,
+      notes: '${map['notes'] ?? ''}'.trim(),
+    );
+  }
 }
 
 /// Parsed response of `/textbook/vlm/detect-problems`.
@@ -349,8 +459,7 @@ class TextbookVlmDetectResult {
       pageOffsetFound: map['page_offset_found'] == true,
       section: section,
       pageKind: pageKind,
-      conceptDrillHeaderVisible:
-          map['concept_drill_header_visible'] == true,
+      conceptDrillHeaderVisible: map['concept_drill_header_visible'] == true,
       layout: '${map['layout'] ?? 'unknown'}',
       items: synthesis.items,
       notes: notes,

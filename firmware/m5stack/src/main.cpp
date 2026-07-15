@@ -99,7 +99,7 @@ static uint16_t g_tcp_probe_fail_count = 0;
 // 느린 경로에서 핸드셰이크 직전 오탐으로 끊기지 않도록 넉넉히 준다.
 static const uint32_t MQTT_TCP_PROBE_TIMEOUT_MS = 4000;
 static bool g_wifi_loop_connected = false;
-static const uint8_t ALERT_VIBRATION_STRENGTH = 102; // 약 4/10 기준(0-255 스케일)
+static const uint8_t ALERT_VIBRATION_STRENGTH = 150; // 실기기 모터 구동이 확인된 중간 출력
 static uint32_t g_last_boot_status_ui_ms = 0;
 
 // Deferred homework update (MQTT callback -> main loop)
@@ -1443,29 +1443,20 @@ void loop() {
   screensaver_poll();
   screensaver_check_shake();
   
-  // Safe vibration handling (3 second interval) using PMIC vibration (LDO3/DLDO1)
+  // PMIC vibration: 6초 주기, 0.5초 펄스
   static uint32_t lastVibMs = 0;
-  // 주기 20% 감소: 3000ms -> 2400ms
-  if ((g_should_vibrate_phase4 || g_should_vibrate_test_end) && nowTick - lastVibMs >= 2400) {
+  static bool vibrationActive = false;
+  const bool vibrationRequested = g_should_vibrate_phase4 || g_should_vibrate_test_end;
+  if (vibrationRequested && !vibrationActive && nowTick - lastVibMs >= 6000) {
     Serial.println("[VIB] setVibration: pulse start");
     screensaver_dismiss();
     M5.Power.setVibration(ALERT_VIBRATION_STRENGTH);
-    // 짧은 펄스 종료 예약 (non-blocking): 다음 틱에서 0으로
-    // 즉시 끄지 않도록 최소 80ms 유지
-    static uint32_t vibOnSince = 0;
-    vibOnSince = nowTick;
     lastVibMs = nowTick;
+    vibrationActive = true;
   }
-  // turn-off window (keep ~120ms)
-  static uint32_t lastVibOn = 0;
-  if (lastVibOn == 0) { lastVibOn = lastVibMs; }
-  if (M5.Power.getType() != m5::Power_Class::pmic_unknown) {
-    uint32_t since = (nowTick >= lastVibMs) ? (nowTick - lastVibMs) : 0;
-    // 요청: 지속시간 2배 (기존 ~180ms -> ~360ms)
-    if (since > 360 && since < 700) {
-      // ensure off after short duration
-      M5.Power.setVibration(0);
-    }
+  if (vibrationActive && (!vibrationRequested || nowTick - lastVibMs >= 500)) {
+    M5.Power.setVibration(0);
+    vibrationActive = false;
   }
   // Physical buttons disabled (no longer needed with touch UI)
 

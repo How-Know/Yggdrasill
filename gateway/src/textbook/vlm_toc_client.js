@@ -18,6 +18,41 @@ function sleep(ms) {
 
 export function buildParseTocPrompt({ pageCount, series = '' }) {
   const seriesKey = String(series || '').trim().toLowerCase();
+  const ssenLines =
+    seriesKey === 'ssen'
+      ? [
+          '',
+          '=== 쎈 교재 목차 규칙 (매우 중요) ===',
+          '이 교재(쎈)의 목차는 2단계다:',
+          '  - 대단원: "I 기본 도형"처럼 로마숫자와 큰 제목으로 표기된다.',
+          '    로마숫자는 버리고 이름만 big_units[].name에 담아라.',
+          '  - 중단원: "01 기본 도형 8"처럼 두 자리 번호, 이름, 시작 페이지가 한 줄에 표기된다.',
+          '    번호는 버리고 이름을 mid_units[].name, 줄 오른쪽의 페이지 숫자를 mid_units[].page에 담아라.',
+          '쎈의 "A 기본다잡기", "B 유형뽀개기", "C 만점도전하기"는',
+          '중단원마다 반복되는 문제 파트이지 소단원이 아니다. sub_units는 반드시 []로 둔다.',
+          '"부록", "정답 및 풀이", "빠른 정답" 같은 부속물은 단원트리에 넣지 마라.',
+          '그 시작 페이지가 목차에 보이면 마지막 중단원의 종료 경계로 쓸 수 있도록',
+          'appendix_boundary_page에 담아라.',
+          '각 중단원 줄의 시작 페이지를 빠짐없이 읽어라. 페이지가 선명하게 보이는데 null로 두지 마라.',
+        ]
+      : [];
+  const rpmLines =
+    seriesKey === 'rpm'
+      ? [
+          '',
+          '=== RPM 교재 목차 규칙 (매우 중요) ===',
+          '이 교재(RPM)의 목차는 2단계다:',
+          '  - 대단원: "I. 소인수분해"처럼 로마숫자와 큰 제목으로 표기된다.',
+          '    로마숫자는 버리고 이름만 big_units[].name에 담아라.',
+          '  - 중단원: "01 소인수분해 8"처럼 두 자리 번호, 이름, 시작 페이지가 한 줄에 표기된다.',
+          '    번호는 버리고 이름을 mid_units[].name, 줄 오른쪽의 페이지 숫자를 mid_units[].page에 담아라.',
+          'RPM의 "교과서문제 정복하기", "유형 익히기", "시험에 꼭 나오는 문제"는',
+          '중단원마다 반복되는 문제 파트이지 소단원이 아니다. sub_units는 반드시 []로 둔다.',
+          '"부록 대표문제 다시 풀기"는 단원트리에 넣지 마라. 단, 그 줄 오른쪽의 시작 페이지는',
+          '마지막 중단원의 종료 경계이므로 appendix_boundary_page에 반드시 담아라.',
+          '각 중단원 줄의 시작 페이지를 빠짐없이 읽어라. 페이지가 선명하게 보이는데 null로 두지 마라.',
+        ]
+      : [];
   const wonriLines =
     seriesKey === 'wonri'
       ? [
@@ -44,6 +79,8 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     '',
     `첨부된 ${pageCount}장의 이미지는 한 교재의 목차 페이지들을 순서대로 래스터한 것이다.`,
     '모든 이미지를 이어서 하나의 목차로 읽어라 (앞 이미지에서 시작된 단원이 뒤 이미지로 이어질 수 있다).',
+    ...ssenLines,
+    ...rpmLines,
     ...wonriLines,
     '',
     '=== 출력 스키마 ===',
@@ -54,6 +91,7 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     '      "mid_units": [',
     '        {',
     '          "name": "<중단원 이름. 앞에 붙는 번호는 빼고 이름만>",',
+    '          "page": <중단원 시작 페이지가 목차에 인쇄돼 있으면 그 정수, 아니면 null>,',
     '          "sub_units": [',
     '            {',
     '              "name": "<소단원 이름. 앞에 붙는 번호는 빼고 이름만. 연습문제 항목이면 \\"연습문제\\">",',
@@ -65,6 +103,7 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     '      ]',
     '    }',
     '  ],',
+    '  "appendix_boundary_page": <RPM의 트리 제외 부록 시작 페이지 또는 null>,',
     '  "notes": "<특이사항 간단히, 없으면 빈 문자열>"',
     '}',
     '',
@@ -205,9 +244,17 @@ export async function parseTocPages({
 }
 
 export function normalizeTocResult(parsedJson) {
-  const out = { big_units: [], notes: '' };
+  const out = { big_units: [], appendix_boundary_page: null, notes: '' };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
   out.notes = String(parsedJson.notes || '').trim();
+  const appendixBoundaryPage = Number.parseInt(
+    String(parsedJson.appendix_boundary_page ?? ''),
+    10,
+  );
+  out.appendix_boundary_page =
+    Number.isFinite(appendixBoundaryPage) && appendixBoundaryPage > 0
+      ? appendixBoundaryPage
+      : null;
   const bigs = Array.isArray(parsedJson.big_units) ? parsedJson.big_units : [];
   for (const rawBig of bigs) {
     if (!rawBig || typeof rawBig !== 'object') continue;
@@ -219,6 +266,7 @@ export function normalizeTocResult(parsedJson) {
       if (!rawMid || typeof rawMid !== 'object') continue;
       const midName = String(rawMid.name || '').trim();
       if (!midName) continue;
+      const midPage = Number.parseInt(String(rawMid.page ?? ''), 10);
       const subs = [];
       const rawSubs = Array.isArray(rawMid.sub_units) ? rawMid.sub_units : [];
       for (const rawSub of rawSubs) {
@@ -234,6 +282,7 @@ export function normalizeTocResult(parsedJson) {
       }
       mids.push({
         name: midName,
+        page: Number.isFinite(midPage) && midPage > 0 ? midPage : null,
         // 구 스키마(has_exercise 불리언) 호환 — 새 스키마는 연습문제가
         // sub_units 항목(is_exercise=true)으로 위치까지 담겨 온다.
         has_exercise:
