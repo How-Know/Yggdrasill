@@ -148,6 +148,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     });
     HomeworkStore.instance.revision
         .addListener(_onHomeworkStoreRevisionChanged);
+    rightSideSheetPdfPanelSession.addListener(_onPdfPanelSessionChanged);
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
       ..repeat();
@@ -187,9 +188,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     HomeworkStore.instance.revision.removeListener(
       _onHomeworkStoreRevisionChanged,
     );
+    rightSideSheetPdfPanelSession.removeListener(_onPdfPanelSessionChanged);
     _uiAnimController.dispose();
     _clockTimer.cancel();
     super.dispose();
+  }
+
+  void _onPdfPanelSessionChanged() {
+    if (!mounted) return;
+    _syncHomeTabOverlay();
   }
 
   void _syncMemoFloatingForGradingMode(bool active) {
@@ -234,6 +241,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   void _syncHomeTabOverlay() {
+    // 왼쪽 정답 PDF 패널이 열려 있으면 공용 FAB 탭바를 숨긴다.
+    if (rightSideSheetPdfPanelSession.value != null) {
+      _homeTabOverlay.dispose();
+      return;
+    }
     _homeTabOverlay.sync(
       context,
       selectedIndex: _isGradingMode ? 1 : 0,

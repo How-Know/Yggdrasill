@@ -11,10 +11,12 @@ import '../../services/data_manager.dart';
 import '../../services/homework_assignment_store.dart';
 import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
+import '../../services/textbook_pdf_service.dart';
 import '../../utils/homework_page_text.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/home_header_weather_icon.dart';
+import '../../widgets/navigation_rail.dart';
 import '../../widgets/resource_textbook_card.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
@@ -196,7 +198,7 @@ class _GradingModePageState extends State<GradingModePage> {
                 );
                 return LayoutBuilder(
                   builder: (context, constraints) {
-                    final railWidth = _resolveAnswerRailWidth(constraints);
+                    final railWidth = _resolveAnswerRailWidth(context);
                     return Stack(
                       clipBehavior: Clip.none,
                       children: [
@@ -303,8 +305,11 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  double _resolveAnswerRailWidth(BoxConstraints constraints) {
-    final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 1200.0;
+  /// 왼쪽 시트 개폐로 부모 폭이 변해도 레일/책카드가 리플로우되지 않도록
+  /// 화면 폭(네비 레일 제외) 기준으로 고정한다.
+  double _resolveAnswerRailWidth(BuildContext context) {
+    final width =
+        (MediaQuery.sizeOf(context).width - navRailMinWidth).clamp(0.0, 4000.0);
     if (width < 820) return 248.0;
     return (width * 0.2).clamp(248.0, 280.0).toDouble();
   }
@@ -686,34 +691,91 @@ class _GradingModePageState extends State<GradingModePage> {
     return int.tryParse('${raw ?? ''}'.trim());
   }
 
+  String? _storageKeyFromTextbookPath(String raw) {
+    const prefix = 'storage://textbook/';
+    final path = raw.trim();
+    if (!path.startsWith(prefix)) return null;
+    final key = path.substring(prefix.length).trim();
+    return key.isEmpty ? null : key;
+  }
+
+  Future<String> _resolveAnswerBookPdfPath({
+    required String bookId,
+    required String gradeLabel,
+    required String kind,
+    required String rawPath,
+  }) async {
+    final normalizedKind = kind.trim().toLowerCase() == 'sol' ? 'sol' : 'ans';
+    final raw = rawPath.trim();
+    if (raw.isEmpty) return '';
+    try {
+      final source = await TextbookPdfService.instance.resolve(
+        TextbookPdfRef(
+          fileId: bookId,
+          gradeLabel: gradeLabel,
+          kind: normalizedKind,
+          storageKey: _storageKeyFromTextbookPath(raw),
+        ),
+      );
+      final resolved = (source.localPath ?? source.url ?? '').trim();
+      if (resolved.isNotEmpty) return resolved;
+    } catch (_) {
+      // fall through to raw path for legacy Dropbox URLs
+    }
+    if (raw.startsWith('storage://')) return '';
+    return raw;
+  }
+
   Future<void> _openAnswerBook(
     _GradingAnswerBook book,
     _GradingAnswerBookGrade grade,
   ) async {
-    final answerPath = grade.answerPath.trim();
-    if (answerPath.isEmpty) {
+    final answerPathRaw = grade.answerPath.trim();
+    if (answerPathRaw.isEmpty) {
       showAppSnackBar(
           context, '\uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.');
       return;
     }
+    final gradeLabel = grade.gradeLabel.trim().isNotEmpty
+        ? grade.gradeLabel.trim()
+        : grade.gradeKey.trim();
+    final answerPath = await _resolveAnswerBookPdfPath(
+      bookId: book.id,
+      gradeLabel: gradeLabel,
+      kind: 'ans',
+      rawPath: answerPathRaw,
+    );
+    if (!mounted) return;
+    if (answerPath.isEmpty) {
+      showAppSnackBar(context, '정답 PDF를 열 수 없습니다.');
+      return;
+    }
+    final solutionPathRaw = grade.solutionPath.trim();
+    final solutionPath = solutionPathRaw.isEmpty
+        ? ''
+        : await _resolveAnswerBookPdfPath(
+            bookId: book.id,
+            gradeLabel: gradeLabel,
+            kind: 'sol',
+            rawPath: solutionPathRaw,
+          );
+    if (!mounted) return;
     final titleBase = book.name.trim().isEmpty
         ? '\uC815\uB2F5 \uBC14\uB85C\uAC00\uAE30'
         : book.name.trim();
-    final title = grade.gradeLabel.trim().isEmpty
-        ? titleBase
-        : '$titleBase \u00B7 ${grade.gradeLabel.trim()}';
+    final title = gradeLabel.isEmpty ? titleBase : '$titleBase · $gradeLabel';
     final cacheKey =
         'answerkey|$_kGradingAnswerBookCategory|${book.id}|${grade.gradeKey}|$answerPath';
     RightSheetAnswerPreloadService.instance.putPdfLinks(
       cacheKey: cacheKey,
       answerPath: answerPath,
-      solutionPath: grade.solutionPath,
+      solutionPath: solutionPath,
     );
     rightSideSheetPdfPanelSession.value = RightSideSheetPdfPanelSession(
       sessionId: 'grading-answer-book:${book.id}:${grade.gradeKey}',
       title: title,
       answerPath: answerPath,
-      solutionPath: grade.solutionPath,
+      solutionPath: solutionPath,
       cacheKey: cacheKey,
     );
   }

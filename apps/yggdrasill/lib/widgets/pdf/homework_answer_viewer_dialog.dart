@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../app_overlays.dart';
+import '../../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../dialog_tokens.dart';
 import '../latex_text_renderer.dart';
+import '../solid_capsule_action_bar.dart';
 
 enum HomeworkAnswerViewerAction { confirm, complete }
 
@@ -1338,7 +1340,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                   widget.overlayEntries.isNotEmpty)
                 Positioned(
                   right: controlsRightInset,
-                  bottom: 92,
+                  top: 8,
                   child: _buildChildOverlayPanel(context),
                 ),
               if (_chromeVisible && showPageSlider)
@@ -1584,17 +1586,23 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   Widget _buildChildOverlayPanel(BuildContext context) {
     final entries = widget.overlayEntries;
     if (entries.isEmpty) return const SizedBox.shrink();
+    final brightness = Theme.of(context).brightness;
     final maxWidth = math.min(MediaQuery.of(context).size.width * 0.29, 380.0);
     final visibleEntries =
         _overlayCollapsed ? entries.take(1).toList(growable: false) : entries;
-    const titleStyle = TextStyle(
-      color: Colors.white,
+    final titleColor = SolidCapsuleActionBarTokens.iconColor(brightness);
+    final metaColor = brightness == Brightness.dark
+        ? const Color(0xFF9AA3AD)
+        : const Color(0xFF6B6B6B);
+    final dividerColor = SolidCapsuleActionBarTokens.border(brightness);
+    final titleStyle = TextStyle(
+      color: titleColor,
       fontSize: 20.0,
       fontWeight: FontWeight.w800,
       height: 1.1,
     );
-    const metaStyle = TextStyle(
-      color: Color(0xFF9AA3AD),
+    final metaStyle = TextStyle(
+      color: metaColor,
       fontSize: 20.0,
       fontWeight: FontWeight.w800,
       height: 1.1,
@@ -1605,7 +1613,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     }
 
     return Align(
-      alignment: Alignment.bottomRight,
+      alignment: Alignment.topRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: GestureDetector(
@@ -1613,70 +1621,83 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           onTap: () => setState(() {
             _overlayCollapsed = !_overlayCollapsed;
           }),
-          child: Container(
-            padding: const EdgeInsets.all(8),
+          child: DecoratedBox(
             decoration: BoxDecoration(
-              color: const Color(0xFF121A20),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(
+                FabTabBarTokens.previewAcademyGroupedCardRadius,
               ),
+              boxShadow: SolidCapsuleActionBarTokens.boxShadows(brightness),
             ),
-            child: ConstrainedBox(
-              constraints:
-                  BoxConstraints(maxHeight: _overlayCollapsed ? 78 : 320),
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (int i = 0; i < visibleEntries.length; i++) ...[
-                        Text(
-                          normalize(
-                            visibleEntries[i].title,
-                            fallback: '(제목 없음)',
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: SolidCapsuleActionBarTokens.background(brightness),
+                borderRadius: BorderRadius.circular(
+                  FabTabBarTokens.previewAcademyGroupedCardRadius,
+                ),
+                border: Border.all(
+                  color: SolidCapsuleActionBarTokens.border(brightness),
+                ),
+              ),
+              child: ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxHeight: _overlayCollapsed ? 78 : 320),
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (int i = 0; i < visibleEntries.length; i++) ...[
+                          Text(
+                            normalize(
+                              visibleEntries[i].title,
+                              fallback: '(제목 없음)',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: titleStyle,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: titleStyle,
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                normalize(visibleEntries[i].page),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.left,
-                                style: metaStyle,
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  normalize(visibleEntries[i].page),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.left,
+                                  style: metaStyle,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                normalize(visibleEntries[i].memo),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.right,
-                                style: metaStyle,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  normalize(visibleEntries[i].memo),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.right,
+                                  style: metaStyle,
+                                ),
                               ),
+                            ],
+                          ),
+                          if (i != visibleEntries.length - 1) ...[
+                            const SizedBox(height: 9),
+                            Container(
+                              width: double.infinity,
+                              height: 1,
+                              color: dividerColor,
                             ),
+                            const SizedBox(height: 9),
                           ],
-                        ),
-                        if (i != visibleEntries.length - 1) ...[
-                          const SizedBox(height: 9),
-                          Container(
-                            width: double.infinity,
-                            height: 1,
-                            color: Colors.white.withValues(alpha: 0.18),
-                          ),
-                          const SizedBox(height: 9),
                         ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),

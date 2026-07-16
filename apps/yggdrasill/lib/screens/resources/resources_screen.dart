@@ -2858,18 +2858,26 @@ const double _textbookCardCoverMetaGap = 14.0;
 const double _textbookGridMaxCardWidth = 240.0;
 const double _textbookGridSpacing = 20.0;
 
-/// 자원 그리드(교재·시험·기타) — 최대 카드 너비 상한, 가로 100% 채움.
+/// 자원 그리드(교재·기타) — 카드 폭을 [maxCardWidth]로 고정한다.
+///
+/// 남는 가로 여백은 채우지 않는다. 폭을 나눠 주면 창 크기에 따라
+/// 카드가 커졌다 작아졌다 한다.
 ({int columns, double cardWidth}) _fillWidthResourceGridLayout(
   double availableWidth, {
   double maxCardWidth = _textbookGridMaxCardWidth,
   double spacing = _textbookGridSpacing,
 }) {
+  if (availableWidth <= maxCardWidth) {
+    return (
+      columns: 1,
+      cardWidth: math.max(0.0, availableWidth),
+    );
+  }
   final columns = math.max(
     1,
-    ((availableWidth + spacing) / (maxCardWidth + spacing)).ceil(),
+    ((availableWidth + spacing) / (maxCardWidth + spacing)).floor(),
   );
-  final cardWidth = (availableWidth - (columns - 1) * spacing) / columns;
-  return (columns: columns, cardWidth: cardWidth);
+  return (columns: columns, cardWidth: maxCardWidth);
 }
 const String _examM1RootId = 'exam-folder-M1-naesin';
 const String _examLegacyMiddleSchoolRootId = 'exam-folder-middle-school';

@@ -4163,8 +4163,12 @@ class _MainScreenState extends State<MainScreen>
                               _resolveSideSheetMaxWidth(screenWidth);
                           final offset = (maxWidth * _sideSheetAnimation.value)
                               .clamp(0.0, maxWidth);
-                          return Transform.translate(
-                            offset: Offset(offset, 0),
+                          // Transform.translate는 전체 폭을 유지한 채 밀어서
+                          // 오른쪽이 ClipRect에 잘리고 가로 스크롤이 끝까지
+                          // 가지 못했다. 시트 폭만큼 왼쪽만 비워 남는 영역에
+                          // 레이아웃하면 스크롤 viewport가 보이는 폭과 일치한다.
+                          return Padding(
+                            padding: EdgeInsets.only(left: offset),
                             child: child,
                           );
                         },

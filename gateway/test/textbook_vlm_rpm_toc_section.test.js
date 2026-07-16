@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildParseTocPrompt,
   normalizeTocResult,
+  parseTocModelJson,
 } from '../src/textbook/vlm_toc_client.js';
 import {
   buildRpmSectionPrompt,
@@ -47,6 +48,25 @@ test('Ssen TOC prompt extracts numbered rows as middle-unit pages', () => {
   assert.match(prompt, /B 유형뽀개기/);
   assert.match(prompt, /C 만점도전하기/);
   assert.match(prompt, /sub_units는 반드시 \[\]/);
+});
+
+test('TOC parser ignores trailing model junk after valid JSON', () => {
+  const malformed =
+    '{"big_units":[{"name":"이차곡선","mid_units":[]}],' +
+    '"appendix_boundary_page":null,"notes":""} }"';
+  const parsed = parseTocModelJson(malformed);
+  assert.ok(parsed);
+  assert.equal(parsed.big_units[0].name, '이차곡선');
+});
+
+test('TOC parser closes a truncated root object returned with STOP', () => {
+  const truncated =
+    '{"big_units":[{"name":"이차곡선","mid_units":[' +
+    '{"name":"이차곡선","page":8,"sub_units":[]}]}],' +
+    '"appendix_boundary_page":null,"notes":""';
+  const parsed = parseTocModelJson(truncated);
+  assert.ok(parsed);
+  assert.equal(parsed.big_units[0].mid_units[0].page, 8);
 });
 
 test('RPM section prompt describes monotonic A to B to C flow', () => {

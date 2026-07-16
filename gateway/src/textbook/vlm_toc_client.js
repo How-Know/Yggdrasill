@@ -7,13 +7,50 @@
 //
 // `vlm_detect_client.js`(문항번호 탐지) 와는 목적이 달라 분리했다.
 
-import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
+import {
+  closeTruncatedJson,
+  extractBalancedJsonObject,
+  repairLatexBackslashes,
+} from '../problem_bank/extract_engines/vlm/client.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/// 목차 VLM 응답 전용 느슨한 JSON 파서.
+///
+/// Gemini가 finishReason=STOP인데도 마지막 괄호를 빠뜨리거나 정상 JSON 뒤에
+/// 여분의 `}`를 붙이는 두 변형을 모두 복구한다.
+export function parseTocModelJson(text) {
+  const source = String(text || '').trim();
+  for (const candidate of [source, repairLatexBackslashes(source)]) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_) {
+      const balanced = extractBalancedJsonObject(candidate);
+      if (balanced) {
+        try {
+          return JSON.parse(balanced);
+        } catch (_) {
+          // 아래 복구로 진행한다.
+        }
+      }
+      const greedy = candidate.match(/\{[\s\S]*\}/);
+      if (greedy) {
+        try {
+          return JSON.parse(greedy[0]);
+        } catch (_) {
+          // 마지막 닫는 괄호 복구로 진행한다.
+        }
+      }
+      const closed = closeTruncatedJson(candidate);
+      if (closed) return closed;
+    }
+  }
+  return null;
 }
 
 export function buildParseTocPrompt({ pageCount, series = '' }) {
@@ -207,24 +244,7 @@ export async function parseTocPages({
       .map((p) => p?.text || '')
       .join('\n')
       .trim();
-    let parsedJson = null;
-    try {
-      parsedJson = JSON.parse(modelText);
-    } catch (_) {
-      const repaired = repairLatexBackslashes(modelText);
-      try {
-        parsedJson = JSON.parse(repaired);
-      } catch (_) {
-        const m = repaired.match(/\{[\s\S]*\}/);
-        if (m) {
-          try {
-            parsedJson = JSON.parse(m[0]);
-          } catch (_) {
-            // leave null
-          }
-        }
-      }
-    }
+    const parsedJson = parseTocModelJson(modelText);
     if (!parsedJson) {
       throw new Error(
         `vlm_toc_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(0, 180)}"`,
