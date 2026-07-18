@@ -2125,7 +2125,23 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     });
   }
 
+  @override
+  void reassemble() {
+    super.reassemble();
+    final explorerOpen = _explorer != null;
+    hideGlobalMemoFloatingBanners.value = explorerOpen;
+    hideGlobalMainFab.value = explorerOpen;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncFabTabBarOverlay();
+    });
+  }
+
   void _syncFabTabBarOverlay() {
+    if (_explorer != null) {
+      _fabTabBarOverlay.dispose();
+      _syncExplorerFabOverlay();
+      return;
+    }
     _fabTabBarOverlay.sync(
       context,
       selectedIndex: _customTabIndex,
@@ -2177,6 +2193,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       _explorer = controller;
     });
     hideGlobalMemoFloatingBanners.value = true;
+    hideGlobalMainFab.value = true;
     _syncFabTabBarOverlay();
     unawaited(controller.load());
   }
@@ -2189,6 +2206,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     });
     controller.dispose();
     hideGlobalMemoFloatingBanners.value = false;
+    hideGlobalMainFab.value = false;
     _explorerFabOverlay.hide();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncFabTabBarOverlay();
@@ -2210,6 +2228,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     explorer?.dispose();
     if (explorer != null) {
       hideGlobalMemoFloatingBanners.value = false;
+      hideGlobalMainFab.value = false;
     }
     widget.printController?._notifyStateChanged();
     _syncFabTabBarOverlay();
@@ -2221,6 +2240,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     widget.printController?._detach(notify: false);
     _explorer?.dispose();
     hideGlobalMemoFloatingBanners.value = false;
+    hideGlobalMainFab.value = false;
     _fabTabBarOverlay.dispose();
     _explorerFabOverlay.dispose();
     for (final c in _gridScrollCtrls) {
@@ -2879,6 +2899,7 @@ const double _textbookGridSpacing = 20.0;
   );
   return (columns: columns, cardWidth: maxCardWidth);
 }
+
 const String _examM1RootId = 'exam-folder-M1-naesin';
 const String _examLegacyMiddleSchoolRootId = 'exam-folder-middle-school';
 const List<String> _examCanonicalRootIds = <String>[
@@ -3786,9 +3807,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isTextbook = _currentCategory == 'textbook';
-          final double spacing = isTextbook || isOther
-              ? _textbookGridSpacing
-              : 16.0;
+          final double spacing =
+              isTextbook || isOther ? _textbookGridSpacing : 16.0;
           final int cols;
           final double gridCardWidth;
           final double gridWidth;

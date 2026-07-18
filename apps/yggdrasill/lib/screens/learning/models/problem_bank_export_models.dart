@@ -194,7 +194,7 @@ class LearningProblemExportSettings {
 
   factory LearningProblemExportSettings.initial() {
     return LearningProblemExportSettings(
-      templateLabel: '\uB0B4\uC2E0\uD615',
+      templateLabel: '\uACFC\uC81C\uD615',
       paperLabel: 'A4',
       questionModeLabel: '\uAE30\uBCF8',
       layoutColumnLabel: '1\uB2E8',
@@ -203,9 +203,9 @@ class LearningProblemExportSettings {
       fontSizeLabel: '\uAE30\uBCF8',
       layoutTuning: LearningProblemLayoutTuning.defaults(),
       figureQuality: LearningProblemFigureQuality.defaults(),
-      includeAnswerSheet: true,
+      includeAnswerSheet: false,
       includeExplanation: false,
-      includeAcademyLogo: false,
+      includeAcademyLogo: true,
       timeLimitText: '',
       titlePageTopText: kLearningDefaultTitlePageTopText,
       titlePageGoalText: kLearningDefaultTitlePageGoalText,

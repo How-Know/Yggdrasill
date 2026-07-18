@@ -5,7 +5,7 @@
 // 정제해서 돌려준다.
 
 import { buildExtractAnswersPrompt } from './vlm_answer_prompt.js';
-import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
+import { parseTextbookVlmJson } from './vlm_json_parse.js';
 
 const ANSWER_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ANSWER_DEFAULT_MAX_RETRIES = 3;
@@ -134,24 +134,7 @@ export async function extractAnswersOnPage({
       .map((p) => p?.text || '')
       .join('\n')
       .trim();
-    let parsedJson = null;
-    try {
-      parsedJson = JSON.parse(modelText);
-    } catch (_) {
-      const repaired = repairLatexBackslashes(modelText);
-      try {
-        parsedJson = JSON.parse(repaired);
-      } catch (_) {
-        const m = repaired.match(/\{[\s\S]*\}/);
-        if (m) {
-          try {
-            parsedJson = JSON.parse(m[0]);
-          } catch (_) {
-            // leave null
-          }
-        }
-      }
-    }
+    const parsedJson = parseTextbookVlmJson(modelText);
     if (!parsedJson) {
       throw new Error(
         `vlm_answer_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(

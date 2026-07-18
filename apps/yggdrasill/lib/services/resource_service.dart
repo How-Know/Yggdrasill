@@ -713,6 +713,29 @@ class ResourceService {
     return keys;
   }
 
+  Future<Map<String, String>> _loadTextbookBodyMigrationStatuses({
+    required SupabaseClient supa,
+    required String academyId,
+  }) async {
+    try {
+      final rows = await supa
+          .from('resource_file_links')
+          .select('file_id,grade,migration_status')
+          .eq('academy_id', academyId);
+      final out = <String, String>{};
+      for (final row in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        final bookId = (row['file_id'] as String?)?.trim() ?? '';
+        final grade = (row['grade'] as String?)?.trim() ?? '';
+        final status = (row['migration_status'] as String?)?.trim() ?? '';
+        if (bookId.isEmpty || grade.isEmpty || status.isEmpty) continue;
+        out['$bookId|$grade'] = status;
+      }
+      return out;
+    } catch (_) {
+      return <String, String>{};
+    }
+  }
+
   Future<List<Map<String, dynamic>>> loadTextbooksWithMetadata() async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -780,6 +803,10 @@ class ResourceService {
         supa: supa,
         academyId: academyId,
       );
+      final migrationStatuses = await _loadTextbookBodyMigrationStatuses(
+        supa: supa,
+        academyId: academyId,
+      );
       try {
         final rows = await supa
             .from('flow_textbook_links')
@@ -809,6 +836,9 @@ class ResourceService {
             'grade_label': gradeLabel,
             'order_index': _asInt(row['order_index']) ?? 0,
             'book_name': (file['name'] as String?)?.trim() ?? '',
+            'migration_status': migrationStatuses['$bookId|$gradeLabel#body'] ??
+                migrationStatuses['$bookId|$gradeLabel'] ??
+                'legacy',
           });
         }
         return out;
@@ -836,6 +866,9 @@ class ResourceService {
             'grade_label': gradeLabel,
             'order_index': _asInt(row['order_index']) ?? 0,
             'book_name': nameById[bookId] ?? '',
+            'migration_status': migrationStatuses['$bookId|$gradeLabel#body'] ??
+                migrationStatuses['$bookId|$gradeLabel'] ??
+                'legacy',
           });
         }
         return out;

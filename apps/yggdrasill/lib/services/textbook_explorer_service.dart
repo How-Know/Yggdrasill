@@ -25,6 +25,7 @@ extension TbAnswerKindLabel on TbAnswerKind {
 /// 교재 단원/문항 탐색 화면에서 사용하는 단일 문항(크롭) 정보.
 class TbExItem {
   const TbExItem({
+    required this.cropId,
     required this.questionUid,
     required this.problemNumber,
     required this.difficultyLabel,
@@ -51,6 +52,7 @@ class TbExItem {
     required this.sortOrder,
   });
 
+  final String cropId;
   final String questionUid;
   final String problemNumber;
   final String difficultyLabel;
@@ -113,9 +115,13 @@ class TbExItem {
     return problemNumber;
   }
 
-  TbExItem copyWith({TbAnswerKind? answerKind}) {
+  TbExItem copyWith({
+    String? questionUid,
+    TbAnswerKind? answerKind,
+  }) {
     return TbExItem(
-      questionUid: questionUid,
+      cropId: cropId,
+      questionUid: questionUid ?? this.questionUid,
       problemNumber: problemNumber,
       difficultyLabel: difficultyLabel,
       answerKind: answerKind ?? this.answerKind,
@@ -276,8 +282,57 @@ class TextbookExplorerService {
       order += 1;
     }
 
+    final resolvedQuestionUidByCropId = <String, String>{};
+    final resolvedQuestionUidByLocation = <String, String>{};
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      if (academyId != null && academyId.trim().isNotEmpty) {
+        final links = await _pbService.loadTextbookQuestionLinkRows(
+          academyId: academyId,
+          bookId: safeBookId,
+          gradeLabel: safeGrade,
+        );
+        for (final row in links) {
+          final meta = _asMap(row['meta']);
+          final cropPage = _asMap(meta['textbook_crop_page']);
+          final scope = _asMap(meta['textbook_scope'] ?? meta['textbookScope']);
+          final uid = '${row['question_uid'] ?? row['id'] ?? ''}'.trim();
+          if (uid.isEmpty) continue;
+          final cropId = '${cropPage['crop_id'] ?? ''}'.trim();
+          if (cropId.isNotEmpty) {
+            resolvedQuestionUidByCropId[cropId] = uid;
+          }
+          final bigOrder = _toInt(scope['big_order'] ?? scope['bigOrder']);
+          final midOrder = _toInt(scope['mid_order'] ?? scope['midOrder']);
+          final subKey = '${scope['sub_key'] ?? scope['subKey'] ?? ''}'.trim();
+          final rawPage = _toInt(cropPage['raw_page']);
+          final problemNumber = '${row['question_number'] ?? ''}'.trim();
+          if (bigOrder != null &&
+              midOrder != null &&
+              subKey.isNotEmpty &&
+              rawPage != null &&
+              problemNumber.isNotEmpty) {
+            resolvedQuestionUidByLocation[
+                '$bigOrder|$midOrder|$subKey|$rawPage|$problemNumber'] = uid;
+          }
+        }
+      }
+    } catch (_) {
+      // 직접 연결된 pb_question_uid가 있으면 기존 경로로 계속 동작한다.
+    }
+
+    final linkedItems = items.map((item) {
+      if (item.questionUid.trim().isNotEmpty) return item;
+      final byCrop = resolvedQuestionUidByCropId[item.cropId];
+      final byLocation = resolvedQuestionUidByLocation[
+          '${item.bigOrder}|${item.midOrder}|${item.subKey}|'
+              '${item.rawPage}|${item.problemNumber}'];
+      final resolved = (byCrop ?? byLocation ?? '').trim();
+      return resolved.isEmpty ? item : item.copyWith(questionUid: resolved);
+    }).toList(growable: false);
+
     // 응답 유형(객/주/서)은 pb_questions 에서 보강한다.
-    final uids = items
+    final uids = linkedItems
         .where((e) => e.hasUid)
         .map((e) => e.questionUid)
         .toSet()
@@ -300,7 +355,7 @@ class TextbookExplorerService {
       }
     }
 
-    final resolvedItems = items
+    final resolvedItems = linkedItems
         .map(
           (e) => e.hasUid && answerKindByUid.containsKey(e.questionUid)
               ? e.copyWith(answerKind: answerKindByUid[e.questionUid])
@@ -349,12 +404,14 @@ class TextbookExplorerService {
       if (box == null || box.length != 4) return 0;
       return (box[index] / 1000.0).clamp(0.0, 1.0);
     }
+
     double? nfrac(List<int>? box, int index) {
       if (box == null || box.length != 4) return null;
       return (box[index] / 1000.0).clamp(0.0, 1.0);
     }
 
     return TbExItem(
+      cropId: '${row['id'] ?? ''}'.trim(),
       questionUid: '${row['pb_question_uid'] ?? ''}'.trim(),
       problemNumber: number,
       difficultyLabel: _normalizeDifficulty('${row['label'] ?? ''}'),

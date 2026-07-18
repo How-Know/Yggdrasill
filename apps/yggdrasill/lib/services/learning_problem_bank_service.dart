@@ -1717,6 +1717,52 @@ class LearningProblemBankService {
     );
   }
 
+  Future<List<Map<String, dynamic>>> loadTextbookQuestionLinkRows({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safeBookId = bookId.trim();
+    final safeGradeLabel = gradeLabel.trim();
+    if (safeAcademyId.isEmpty || safeBookId.isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+    final sourceCodes = pbSourceTypeCodesForLearningUi('private_material');
+    final rows = await _client
+        .from('pb_documents')
+        .select('id,grade_label,meta')
+        .eq('academy_id', safeAcademyId)
+        .eq('status', 'ready')
+        .inFilter('source_type_code', sourceCodes);
+    final documentIds = <String>[];
+    for (final raw in _listOrEmpty(rows)) {
+      final row = _mapOrEmpty(raw);
+      final id = '${row['id'] ?? ''}'.trim();
+      final meta = _mapOrEmpty(row['meta']);
+      final scope =
+          _mapOrEmpty(meta['textbook_scope'] ?? meta['textbookScope']);
+      final rowBookId =
+          '${scope['book_id'] ?? scope['bookId'] ?? meta['book_id'] ?? meta['bookId'] ?? ''}'
+              .trim();
+      final rowGradeLabel =
+          '${scope['grade_label'] ?? scope['gradeLabel'] ?? row['grade_label'] ?? ''}'
+              .trim();
+      if (id.isEmpty || rowBookId != safeBookId) continue;
+      if (safeGradeLabel.isNotEmpty &&
+          rowGradeLabel.isNotEmpty &&
+          rowGradeLabel != safeGradeLabel) {
+        continue;
+      }
+      documentIds.add(id);
+    }
+    if (documentIds.isEmpty) return const <Map<String, dynamic>>[];
+    return loadQuestionLinkRowsForDocuments(
+      academyId: safeAcademyId,
+      documentIds: documentIds,
+    );
+  }
+
   Future<Map<String, int>> loadQuestionOrders({
     required String academyId,
     required String scopeKey,

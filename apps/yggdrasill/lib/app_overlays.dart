@@ -163,6 +163,9 @@ final GlobalKey<OverlayState> fabDropdownOverlayKey = GlobalKey<OverlayState>();
 final ValueNotifier<bool> hideGlobalMemoFloatingBanners =
     ValueNotifier<bool>(false);
 
+/// 특정 전체 화면 작업 중 오른쪽 하단 전역 + FAB를 숨긴다.
+final ValueNotifier<bool> hideGlobalMainFab = ValueNotifier<bool>(false);
+
 /// 왼쪽 출석 슬라이드시트가 차지하는 너비(열림·닫힘 애니메이션 중간값 포함).
 final ValueNotifier<double> leftSideSheetClipWidthNotifier =
     ValueNotifier<double>(0);

@@ -14,6 +14,7 @@ import '../../services/learning_problem_bank_service.dart';
 import '../../services/student_textbook_active_store.dart';
 import '../../services/tenant_service.dart';
 import '../../services/textbook_concept_units.dart';
+import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../widgets/utility_glass_dialog_shell.dart';
@@ -22,6 +23,7 @@ import '../../models/student.dart';
 import '../../models/student_flow.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../resources/textbook_explorer_view.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
@@ -85,6 +87,8 @@ class HomeworkQuickAddProxyDialogState
   List<_TextbookProblemRegion> _problemRegions =
       const <_TextbookProblemRegion>[];
   final Set<String> _selectedProblemRegionIds = <String>{};
+  TextbookExplorerController? _migratedExplorer;
+  String? _migratedExplorerBookKey;
   String _rangeAutoPage = '';
   String _rangeAutoCount = '';
   String _rangeAutoScope = '-';
@@ -298,6 +302,7 @@ class HomeworkQuickAddProxyDialogState
 
   @override
   void dispose() {
+    _disposeMigratedExplorer();
     _title.dispose();
     _content.dispose();
     _rangeTitle.dispose();
@@ -313,6 +318,15 @@ class HomeworkQuickAddProxyDialogState
     _inputPanelScrollController.dispose();
     _rangeContentScrollController.dispose();
     super.dispose();
+  }
+
+  void _disposeMigratedExplorer() {
+    final controller = _migratedExplorer;
+    if (controller == null) return;
+    controller.removeListener(_syncMigratedExplorerSelection);
+    controller.dispose();
+    _migratedExplorer = null;
+    _migratedExplorerBookKey = null;
   }
 
   InputDecoration _inputDecoration(String label, {String? hint}) {
@@ -1027,6 +1041,8 @@ class HomeworkQuickAddProxyDialogState
           gradeLabel: gradeLabel,
           bookName: (row['book_name'] as String?)?.trim() ?? '(이름 없음)',
           orderIndex: (row['order_index'] as int?) ?? links.length,
+          migrationStatus:
+              (row['migration_status'] as String?)?.trim() ?? 'legacy',
         ),
       );
     }
@@ -1152,6 +1168,7 @@ class HomeworkQuickAddProxyDialogState
     final lockedKeyForFlow =
         _isChildAddMode ? _lockedLinkedBookKeyForFlow(_flowId) : null;
     if (_flowId.isEmpty) {
+      _disposeMigratedExplorer();
       if (!mounted) return;
       setState(() {
         _linkedTextbooks = const <_LinkedTextbook>[];
@@ -1211,6 +1228,7 @@ class HomeworkQuickAddProxyDialogState
       if (nextSelectedKey != null) {
         await _loadMetadataForSelectedBook();
       } else {
+        _disposeMigratedExplorer();
         if (mounted) {
           setState(() {
             _units = const <_BigUnitSelectionNode>[];
@@ -1222,6 +1240,7 @@ class HomeworkQuickAddProxyDialogState
         _refreshRangeAutoDraft();
       }
     } catch (_) {
+      _disposeMigratedExplorer();
       if (!mounted) return;
       setState(() {
         _linkedTextbooks = const <_LinkedTextbook>[];
@@ -1242,6 +1261,7 @@ class HomeworkQuickAddProxyDialogState
   Future<void> _loadMetadataForSelectedBook() async {
     final linked = _selectedLinkedBook;
     if (linked == null) {
+      _disposeMigratedExplorer();
       if (!mounted) return;
       setState(() {
         _units = const <_BigUnitSelectionNode>[];
@@ -1304,6 +1324,11 @@ class HomeworkQuickAddProxyDialogState
         _pendingScrollSmallExpandKey = null;
         _expandedLeftMidSmallsKey = null;
       });
+      if (linked.isMigrated) {
+        await _loadMigratedExplorer(linked);
+      } else {
+        _disposeMigratedExplorer();
+      }
       _refreshRangeAutoDraft();
     } catch (_) {
       if (!mounted) return;
@@ -1323,6 +1348,70 @@ class HomeworkQuickAddProxyDialogState
         setState(() => _loadingMetadata = false);
       }
     }
+  }
+
+  Future<void> _loadMigratedExplorer(_LinkedTextbook linked) async {
+    if (_migratedExplorerBookKey == linked.key && _migratedExplorer != null) {
+      return;
+    }
+    _disposeMigratedExplorer();
+    String academyId = '';
+    try {
+      academyId = await TenantService.instance.getActiveAcademyId() ?? '';
+    } catch (_) {}
+    if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+    final controller = TextbookExplorerController(
+      academyId: academyId,
+      bookId: linked.bookId,
+      gradeLabel: linked.gradeLabel,
+      bookTitle: linked.bookName,
+      categoryLabel: '교재',
+      homeworkSelectionMode: true,
+      autoSelectAllQuestionsOnRangeChange: true,
+    );
+    controller.addListener(_syncMigratedExplorerSelection);
+    setState(() {
+      _migratedExplorer = controller;
+      _migratedExplorerBookKey = linked.key;
+      _rangePickerMode = 'type';
+      _selectedProblemRegionIds.clear();
+    });
+    await controller.load();
+  }
+
+  void _syncMigratedExplorerSelection() {
+    final controller = _migratedExplorer;
+    if (!mounted || controller == null) return;
+    final next = <String>{};
+    for (final item in controller.selectedItems) {
+      for (final region in _problemRegions) {
+        final itemUid = item.questionUid.trim();
+        final regionUid = region.pbQuestionUid.trim();
+        final uidMatches =
+            itemUid.isNotEmpty && regionUid.isNotEmpty && itemUid == regionUid;
+        final locationMatches = itemUid.isEmpty &&
+            region.bigOrder == item.bigOrder &&
+            region.midOrder == item.midOrder &&
+            region.subKey == item.subKey &&
+            region.rawPage == item.rawPage &&
+            region.problemNumber == item.problemNumber;
+        if (uidMatches || locationMatches) {
+          next.add(region.id);
+          break;
+        }
+      }
+    }
+    if (next.length == _selectedProblemRegionIds.length &&
+        next.every(_selectedProblemRegionIds.contains)) {
+      return;
+    }
+    setState(() {
+      _rangePickerMode = 'type';
+      _selectedProblemRegionIds
+        ..clear()
+        ..addAll(next);
+    });
+    _refreshRangeAutoDraft();
   }
 
   List<_BigUnitSelectionNode> _parseSelectionUnits(dynamic payload) {
@@ -3992,8 +4081,7 @@ class HomeworkQuickAddProxyDialogState
 
   void _showDialogSnackBar(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message, useRoot: true);
   }
 
   _DraftGroupItem? _buildDraftGroupItemFromInput() {
@@ -7164,6 +7252,59 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Widget _buildMigratedExplorerRangePanel() {
+    final controller = _migratedExplorer;
+    if (controller == null) {
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.4,
+            valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
+          ),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const YggDialogSectionHeader(
+          icon: Icons.account_tree_outlined,
+          title: '단원 · 페이지 · 문항 선택',
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 2,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: TextbookExplorerTreePanel(controller: controller),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 3,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: kDlgPanelBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: kDlgBorder),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: TextbookExplorerContent(controller: controller),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildRangeSelectionPanel({
     required _LinkedTextbook? selectedBook,
     required bool waitingSelectedBook,
@@ -7203,6 +7344,9 @@ class HomeworkQuickAddProxyDialogState
           _buildNoticeCard('교재를 선택하면 단원 범위를 지정할 수 있습니다.'),
         ],
       );
+    }
+    if (selectedBook.isMigrated) {
+      return _buildMigratedExplorerRangePanel();
     }
 
     final body = _buildMetadataTree(selectedBook);
@@ -7341,6 +7485,7 @@ class HomeworkQuickAddProxyDialogState
   Widget build(BuildContext context) {
     final selectedBook = _selectedLinkedBook;
     final hasBookSelection = _selectedLinkedBookKey != null;
+    final hasMigratedBookSelection = selectedBook?.isMigrated == true;
     final showNaesinPanel = _shouldShowNaesinPanel();
     final showNaesinStandalone = _naesinStandaloneMode && showNaesinPanel;
     final showBody = _useCustomSource || hasBookSelection || showNaesinPanel;
@@ -7357,7 +7502,9 @@ class HomeworkQuickAddProxyDialogState
     const naesinBodyHeight = 720.0;
     final naesinGridColumnCount = _naesinSchools.length;
     final double baseDialogWidth = (hasBookSelection
-            ? (_showGroupPanel ? 1460.0 : 1180.0)
+            ? (hasMigratedBookSelection
+                ? (_showGroupPanel ? 1680.0 : 1520.0)
+                : (_showGroupPanel ? 1460.0 : 1180.0))
             : (showNaesinPanel
                 ? (_showGroupPanel ? 1180.0 : compactDialogWidth)
                 : (_showGroupPanel ? 1180.0 : compactDialogWidth))) *
@@ -7733,9 +7880,8 @@ class HomeworkQuickAddProxyDialogState
     final shellWidth = math
         .min(targetDialogWidth + 48, mediaSize.width - horizontalInset * 2)
         .toDouble();
-    final shellHeight = math
-        .min(targetDialogHeight + 72, mediaSize.height * 0.92)
-        .toDouble();
+    final shellHeight =
+        math.min(targetDialogHeight + 72, mediaSize.height * 0.92).toDouble();
     // 보강/PDF/메모와 같이 하단 정렬 글래스 시트로 표시한다.
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -7966,6 +8112,7 @@ class _LinkedTextbook {
   final String gradeLabel;
   final String bookName;
   final int orderIndex;
+  final String migrationStatus;
 
   const _LinkedTextbook({
     required this.flowId,
@@ -7974,10 +8121,12 @@ class _LinkedTextbook {
     required this.gradeLabel,
     required this.bookName,
     required this.orderIndex,
+    required this.migrationStatus,
   });
 
   String get key => '$flowId|$bookId|$gradeLabel';
   String get label => '$bookName · $gradeLabel';
+  bool get isMigrated => migrationStatus == 'migrated';
 }
 
 class _IssuedSmallSummary {

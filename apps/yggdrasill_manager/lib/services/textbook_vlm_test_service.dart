@@ -377,6 +377,9 @@ class TextbookVlmDetectResult {
     required this.model,
     required this.elapsedMs,
     required this.finishReason,
+    this.contentGroupFallback = false,
+    this.contentGroupRequired = false,
+    this.contentGroupMissing = false,
     this.usage,
   });
 
@@ -406,6 +409,9 @@ class TextbookVlmDetectResult {
   final String model;
   final int elapsedMs;
   final String finishReason;
+  final bool contentGroupFallback;
+  final bool contentGroupRequired;
+  final bool contentGroupMissing;
   final Map<String, dynamic>? usage;
 
   factory TextbookVlmDetectResult.fromMap(Map<String, dynamic> map) {
@@ -445,12 +451,18 @@ class TextbookVlmDetectResult {
       pageKind: pageKind,
       items: parsed,
     );
-    final notes = _appendDetectNote(
+    var notes = _appendDetectNote(
       '${map['notes'] ?? ''}',
       synthesis.filled > 0
           ? 'manager_basic_drill_synthesized_item_region=${synthesis.filled}'
           : '',
     );
+    if (map['content_group_fallback'] == true) {
+      notes = _appendDetectNote(notes, 'content_group_fallback');
+    }
+    if (map['content_group_missing'] == true) {
+      notes = _appendDetectNote(notes, 'content_group_missing');
+    }
 
     return TextbookVlmDetectResult(
       rawPage: asInt(map['raw_page']),
@@ -466,6 +478,9 @@ class TextbookVlmDetectResult {
       model: '${map['model'] ?? ''}',
       elapsedMs: asInt(map['elapsed_ms']),
       finishReason: '${map['finish_reason'] ?? ''}',
+      contentGroupFallback: map['content_group_fallback'] == true,
+      contentGroupRequired: map['content_group_required'] == true,
+      contentGroupMissing: map['content_group_missing'] == true,
       usage: (map['usage'] is Map)
           ? (map['usage'] as Map).map((k, dynamic v) => MapEntry('$k', v))
           : null,

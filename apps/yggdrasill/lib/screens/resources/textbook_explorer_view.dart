@@ -11,6 +11,7 @@ import '../../services/textbook_explorer_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/shared_dropdown_dialog.dart';
 import '../../widgets/shared_folder_tree.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
@@ -34,6 +35,8 @@ class TextbookExplorerController extends ChangeNotifier {
     this.categoryLabel,
     this.folderLabel,
     this.onClose,
+    this.homeworkSelectionMode = false,
+    this.autoSelectAllQuestionsOnRangeChange = false,
   });
 
   final String academyId;
@@ -43,11 +46,14 @@ class TextbookExplorerController extends ChangeNotifier {
   final String? description;
   final String? categoryLabel;
   final String? folderLabel;
+  final bool homeworkSelectionMode;
+  final bool autoSelectAllQuestionsOnRangeChange;
   VoidCallback? onClose;
 
   bool loading = true;
   String? error;
   TbExData data = TbExData.empty;
+  bool _disposed = false;
 
   bool basicInfoExpanded = false;
   TbExRightMode mode = TbExRightMode.questions;
@@ -71,6 +77,11 @@ class TextbookExplorerController extends ChangeNotifier {
   final Set<String> activeTypeFilters = <String>{};
   final Set<String> activeDifficultyFilters = <String>{};
 
+  /// 선택 문항의 출제 모드 및 출력 순서 옵션.
+  final Map<String, String> selectedQuestionModesByUid = <String, String>{};
+  bool questionOrderTypePriorityEnabled = false;
+  String questionOrderTypePriorityMode = '객관식 먼저';
+
   /// 장바구니에 담긴 문항만 보기.
   bool showOnlyCart = false;
 
@@ -81,9 +92,14 @@ class TextbookExplorerController extends ChangeNotifier {
 
   final TextbookExplorerExportLauncher _exportLauncher =
       TextbookExplorerExportLauncher();
+  final LearningProblemBankService _problemBankService =
+      LearningProblemBankService();
 
   /// selKey -> 문항 조회용.
   final Map<String, TbExItem> _itemBySelKey = <String, TbExItem>{};
+  final Map<String, LearningProblemQuestion> _questionMetadataByUid =
+      <String, LearningProblemQuestion>{};
+  bool questionMetadataLoading = false;
 
   // PDF
   final PdfViewerController pdfController = PdfViewerController();
@@ -111,6 +127,7 @@ class TextbookExplorerController extends ChangeNotifier {
         bookId: bookId,
         gradeLabel: gradeLabel,
       );
+      if (_disposed) return;
       data = loaded;
       _itemBySelKey.clear();
       for (final big in loaded.units) {
@@ -127,16 +144,18 @@ class TextbookExplorerController extends ChangeNotifier {
         error = '이 교재에는 연결된 문항 정보가 없어 단원/문항 탐색을 지원하지 않습니다.';
       }
     } catch (e) {
+      if (_disposed) return;
       loading = false;
       error = '교재 데이터를 불러오지 못했습니다.\n$e';
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   // PdfViewerController(pdfrx)는 별도 dispose가 필요 없다.
 
   @override
   void dispose() {
+    _disposed = true;
     pdfHoverSelKey.dispose();
     super.dispose();
   }
@@ -179,6 +198,7 @@ class TextbookExplorerController extends ChangeNotifier {
       }
     }
     checkedSmallKeys.clear();
+    _syncDefaultSelectedItems();
     notifyListeners();
   }
 
@@ -191,6 +211,7 @@ class TextbookExplorerController extends ChangeNotifier {
       }
     }
     checkedSmallKeys.clear();
+    _syncDefaultSelectedItems();
     notifyListeners();
   }
 
@@ -202,6 +223,7 @@ class TextbookExplorerController extends ChangeNotifier {
       checkedPageKeys.add(pageKey);
     }
     checkedSmallKeys.clear();
+    _syncDefaultSelectedItems();
     notifyListeners();
   }
 
@@ -339,6 +361,41 @@ class TextbookExplorerController extends ChangeNotifier {
     return out;
   }
 
+  List<TbExItem> get selectedItems => selectedKeys
+      .map((key) => _itemBySelKey[key])
+      .whereType<TbExItem>()
+      .toList(growable: false);
+
+  bool get allRangeItemsSelected {
+    final items = visibleItems;
+    return items.isNotEmpty &&
+        items.every((item) => selectedKeys.contains(item.selKey));
+  }
+
+  bool get someRangeItemsSelected =>
+      visibleItems.any((item) => selectedKeys.contains(item.selKey));
+
+  void toggleSelectAllRangeItems() {
+    final items = visibleItems;
+    if (items.isEmpty) return;
+    final select = !allRangeItemsSelected;
+    for (final item in items) {
+      if (select) {
+        selectedKeys.add(item.selKey);
+      } else {
+        selectedKeys.remove(item.selKey);
+      }
+    }
+    notifyListeners();
+  }
+
+  void _syncDefaultSelectedItems() {
+    if (!autoSelectAllQuestionsOnRangeChange) return;
+    selectedKeys
+      ..clear()
+      ..addAll(visibleItems.map((item) => item.selKey));
+  }
+
   static String _normalizeDifficultyLabel(String raw) {
     final compact = raw.trim().replaceAll(RegExp(r'\s+'), '');
     if (compact == '대표문제') return '대표 문제';
@@ -425,14 +482,213 @@ class TextbookExplorerController extends ChangeNotifier {
         visible.every((item) => selectedKeys.contains(item.selKey));
   }
 
+  bool get hasVisibleSelection =>
+      displayItems.any((item) => selectedKeys.contains(item.selKey));
+
+  List<TbExItem> get selectedOptionItems => selectedItems
+      .where((item) => item.questionUid.trim().isNotEmpty)
+      .toList(growable: false);
+
+  String questionModeForItem(TbExItem item) {
+    final uid = item.questionUid.trim();
+    final overridden = selectedQuestionModesByUid[uid];
+    final question = _questionMetadataByUid[uid];
+    if (question != null) {
+      return normalizeQuestionModeSelection(
+        question,
+        overridden,
+        fallbackMode: originalQuestionModeOf(question),
+      );
+    }
+    if (overridden != null && overridden.isNotEmpty) return overridden;
+    switch (item.answerKind) {
+      case TbAnswerKind.objective:
+        return kLearningQuestionModeObjective;
+      case TbAnswerKind.essay:
+        return kLearningQuestionModeEssay;
+      case TbAnswerKind.subjective:
+      case TbAnswerKind.unknown:
+        return kLearningQuestionModeSubjective;
+    }
+  }
+
+  int selectedModeCount(String mode) => selectedOptionItems
+      .where((item) => questionModeForItem(item) == mode)
+      .length;
+
+  int selectedPossibleModeCount(String mode) => selectedOptionItems.where((
+        item,
+      ) {
+        final question = _questionMetadataByUid[item.questionUid.trim()];
+        return question != null &&
+            selectableQuestionModesOf(question).contains(mode);
+      }).length;
+
+  Future<void> ensureSelectedQuestionMetadata() async {
+    final missingUids = selectedOptionItems
+        .map((item) => item.questionUid.trim())
+        .where(
+            (uid) => uid.isNotEmpty && !_questionMetadataByUid.containsKey(uid))
+        .toSet()
+        .toList(growable: false);
+    if (missingUids.isEmpty || questionMetadataLoading) return;
+    questionMetadataLoading = true;
+    notifyListeners();
+    try {
+      final questions = await _problemBankService.loadQuestionsByQuestionUids(
+        academyId: academyId,
+        questionUids: missingUids,
+      );
+      if (_disposed) return;
+      for (final question in questions) {
+        final stableKey = question.stableQuestionKey.trim();
+        final id = question.id.trim();
+        if (stableKey.isNotEmpty) {
+          _questionMetadataByUid[stableKey] = question;
+        }
+        if (id.isNotEmpty) {
+          _questionMetadataByUid[id] = question;
+        }
+      }
+    } catch (_) {
+      // 메타데이터를 확인하지 못한 문항은 일괄 변환 대상에서 제외한다.
+    } finally {
+      if (!_disposed) {
+        questionMetadataLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void setAllSelectedQuestionModes(String mode) {
+    final items = selectedOptionItems;
+    if (items.isEmpty) return;
+    for (final item in items) {
+      final uid = item.questionUid.trim();
+      final question = _questionMetadataByUid[uid];
+      if (question == null ||
+          !selectableQuestionModesOf(question).contains(mode)) {
+        continue;
+      }
+      selectedQuestionModesByUid[uid] = normalizeQuestionModeSelection(
+        question,
+        mode,
+        fallbackMode: originalQuestionModeOf(question),
+      );
+    }
+    _reorderQuestionTargets();
+    notifyListeners();
+  }
+
+  void shuffleQuestionOrderNow() {
+    _reorderQuestionTargets(shuffleNow: true);
+    notifyListeners();
+  }
+
+  void setQuestionOrderTypePriorityEnabled(bool enabled) {
+    if (questionOrderTypePriorityEnabled == enabled) return;
+    questionOrderTypePriorityEnabled = enabled;
+    _reorderQuestionTargets();
+    notifyListeners();
+  }
+
+  void setQuestionOrderTypePriorityMode(String mode) {
+    if (questionOrderTypePriorityMode == mode) return;
+    questionOrderTypePriorityMode = mode;
+    questionOrderTypePriorityEnabled = true;
+    _reorderQuestionTargets();
+    notifyListeners();
+  }
+
+  int _questionTypePriorityRank(TbExItem item) {
+    if (!questionOrderTypePriorityEnabled) return 0;
+    final mode = questionModeForItem(item);
+    final objectiveFirst = questionOrderTypePriorityMode == '객관식 먼저';
+    if (mode == kLearningQuestionModeObjective) {
+      return objectiveFirst ? 0 : 1;
+    }
+    if (mode == kLearningQuestionModeSubjective) {
+      return objectiveFirst ? 1 : 0;
+    }
+    return 2;
+  }
+
+  List<TbExItem> _orderedQuestionTargets(
+    List<TbExItem> items, {
+    bool shuffleNow = false,
+  }) {
+    if (shuffleNow) {
+      return List<TbExItem>.from(items)..shuffle(math.Random());
+    }
+    if (!questionOrderTypePriorityEnabled) {
+      return List<TbExItem>.from(items);
+    }
+    final grouped = <int, List<TbExItem>>{};
+    for (final item in items) {
+      grouped
+          .putIfAbsent(
+            _questionTypePriorityRank(item),
+            () => <TbExItem>[],
+          )
+          .add(item);
+    }
+    final ranks = grouped.keys.toList()..sort();
+    final ordered = <TbExItem>[];
+    for (final rank in ranks) {
+      final group = List<TbExItem>.from(grouped[rank]!);
+      ordered.addAll(group);
+    }
+    return ordered;
+  }
+
+  void _reorderQuestionTargets({bool shuffleNow = false}) {
+    if (cartKeys.isNotEmpty) {
+      final ordered = _orderedQuestionTargets(
+        cartKeys
+            .map((key) => _itemBySelKey[key])
+            .whereType<TbExItem>()
+            .toList(growable: false),
+        shuffleNow: shuffleNow,
+      );
+      cartKeys
+        ..clear()
+        ..addAll(ordered.map((item) => item.selKey));
+      return;
+    }
+    final ordered = _orderedQuestionTargets(
+      selectedItems,
+      shuffleNow: shuffleNow,
+    );
+    selectedKeys
+      ..clear()
+      ..addAll(ordered.map((item) => item.selKey));
+  }
+
+  Map<String, String> get makeTargetQuestionModeByUid {
+    final targetUids = makeTargetQuestionUids.toSet();
+    final out = <String, String>{};
+    for (final entry in selectedQuestionModesByUid.entries) {
+      if (!targetUids.contains(entry.key)) continue;
+      final question = _questionMetadataByUid[entry.key];
+      if (question == null) continue;
+      out[entry.key] = normalizeQuestionModeSelection(
+        question,
+        entry.value,
+        fallbackMode: originalQuestionModeOf(question),
+      );
+    }
+    return out;
+  }
+
   int get makeTargetCount => makeTargetQuestionUids.length;
 
   List<String> get makeTargetQuestionUids {
     if (cartKeys.isNotEmpty) {
-      return cartKeys
+      final cartUids = cartKeys
           .map((key) => _itemBySelKey[key]?.questionUid.trim() ?? '')
           .where((uid) => uid.isNotEmpty)
           .toList(growable: false);
+      if (cartUids.isNotEmpty) return cartUids;
     }
     return selectedKeys
         .map((key) => _itemBySelKey[key]?.questionUid.trim() ?? '')
@@ -537,10 +793,10 @@ class TextbookExplorerController extends ChangeNotifier {
   void toggleSelectAllVisible() {
     final visible = displayItems;
     if (visible.isEmpty) return;
-    final allSelected =
-        visible.every((item) => selectedKeys.contains(item.selKey));
+    final clearSelection =
+        visible.any((item) => selectedKeys.contains(item.selKey));
     for (final item in visible) {
-      if (allSelected) {
+      if (clearSelection) {
         selectedKeys.remove(item.selKey);
       } else {
         selectedKeys.add(item.selKey);
@@ -570,6 +826,14 @@ class TextbookExplorerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void resetSelectionAfterPresetCreated() {
+    selectedKeys.clear();
+    cartKeys.clear();
+    selectedQuestionModesByUid.clear();
+    showOnlyCart = false;
+    notifyListeners();
+  }
+
   void patchExportSettings(LearningProblemExportSettings next) {
     exportSettings = next;
     notifyListeners();
@@ -594,7 +858,13 @@ class TextbookExplorerController extends ChangeNotifier {
   Future<void> openExportLayoutPreview(BuildContext context) async {
     final uids = makeTargetQuestionUids;
     if (uids.isEmpty) {
-      showAppSnackBar(context, '레이아웃 미리보기할 문항을 먼저 선택해주세요.');
+      final hasVisualSelection = selectedKeys.isNotEmpty || cartKeys.isNotEmpty;
+      showAppSnackBar(
+        context,
+        hasVisualSelection
+            ? '선택한 문항에 서버 문항 연결 정보가 없습니다.'
+            : '레이아웃 미리보기할 문항을 먼저 선택해주세요.',
+      );
       return;
     }
     if (isExporting) return;
@@ -605,7 +875,9 @@ class TextbookExplorerController extends ChangeNotifier {
         context: context,
         academyId: academyId,
         questionUids: uids,
+        questionModeByQuestionUid: makeTargetQuestionModeByUid,
         settings: exportSettings,
+        onSelectionReset: resetSelectionAfterPresetCreated,
         onSettingsChanged: patchExportSettings,
         onActiveJobChanged: (job) {
           activeExportJob = job;
@@ -1224,9 +1496,11 @@ class TextbookExplorerContent extends StatelessWidget {
             ),
             Positioned(
               top: _tbExTitleOverlayTop,
-              left: _tbExContentHorizontalInset +
-                  FabTabBarTokens.fabBarHeight +
-                  _tbExHeaderBackButtonGap,
+              left: controller.homeworkSelectionMode
+                  ? _tbExContentHorizontalInset
+                  : _tbExContentHorizontalInset +
+                      FabTabBarTokens.fabBarHeight +
+                      _tbExHeaderBackButtonGap,
               right: 12,
               child: IgnorePointer(
                 child: FabStyleScreenMainTitle(
@@ -1236,21 +1510,23 @@ class TextbookExplorerContent extends StatelessWidget {
                 ),
               ),
             ),
-            Positioned(
-              top: _tbExTitleOverlayTop +
-                  (_tbExTitleLineHeight - FabTabBarTokens.fabBarHeight) / 2,
-              left: _tbExContentHorizontalInset,
-              child: _SolidCircleActionButton(
-                icon: Icons.arrow_back_rounded,
-                tooltip: '교재 목록으로 돌아가기',
-                size: FabTabBarTokens.fabBarHeight,
-                iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
-                onPressed: () => controller.onClose?.call(),
+            if (!controller.homeworkSelectionMode)
+              Positioned(
+                top: _tbExTitleOverlayTop +
+                    (_tbExTitleLineHeight - FabTabBarTokens.fabBarHeight) / 2,
+                left: _tbExContentHorizontalInset,
+                child: _SolidCircleActionButton(
+                  icon: Icons.arrow_back_rounded,
+                  tooltip: '교재 목록으로 돌아가기',
+                  size: FabTabBarTokens.fabBarHeight,
+                  iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
+                  onPressed: () => controller.onClose?.call(),
+                ),
               ),
-            ),
             if (controller.hasSelectionFilter &&
                 !controller.loading &&
-                controller.data.hasQuestions)
+                controller.data.hasQuestions &&
+                !controller.homeworkSelectionMode)
               Positioned(
                 top: 12,
                 right: 12,
@@ -1322,6 +1598,7 @@ class TextbookExplorerContent extends StatelessWidget {
       grouped.putIfAbsent(item.typeGroupKey, () => <TbExItem>[]).add(item);
     }
     final keys = grouped.keys.toList(growable: false);
+    final showSelectAll = controller.homeworkSelectionMode;
     return Listener(
       onPointerUp: (_) => controller.finishItemDrag(),
       onPointerCancel: (_) => controller.cancelItemDrag(),
@@ -1332,12 +1609,18 @@ class TextbookExplorerContent extends StatelessWidget {
           4,
           120,
         ),
-        itemCount: keys.length,
+        itemCount: keys.length + (showSelectAll ? 1 : 0),
         itemBuilder: (context, index) {
-          final key = keys[index];
+          if (showSelectAll && index == 0) {
+            return _buildSelectAllHeader(style);
+          }
+          final adjustedIndex = index - (showSelectAll ? 1 : 0);
+          final key = keys[adjustedIndex];
           final groupItems = grouped[key] ?? const <TbExItem>[];
           return Padding(
-            padding: EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 18),
+            padding: EdgeInsets.only(
+              bottom: adjustedIndex == keys.length - 1 ? 0 : 18,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1379,6 +1662,46 @@ class TextbookExplorerContent extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildSelectAllHeader(PreviewAcademyPanelStyle style) {
+    const active = Color(0xFF33A373);
+    final allSelected = controller.allRangeItemsSelected;
+    final someSelected = controller.someRangeItemsSelected;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Row(
+        children: [
+          Checkbox(
+            value: allSelected ? true : (someSelected ? null : false),
+            tristate: true,
+            visualDensity: VisualDensity.compact,
+            side: BorderSide(color: style.border),
+            activeColor: active,
+            onChanged: (_) => controller.toggleSelectAllRangeItems(),
+          ),
+          const SizedBox(width: 2),
+          Expanded(
+            child: Text(
+              '전체 문항',
+              style: TextStyle(
+                color: style.title,
+                fontWeight: FontWeight.w800,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          Text(
+            '${controller.visibleItems.length}문항',
+            style: TextStyle(
+              color: style.hint,
+              fontWeight: FontWeight.w800,
+              fontSize: 12.5,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1858,6 +2181,7 @@ class _PdfProblemOverlay extends StatelessWidget {
 
   static const Color _accent = Color(0xFF33A373);
   static const double _numberPadRatio = 0.03;
+
   /// B단계 등 큰 문항에서 쓰는 통일 최대 체크 배지 크기.
   static const double _checkMaxSize = 40.0;
 
@@ -1953,8 +2277,7 @@ class _PdfProblemOverlay extends StatelessWidget {
     final numberRect = _numberPaintRect();
     final hlLeft = numberRect.left - hitLeft;
     final hlTop = numberRect.top - hitTop;
-    final checkSize =
-        _checkBadgeSize(numberRect.height, hitW, hitH);
+    final checkSize = _checkBadgeSize(numberRect.height, hitW, hitH);
 
     return Positioned(
       left: hitLeft,
@@ -2037,8 +2360,8 @@ class _PdfProblemOverlay extends StatelessWidget {
                               alignment: Alignment.center,
                               child: Icon(
                                 Icons.check,
-                                size: (checkSize * 0.62)
-                                    .clamp(numberRect.height * 0.45, checkSize * 0.72),
+                                size: (checkSize * 0.62).clamp(
+                                    numberRect.height * 0.45, checkSize * 0.72),
                                 weight: 900,
                                 color: Colors.white,
                               ),
@@ -2311,6 +2634,9 @@ class _TbExExportOptionsFab extends StatelessWidget {
       listenable: controller,
       builder: (context, _) {
         final busy = controller.isExporting;
+        final showQuestionOptions =
+            controller.mode == TbExRightMode.questions &&
+                controller.selectedKeys.isNotEmpty;
         return ProblemBankExportOptionsFab(
           isBusy: busy,
           panel: _TbExExportOptionsPanel(controller: controller),
@@ -2324,9 +2650,254 @@ class _TbExExportOptionsFab extends StatelessWidget {
             onToggleTypeFilter: controller.toggleTypeFilter,
             onToggleDifficultyFilter: controller.toggleDifficultyFilter,
             onClearFilters: controller.clearQuestionFilters,
+            panelRightExtraOffset: showQuestionOptions ? 136 : 74,
+          ),
+          questionOptionsButton: showQuestionOptions
+              ? _TbExQuestionOptionsButton(
+                  controller: controller,
+                  disabled: busy,
+                )
+              : null,
+          selectionButton: SolidCapsuleTextActionButton(
+            label: controller.hasVisibleSelection ? '해제' : '전체',
+            tooltip:
+                controller.hasVisibleSelection ? '선택 문항 해제' : '필터 문항 전체 선택',
+            selected: controller.hasVisibleSelection,
+            onPressed: busy ? null : controller.toggleSelectAllVisible,
           ),
         );
       },
+    );
+  }
+}
+
+class _TbExQuestionOptionsButton extends StatelessWidget {
+  const _TbExQuestionOptionsButton({
+    required this.controller,
+    required this.disabled,
+  });
+
+  final TextbookExplorerController controller;
+  final bool disabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return SharedDropdownDialog(
+      disabled: disabled,
+      panelMaxWidth: 620,
+      alignPanelRightToCapsuleBar: true,
+      panelRightExtraOffset: 74,
+      maxHeightScreenFraction: 0.58,
+      panelBuilder: (context, dropdownController) => SharedDropdownDialogPanel(
+        title: '문항 옵션',
+        maxHeight: dropdownController.maxHeight,
+        onClose: dropdownController.close,
+        body: SingleChildScrollView(
+          padding: SharedDropdownDialogPanel.bodyPadding,
+          child: ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) =>
+                _TbExQuestionOptionsPanel(controller: controller),
+          ),
+        ),
+      ),
+      childBuilder: (context, dropdownController) => SolidCapsuleActionButton(
+        tooltip: '문항 옵션',
+        icon: Icons.more_horiz_rounded,
+        selected: dropdownController.isOpen,
+        onPressed: disabled
+            ? null
+            : () {
+                unawaited(controller.ensureSelectedQuestionMetadata());
+                dropdownController.toggle();
+              },
+      ),
+    );
+  }
+}
+
+class _TbExQuestionOptionsPanel extends StatelessWidget {
+  const _TbExQuestionOptionsPanel({required this.controller});
+
+  final TextbookExplorerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final accent = FabTabBarTokens.previewConfirmActionColor;
+    final objective =
+        controller.selectedModeCount(kLearningQuestionModeObjective);
+    final subjective =
+        controller.selectedModeCount(kLearningQuestionModeSubjective);
+    final essay = controller.selectedModeCount(kLearningQuestionModeEssay);
+    final possibleObjective = controller.selectedPossibleModeCount(
+      kLearningQuestionModeObjective,
+    );
+    final possibleSubjective = controller.selectedPossibleModeCount(
+      kLearningQuestionModeSubjective,
+    );
+
+    Widget stat(String label, int count) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: style.groupedCardBackground,
+            borderRadius: BorderRadius.circular(10),
+            border: FabTabBarTokens.groupedCardBorderFor(brightness),
+          ),
+          child: Column(
+            children: [
+              Text(
+                '$count',
+                style: FabTabBarTokens.previewAcademyLabelStyle(style).copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: style.title,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: FabTabBarTokens.previewBodyTextStyle(
+                  style,
+                  color: style.hint,
+                  fontWeight: FontWeight.w700,
+                ).copyWith(fontSize: 11.5),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ProblemBankExportOptionsPanel.sectionTitle(style, '문항 통계'),
+        Row(
+          children: [
+            stat('객관식', objective),
+            const SizedBox(width: 8),
+            stat('주관식', subjective),
+            const SizedBox(width: 8),
+            stat('서술형', essay),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Divider(color: style.divider, height: 1),
+        const SizedBox(height: 12),
+        ProblemBankExportOptionsPanel.sectionTitle(style, '일괄 변경'),
+        if (controller.questionMetadataLoading) ...[
+          const LinearProgressIndicator(minHeight: 2),
+          const SizedBox(height: 8),
+        ],
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _questionOptionButton(
+              style: style,
+              label: '가능 문항 객관식 ($possibleObjective)',
+              onPressed:
+                  controller.questionMetadataLoading || possibleObjective == 0
+                      ? null
+                      : () => controller.setAllSelectedQuestionModes(
+                            kLearningQuestionModeObjective,
+                          ),
+            ),
+            _questionOptionButton(
+              style: style,
+              label: '가능 문항 주관식 ($possibleSubjective)',
+              onPressed:
+                  controller.questionMetadataLoading || possibleSubjective == 0
+                      ? null
+                      : () => controller.setAllSelectedQuestionModes(
+                            kLearningQuestionModeSubjective,
+                          ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Divider(color: style.divider, height: 1),
+        const SizedBox(height: 12),
+        ProblemBankExportOptionsPanel.sectionTitle(style, '배치 순서'),
+        Row(
+          children: [
+            Checkbox(
+              value: controller.questionOrderTypePriorityEnabled,
+              activeColor: accent,
+              visualDensity: VisualDensity.compact,
+              onChanged: (value) =>
+                  controller.setQuestionOrderTypePriorityEnabled(value == true),
+            ),
+            Text(
+              '유형 우선',
+              style: FabTabBarTokens.previewBodyTextStyle(
+                style,
+                color: style.hint,
+                fontWeight: FontWeight.w700,
+              ).copyWith(fontSize: 12),
+            ),
+            const SizedBox(width: 8),
+            ProblemBankExportOptionsPanel.dropdown(
+              style: style,
+              brightness: brightness,
+              width: 150,
+              value: controller.questionOrderTypePriorityMode,
+              values: const ['객관식 먼저', '주관식 먼저'],
+              onChanged: controller.questionOrderTypePriorityEnabled
+                  ? controller.setQuestionOrderTypePriorityMode
+                  : null,
+            ),
+            const Spacer(),
+            SizedBox(
+              height: 36,
+              child: OutlinedButton.icon(
+                onPressed: controller.shuffleQuestionOrderNow,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: style.title,
+                  side: BorderSide(color: style.border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                icon: const Icon(Icons.casino_outlined, size: 17),
+                label: const Text(
+                  '랜덤 섞기',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _questionOptionButton({
+    required PreviewAcademyPanelStyle style,
+    required String label,
+    required VoidCallback? onPressed,
+  }) {
+    return SizedBox(
+      height: 36,
+      child: OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: style.title,
+          side: BorderSide(color: style.border),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+        ),
+      ),
     );
   }
 }
@@ -2522,6 +3093,7 @@ class TbExFabBar extends StatelessWidget {
 class TextbookExplorerFabOverlay {
   OverlayEntry? _entry;
   TextbookExplorerController? _controller;
+  NavigatorState? _navigator;
   double _left = 0;
   double _right = 0;
   bool _syncScheduled = false;
@@ -2539,6 +3111,7 @@ class TextbookExplorerFabOverlay {
       return;
     }
     _controller = controller;
+    _navigator = Navigator.maybeOf(context, rootNavigator: true);
     _left = left;
     _right = right;
 
@@ -2561,6 +3134,7 @@ class TextbookExplorerFabOverlay {
 
   void hide() {
     _controller = null;
+    _navigator = null;
     _entry?.remove();
     _entry = null;
   }
@@ -2573,42 +3147,65 @@ class TextbookExplorerFabOverlay {
   Widget _buildOverlay(BuildContext overlayContext) {
     final controller = _controller;
     if (controller == null) return const SizedBox.shrink();
+    final actionContext = _navigator?.context ?? overlayContext;
+    final railWidth = NavigationRailTheme.of(overlayContext).minWidth ??
+        FabTabBarTokens.fabBarNavRailDefaultWidth;
 
-    return Positioned(
-      left: _left,
-      right: _right,
-      bottom: FabTabBarTokens.fabBarBottomInset,
-      child: ListenableBuilder(
-        listenable: controller,
-        builder: (context, _) {
-          final enabled = !controller.loading && controller.data.hasQuestions;
-          final busy = controller.isExporting;
-          return Padding(
-            padding: const EdgeInsets.only(left: _tbExContentHorizontalInset),
-            child: ProblemBankBottomFabBar(
-              alignStart: true,
-              leading: TbExModeFabBar.leadingPills(
-                mode: controller.mode,
-                enabled: enabled,
-                onQuestionsMode: () =>
-                    controller.switchMode(TbExRightMode.questions),
-                onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final enabled = !controller.loading && controller.data.hasQuestions;
+        final busy = controller.isExporting;
+        return Stack(
+          children: [
+            Positioned(
+              left: railWidth + FabTabBarTokens.fabBarLeftInsetFromNavRail,
+              bottom: FabTabBarTokens.fabBarBottomInset,
+              child: ProblemBankBottomFabBar(
+                showPrimaryActions: false,
+                alignStart: true,
+                leading: TbExModeFabBar.leadingPills(
+                  mode: controller.mode,
+                  enabled: enabled,
+                  onQuestionsMode: () =>
+                      controller.switchMode(TbExRightMode.questions),
+                  onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
+                ),
+                cartCount: controller.cartCount,
+                cartActive: controller.showOnlyCart,
+                allVisibleSelected: controller.allVisibleSelected,
+                isBusy: busy || !enabled,
+                onToggleSelectAll: controller.toggleSelectAllVisible,
+                onToggleCart: () =>
+                    controller.toggleShowOnlyCart(actionContext),
+                onClearCart: controller.clearCart,
+                onAddToCart: () => controller.addSelectedToCart(actionContext),
+                onCreate: () =>
+                    controller.openExportLayoutPreview(actionContext),
               ),
-              cartCount: controller.cartCount,
-              cartActive: controller.showOnlyCart,
-              allVisibleSelected: controller.allVisibleSelected,
-              isBusy: busy || !enabled,
-              onToggleSelectAll: controller.toggleSelectAllVisible,
-              onToggleCart: () =>
-                  controller.toggleShowOnlyCart(overlayContext),
-              onClearCart: controller.clearCart,
-              onAddToCart: () => controller.addSelectedToCart(overlayContext),
-              onCreate: () =>
-                  controller.openExportLayoutPreview(overlayContext),
             ),
-          );
-        },
-      ),
+            Positioned(
+              left: _left + _tbExContentHorizontalInset,
+              right: _right,
+              bottom: FabTabBarTokens.fabBarBottomInset,
+              child: ProblemBankBottomFabBar(
+                showSelectAll: false,
+                cartCount: controller.cartCount,
+                cartActive: controller.showOnlyCart,
+                allVisibleSelected: controller.allVisibleSelected,
+                isBusy: busy || !enabled,
+                onToggleSelectAll: controller.toggleSelectAllVisible,
+                onToggleCart: () =>
+                    controller.toggleShowOnlyCart(actionContext),
+                onClearCart: controller.clearCart,
+                onAddToCart: () => controller.addSelectedToCart(actionContext),
+                onCreate: () =>
+                    controller.openExportLayoutPreview(actionContext),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

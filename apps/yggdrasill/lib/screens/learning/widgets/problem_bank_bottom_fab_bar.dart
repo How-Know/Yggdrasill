@@ -20,6 +20,8 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     required this.onCreate,
     this.leading = const <Widget>[],
     this.alignStart = false,
+    this.showSelectAll = true,
+    this.showPrimaryActions = true,
   });
 
   final int cartCount;
@@ -33,6 +35,8 @@ class ProblemBankBottomFabBar extends StatelessWidget {
   final VoidCallback onCreate;
   final List<Widget> leading;
   final bool alignStart;
+  final bool showSelectAll;
+  final bool showPrimaryActions;
 
   @override
   Widget build(BuildContext context) {
@@ -65,8 +69,10 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   ...leading,
-                  if (leading.isNotEmpty) const SizedBox(width: 4),
-                  _BottomActionPill(
+                  if (leading.isNotEmpty && showPrimaryActions)
+                    const SizedBox(width: 4),
+                  if (showPrimaryActions && showSelectAll)
+                    _BottomActionPill(
                       onPressed: disabled ? null : onToggleSelectAll,
                       icon: allVisibleSelected
                           ? Icons.remove_done
@@ -74,15 +80,17 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                       label: allVisibleSelected ? '해제' : '전체',
                       selected: allVisibleSelected,
                     ),
+                  if (showPrimaryActions) ...[
                     _BottomActionPill(
                       onPressed: disabled ? null : onCreate,
                       icon: Icons.preview,
-                      label: '만들기',
+                      label: '미리보기',
                     ),
                     _BottomActionPill(
                       onPressed: disabled ? null : onAddToCart,
-                      icon: Icons.add_shopping_cart_outlined,
+                      icon: Icons.add,
                       label: '추가',
+                      showLabel: false,
                     ),
                     _CartCountPill(
                       count: cartCount,
@@ -94,11 +102,12 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                       onTap: onClearCart,
                     ),
                   ],
-                ),
+                ],
               ),
             ),
           ),
         ),
+      ),
     );
     if (alignStart) {
       return Align(alignment: Alignment.centerLeft, child: bar);
@@ -113,12 +122,14 @@ class _BottomActionPill extends StatelessWidget {
     required this.icon,
     required this.label,
     this.selected = false,
+    this.showLabel = true,
   });
 
   final VoidCallback? onPressed;
   final IconData icon;
   final String label;
   final bool selected;
+  final bool showLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -134,7 +145,7 @@ class _BottomActionPill extends StatelessWidget {
       message: label,
       waitDuration: const Duration(milliseconds: 450),
       child: SizedBox(
-        width: 112,
+        width: showLabel ? 112 : 52,
         height: double.infinity,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 250),
@@ -153,16 +164,19 @@ class _BottomActionPill extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(icon, size: 20, color: fg),
-                    const SizedBox(width: 7),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
-                        color: fg,
-                        fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                        fontWeight: FontWeight.w600,
+                    if (showLabel) ...[
+                      const SizedBox(width: 7),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontFamily:
+                              FabTabBarTokens.previewAcademyLabelFontFamily,
+                          color: fg,
+                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
@@ -199,7 +213,7 @@ class _CartCountPill extends StatelessWidget {
       message: active ? '전체 문항 보기' : '장바구니 문항 보기',
       waitDuration: const Duration(milliseconds: 450),
       child: SizedBox(
-        width: 144,
+        width: 76,
         height: double.infinity,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 250),
@@ -220,9 +234,10 @@ class _CartCountPill extends StatelessWidget {
                     Icon(Icons.shopping_cart_outlined, size: 20, color: fg),
                     const SizedBox(width: 7),
                     Text(
-                      '장바구니 $count',
+                      '$count',
                       style: TextStyle(
-                        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                        fontFamily:
+                            FabTabBarTokens.previewAcademyLabelFontFamily,
                         fontSize: FabTabBarTokens.fabBarLabelFontSize,
                         fontWeight: FontWeight.w600,
                         color: fg,
@@ -259,7 +274,7 @@ class _ClearCartPill extends StatelessWidget {
       message: '장바구니 비우기',
       waitDuration: const Duration(milliseconds: 450),
       child: SizedBox(
-        width: 112,
+        width: 52,
         height: double.infinity,
         child: Material(
           color: Colors.transparent,
@@ -267,22 +282,7 @@ class _ClearCartPill extends StatelessWidget {
             onTap: enabled ? onTap : null,
             borderRadius: BorderRadius.circular(999),
             child: Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.delete_outline, size: 20, color: fg),
-                  const SizedBox(width: 7),
-                  Text(
-                    '비우기',
-                    style: TextStyle(
-                      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
-                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                      fontWeight: FontWeight.w600,
-                      color: fg,
-                    ),
-                  ),
-                ],
-              ),
+              child: Icon(Icons.delete_outline, size: 20, color: fg),
             ),
           ),
         ),
@@ -303,6 +303,7 @@ class ProblemBankFilterMenuButton extends StatelessWidget {
     required this.onToggleTypeFilter,
     required this.onToggleDifficultyFilter,
     required this.onClearFilters,
+    this.panelRightExtraOffset = 0,
   });
 
   final bool disabled;
@@ -314,12 +315,14 @@ class ProblemBankFilterMenuButton extends StatelessWidget {
   final ValueChanged<String> onToggleTypeFilter;
   final ValueChanged<String> onToggleDifficultyFilter;
   final VoidCallback onClearFilters;
+  final double panelRightExtraOffset;
 
   @override
   Widget build(BuildContext context) {
     return SharedDropdownDialog(
       disabled: disabled,
       alignPanelRightToCapsuleBar: true,
+      panelRightExtraOffset: panelRightExtraOffset,
       panelBuilder: (context, controller) {
         final brightness = Theme.of(context).brightness;
         final isDark = brightness == Brightness.dark;
@@ -370,8 +373,8 @@ class ProblemBankFilterMenuButton extends StatelessWidget {
                       option,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style:
-                          FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+                      style: FabTabBarTokens.previewMenuItemTextStyle(style)
+                          .copyWith(
                         fontSize: SharedDropdownDialogPanel.contentFontSize,
                         fontWeight: selectedDifficultyFilters.contains(option)
                             ? FontWeight.w700
@@ -408,8 +411,7 @@ class ProblemBankTypeFilterLabel extends StatelessWidget {
   ({String number, String name}) _parseTypeKey() {
     final parts = typeKey.split('|');
     final number = parts.isNotEmpty ? parts.first.trim() : '';
-    final name =
-        parts.length > 1 ? parts.sublist(1).join('|').trim() : '';
+    final name = parts.length > 1 ? parts.sublist(1).join('|').trim() : '';
     if (number == '유형 미지정') {
       return (number: number, name: '');
     }
@@ -419,7 +421,8 @@ class ProblemBankTypeFilterLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parsed = _parseTypeKey();
-    final numberStyle = FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+    final numberStyle =
+        FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
       fontSize: SharedDropdownDialogPanel.contentFontSize,
       fontWeight: FontWeight.w800,
       height: 1.2,

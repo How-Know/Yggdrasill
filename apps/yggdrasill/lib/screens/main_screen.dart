@@ -55,6 +55,7 @@ import '../widgets/textbook_flow_link_action.dart';
 import '../widgets/naesin_preset_homework_drop_action.dart';
 import 'student/student_profile_page.dart';
 import '../models/behavior_card_drag_payload.dart';
+import '../widgets/kiosk_management_dialog.dart';
 import '../widgets/top_glass_snack_bar.dart';
 import 'dart:ui' as ui;
 
@@ -67,7 +68,7 @@ class MainScreen extends StatefulWidget {
 
 enum _SideSheetBottomView { waiting, allStudents, favoriteTemplates }
 
-enum _UtilityTool { print, fileShortcut, pdfEdit, memo, grading }
+enum _UtilityTool { print, fileShortcut, pdfEdit, memo, grading, kiosk }
 
 class _UtilityToolbarPanel extends StatelessWidget {
   const _UtilityToolbarPanel({
@@ -87,7 +88,7 @@ class _UtilityToolbarPanel extends StatelessWidget {
   static const Color _borderColor = Color(0x33FFFFFF);
   static const Color _iconColor = Color(0xFFF5F5F7);
   static const Color _activeColor = Color(0xFF33A373);
-  static const double _panelWidth = 308;
+  static const double _panelWidth = 360;
   static const double _snackBarHeight = FabTabBarTokens.fabBarHeight;
   static const double _horizontalPadding = 6;
   static const double _buttonSize = FabTabBarTokens.fabBarHeight;
@@ -196,6 +197,16 @@ class _UtilityToolbarPanel extends StatelessWidget {
                               ),
                               tooltip: '채점',
                               onPressed: () => onPressed(_UtilityTool.grading),
+                            ),
+                            const SizedBox(width: 4),
+                            _UtilityToolButton(
+                              icon: const Icon(
+                                Icons.tv_rounded,
+                                color: _iconColor,
+                                size: _largeIconSize,
+                              ),
+                              tooltip: '키오스크',
+                              onPressed: () => onPressed(_UtilityTool.kiosk),
                             ),
                           ],
                         ),
@@ -2359,6 +2370,9 @@ class _MainScreenState extends State<MainScreen>
       case _UtilityTool.grading:
         unawaited(_openGradingRightSideSheet());
         break;
+      case _UtilityTool.kiosk:
+        unawaited(_openKioskManagementDialog());
+        break;
     }
     // 내부 버튼을 누르면 도구모음을 닫는다.
     _setUtilityToolbarOpen(false);
@@ -2411,6 +2425,11 @@ class _MainScreenState extends State<MainScreen>
     if (openAction != null) {
       await openAction();
     }
+  }
+
+  Future<void> _openKioskManagementDialog() async {
+    if (!mounted) return;
+    await showKioskManagementDialog(context);
   }
 
   double _resolveSideSheetScale(double containerWidth) {
@@ -4184,8 +4203,13 @@ class _MainScreenState extends State<MainScreen>
       ),
       floatingActionButtonLocation:
           const FabStyleFloatingActionButtonLocation(),
-      floatingActionButton: MainFabAlternative(
-        showHomeBatchConfirmFab: _selectedIndex == 0,
+      floatingActionButton: ValueListenableBuilder<bool>(
+        valueListenable: hideGlobalMainFab,
+        builder: (context, hidden, _) => hidden
+            ? const SizedBox.shrink()
+            : MainFabAlternative(
+                showHomeBatchConfirmFab: _selectedIndex == 0,
+              ),
       ),
     );
   }

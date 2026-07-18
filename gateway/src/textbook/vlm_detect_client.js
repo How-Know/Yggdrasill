@@ -7,10 +7,11 @@
 
 import {
   buildDetectProblemsPrompt,
+  buildRpmSetHeaderPrompt,
   VLM_DETECT_LABELS,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
-import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
+import { parseTextbookVlmJson } from './vlm_json_parse.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
@@ -43,6 +44,7 @@ export async function detectProblemsOnPage({
   series = 'ssen',
   sectionHint = '',
   maxRetries = DEFAULT_MAX_RETRIES,
+  promptOverride = '',
 }) {
   const key = String(apiKey || '').trim();
   if (!key) throw new Error('vlm_detect_api_key_missing');
@@ -66,15 +68,17 @@ export async function detectProblemsOnPage({
             },
           },
           {
-            text: buildDetectProblemsPrompt({
-              rawPage,
-              displayPage,
-              pageOffset,
-              includeContentGroups,
-              expectedStartNumber,
-              series,
-              sectionHint,
-            }),
+            text:
+              String(promptOverride || '').trim() ||
+              buildDetectProblemsPrompt({
+                rawPage,
+                displayPage,
+                pageOffset,
+                includeContentGroups,
+                expectedStartNumber,
+                series,
+                sectionHint,
+              }),
           },
         ],
       },
@@ -148,37 +152,7 @@ export async function detectProblemsOnPage({
       .map((p) => p?.text || '')
       .join('\n')
       .trim();
-    let parsedJson = null;
-    try {
-      parsedJson = JSON.parse(modelText);
-    } catch (_) {
-      const repaired = repairLatexBackslashes(modelText);
-      try {
-        parsedJson = JSON.parse(repaired);
-      } catch (_) {
-        // 균형 중괄호 추출: 모델이 뒤에 여분의 "}" 나 따옴표를 붙이는 경우
-        // (예: "... } }\"") 그리디 정규식은 마지막 "}" 까지 삼켜 깨지므로,
-        // 첫 "{" 부터 문자열을 고려해 짝이 맞는 지점까지만 잘라낸다.
-        const balanced = extractBalancedJsonObject(repaired);
-        if (balanced) {
-          try {
-            parsedJson = JSON.parse(balanced);
-          } catch (_) {
-            // leave null
-          }
-        }
-        if (!parsedJson) {
-          const m = repaired.match(/\{[\s\S]*\}/);
-          if (m) {
-            try {
-              parsedJson = JSON.parse(m[0]);
-            } catch (_) {
-              // leave null
-            }
-          }
-        }
-      }
-    }
+    let parsedJson = parseTextbookVlmJson(modelText);
     if (!parsedJson) {
       // 개념 페이지 폴백: 모델이 정상 종료했는데도 개념 설명 페이지에서 JSON을
       // 깨뜨리는 경우가 잦다(닫는 중괄호 누락/중복). 응답에 빈 items 배열이
@@ -220,32 +194,17 @@ export async function detectProblemsOnPage({
   );
 }
 
-// 첫 "{" 부터 문자열/이스케이프를 고려해 짝이 맞는 "}" 까지의 JSON 오브젝트를
-// 잘라낸다. 모델이 뒤에 여분 텍스트(예: "} }\"") 를 붙여도 유효 오브젝트만 얻는다.
-// 짝이 맞는 닫힘을 못 찾으면(잘림) null.
-function extractBalancedJsonObject(text) {
-  const src = String(text || '');
-  const start = src.indexOf('{');
-  if (start < 0) return null;
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < src.length; i += 1) {
-    const ch = src[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === '\\') esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') inStr = true;
-    else if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return src.slice(start, i + 1);
-    }
-  }
-  return null;
+export function detectRpmSetHeadersOnPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    series: 'rpm',
+    sectionHint: 'basic_drill',
+    includeContentGroups: false,
+    promptOverride: buildRpmSetHeaderPrompt({
+      rawPage: options?.rawPage,
+      displayPage: options?.displayPage,
+    }),
+  });
 }
 
 function compactErrMsg(err) {
@@ -319,7 +278,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     const number = String(raw.number ?? '').trim();
     if (!number) continue;
     const label = normalizeDifficultyLabel(raw.label);
-    const inferredSetRange = parseBasicDrillRange(number);
+    const inferredSetRange = parseBasicDrillRange(number, series === 'rpm');
     const isSet = Boolean(raw.is_set_header) || Boolean(inferredSetRange);
     let setRange = null;
     if (raw.set_range && typeof raw.set_range === 'object') {
@@ -372,9 +331,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   }
   backfillWonriCategories(out, series);
   backfillMissingItemRegions(out);
-  backfillBasicDrillItemRegions(out);
+  backfillBasicDrillItemRegions(out, series);
   backfillMissingBboxes(out);
-  validateBasicDrillItems(out);
+  validateBasicDrillItems(out, series);
   annotateExpectedBasicDrillStart(out, opts?.expectedStartNumber);
   return out;
 }
@@ -494,7 +453,7 @@ function normalizeDifficultyLabel(input) {
   return ALLOWED_LABELS.has(compact) ? compact : '';
 }
 
-function backfillBasicDrillItemRegions(result) {
+function backfillBasicDrillItemRegions(result, series = '') {
   if (
     !result ||
     result.page_kind === 'concept_page' ||
@@ -508,7 +467,11 @@ function backfillBasicDrillItemRegions(result) {
 
   const candidates = result.items.filter(
     (item) =>
-      isBasicDrillNumber(String(item?.number || '').trim(), item?.is_set_header) &&
+      isBasicDrillNumber(
+        String(item?.number || '').trim(),
+        item?.is_set_header,
+        series === 'rpm',
+      ) &&
       Array.isArray(item?.bbox),
   );
   if (candidates.length === 0) return;
@@ -551,7 +514,7 @@ function backfillBasicDrillItemRegions(result) {
   }
 }
 
-function validateBasicDrillItems(result) {
+function validateBasicDrillItems(result, series = '') {
   if (
     !result ||
     result.section !== 'basic_drill' ||
@@ -564,8 +527,9 @@ function validateBasicDrillItems(result) {
 
   const kept = [];
   let dropped = 0;
+  const allowIndependentSetGeometry = series === 'rpm';
   for (const item of result.items) {
-    if (isValidBasicDrillItem(item)) {
+    if (isValidBasicDrillItem(item, allowIndependentSetGeometry)) {
       kept.push(item);
     } else {
       dropped += 1;
@@ -583,13 +547,21 @@ function validateBasicDrillItems(result) {
   }
 }
 
-function isValidBasicDrillItem(item) {
+function isValidBasicDrillItem(
+  item,
+  allowIndependentSetGeometry = false,
+) {
   const number = String(item?.number || '').trim();
-  if (!isBasicDrillNumber(number, item?.is_set_header)) return false;
-  if (String(item?.label || '').trim()) return false;
+  if (
+    !isBasicDrillNumber(
+      number,
+      item?.is_set_header,
+      allowIndependentSetGeometry,
+    )
+  ) {
+    return false;
+  }
 
-  // A 기본다잡기는 "번호 왼쪽 + 본문 오른쪽"의 짧은 행 구조다. 번호 bbox와
-  // 본문 region이 이 관계를 전혀 만족하지 않으면 개념/예제 박스 오탐으로 본다.
   if (!Array.isArray(item?.bbox) || !Array.isArray(item?.item_region)) {
     return false;
   }
@@ -605,6 +577,16 @@ function isValidBasicDrillItem(item) {
   if (byMin >= byMax || bxMin >= bxMax || ryMin >= ryMax || rxMin >= rxMax) {
     return false;
   }
+
+  // RPM A는 개념 페이지와 문제 페이지가 교대로 나오며, 문제 페이지 안에서도
+  // 짧은 가로형·세로형·독립형 세트가 섞인다. 4자리 번호(또는 범위 번호)와
+  // 유효 좌표가 확인된 RPM 문항을 쎈 전용 짧은 행 기하 검증으로 제거하지 않는다.
+  if (allowIndependentSetGeometry) return true;
+
+  if (String(item?.label || '').trim()) return false;
+
+  // 일반 A 문항은 "번호 왼쪽 + 본문 오른쪽"의 짧은 행 구조다. 번호 bbox와
+  // 본문 region이 이 관계를 전혀 만족하지 않으면 개념/예제 박스 오탐으로 본다.
   const regionHeight = ryMax - ryMin;
   const numberCenterY = (byMin + byMax) / 2;
   const rowYMin = ryMin - 80;
@@ -617,17 +599,22 @@ function isValidBasicDrillItem(item) {
   return true;
 }
 
-function isBasicDrillNumber(number, isSetHeader) {
+function isBasicDrillNumber(number, isSetHeader, allowShortSetRange = false) {
   if (isSetHeader) {
-    return Boolean(parseBasicDrillRange(number));
+    return Boolean(parseBasicDrillRange(number, allowShortSetRange));
   }
   return /^\d{4}$/.test(number);
 }
 
-function parseBasicDrillRange(number) {
+function parseBasicDrillRange(number, allowShort = false) {
+  const digitPattern = allowShort ? '\\d{1,4}' : '\\d{4}';
   const match = String(number || '')
     .trim()
-    .match(/^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$/);
+    .match(
+      new RegExp(
+        `^(${digitPattern})\\s*[~\\-\\u2013\\u2014\\u301c]\\s*(${digitPattern})$`,
+      ),
+    );
   if (!match) return null;
   const from = Number(match[1]);
   const to = Number(match[2]);

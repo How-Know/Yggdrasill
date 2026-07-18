@@ -77,79 +77,110 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         sectionTitle(style, '기본 양식'),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+        labeledDropdown(
+          style: style,
+          brightness: brightness,
+          label: '양식',
+          width: 170,
+          value: settings.templateLabel,
+          values: kLearningProblemTemplateOptions,
+          onChanged: disabled ? null : onTemplateChanged,
+        ),
+        const SizedBox(height: 6),
+        Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            initiallyExpanded: false,
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 4),
+            iconColor: style.hint,
+            collapsedIconColor: style.hint,
+            title: Text(
+              '세부 양식',
+              style: FabTabBarTokens.previewAcademyLabelStyle(style).copyWith(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: style.hint,
+              ),
+            ),
+            subtitle: Text(
+              '${settings.paperLabel} · ${settings.questionModeLabel} · '
+              '${settings.layoutColumnLabel} · ${settings.maxQuestionsPerPageLabel}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: FabTabBarTokens.previewBodyTextStyle(
+                style,
+                color: style.hint,
+                fontWeight: FontWeight.w600,
+              ).copyWith(fontSize: 11.5),
+            ),
             children: [
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '시험 양식',
-                width: 170,
-                value: settings.templateLabel,
-                values: kLearningProblemTemplateOptions,
-                onChanged: disabled ? null : onTemplateChanged,
-              ),
-              const SizedBox(width: 10),
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '용지',
-                width: 110,
-                value: settings.paperLabel,
-                values: kLearningProblemPaperOptions,
-                onChanged: disabled ? null : onPaperChanged,
-              ),
-              const SizedBox(width: 10),
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '출제형식',
-                width: 130,
-                value: settings.questionModeLabel,
-                values: kLearningProblemQuestionModeOptions,
-                onChanged: disabled ? null : onQuestionModeChanged,
-              ),
-              const SizedBox(width: 10),
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '단 선택',
-                width: 110,
-                value: settings.layoutColumnLabel,
-                values: kLearningProblemLayoutColumnOptions,
-                onChanged: disabled ? null : onLayoutColumnsChanged,
-              ),
-              const SizedBox(width: 10),
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '문항 배치',
-                width: 160,
-                value: settings.maxQuestionsPerPageLabel,
-                values: maxPerPageValues,
-                onChanged: disabled ? null : onMaxQuestionsPerPageChanged,
-              ),
-              const SizedBox(width: 10),
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '폰트',
-                width: 150,
-                value: settings.fontFamilyLabel,
-                values: kLearningProblemFontFamilyOptions,
-                onChanged: disabled ? null : onFontFamilyChanged,
-              ),
-              const SizedBox(width: 10),
-              labeledDropdown(
-                style: style,
-                brightness: brightness,
-                label: '폰트 크기',
-                width: 120,
-                value: settings.fontSizeLabel,
-                values: kLearningProblemFontSizeOptions,
-                onChanged: disabled ? null : onFontSizeChanged,
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    labeledDropdown(
+                      style: style,
+                      brightness: brightness,
+                      label: '용지',
+                      width: 110,
+                      value: settings.paperLabel,
+                      values: kLearningProblemPaperOptions,
+                      onChanged: disabled ? null : onPaperChanged,
+                    ),
+                    const SizedBox(width: 10),
+                    labeledDropdown(
+                      style: style,
+                      brightness: brightness,
+                      label: '출제형식',
+                      width: 130,
+                      value: settings.questionModeLabel,
+                      values: kLearningProblemQuestionModeOptions,
+                      onChanged: disabled ? null : onQuestionModeChanged,
+                    ),
+                    const SizedBox(width: 10),
+                    labeledDropdown(
+                      style: style,
+                      brightness: brightness,
+                      label: '단 선택',
+                      width: 110,
+                      value: settings.layoutColumnLabel,
+                      values: kLearningProblemLayoutColumnOptions,
+                      onChanged: disabled ? null : onLayoutColumnsChanged,
+                    ),
+                    const SizedBox(width: 10),
+                    labeledDropdown(
+                      style: style,
+                      brightness: brightness,
+                      label: '문항 배치',
+                      width: 160,
+                      value: settings.maxQuestionsPerPageLabel,
+                      values: maxPerPageValues,
+                      onChanged: disabled ? null : onMaxQuestionsPerPageChanged,
+                    ),
+                    const SizedBox(width: 10),
+                    labeledDropdown(
+                      style: style,
+                      brightness: brightness,
+                      label: '폰트',
+                      width: 150,
+                      value: settings.fontFamilyLabel,
+                      values: kLearningProblemFontFamilyOptions,
+                      onChanged: disabled ? null : onFontFamilyChanged,
+                    ),
+                    const SizedBox(width: 10),
+                    labeledDropdown(
+                      style: style,
+                      brightness: brightness,
+                      label: '폰트 크기',
+                      width: 120,
+                      value: settings.fontSizeLabel,
+                      values: kLearningProblemFontSizeOptions,
+                      onChanged: disabled ? null : onFontSizeChanged,
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -166,7 +197,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
             optionCheckbox(
               style: style,
               accent: accent,
-              label: '정답지 포함',
+              label: '정답(빠른정답) 포함',
               value: settings.includeAnswerSheet,
               disabled: disabled,
               onChanged: onIncludeAnswerSheetChanged,
@@ -319,8 +350,8 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
                     style: style,
                     brightness: brightness,
                     label: '내어쓰기',
-                    valueText: settings.layoutTuning.hangingIndent
-                        .toStringAsFixed(0),
+                    valueText:
+                        settings.layoutTuning.hangingIndent.toStringAsFixed(0),
                     onMinus: disabled
                         ? null
                         : () => onHangingIndentChanged(
@@ -361,8 +392,8 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
                     style: style,
                     brightness: brightness,
                     label: '보기간격',
-                    valueText: settings.layoutTuning.choiceSpacing
-                        .toStringAsFixed(1),
+                    valueText:
+                        settings.layoutTuning.choiceSpacing.toStringAsFixed(1),
                     onMinus: disabled
                         ? null
                         : () => onChoiceSpacingChanged(
@@ -478,8 +509,9 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
     required List<String> values,
     required ValueChanged<String>? onChanged,
   }) {
-    final safeValue =
-        values.contains(value) ? value : (values.isNotEmpty ? values.first : null);
+    final safeValue = values.contains(value)
+        ? value
+        : (values.isNotEmpty ? values.first : null);
     return SizedBox(
       width: width,
       height: controlHeight,
@@ -581,7 +613,8 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
                 const SizedBox(height: 1),
                 Text(
                   valueText,
-                  style: FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+                  style:
+                      FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
                     fontSize: 12.4,
                     fontWeight: FontWeight.w700,
                   ),
@@ -679,14 +712,16 @@ class ProblemBankQuestionSelectionOptionsPanel extends StatelessWidget {
             _actionButton(
               style: style,
               label: '가능 문항 객관식',
-              onPressed:
-                  possibleObjectiveCount == 0 || isBusy ? null : onSetObjectiveMode,
+              onPressed: possibleObjectiveCount == 0 || isBusy
+                  ? null
+                  : onSetObjectiveMode,
             ),
             _actionButton(
               style: style,
               label: '가능 문항 주관식',
-              onPressed:
-                  possibleSubjectiveCount == 0 || isBusy ? null : onSetSubjectiveMode,
+              onPressed: possibleSubjectiveCount == 0 || isBusy
+                  ? null
+                  : onSetSubjectiveMode,
             ),
             _checkDropdown(
               style: style,

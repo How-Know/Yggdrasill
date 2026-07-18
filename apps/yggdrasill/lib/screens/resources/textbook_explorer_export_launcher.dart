@@ -1,5 +1,10 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
+
+import '../../models/student_flow.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../widgets/app_snackbar.dart';
 import '../learning/models/problem_bank_export_models.dart';
@@ -17,7 +22,9 @@ class TextbookExplorerExportLauncher {
     required BuildContext context,
     required String academyId,
     required List<String> questionUids,
+    required Map<String, String> questionModeByQuestionUid,
     required LearningProblemExportSettings settings,
+    VoidCallback? onSelectionReset,
     void Function(LearningProblemExportSettings settings)? onSettingsChanged,
     void Function(LearningProblemExportJob? job)? onActiveJobChanged,
   }) async {
@@ -71,7 +78,9 @@ class TextbookExplorerExportLauncher {
       service: _service,
       academyId: safeAcademyId,
       questions: questions,
+      questionModeByQuestionUid: questionModeByQuestionUid,
       settings: settings,
+      onSelectionReset: onSelectionReset,
       onSettingsChanged: onSettingsChanged,
       onActiveJobChanged: onActiveJobChanged,
     );
@@ -104,7 +113,9 @@ class _TbExExportPreviewSession {
     required this.service,
     required this.academyId,
     required this.questions,
+    required this.questionModeByQuestionUid,
     required LearningProblemExportSettings settings,
+    this.onSelectionReset,
     this.onSettingsChanged,
     this.onActiveJobChanged,
   }) : settings = settings {
@@ -114,14 +125,21 @@ class _TbExExportPreviewSession {
   final LearningProblemBankService service;
   final String academyId;
   final List<LearningProblemQuestion> questions;
+  final Map<String, String> questionModeByQuestionUid;
   LearningProblemExportSettings settings;
-  final void Function(LearningProblemExportSettings settings)? onSettingsChanged;
+  final VoidCallback? onSelectionReset;
+  final void Function(LearningProblemExportSettings settings)?
+      onSettingsChanged;
   final void Function(LearningProblemExportJob? job)? onActiveJobChanged;
   late String mathEngine;
 
   void _emitSettings() => onSettingsChanged?.call(settings);
 
   void _emitJob(LearningProblemExportJob? job) => onActiveJobChanged?.call(job);
+
+  void _showSnack(BuildContext context, String message) {
+    showAppSnackBar(context, message);
+  }
 
   List<String> _orderedUids() {
     return questions
@@ -130,13 +148,26 @@ class _TbExExportPreviewSession {
         .toList(growable: false);
   }
 
+  Map<String, String> _effectiveQuestionModeMap() {
+    return <String, String>{
+      for (final question in questions)
+        if (question.stableQuestionKey.trim().isNotEmpty)
+          question.stableQuestionKey.trim(): normalizeQuestionModeSelection(
+            question,
+            questionModeByQuestionUid[question.stableQuestionKey.trim()] ??
+                questionModeByQuestionUid[question.id.trim()],
+            fallbackMode: originalQuestionModeOf(question),
+          ),
+    };
+  }
+
   Map<String, dynamic> _renderConfig({
     Map<String, dynamic> patch = const <String, dynamic>{},
   }) {
     final orderedUids = _orderedUids();
     final base = settings.toRenderConfig(
       selectedQuestionUidsOrdered: orderedUids,
-      questionModeByQuestionUid: const <String, String>{},
+      questionModeByQuestionUid: _effectiveQuestionModeMap(),
     );
     return <String, dynamic>{
       ...base,
@@ -195,6 +226,174 @@ class _TbExExportPreviewSession {
     return current;
   }
 
+  void _applyRequestSettings(ProblemBankPreviewRefreshRequest request) {
+    settings = settings.copyWith(
+      includeAcademyLogo: request.includeAcademyLogo,
+      timeLimitText: request.timeLimitText.trim(),
+      titlePageTopText: request.titlePageTopText.trim().isEmpty
+          ? kLearningDefaultTitlePageTopText
+          : request.titlePageTopText.trim(),
+      titlePageGoalText: request.titlePageGoalText.trim().isEmpty
+          ? kLearningDefaultTitlePageGoalText
+          : request.titlePageGoalText.trim(),
+      includeAnswerSheet: request.includeAnswerSheet,
+      includeExplanation: request.includeExplanation,
+      includeQuestionScore: request.includeQuestionScore,
+      questionScoreByQuestionId: request.questionScoreByQuestionId,
+    );
+    mathEngine = _normalizeMathEngine(request.mathEngine);
+    _emitSettings();
+  }
+
+  Map<String, dynamic> _renderPatchFromRequest(
+    ProblemBankPreviewRefreshRequest request,
+  ) {
+    final patch = <String, dynamic>{
+      'subjectTitleText': request.subjectTitleText.trim().isEmpty
+          ? '수학 영역'
+          : request.subjectTitleText.trim(),
+      'titlePageTopText': request.titlePageTopText.trim().isEmpty
+          ? kLearningDefaultTitlePageTopText
+          : request.titlePageTopText.trim(),
+      'titlePageGoalText': request.titlePageGoalText.trim().isEmpty
+          ? kLearningDefaultTitlePageGoalText
+          : request.titlePageGoalText.trim(),
+      'timeLimitText': request.timeLimitText.trim(),
+      'includeAcademyLogo': request.includeAcademyLogo,
+      'includeCoverPage': request.includeCoverPage,
+      'coverPageTexts': request.coverPageTexts,
+      'includeAnswerSheet': request.includeAnswerSheet,
+      'includeExplanation': request.includeExplanation,
+      'includeQuestionScore': request.includeQuestionScore,
+      'questionScoreByQuestionUid': request.questionScoreByQuestionId,
+      'questionScoreByQuestionId': request.questionScoreByQuestionId,
+      'mathEngine': request.mathEngine,
+      'disableAutoLabels': request.disableAutoLabels,
+    };
+    if (request.pageColumnQuestionCounts.isNotEmpty) {
+      patch['pageColumnQuestionCounts'] = request.pageColumnQuestionCounts;
+    }
+    if (settings.layoutColumnCount == 2) {
+      patch['layoutMode'] = 'custom_columns';
+      patch['columnLabelAnchors'] = request.columnLabelAnchors;
+      patch['titlePageIndices'] = request.titlePageIndices;
+      patch['titlePageHeaders'] = request.titlePageHeaders;
+    }
+    return patch;
+  }
+
+  String get _sourceDocumentId =>
+      questions.isEmpty ? '' : questions.first.documentId.trim();
+
+  Map<String, dynamic> _generatedAssignmentMetadata(
+    String assignmentFlowName,
+  ) {
+    if (questions.isEmpty) return const <String, dynamic>{};
+    final first = questions.first;
+    final textbookScope =
+        first.meta['textbook_scope'] ?? first.meta['textbookScope'];
+    final scope = textbookScope is Map
+        ? textbookScope.map((key, value) => MapEntry('$key', value))
+        : const <String, dynamic>{};
+    final scopedBookName =
+        '${scope['book_name'] ?? scope['bookName'] ?? ''}'.trim();
+    final bookLabel = scopedBookName.isNotEmpty
+        ? scopedBookName
+        : (first.materialName.trim().isNotEmpty
+            ? first.materialName.trim()
+            : (first.schoolName.trim().isNotEmpty
+                ? first.schoolName.trim()
+                : first.documentId.trim()));
+    final scopedCourseLabel =
+        '${scope['course_label'] ?? scope['courseLabel'] ?? ''}'.trim();
+    final courseLabel = first.courseLabel.trim().isNotEmpty
+        ? first.courseLabel.trim()
+        : scopedCourseLabel;
+    final assignmentBookId =
+        '${scope['book_id'] ?? scope['bookId'] ?? first.meta['book_id'] ?? first.meta['bookId'] ?? ''}'
+            .trim();
+    final assignmentBookGradeLabel =
+        '${scope['grade_label'] ?? scope['gradeLabel'] ?? ''}'.trim();
+    return <String, dynamic>{
+      'presetKind': 'assignment',
+      'assignmentLibraryKind': 'generated_assignment',
+      'assignmentBookLabel': bookLabel,
+      if (assignmentBookId.isNotEmpty) 'assignmentBookId': assignmentBookId,
+      if (assignmentBookGradeLabel.isNotEmpty)
+        'assignmentBookGradeLabel': assignmentBookGradeLabel,
+      'assignmentGradeLabel': first.gradeLabel.trim(),
+      'assignmentCourseLabel': courseLabel,
+      'assignmentSchoolName': first.schoolName.trim(),
+      'assignmentQuestionCount': questions.length,
+      if (assignmentFlowName.trim().isNotEmpty)
+        'assignmentFlowName': StudentFlow.normalizeName(
+          assignmentFlowName.trim(),
+        ),
+    };
+  }
+
+  String _defaultPdfFileName(LearningProblemExportJob job) {
+    final sourceName = questions.isEmpty
+        ? 'problem_bank'
+        : questions.first.documentSourceName.trim();
+    final base = (sourceName.isEmpty ? 'problem_bank' : sourceName)
+        .replaceAll(RegExp(r'\.[^.]+$'), '')
+        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+    final now = DateTime.now();
+    final stamp =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    return '${base}_${job.paperSize}_$stamp.pdf';
+  }
+
+  Future<void> _saveCompletedPdf(
+    BuildContext context,
+    LearningProblemExportJob job,
+  ) async {
+    final savePath = await FilePicker.platform.saveFile(
+      dialogTitle: 'PDF 저장 위치 선택',
+      fileName: _defaultPdfFileName(job),
+      type: FileType.custom,
+      allowedExtensions: const ['pdf'],
+    );
+    if (savePath == null || savePath.trim().isEmpty) {
+      if (context.mounted) _showSnack(context, '로컬 저장이 취소되었습니다.');
+      return;
+    }
+    var rawUrl = job.outputUrl.trim();
+    if (rawUrl.isEmpty &&
+        job.outputStorageBucket.isNotEmpty &&
+        job.outputStoragePath.isNotEmpty) {
+      rawUrl = await service.createStorageSignedUrl(
+        bucket: job.outputStorageBucket,
+        path: job.outputStoragePath,
+      );
+    }
+    if (rawUrl.isEmpty) {
+      throw Exception('PDF URL을 확보하지 못해 로컬 저장을 진행할 수 없습니다.');
+    }
+    late final List<int> bytes;
+    try {
+      bytes = await service.downloadPdfBytesFromUrl(rawUrl);
+    } catch (_) {
+      if (job.outputStorageBucket.isEmpty || job.outputStoragePath.isEmpty) {
+        rethrow;
+      }
+      final refreshed = await service.createStorageSignedUrl(
+        bucket: job.outputStorageBucket,
+        path: job.outputStoragePath,
+      );
+      if (refreshed.trim().isEmpty) rethrow;
+      bytes = await service.downloadPdfBytesFromUrl(refreshed);
+    }
+    final normalizedPath =
+        savePath.toLowerCase().endsWith('.pdf') ? savePath : '$savePath.pdf';
+    final outFile = File(normalizedPath);
+    await outFile.parent.create(recursive: true);
+    await outFile.writeAsBytes(bytes, flush: true);
+    await OpenFilex.open(normalizedPath);
+    if (context.mounted) _showSnack(context, 'PDF 저장 완료: $normalizedPath');
+  }
+
   Future<void> openPreviewDialog({
     required BuildContext context,
     required LearningProblemExportJob completed,
@@ -237,22 +436,22 @@ class _TbExExportPreviewSession {
       titleText: '서버 PDF 미리보기 (${questions.length}문항)',
       initialSubjectTitle:
           '${initialPrimary('subjectTitleText') ?? initialFallback('subjectTitleText') ?? '수학 영역'}'
-              .trim()
-              .isEmpty
+                  .trim()
+                  .isEmpty
               ? '수학 영역'
               : '${initialPrimary('subjectTitleText') ?? initialFallback('subjectTitleText')}'
                   .trim(),
       initialTitlePageTopText:
           '${initialPrimary('titlePageTopText') ?? initialFallback('titlePageTopText') ?? kLearningDefaultTitlePageTopText}'
-              .trim()
-              .isEmpty
+                  .trim()
+                  .isEmpty
               ? kLearningDefaultTitlePageTopText
               : '${initialPrimary('titlePageTopText') ?? initialFallback('titlePageTopText')}'
                   .trim(),
       initialTitlePageGoalText:
           '${initialPrimary('titlePageGoalText') ?? initialFallback('titlePageGoalText') ?? kLearningDefaultTitlePageGoalText}'
-              .trim()
-              .isEmpty
+                  .trim()
+                  .isEmpty
               ? kLearningDefaultTitlePageGoalText
               : '${initialPrimary('titlePageGoalText') ?? initialFallback('titlePageGoalText')}'
                   .trim(),
@@ -297,6 +496,7 @@ class _TbExExportPreviewSession {
         initialPrimary('coverPageTexts'),
         initialFallback('coverPageTexts'),
       ),
+      assignmentFlowNames: StudentFlow.defaultNames,
       onRefreshRequested: (request) async {
         settings = settings.copyWith(
           includeAcademyLogo: request.includeAcademyLogo,
@@ -380,6 +580,115 @@ class _TbExExportPreviewSession {
           includeQuestionScore: settings.includeQuestionScore,
           questionScoreByQuestionId: request.questionScoreByQuestionId,
         );
+      },
+      onGeneratePdfRequested: (request) async {
+        _applyRequestSettings(request);
+        try {
+          final completedPdf = await createPreviewExport(
+            patch: _renderPatchFromRequest(request),
+            previewOnly: false,
+          );
+          if (!context.mounted) return;
+          if (completedPdf == null ||
+              completedPdf.status != 'completed' ||
+              completedPdf.outputUrl.trim().isEmpty) {
+            final err = completedPdf?.errorMessage.isNotEmpty == true
+                ? completedPdf!.errorMessage
+                : (completedPdf?.errorCode ??
+                    completedPdf?.status ??
+                    'unknown');
+            _showSnack(context, 'PDF 생성 실패: $err');
+            return;
+          }
+          await _saveCompletedPdf(context, completedPdf);
+        } catch (e) {
+          if (context.mounted) _showSnack(context, 'PDF 생성 실패: $e');
+        }
+      },
+      onSaveSettingsRequested: (request) async {
+        final orderedUids = _orderedUids();
+        final sourceDocumentId = _sourceDocumentId;
+        if (orderedUids.isEmpty || sourceDocumentId.isEmpty) {
+          _showSnack(context, '저장할 문항 또는 원본 문서 정보가 없습니다.');
+          return false;
+        }
+        _applyRequestSettings(request);
+        final renderConfig = _renderConfig(
+          patch: _renderPatchFromRequest(request),
+        );
+        try {
+          final presetIdToUpdate = request.presetIdToUpdate.trim();
+          final result = await service.saveExportSettingsAsDocument(
+            academyId: academyId,
+            sourceDocumentId: sourceDocumentId,
+            selectedQuestionUidsOrdered: orderedUids,
+            questionModeByQuestionUid: _effectiveQuestionModeMap(),
+            renderConfig: renderConfig,
+            templateProfile: settings.templateProfile,
+            paperSize: settings.paperLabel,
+            includeAnswerSheet: request.includeAnswerSheet,
+            includeExplanation: request.includeExplanation,
+            displayName: request.presetDisplayName.trim(),
+            presetId: presetIdToUpdate,
+          );
+          final savedPresetId = (result.preset?.id ?? presetIdToUpdate).trim();
+          if (savedPresetId.isNotEmpty) {
+            await service.overwriteExportPresetRenderConfig(
+              academyId: academyId,
+              presetId: savedPresetId,
+              renderConfig: renderConfig,
+            );
+          }
+          if (!context.mounted) return false;
+          _showSnack(
+            context,
+            presetIdToUpdate.isEmpty
+                ? '새 프리셋 저장 완료 (${orderedUids.length}문항)'
+                : '프리셋 업데이트 완료 (${orderedUids.length}문항)',
+          );
+          if (presetIdToUpdate.isEmpty) onSelectionReset?.call();
+          return true;
+        } catch (e) {
+          if (context.mounted) _showSnack(context, '세팅 저장 실패: $e');
+          return false;
+        }
+      },
+      onCreateAssignmentRequested: (request) async {
+        final orderedUids = _orderedUids();
+        final sourceDocumentId = _sourceDocumentId;
+        if (orderedUids.isEmpty || sourceDocumentId.isEmpty) {
+          _showSnack(context, '과제로 저장할 문항 또는 원본 문서 정보가 없습니다.');
+          return false;
+        }
+        _applyRequestSettings(request);
+        final renderConfig = <String, dynamic>{
+          ..._renderConfig(patch: _renderPatchFromRequest(request)),
+          ..._generatedAssignmentMetadata(request.assignmentFlowName),
+        };
+        try {
+          final result = await service.createGeneratedAssignmentPreset(
+            academyId: academyId,
+            sourceDocumentId: sourceDocumentId,
+            selectedQuestionUidsOrdered: orderedUids,
+            questionModeByQuestionUid: _effectiveQuestionModeMap(),
+            renderConfig: renderConfig,
+            templateProfile: settings.templateProfile,
+            paperSize: settings.paperLabel,
+            includeAnswerSheet: request.includeAnswerSheet,
+            includeExplanation: request.includeExplanation,
+            displayName: request.presetDisplayName.trim(),
+          );
+          if (!context.mounted) return false;
+          final count = result.selectedQuestionUids.isNotEmpty
+              ? result.selectedQuestionUids.length
+              : orderedUids.length;
+          _showSnack(context, '미리 만든 과제 생성 완료 ($count문항)');
+          onSelectionReset?.call();
+          return true;
+        } catch (e) {
+          if (context.mounted) _showSnack(context, '과제 생성 실패: $e');
+          return false;
+        }
       },
     );
   }

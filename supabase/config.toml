@@ -3,4 +3,7 @@ project_id = "jkanrdxaidumlvpntudy"
 # This file will be updated by `supabase link`.
 # Keeping it minimal to avoid local Docker dev setup for now.
 
+[functions.kiosk_api]
+verify_jwt = false
+
 

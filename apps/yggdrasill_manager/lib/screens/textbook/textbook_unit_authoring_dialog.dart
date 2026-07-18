@@ -713,6 +713,51 @@ class _TextbookUnitAuthoringDialogState
     );
   }
 
+  _ResolvedContentGroup _effectiveContentGroupForItem({
+    required _SubFocus focus,
+    required _SubRunState state,
+    required int rawPage,
+    required int itemIndex,
+  }) {
+    if (focus.subKey != 'B') return const _ResolvedContentGroup.none();
+    _ResolvedContentGroup? lastGroup;
+    final rows = state.pageResults.where((row) => row.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    for (final row in rows) {
+      for (var i = 0; i < row.items.length; i += 1) {
+        final rawGroup =
+            _rawContentGroupForItem(row.items[i], focus.subKey, row.section);
+        if (rawGroup.kind == 'type') lastGroup = rawGroup;
+        if (row.rawPage == rawPage && i == itemIndex) {
+          return rawGroup.kind == 'type'
+              ? rawGroup
+              : (lastGroup ?? const _ResolvedContentGroup.none());
+        }
+      }
+    }
+    return const _ResolvedContentGroup.none();
+  }
+
+  String? _requiredTypeGroupError(_SubFocus focus, _SubRunState state) {
+    if (focus.subKey != 'B' ||
+        (_seriesKey != 'ssen' && _seriesKey != 'rpm')) {
+      return null;
+    }
+    final items = state.pageResults
+        .where((row) => row.ok)
+        .expand((row) => row.items)
+        .toList(growable: false);
+    if (items.isEmpty) return null;
+    final hasType = items.any((item) {
+      final group =
+          _rawContentGroupForItem(item, focus.subKey, 'type_practice');
+      return group.kind == 'type';
+    });
+    return hasType
+        ? null
+        : 'B단계 유형명을 하나도 추출하지 못했습니다. 유형명 포함 재분석이 필요합니다.';
+  }
+
   String _sectionForSubKey(String subKey) {
     // 개념원리는 슬롯 의미가 문제집(쎈/RPM)과 다르다.
     // 게이트웨이 vlm_detect_prompt.js 의 WONRI_SECTION_BY_SUB_KEY 와 동일하게 유지.
@@ -740,6 +785,34 @@ class _TextbookUnitAuthoringDialogState
       default:
         return 'unknown';
     }
+  }
+
+  bool _isRpmAConceptPage(
+    _SubFocus focus,
+    int rawPage,
+    int rawStartPage,
+  ) {
+    return _seriesKey == 'rpm' &&
+        focus.subKey == 'A' &&
+        (rawPage - rawStartPage).isEven;
+  }
+
+  TextbookVlmDetectResult _rpmAConceptPageResult(int rawPage) {
+    return TextbookVlmDetectResult(
+      rawPage: rawPage,
+      displayPage: _displayPageForRawPage(rawPage),
+      pageOffset: 0,
+      pageOffsetFound: false,
+      section: 'basic_drill',
+      pageKind: 'concept_page',
+      conceptDrillHeaderVisible: false,
+      layout: 'unknown',
+      items: const <TextbookVlmItem>[],
+      notes: 'rpm_a_concept_page_by_alternation',
+      model: 'deterministic_series_rule',
+      elapsedMs: 0,
+      finishReason: 'RULE',
+    );
   }
 
   // ------------------------------------------------------- 목차 자동 인식
@@ -1373,8 +1446,11 @@ class _TextbookUnitAuthoringDialogState
     Future<TextbookVlmDetectResult> detect({
       required Uint8List imageBytes,
       required int rawPage,
-    }) {
-      return _vlmService.detectProblemsOnPage(
+    }) async {
+      if (_isRpmAConceptPage(focus, rawPage, rawStartPage)) {
+        return _rpmAConceptPageResult(rawPage);
+      }
+      final result = await _vlmService.detectProblemsOnPage(
         imageBytes: imageBytes,
         rawPage: rawPage,
         academyId: widget.academyId,
@@ -1392,6 +1468,14 @@ class _TextbookUnitAuthoringDialogState
         ),
         series: _seriesKey,
       );
+      if (_seriesKey == 'rpm' &&
+          focus.subKey == 'A' &&
+          result.items.isEmpty) {
+        throw StateError(
+          'rpm_a_expected_problem_page_empty: raw_page=$rawPage',
+        );
+      }
+      return result;
     }
 
     try {
@@ -1434,10 +1518,13 @@ class _TextbookUnitAuthoringDialogState
         },
       );
       if (!mounted) return;
+      final typeGroupError = _requiredTypeGroupError(focus, state);
       setState(() {
         state.running = false;
-        state.error = finalProgress.lastError;
-        state.phase = finalProgress.failed > 0 ? '일부 실패' : '완료';
+        state.error = finalProgress.lastError ?? typeGroupError;
+        state.phase = finalProgress.failed > 0
+            ? '일부 실패'
+            : (typeGroupError == null ? '완료' : '유형명 누락');
       });
     } catch (e) {
       if (!mounted) return;
@@ -1464,6 +1551,7 @@ class _TextbookUnitAuthoringDialogState
     final doc = await _ensurePdf();
     if (doc == null) return;
     final expectedStartNumber = await _expectedStartNumberForFocus(focus);
+    final rawStartPage = _rawStartPageForFocus(focus);
     setState(() {
       state.running = true;
       state.cancelled = false;
@@ -1484,8 +1572,12 @@ class _TextbookUnitAuthoringDialogState
     Future<TextbookVlmDetectResult> detect({
       required Uint8List imageBytes,
       required int rawPage,
-    }) {
-      return _vlmService.detectProblemsOnPage(
+    }) async {
+      if (rawStartPage != null &&
+          _isRpmAConceptPage(focus, rawPage, rawStartPage)) {
+        return _rpmAConceptPageResult(rawPage);
+      }
+      final result = await _vlmService.detectProblemsOnPage(
         imageBytes: imageBytes,
         rawPage: rawPage,
         academyId: widget.academyId,
@@ -1501,6 +1593,14 @@ class _TextbookUnitAuthoringDialogState
         ),
         series: _seriesKey,
       );
+      if (_seriesKey == 'rpm' &&
+          focus.subKey == 'A' &&
+          result.items.isEmpty) {
+        throw StateError(
+          'rpm_a_expected_problem_page_empty: raw_page=$rawPage',
+        );
+      }
+      return result;
     }
 
     try {
@@ -1545,10 +1645,13 @@ class _TextbookUnitAuthoringDialogState
         },
       );
       if (!mounted) return;
+      final typeGroupError = _requiredTypeGroupError(focus, state);
       setState(() {
         state.running = false;
-        state.error = finalProgress.lastError;
-        state.phase = finalProgress.failed > 0 ? '재분석 일부 실패' : '재분석 완료';
+        state.error = finalProgress.lastError ?? typeGroupError;
+        state.phase = finalProgress.failed > 0
+            ? '재분석 일부 실패'
+            : (typeGroupError == null ? '재분석 완료' : '유형명 누락');
       });
     } catch (e) {
       if (!mounted) return;
@@ -1756,7 +1859,6 @@ class _TextbookUnitAuthoringDialogState
 
   bool _isValidBasicDrillCandidate(TextbookVlmItem item) {
     if (!_isBasicDrillNumber(item)) return false;
-    if (item.label.trim().isNotEmpty) return false;
     final bbox = item.bbox;
     final region = item.itemRegion;
     if (bbox == null ||
@@ -1776,6 +1878,12 @@ class _TextbookUnitAuthoringDialogState
     if (byMin >= byMax || bxMin >= bxMax || ryMin >= ryMax || rxMin >= rxMax) {
       return false;
     }
+
+    // RPM A에는 짧은 가로형 외에 세로형·독립형 세트가 섞인다. 4자리 번호와
+    // 유효 좌표가 확인되면 쎈 전용 짧은 행 기하 검증으로 제거하지 않는다.
+    if (_seriesKey == 'rpm') return true;
+
+    if (item.label.trim().isNotEmpty) return false;
     final regionHeight = ryMax - ryMin;
     final numberCenterY = (byMin + byMax) / 2;
     if (regionHeight > 380) return false;
@@ -1791,8 +1899,10 @@ class _TextbookUnitAuthoringDialogState
   bool _isBasicDrillNumber(TextbookVlmItem item) {
     final number = item.number.trim();
     if (item.isSetHeader) {
-      final match = RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$')
-          .firstMatch(number);
+      final pattern = _seriesKey == 'rpm'
+          ? RegExp(r'^(\d{1,4})\s*[~\-\u2013\u2014\u301c]\s*(\d{1,4})$')
+          : RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$');
+      final match = pattern.firstMatch(number);
       if (match == null) return false;
       final from = int.tryParse(match.group(1)!);
       final to = int.tryParse(match.group(2)!);
@@ -1812,8 +1922,10 @@ class _TextbookUnitAuthoringDialogState
     final out = <int>{};
     for (final item in items) {
       if (item.isSetHeader) {
-        final match = RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$')
-            .firstMatch(item.number.trim());
+        final pattern = _seriesKey == 'rpm'
+            ? RegExp(r'^(\d{1,4})\s*[~\-\u2013\u2014\u301c]\s*(\d{1,4})$')
+            : RegExp(r'^(\d{4})\s*[~\-\u2013\u2014\u301c]\s*(\d{4})$');
+        final match = pattern.firstMatch(item.number.trim());
         final from = match == null ? null : int.tryParse(match.group(1)!);
         final to = match == null ? null : int.tryParse(match.group(2)!);
         if (from != null && to != null && from <= to && to - from <= 30) {
@@ -1882,6 +1994,11 @@ class _TextbookUnitAuthoringDialogState
     final state = _ensureSubState(focus);
     if (state.running || state.uploading) return;
     _applyScopeGuards(focus);
+    final typeGroupError = _requiredTypeGroupError(focus, state);
+    if (typeGroupError != null) {
+      _toast(typeGroupError, error: true);
+      return;
+    }
     if (_isWonriRowFocus(focus)) {
       await _uploadWonriRowFocus(focus, state);
       return;
@@ -4492,9 +4609,19 @@ class _TextbookUnitAuthoringDialogState
       if (bbox == null || bbox.length != 4) continue;
       final rect = _bboxToRect(bbox, pageSize);
       if (rect == null) continue;
+      final effectiveGroup = _effectiveContentGroupForItem(
+        focus: focus,
+        state: state,
+        rawPage: pageNumber,
+        itemIndex: i,
+      );
       widgets.add(_NumberBadge(
         rect: rect,
         item: item,
+        groupLabelOverride:
+            effectiveGroup.kind == 'type' ? effectiveGroup.label : null,
+        groupTitleOverride:
+            effectiveGroup.kind == 'type' ? effectiveGroup.title : null,
         // 개념서는 난이도가 없으므로 뱃지에 문항이름을 표시한다.
         labelOverride: _seriesKey == 'wonri'
             ? _wonriItemName(_wonriCategoryOfItem(item, ''), item.label)
@@ -4822,7 +4949,7 @@ class _AutoGuardMarker extends StatelessWidget {
             Icon(Icons.rule, size: 13, color: Color(0xFFEAB968)),
             SizedBox(width: 5),
             Text(
-              'A 번호 검증 적용',
+              'A 오인식 후보 자동 제외',
               style: TextStyle(
                 color: Color(0xFFEAB968),
                 fontSize: 11,
@@ -4889,20 +5016,28 @@ class _RegionBox extends StatelessWidget {
 
 class _NumberBadge extends StatelessWidget {
   const _NumberBadge(
-      {required this.rect, required this.item, this.labelOverride});
+      {required this.rect,
+      required this.item,
+      this.labelOverride,
+      this.groupLabelOverride,
+      this.groupTitleOverride});
   final Rect rect;
   final TextbookVlmItem item;
 
   /// 개념서 문항이름처럼 난이도(label) 대신 표시할 라벨. null 이면 item.label 사용.
   final String? labelOverride;
+  final String? groupLabelOverride;
+  final String? groupTitleOverride;
 
   @override
   Widget build(BuildContext context) {
     final color =
         item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFFFF4D4F);
-    final groupLabel = item.contentGroupLabel.trim();
+    final groupLabel =
+        (groupLabelOverride ?? item.contentGroupLabel).trim();
     // 필수유형 유형명(content_group_title). 확인용으로 뱃지에 함께 표시한다.
-    final groupTitle = item.contentGroupTitle.trim();
+    final groupTitle =
+        (groupTitleOverride ?? item.contentGroupTitle).trim();
     final badgeLabel = labelOverride ?? item.label;
     final numberLabel =
         badgeLabel.isEmpty ? item.number : '${item.number} · $badgeLabel';

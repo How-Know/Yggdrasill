@@ -59,6 +59,7 @@ import {
 } from './storage/driver.js';
 import {
   detectProblemsOnPage,
+  detectRpmSetHeadersOnPage,
   normalizeDetectResult,
 } from './textbook/vlm_detect_client.js';
 import {
@@ -6050,6 +6051,17 @@ const TEXTBOOK_VLM_TIMEOUT_MS = Number.parseInt(
   process.env.TEXTBOOK_VLM_TIMEOUT_MS || '120000',
   10,
 );
+// 정답지/해설지는 한 페이지에 수십~수백 개 번호가 밀집해 일반 문항 탐지보다
+// 응답 생성 시간이 길다. 120초×3회 대신 180초×2회로 총 대기 상한은 유지하면서
+// 정상 응답이 완료될 시간을 확보한다.
+const TEXTBOOK_ANSWER_VLM_TIMEOUT_MS = Number.parseInt(
+  process.env.TEXTBOOK_ANSWER_VLM_TIMEOUT_MS || '180000',
+  10,
+);
+const TEXTBOOK_ANSWER_VLM_MAX_RETRIES = Number.parseInt(
+  process.env.TEXTBOOK_ANSWER_VLM_MAX_RETRIES || '2',
+  10,
+);
 const TEXTBOOK_VLM_VALID_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 function isTextbookVlmQuotaError(input) {
@@ -6115,6 +6127,9 @@ async function handleTextbookVlmDetectProblems(body, res) {
     : '';
   // 교재 시리즈 (ssen | rpm | wonri). 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
   const series = String(body?.series || '').trim().toLowerCase();
+  const contentGroupRequired =
+    sectionHint === 'type_practice' &&
+    (series === 'ssen' || series === 'rpm');
 
   // Textbook authoring VLM uses operator-entered PDF raw pages directly.
   // page_offset is a learning-app display concern and must not shift VLM ranges.
@@ -6169,7 +6184,9 @@ async function handleTextbookVlmDetectProblems(body, res) {
         model: TEXTBOOK_VLM_MODEL,
         apiKey,
         timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
-        includeContentGroups: false,
+        // 쎈/RPM B단계는 모든 문항이 유형에 속한다. 좌표 추출용 간소화
+        // 재시도에서도 유형 정보를 끄면 성공처럼 보이는 불완전 결과가 된다.
+        includeContentGroups: contentGroupRequired,
         expectedStartNumber,
         series,
         sectionHint,
@@ -6213,6 +6230,117 @@ async function handleTextbookVlmDetectProblems(body, res) {
     expectedStartNumber,
     series,
   });
+  let rpmSetHeaderCount = 0;
+  let rpmComplexRegionCount = 0;
+  if (
+    series === 'rpm' &&
+    sectionHint === 'basic_drill' &&
+    normalized.items.length > 0
+  ) {
+    let setHeaderResult;
+    try {
+      setHeaderResult = await detectRpmSetHeadersOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      });
+    } catch (err) {
+      const message = compact(err?.message || err);
+      console.warn(
+        '[textbook-vlm-detect] rpm_set_header_failed',
+        JSON.stringify({ rawPage, bookId, gradeLabel, message }),
+      );
+      sendJson(res, isTextbookVlmQuotaError(message) ? 429 : 502, {
+        ok: false,
+        error: isTextbookVlmQuotaError(message)
+          ? 'vlm_daily_quota_exceeded'
+          : 'vlm_rpm_set_header_failed',
+        message,
+      });
+      return;
+    }
+    const setHeaderNormalized = normalizeDetectResult(
+      setHeaderResult.parsedJson,
+      { sectionHint: 'basic_drill', series: 'rpm' },
+    );
+    const existing = new Set(
+      normalized.items
+        .filter((item) => item?.is_set_header === true)
+        .map((item) =>
+          String(item?.number || '')
+            .replace(/[\[\]【】()\s]/g, '')
+            .replace(/[\u2013\u2014\u301c-]/g, '~'),
+        ),
+    );
+    const numberKey = (value) =>
+      String(value || '')
+        .trim()
+        .replace(/^0+(?=\d)/, '');
+    const existingProblemByNumber = new Map(
+      normalized.items
+        .filter((item) => item?.is_set_header !== true)
+        .map((item) => [numberKey(item?.number), item]),
+    );
+    const regionArea = (region) =>
+      Array.isArray(region) && region.length === 4
+        ? Math.max(0, Number(region[2]) - Number(region[0])) *
+          Math.max(0, Number(region[3]) - Number(region[1]))
+        : 0;
+    for (const item of setHeaderNormalized.items) {
+      if (item?.is_set_header !== true) {
+        const existingProblem = existingProblemByNumber.get(
+          numberKey(item?.number),
+        );
+        if (
+          existingProblem &&
+          regionArea(item?.item_region) > regionArea(existingProblem.item_region)
+        ) {
+          existingProblem.item_region = item.item_region;
+          rpmComplexRegionCount += 1;
+        }
+        continue;
+      }
+      const key = String(item?.number || '')
+        .replace(/[\[\]【】()\s]/g, '')
+        .replace(/[\u2013\u2014\u301c-]/g, '~');
+      if (!key || existing.has(key)) continue;
+      existing.add(key);
+      normalized.items.push(item);
+      rpmSetHeaderCount += 1;
+    }
+    normalized.items.sort((a, b) => {
+      const aCol = a?.column === 2 ? 2 : 1;
+      const bCol = b?.column === 2 ? 2 : 1;
+      if (aCol !== bCol) return aCol - bCol;
+      return Number(a?.bbox?.[0] || 0) - Number(b?.bbox?.[0] || 0);
+    });
+    if (rpmSetHeaderCount > 0 || rpmComplexRegionCount > 0) {
+      const suffix = [
+        rpmSetHeaderCount > 0
+          ? `rpm_set_headers_merged=${rpmSetHeaderCount}`
+          : '',
+        rpmComplexRegionCount > 0
+          ? `rpm_complex_regions_merged=${rpmComplexRegionCount}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('; ');
+      normalized.notes = normalized.notes
+        ? `${normalized.notes}; ${suffix}`
+        : suffix;
+    }
+  }
+  const hasContentGroup = normalized.items.some(
+    (item) =>
+      item?.content_group_kind === 'type' &&
+      (String(item?.content_group_label || '').trim() ||
+        String(item?.content_group_title || '').trim()),
+  );
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
@@ -6221,6 +6349,11 @@ async function handleTextbookVlmDetectProblems(body, res) {
     page_offset_found: offsetFound,
     expected_start_number: expectedStartNumber || null,
     content_group_fallback: usedFallbackPrompt,
+    content_group_required: contentGroupRequired,
+    content_group_missing:
+      contentGroupRequired && normalized.items.length > 0 && !hasContentGroup,
+    rpm_set_header_count: rpmSetHeaderCount,
+    rpm_complex_region_count: rpmComplexRegionCount,
     section: normalized.section,
     page_kind: normalized.page_kind,
     concept_drill_header_visible:
@@ -6862,7 +6995,8 @@ async function handleTextbookVlmExtractAnswers(body, res) {
       expectedNumbers,
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
-      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+      maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
     });
   } catch (err) {
     sendJson(res, 502, {
@@ -6956,7 +7090,8 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
       expectedNumbers,
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
-      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+      maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
     });
   } catch (err) {
     sendJson(res, 502, {

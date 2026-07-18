@@ -2,7 +2,7 @@
 // `vlm_detect_client.js` 와 뼈대는 같지만, 프롬프트와 결과 정규화 규칙이 다르다.
 
 import { buildDetectSolutionRefsPrompt } from './vlm_solution_refs_prompt.js';
-import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
+import { parseTextbookVlmJson } from './vlm_json_parse.js';
 
 const SOLREF_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const SOLREF_DEFAULT_MAX_RETRIES = 3;
@@ -128,24 +128,7 @@ export async function detectSolutionRefsOnPage({
       .map((p) => p?.text || '')
       .join('\n')
       .trim();
-    let parsedJson = null;
-    try {
-      parsedJson = JSON.parse(modelText);
-    } catch (_) {
-      const repaired = repairLatexBackslashes(modelText);
-      try {
-        parsedJson = JSON.parse(repaired);
-      } catch (_) {
-        const m = repaired.match(/\{[\s\S]*\}/);
-        if (m) {
-          try {
-            parsedJson = JSON.parse(m[0]);
-          } catch (_) {
-            // leave null
-          }
-        }
-      }
-    }
+    const parsedJson = parseTextbookVlmJson(modelText);
     if (!parsedJson) {
       throw new Error(
         `vlm_solref_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(
