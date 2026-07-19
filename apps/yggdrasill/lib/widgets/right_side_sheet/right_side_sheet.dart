@@ -6587,21 +6587,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   Widget _buildAnswerFallback(_RightSheetGradingCellVm cell) {
-    return SizedBox(
-      height: _answerSlotHeightForCell(cell),
-      child: const Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          '렌더 준비 안 됨',
-          textAlign: TextAlign.left,
-          style: TextStyle(
-            color: Color(0xFFFFD7DE),
-            fontWeight: FontWeight.w800,
-            fontSize: 12,
-          ),
-        ),
-      ),
-    );
+    // 사전 렌더 PNG가 아직 없거나 네트워크에서 불러오지 못해도 정답
+    // 자체는 숨기지 않는다. 기존 LaTeX 텍스트 렌더러로 즉시 폴백한다.
+    return _buildInlineAnswerText(cell);
   }
 
   Widget _buildInlineAnswerText(_RightSheetGradingCellVm cell) {

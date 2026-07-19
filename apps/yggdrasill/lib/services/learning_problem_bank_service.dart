@@ -1030,16 +1030,35 @@ class LearningProblemBankService {
 
   static String _resolveGatewayUrl(String? explicit) {
     if (explicit != null && explicit.trim().isNotEmpty) {
-      return explicit.trim();
+      return _usableGatewayUrl(explicit);
     }
     const dartDefine =
         String.fromEnvironment('PB_GATEWAY_URL', defaultValue: '');
-    if (dartDefine.isNotEmpty) return dartDefine;
+    if (dartDefine.isNotEmpty) return _usableGatewayUrl(dartDefine);
     try {
       final envValue = Platform.environment['PB_GATEWAY_URL'] ?? '';
-      if (envValue.isNotEmpty) return envValue;
+      if (envValue.isNotEmpty) return _usableGatewayUrl(envValue);
     } catch (_) {}
-    return 'http://localhost:8787';
+    return _isMobilePlatform ? '' : 'http://localhost:8787';
+  }
+
+  static bool get _isMobilePlatform {
+    try {
+      return Platform.isIOS || Platform.isAndroid;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _usableGatewayUrl(String raw) {
+    final value = raw.trim();
+    if (!_isMobilePlatform) return value;
+    final uri = Uri.tryParse(value);
+    final host = (uri?.host ?? '').toLowerCase();
+    if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
+      return '';
+    }
+    return value;
   }
 
   final SupabaseClient _client;
@@ -1048,6 +1067,8 @@ class LearningProblemBankService {
   final String _gatewayApiKey;
 
   bool get hasGateway => _gatewayBaseUrl.isNotEmpty;
+  static const _previewBucket = 'problem-previews';
+  static const _batchPreviewVersion = 'pb_render_v103_subq_wrap_27';
 
   Uri _gatewayUri(String path, [Map<String, String>? query]) {
     final base = _gatewayBaseUrl.endsWith('/')
@@ -2573,23 +2594,28 @@ class LearningProblemBankService {
         'selectedQuestionIdsOrdered': selectedUids,
     };
     if (hasGateway) {
-      final json = await _gatewayPost(
-        '/pb/jobs/export',
-        body: {
-          'academyId': academyId,
-          'documentId': documentId,
-          'requestedBy': _client.auth.currentUser?.id,
-          'templateProfile': templateProfile,
-          'paperSize': paperSize,
-          'includeAnswerSheet': includeAnswerSheet,
-          'includeExplanation': includeExplanation,
-          'selectedQuestionUids': selectedUids,
-          'renderHash': safeRenderHash,
-          'previewOnly': previewOnly,
-          'options': payloadOptions,
-        },
-      );
-      return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
+      try {
+        final json = await _gatewayPost(
+          '/pb/jobs/export',
+          body: {
+            'academyId': academyId,
+            'documentId': documentId,
+            'requestedBy': _client.auth.currentUser?.id,
+            'templateProfile': templateProfile,
+            'paperSize': paperSize,
+            'includeAnswerSheet': includeAnswerSheet,
+            'includeExplanation': includeExplanation,
+            'selectedQuestionUids': selectedUids,
+            'renderHash': safeRenderHash,
+            'previewOnly': previewOnly,
+            'options': payloadOptions,
+          },
+        );
+        return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
+      } catch (_) {
+        // LAN gateway가 없는 iPad 등에서는 RLS가 보호하는 Supabase 큐에
+        // 직접 삽입한다. Windows worker는 동일 pb_exports 큐를 처리한다.
+      }
     }
 
     final storageTemplateProfile =
@@ -2852,6 +2878,36 @@ class LearningProblemBankService {
     }
   }
 
+  /// 완료된 export의 Storage 위치에서 항상 새 URL을 발급한다.
+  ///
+  /// Worker가 DB에 저장한 output_url은 만료될 수 있으므로 화면에서는 이
+  /// 메서드를 사용하고, Storage 메타가 없는 레거시 작업만 기존 URL을 쓴다.
+  Future<String> resolveExportPdfUrl(
+    LearningProblemExportJob job, {
+    int ttlSeconds = 60 * 30,
+  }) async {
+    if (job.status.trim().toLowerCase() != 'completed') return '';
+    final fresh = await regenerateExportSignedUrl(
+      academyId: job.academyId,
+      exportJobId: job.id,
+      ttlSeconds: ttlSeconds,
+    );
+    if (fresh.isNotEmpty) return fresh;
+
+    if (job.outputStorageBucket.isNotEmpty &&
+        job.outputStoragePath.isNotEmpty) {
+      try {
+        final direct = await createStorageSignedUrl(
+          bucket: job.outputStorageBucket,
+          path: job.outputStoragePath,
+          expiresInSeconds: ttlSeconds,
+        );
+        if (direct.isNotEmpty) return direct;
+      } catch (_) {}
+    }
+    return job.outputUrl.trim();
+  }
+
   Future<Map<String, dynamic>> cleanupLegacySavedSettingsClones({
     required String academyId,
     bool dryRun = true,
@@ -2947,42 +3003,195 @@ class LearningProblemBankService {
     String paperSize = '',
     Map<String, String> questionModeByQuestionUid = const <String, String>{},
   }) async {
-    if (!hasGateway || questionIds.isEmpty) return {};
-    try {
-      final body = <String, dynamic>{
-        'academyId': academyId,
-        'questionIds': questionIds,
-        'mathEngine': 'xelatex',
-      };
-      if (documentId.trim().isNotEmpty) body['documentId'] = documentId.trim();
-      if (questionModeByQuestionUid.isNotEmpty) {
-        body['questionModeByQuestionUid'] = questionModeByQuestionUid;
-      }
-      if (templateProfile.trim().isNotEmpty) {
-        body['templateProfile'] = templateProfile.trim();
-      }
-      if (paperSize.trim().isNotEmpty) body['paperSize'] = paperSize.trim();
-      if (renderConfig != null && renderConfig.isNotEmpty) {
-        body['renderConfig'] = renderConfig;
-      }
-
-      final result = await _gatewayPost('/pb/preview/batch-render', body: body);
-      final thumbnails = result['thumbnails'];
-      if (thumbnails is! Map) return {};
-
-      final out = <String, String>{};
-      for (final entry in thumbnails.entries) {
-        final qid = '${entry.key}'.trim();
-        final value = entry.value;
-        if (value is Map) {
-          final url = '${value['url'] ?? ''}'.trim();
-          if (qid.isNotEmpty && url.isNotEmpty) out[qid] = url;
+    if (questionIds.isEmpty) return {};
+    if (hasGateway) {
+      try {
+        final body = <String, dynamic>{
+          'academyId': academyId,
+          'questionIds': questionIds,
+          'mathEngine': 'xelatex',
+        };
+        if (documentId.trim().isNotEmpty) {
+          body['documentId'] = documentId.trim();
         }
+        if (questionModeByQuestionUid.isNotEmpty) {
+          body['questionModeByQuestionUid'] = questionModeByQuestionUid;
+        }
+        if (templateProfile.trim().isNotEmpty) {
+          body['templateProfile'] = templateProfile.trim();
+        }
+        if (paperSize.trim().isNotEmpty) body['paperSize'] = paperSize.trim();
+        if (renderConfig != null && renderConfig.isNotEmpty) {
+          body['renderConfig'] = renderConfig;
+        }
+
+        final result =
+            await _gatewayPost('/pb/preview/batch-render', body: body);
+        final thumbnails = result['thumbnails'];
+        if (thumbnails is! Map) return {};
+
+        final out = <String, String>{};
+        for (final entry in thumbnails.entries) {
+          final qid = '${entry.key}'.trim();
+          final value = entry.value;
+          if (value is Map) {
+            final url = '${value['url'] ?? ''}'.trim();
+            if (qid.isNotEmpty && url.isNotEmpty) out[qid] = url;
+          }
+        }
+        return out;
+      } catch (_) {
+        // Gateway가 닿지 않으면 이미 생성돼 Storage에 저장된 산출물을 찾는다.
+      }
+    }
+    final stored = await _loadStoredBatchThumbnails(
+      academyId: academyId,
+      questionIds: questionIds,
+    );
+    final missing = questionIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty && !stored.containsKey(id))
+        .toList(growable: false);
+    if (missing.isEmpty || documentId.trim().isEmpty) return stored;
+    final generated = await _createWorkerPreviewThumbnails(
+      academyId: academyId,
+      documentId: documentId,
+      questionIds: missing,
+      templateProfile:
+          templateProfile.trim().isEmpty ? 'naesin' : templateProfile,
+      paperSize: paperSize.trim().isEmpty ? 'A4' : paperSize,
+      renderConfig: renderConfig ?? const <String, dynamic>{},
+      questionModeByQuestionUid: questionModeByQuestionUid,
+    );
+    return <String, String>{...stored, ...generated};
+  }
+
+  Future<Map<String, String>> _loadStoredBatchThumbnails({
+    required String academyId,
+    required List<String> questionIds,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final ids =
+        questionIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    if (safeAcademyId.isEmpty || ids.isEmpty) return const <String, String>{};
+    final folder = '$safeAcademyId/batch-preview/$_batchPreviewVersion/card';
+    try {
+      final objects = await _client.storage.from(_previewBucket).list(
+            path: folder,
+            searchOptions: const SearchOptions(limit: 1000),
+          );
+      final existing = objects.map((object) => object.name).toSet();
+      final out = <String, String>{};
+      for (final id in ids) {
+        final name = '$id.png';
+        if (!existing.contains(name)) continue;
+        final url = await _client.storage
+            .from(_previewBucket)
+            .createSignedUrl('$folder/$name', 60 * 60);
+        if (url.isNotEmpty) out[id] = url;
       }
       return out;
     } catch (_) {
-      return {};
+      return const <String, String>{};
     }
+  }
+
+  Future<Map<String, String>> _createWorkerPreviewThumbnails({
+    required String academyId,
+    required String documentId,
+    required List<String> questionIds,
+    required String templateProfile,
+    required String paperSize,
+    required Map<String, dynamic> renderConfig,
+    required Map<String, String> questionModeByQuestionUid,
+  }) async {
+    final questionIdByJobId = <String, String>{};
+    for (final questionId in questionIds) {
+      try {
+        final mode = questionModeByQuestionUid[questionId]?.trim() ?? '';
+        final job = await createExportJob(
+          academyId: academyId,
+          documentId: documentId,
+          templateProfile: templateProfile,
+          paperSize: paperSize,
+          includeAnswerSheet: false,
+          includeExplanation: false,
+          selectedQuestionUids: <String>[questionId],
+          previewOnly: true,
+          options: <String, dynamic>{
+            ...renderConfig,
+            'mathEngine': '${renderConfig['mathEngine'] ?? 'xelatex'}',
+            'layoutColumns': 1,
+            'maxQuestionsPerPage': 1,
+            'includeCoverPage': false,
+            'includeAcademyLogo': false,
+            'hidePreviewHeader': true,
+            'hideQuestionNumber': true,
+            if (mode.isNotEmpty)
+              'questionModeByQuestionUid': <String, String>{
+                questionId: mode,
+              },
+          },
+        );
+        if (job.id.isNotEmpty) questionIdByJobId[job.id] = questionId;
+      } catch (_) {
+        // 다른 문항의 생성과 폴링은 계속한다.
+      }
+    }
+    if (questionIdByJobId.isEmpty) return const <String, String>{};
+
+    final pending = questionIdByJobId.keys.toSet();
+    final out = <String, String>{};
+    final deadline = DateTime.now().add(const Duration(seconds: 90));
+    while (pending.isNotEmpty && DateTime.now().isBefore(deadline)) {
+      try {
+        final rows = await _client
+            .from('pb_exports')
+            .select('*')
+            .eq('academy_id', academyId)
+            .inFilter('id', pending.toList(growable: false));
+        for (final raw in rows as List<dynamic>) {
+          if (raw is! Map) continue;
+          final job = LearningProblemExportJob.fromMap(
+            Map<String, dynamic>.from(raw),
+          );
+          if (!job.isTerminal) continue;
+          pending.remove(job.id);
+          if (job.status != 'completed') continue;
+          final url = await _signedPreviewThumbnailUrl(job);
+          final questionId = questionIdByJobId[job.id] ?? '';
+          if (questionId.isNotEmpty && url.isNotEmpty) {
+            out[questionId] = url;
+          }
+        }
+      } catch (_) {}
+      if (pending.isNotEmpty) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    }
+    return out;
+  }
+
+  Future<String> _signedPreviewThumbnailUrl(
+    LearningProblemExportJob job,
+  ) async {
+    final nested = _mapOrEmpty(job.resultSummary['previewThumbnail']);
+    final bucket =
+        '${nested['bucket'] ?? job.resultSummary['previewThumbnailBucket'] ?? ''}'
+            .trim();
+    final path =
+        '${nested['path'] ?? job.resultSummary['previewThumbnailPath'] ?? ''}'
+            .trim();
+    if (bucket.isNotEmpty && path.isNotEmpty) {
+      try {
+        return await _client.storage.from(bucket).createSignedUrl(
+              path,
+              60 * 60,
+            );
+      } catch (_) {}
+    }
+    return '${nested['url'] ?? job.resultSummary['previewThumbnailUrl'] ?? ''}'
+        .trim();
   }
 
   Future<Map<String, LearningProblemPdfPreviewArtifact>>
@@ -3115,34 +3324,108 @@ class LearningProblemBankService {
     if (safeAcademyId.isEmpty || safeSourceKind.isEmpty || ids.isEmpty) {
       return const <String, LearningProblemAnswerRender>{};
     }
-    if (!hasGateway) return const <String, LearningProblemAnswerRender>{};
     final safeAnswerKind = _normalizeUnifiedAnswerKind(answerKind);
+    final styles = <String>[
+      styleVersion,
+      ...fallbackStyleVersions,
+    ].map((style) => style.trim()).where((style) => style.isNotEmpty).toSet();
+    if (hasGateway) {
+      try {
+        final result = await _gatewayPost(
+          '/answers/render-assets/resolve',
+          body: <String, dynamic>{
+            'academyId': safeAcademyId,
+            'sourceKind': safeSourceKind,
+            'sourceIds': ids,
+            'answerKind': safeAnswerKind,
+            'styleVersions': styles.toList(growable: false),
+          },
+        );
+        final rawRenders = result['renders'];
+        if (rawRenders is List) {
+          final out = <String, LearningProblemAnswerRender>{};
+          for (final raw in rawRenders) {
+            if (raw is! Map) continue;
+            final render = LearningProblemAnswerRender.fromMap(
+              Map<String, dynamic>.from(raw),
+            );
+            if (render.key.isNotEmpty &&
+                render.hasImage &&
+                styles.contains(render.styleVersion)) {
+              out[render.key] = render;
+            }
+          }
+          if (out.isNotEmpty) return out;
+        }
+      } catch (_) {
+        // iPad에서 Gateway가 닿지 않으면 RLS가 보호하는 메타와 Storage를
+        // 직접 조회한다.
+      }
+    }
+    if (styles.isEmpty) {
+      return const <String, LearningProblemAnswerRender>{};
+    }
     try {
-      final result = await _gatewayPost(
-        '/answers/render-assets/resolve',
-        body: <String, dynamic>{
-          'academyId': safeAcademyId,
-          'sourceKind': safeSourceKind,
-          'sourceIds': ids,
-          'answerKind': safeAnswerKind,
-          'styleVersions': <String>[styleVersion],
-        },
-      );
-      final rawRenders = result['renders'];
-      if (rawRenders is! List) {
-        return const <String, LearningProblemAnswerRender>{};
+      final rows = await _client
+          .from('answer_render_assets')
+          .select(
+            'source_id,answer_kind,engine,storage_bucket,storage_path,'
+            'width_px,height_px,pixel_ratio,style_version,render_error',
+          )
+          .eq('academy_id', safeAcademyId)
+          .eq('source_kind', safeSourceKind)
+          .eq('answer_kind', safeAnswerKind)
+          .eq('engine', 'xelatex')
+          .eq('render_error', '')
+          .inFilter('source_id', ids)
+          .inFilter('style_version', styles.toList(growable: false));
+      final styleRank = <String, int>{
+        for (var i = 0; i < styles.length; i++) styles.elementAt(i): i,
+      };
+      final bestRows = <String, Map<String, dynamic>>{};
+      for (final raw in rows as List<dynamic>) {
+        if (raw is! Map) continue;
+        final row = Map<String, dynamic>.from(raw);
+        final sourceId = '${row['source_id'] ?? ''}'.trim();
+        final style = '${row['style_version'] ?? ''}'.trim();
+        if (sourceId.isEmpty || style.isEmpty) continue;
+        final previous = bestRows[sourceId];
+        final previousStyle = '${previous?['style_version'] ?? ''}'.trim();
+        if (previous == null ||
+            (styleRank[style] ?? 999) < (styleRank[previousStyle] ?? 999)) {
+          bestRows[sourceId] = row;
+        }
       }
       final out = <String, LearningProblemAnswerRender>{};
-      for (final raw in rawRenders) {
-        if (raw is! Map) continue;
-        final render = LearningProblemAnswerRender.fromMap(
-          Map<String, dynamic>.from(raw),
+      for (final entry in bestRows.entries) {
+        final row = entry.value;
+        final bucket = '${row['storage_bucket'] ?? ''}'.trim();
+        final path = '${row['storage_path'] ?? ''}'.trim();
+        if (bucket.isEmpty || path.isEmpty) continue;
+        final url =
+            await _client.storage.from(bucket).createSignedUrl(path, 60 * 60);
+        if (url.isEmpty) continue;
+        final width = _intOrZero(row['width_px']);
+        final height = _intOrZero(row['height_px']);
+        final ratio = _doubleOrZero(row['pixel_ratio']) <= 0
+            ? 7.0
+            : _doubleOrZero(row['pixel_ratio']);
+        final displayWidth = width > 0 ? width / ratio : 48.0;
+        final displayHeight = height > 0 ? height / ratio : 38.0;
+        out[entry.key] = LearningProblemAnswerRender(
+          key: entry.key,
+          url: url,
+          width: width,
+          height: height,
+          pixelRatio: ratio,
+          cached: true,
+          error: '',
+          styleVersion: '${row['style_version'] ?? ''}'.trim(),
+          displayWidthDp: displayWidth,
+          displayHeightDp: displayHeight,
+          rowHeightDp: displayHeight + 18 < 46 ? 46 : displayHeight + 18,
+          layoutProfile: 'rightsheet_xelatex_asset_driven',
         );
-        if (render.key.isNotEmpty &&
-            render.hasImage &&
-            render.styleVersion == styleVersion) {
-          out[render.key] = render;
-        }
       }
       return out;
     } catch (_) {

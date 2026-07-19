@@ -60,6 +60,8 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
 const RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_slotmeasure_01';
+const SINGLE_QUESTION_RENDERER_VERSION =
+  `${RENDER_CONFIG_VERSION_V2}:student-single-v1`;
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -4832,6 +4834,57 @@ async function main() {
   console.log('[pb-export-worker] exit');
 }
 
+async function renderSingleQuestionPdf({
+  academyId,
+  question,
+  renderProfile = 'student-single-v1',
+}) {
+  if (!question || typeof question !== 'object') {
+    throw new Error('single_question_required');
+  }
+  const questionUid = String(question.question_uid || question.id || '').trim();
+  const normalizedQuestion = {
+    ...question,
+    id: String(question.id || ''),
+    question_uid: questionUid,
+    document_id: String(question.document_id || ''),
+    question_number: String(question.question_number || ''),
+    question_type: String(question.question_type || ''),
+    stem: String(question.stem || ''),
+    choices: normalizeChoiceRows(question.choices),
+    figure_refs: Array.isArray(question.figure_refs) ? question.figure_refs : [],
+    equations: Array.isArray(question.equations) ? question.equations : [],
+    meta: question.meta && typeof question.meta === 'object' ? question.meta : {},
+  };
+  const job = {
+    academy_id: String(academyId || question.academy_id || '').trim(),
+    template_profile: 'naesin',
+    paper_size: 'A4',
+    include_answer_sheet: false,
+    include_explanation: false,
+    selected_question_ids: questionUid ? [questionUid] : [],
+    options: {
+      mathEngine: 'xelatex-v2',
+      selectedQuestionUidsOrdered: questionUid ? [questionUid] : [],
+      layoutColumns: 1,
+      maxQuestionsPerPage: 1,
+      hidePreviewHeader: true,
+      hideQuestionNumber: true,
+      includeAcademyLogo: false,
+      includeCoverPage: false,
+      renderProfile,
+    },
+  };
+  const renderConfig = buildRenderConfigFromJob(job);
+  const rendered = await renderPdf(job, [normalizedQuestion], renderConfig);
+  return {
+    bytes: rendered.bytes,
+    pageCount: Number(rendered.pageCount || 0),
+    rendererVersion: SINGLE_QUESTION_RENDERER_VERSION,
+    renderProfile,
+  };
+}
+
 export {
   buildRenderConfigFromJob,
   computeRenderHash,
@@ -4842,6 +4895,8 @@ export {
   processOneJob,
   normalizeQuestionModeSelection,
   normalizeQuestionMode,
+  renderSingleQuestionPdf,
+  SINGLE_QUESTION_RENDERER_VERSION,
 };
 
 if (IS_DIRECT_RUN) {

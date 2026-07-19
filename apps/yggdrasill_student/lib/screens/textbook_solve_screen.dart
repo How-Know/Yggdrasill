@@ -1,4 +1,9 @@
+import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/textbook_api.dart';
@@ -7,6 +12,8 @@ import '../widgets/math_keypad.dart';
 import '../widgets/pencil_input_pad.dart';
 
 enum _InputMode { pencil, editor, keyboard }
+
+enum _PaneMode { answers, question }
 
 /// 교재 풀이 화면.
 /// 좌: 단원트리(대→중→소→페이지), 우: 페이지 문항 + 정답 입력 + 일괄 채점.
@@ -20,6 +27,8 @@ class TextbookSolveScreen extends StatefulWidget {
 }
 
 class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
+  static final Set<String> _warmedTextbooks = <String>{};
+
   TextbookUnitTree? _tree;
   String? _treeError;
   final Set<String> _expanded = <String>{};
@@ -38,6 +47,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   /// crop_id → 최근 채점 결과
   final Map<String, bool> _results = <String, bool>{};
 
+  /// crop_id → 누적 채점 횟수
+  final Map<String, int> _attemptCounts = <String, int>{};
+
   /// crop_id → 채점 플래그 (unit_hint/unit_caution/form_differs)
   final Map<String, List<String>> _flags = <String, List<String>>{};
 
@@ -46,22 +58,55 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
 
   String? _selectedCropId;
   _InputMode _inputMode = _InputMode.pencil;
+  _PaneMode _paneMode = _PaneMode.answers;
+  StudentTextbookProblemView? _problemView;
+  Object? _problemViewError;
+  bool _loadingProblemView = false;
+  int _problemViewRequestEpoch = 0;
+  final Map<String, StudentTextbookProblemView> _problemViewCache =
+      <String, StudentTextbookProblemView>{};
+  final Map<String, Future<StudentTextbookProblemView>> _problemViewRequests =
+      <String, Future<StudentTextbookProblemView>>{};
+  final Set<String> _prefetchedCropIds = <String>{};
+  final Set<String> _neighborQueueRequestedCropIds = <String>{};
   bool _grading = false;
+  bool _treeOpen = false;
 
   GlobalKey<MathExpressionEditorState> _editorKey =
       GlobalKey<MathExpressionEditorState>();
+  GlobalKey<PencilInputPadState> _pencilKey = GlobalKey<PencilInputPadState>();
   final TextEditingController _keyboardController = TextEditingController();
 
   @override
   void dispose() {
+    _problemViewRequestEpoch++;
     _keyboardController.dispose();
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+    unawaited(_warmProblemViews());
     _loadTree(selectLastPage: true);
+  }
+
+  Future<void> _warmProblemViews() async {
+    final key = '${widget.book.bookId}|${widget.book.gradeLabel}';
+    if (!_warmedTextbooks.add(key)) return;
+    try {
+      await TextbookApi.instance.warmProblemViews(
+        bookId: widget.book.bookId,
+        gradeLabel: widget.book.gradeLabel,
+      );
+    } catch (_) {
+      // 예열은 화면 진입을 막지 않는 best-effort 작업이다.
+    }
   }
 
   Future<void> _loadTree({bool selectLastPage = false}) async {
@@ -96,7 +141,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                 ..add('b${big.order}')
                 ..add('b${big.order}|m${mid.order}')
                 ..add('b${big.order}|m${mid.order}|s${small.subKey}');
-              _openPage(page, '${big.name} · ${mid.name}');
+              _openPage(
+                page,
+                '${mid.name} · ${small.name.isEmpty ? small.subKey : small.name}',
+              );
               return;
             }
           }
@@ -114,9 +162,15 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _answers.clear();
       _gradedAnswers.clear();
       _results.clear();
+      _attemptCounts.clear();
       _flags.clear();
       _selfGraded.clear();
       _selectedCropId = null;
+      _problemViewRequestEpoch++;
+      _problemView = null;
+      _problemViewError = null;
+      _loadingProblemView = false;
+      _treeOpen = false;
     });
     try {
       final problems = await TextbookApi.instance.pageProblems(
@@ -136,6 +190,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           if (p.myCorrect != null) {
             _results[p.cropId] = p.myCorrect!;
           }
+          if (p.attemptCount != null) {
+            _attemptCounts[p.cropId] = p.attemptCount!;
+          }
           if (p.flags.isNotEmpty) {
             _flags[p.cropId] = p.flags;
           }
@@ -149,6 +206,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             _selectPro(p);
             break;
           }
+        }
+        if (_selectedCropId == null && problems.isNotEmpty) {
+          _selectPro(problems.first);
         }
       });
     } catch (_) {
@@ -181,7 +241,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         incomplete.add(p.problemNumber);
         continue; // 수식 에디터 빈칸이 남은 답은 제출하지 않음
       }
-      if (_gradedAnswers[p.cropId] == answer && _results.containsKey(p.cropId)) {
+      if (_gradedAnswers[p.cropId] == answer &&
+          _results.containsKey(p.cropId)) {
         continue;
       }
       toSubmit[p.cropId] = answer;
@@ -215,6 +276,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         _results.addAll(result.correctByCropId);
         _flags.addAll(result.flagsByCropId);
         _gradedAnswers.addAll(toSubmit);
+        for (final cropId in result.correctByCropId.keys) {
+          _attemptCounts[cropId] = (_attemptCounts[cropId] ?? 0) + 1;
+        }
       });
       TopGlassSnackBar.show(
         context,
@@ -246,7 +310,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   Future<void> _selfCheck(PageProblem problem) async {
     RevealedAnswer revealed;
     try {
-      revealed = await TextbookApi.instance.revealAnswer(cropId: problem.cropId);
+      revealed =
+          await TextbookApi.instance.revealAnswer(cropId: problem.cropId);
     } catch (_) {
       if (mounted) {
         TopGlassSnackBar.show(
@@ -282,6 +347,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         _results[problem.cropId] = marked;
         _gradedAnswers[problem.cropId] = _answers[problem.cropId] ?? '';
         _selfGraded.add(problem.cropId);
+        _attemptCounts[problem.cropId] =
+            (_attemptCounts[problem.cropId] ?? 0) + 1;
       });
       _loadTree();
     } catch (_) {
@@ -298,6 +365,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   // ------------------------------------------------------------- 입력 조작
 
   void _setAnswer(String cropId, String value) {
+    if (_results[cropId] == true) return;
     setState(() => _answers[cropId] = value);
   }
 
@@ -305,19 +373,276 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   void _selectPro(PageProblem problem) {
     _selectedCropId = problem.cropId;
     _editorKey = GlobalKey<MathExpressionEditorState>();
+    _pencilKey = GlobalKey<PencilInputPadState>();
     _keyboardController.text = _answers[problem.cropId] ?? '';
+    if (_paneMode == _PaneMode.question) {
+      _startProblemViewLoad(problem.cropId);
+    }
+  }
+
+  List<String> _neighborCropIds(String cropId) {
+    final problems = _problems ?? const <PageProblem>[];
+    final index = problems.indexWhere((problem) => problem.cropId == cropId);
+    if (index < 0) return const <String>[];
+    final start = (index - 2).clamp(0, problems.length);
+    final end = (index + 3).clamp(0, problems.length);
+    return <String>[
+      for (var i = start; i < end; i++)
+        if (problems[i].cropId != cropId) problems[i].cropId,
+    ];
+  }
+
+  void _startProblemViewLoad(String cropId) {
+    final requestEpoch = ++_problemViewRequestEpoch;
+    final cached = _problemViewCache[cropId];
+    _problemView = cached;
+    _problemViewError = null;
+    _loadingProblemView = cached == null;
+
+    final neighbors = _neighborCropIds(cropId);
+    final shouldQueueNeighbors = _neighborQueueRequestedCropIds.add(cropId);
+    if (cached != null) {
+      if (shouldQueueNeighbors) {
+        unawaited(_prefetchProblemView(
+          cropId,
+          neighborCropIds: neighbors,
+        ));
+      }
+      return;
+    }
+    unawaited(_resolveSelectedProblemView(
+      cropId: cropId,
+      neighborCropIds: shouldQueueNeighbors ? neighbors : const <String>[],
+      requestEpoch: requestEpoch,
+    ));
+    for (final neighborId in neighbors) {
+      if (_prefetchedCropIds.add(neighborId)) {
+        unawaited(_prefetchProblemView(neighborId));
+      }
+    }
+  }
+
+  Future<void> _prefetchProblemView(
+    String cropId, {
+    List<String> neighborCropIds = const <String>[],
+  }) async {
+    try {
+      await _fetchProblemView(
+        cropId,
+        neighborCropIds: neighborCropIds,
+      );
+    } catch (_) {
+      // 선택 문항 로딩과 무관한 best-effort 프리패치다.
+    }
+  }
+
+  Future<StudentTextbookProblemView> _fetchProblemView(
+    String cropId, {
+    List<String> neighborCropIds = const <String>[],
+  }) async {
+    final cached = _problemViewCache[cropId];
+    if (cached != null && neighborCropIds.isEmpty) return cached;
+    final pending = _problemViewRequests[cropId];
+    if (pending != null && neighborCropIds.isEmpty) return pending;
+
+    final request = TextbookApi.instance.problemView(
+      cropId: cropId,
+      neighborCropIds: neighborCropIds,
+    );
+    _problemViewRequests[cropId] = request;
+    try {
+      final result = await request;
+      if (!result.isQueued) {
+        _problemViewCache[cropId] = result;
+      }
+      return result;
+    } finally {
+      if (identical(_problemViewRequests[cropId], request)) {
+        _problemViewRequests.remove(cropId);
+      }
+    }
+  }
+
+  Future<void> _resolveSelectedProblemView({
+    required String cropId,
+    required List<String> neighborCropIds,
+    required int requestEpoch,
+  }) async {
+    try {
+      StudentTextbookProblemView? result;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        result = await _fetchProblemView(
+          cropId,
+          neighborCropIds: attempt == 0 ? neighborCropIds : const <String>[],
+        );
+        if (!mounted ||
+            requestEpoch != _problemViewRequestEpoch ||
+            cropId != _selectedCropId) {
+          return;
+        }
+        if (!result.isQueued) break;
+        if (attempt < 2) {
+          final delayMs = (result.pollAfterMs ?? 1800).clamp(300, 5000).toInt();
+          await Future<void>.delayed(Duration(milliseconds: delayMs));
+        }
+      }
+      if (result?.isQueued == true && result?.bodyPdfUrl != null) {
+        result = StudentTextbookProblemView(
+          status: StudentTextbookProblemViewStatus.fallback,
+          bodyPdfUrl: result!.bodyPdfUrl,
+          rawPage: result.rawPage,
+          itemRegion1k: result.itemRegion1k,
+          expiresIn: result.expiresIn,
+        );
+      }
+      if (!mounted ||
+          requestEpoch != _problemViewRequestEpoch ||
+          cropId != _selectedCropId) {
+        return;
+      }
+      setState(() {
+        _problemView = result;
+        _problemViewError = null;
+        _loadingProblemView = false;
+      });
+    } catch (error) {
+      if (!mounted ||
+          requestEpoch != _problemViewRequestEpoch ||
+          cropId != _selectedCropId) {
+        return;
+      }
+      setState(() {
+        _problemView = null;
+        _problemViewError = error;
+        _loadingProblemView = false;
+      });
+    }
   }
 
   void _toggleObjective(String cropId, int number) {
+    if (_results[cropId] == true) return;
     final current = _answers[cropId] ?? '';
-    final selected = current
-        .split(',')
-        .where((s) => s.trim().isNotEmpty)
-        .map(int.parse)
-        .toSet();
+    final startsRevision =
+        _results[cropId] == false && _gradedAnswers[cropId] == current;
+    final selected = startsRevision
+        ? <int>{}
+        : current
+            .split(',')
+            .where((s) => s.trim().isNotEmpty)
+            .map(int.parse)
+            .toSet();
     if (!selected.remove(number)) selected.add(number);
     final sorted = selected.toList()..sort();
-    _setAnswer(cropId, sorted.join(','));
+    setState(() {
+      if (startsRevision) {
+        _results.remove(cropId);
+        _flags.remove(cropId);
+      }
+      _answers[cropId] = sorted.join(',');
+    });
+  }
+
+  int get _pendingGradeCount {
+    final problems = _problems ?? const <PageProblem>[];
+    var count = 0;
+    for (final problem in problems) {
+      if (problem.isSelfCheck) continue;
+      final answer = _answers[problem.cropId]?.trim() ?? '';
+      if (answer.isEmpty || answer.contains('()')) continue;
+      if (_gradedAnswers[problem.cropId] == answer &&
+          _results.containsKey(problem.cropId)) {
+        continue;
+      }
+      count++;
+    }
+    return count;
+  }
+
+  void _moveProblem(int delta) {
+    final problems = _problems ?? const <PageProblem>[];
+    if (problems.isEmpty) return;
+    var index =
+        problems.indexWhere((problem) => problem.cropId == _selectedCropId);
+    if (index < 0) index = delta > 0 ? -1 : problems.length;
+    final next = (index + delta).clamp(0, problems.length - 1);
+    if (next == index) return;
+    setState(() => _selectPro(problems[next]));
+  }
+
+  void _togglePaneMode() {
+    setState(() {
+      _paneMode = _paneMode == _PaneMode.answers
+          ? _PaneMode.question
+          : _PaneMode.answers;
+      if (_paneMode == _PaneMode.question) {
+        final problems = _problems ?? const <PageProblem>[];
+        if (problems.isNotEmpty) {
+          final selected = problems.firstWhere(
+            (problem) => problem.cropId == _selectedCropId,
+            orElse: () => problems.first,
+          );
+          _selectPro(selected);
+        }
+      } else {
+        _problemViewRequestEpoch++;
+        _problemView = null;
+        _problemViewError = null;
+        _loadingProblemView = false;
+      }
+    });
+  }
+
+  void _cycleInputMode() {
+    setState(() {
+      _inputMode = switch (_inputMode) {
+        _InputMode.pencil => _InputMode.editor,
+        _InputMode.editor => _InputMode.keyboard,
+        _InputMode.keyboard => _InputMode.pencil,
+      };
+      final cropId = _selectedCropId;
+      if (cropId != null) {
+        _keyboardController.text = _answers[cropId] ?? '';
+      }
+    });
+  }
+
+  void _eraseCurrentInput() {
+    final cropId = _selectedCropId;
+    if (cropId == null || _results[cropId] == true) return;
+    switch (_inputMode) {
+      case _InputMode.pencil:
+        final hasStrokes = _pencilKey.currentState?.undoStroke() ?? false;
+        if (!hasStrokes) _setAnswer(cropId, '');
+        break;
+      case _InputMode.editor:
+        _editorKey.currentState?.backspace();
+        break;
+      case _InputMode.keyboard:
+        final chars = _keyboardController.text.characters.toList();
+        if (chars.isEmpty) return;
+        chars.removeLast();
+        final value = chars.join();
+        _keyboardController.text = value;
+        _setAnswer(cropId, value);
+        break;
+    }
+  }
+
+  void _clearCurrentInput() {
+    final cropId = _selectedCropId;
+    if (cropId == null || _results[cropId] == true) return;
+    switch (_inputMode) {
+      case _InputMode.pencil:
+        _pencilKey.currentState?.clearStrokes();
+        break;
+      case _InputMode.editor:
+        _editorKey.currentState?.clearAll();
+        break;
+      case _InputMode.keyboard:
+        _keyboardController.clear();
+        break;
+    }
+    _setAnswer(cropId, '');
   }
 
   // ------------------------------------------------------------------ UI
@@ -325,32 +650,114 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final page = _page;
     return Scaffold(
       backgroundColor: context.yggSurfaceBase,
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        leadingWidth: 300,
+        leading: Row(
           children: [
-            Text(widget.book.name,
+            IconButton(
+              tooltip: '뒤로',
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.arrow_back_rounded),
+            ),
+            Expanded(
+              child: Text(
+                widget.book.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700)),
-            Text(widget.book.gradeLabel,
-                style:
-                    theme.textTheme.bodySmall?.copyWith(color: theme.hintColor)),
+                    ?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
           ],
         ),
+        centerTitle: true,
+        title: _buildPaneModeButton(),
+        actions: [
+          if (page != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'p.${page.shownPage}',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      _pagePathLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.hintColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          IconButton(
+            tooltip: '소단원·페이지 선택',
+            onPressed: () => setState(() => _treeOpen = !_treeOpen),
+            icon: const Icon(Icons.segment_rounded),
+          ),
+          const SizedBox(width: 6),
+        ],
         backgroundColor: context.yggSurfaceBase,
         elevation: 0,
       ),
-      body: SafeArea(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(width: 300, child: _buildTreePanel(theme)),
-            const VerticalDivider(width: 1, thickness: 0.5),
-            Expanded(child: _buildPagePanel(theme)),
-          ],
-        ),
+      body: Stack(
+        children: [
+          Positioned.fill(child: _buildPagePanel(theme)),
+          if (_treeOpen)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _treeOpen = false),
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: 0.18),
+                ),
+              ),
+            ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            right: _treeOpen ? 0 : -310,
+            top: 0,
+            bottom: 0,
+            width: 310,
+            child: IgnorePointer(
+              ignoring: !_treeOpen,
+              child: Material(
+                color: context.yggSurfaceBase,
+                elevation: 14,
+                child: _buildTreePanel(theme),
+              ),
+            ),
+          ),
+          if (!_treeOpen)
+            Positioned(
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 28,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  if ((details.primaryVelocity ?? 0) < -180) {
+                    setState(() => _treeOpen = true);
+                  }
+                },
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -414,7 +821,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           ));
           if (!_expanded.contains(smallId)) continue;
           for (final page in small.pages) {
-            rows.add(_pageRow(theme, page, '${big.name} · ${mid.name}'));
+            rows.add(_pageRow(
+              theme,
+              page,
+              '${mid.name} · ${small.name.isEmpty ? small.subKey : small.name}',
+            ));
           }
         }
       }
@@ -508,14 +919,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                   child: Text(
                     'p.${page.shownPage}',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight:
-                          selected ? FontWeight.w700 : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                       color: selected ? accent : null,
                     ),
                   ),
                 ),
                 Text(
-                  '${page.graded}/${page.total}',
+                  '${page.correct}/${page.total}',
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: theme.hintColor),
                 ),
@@ -558,60 +968,206 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       }
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 18, 24, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'p.${page.shownPage}',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w800),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              flex: 2,
+              child: _paneMode == _PaneMode.answers
+                  ? ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+                      itemCount: problems.length,
+                      itemBuilder: (context, i) =>
+                          _problemRow(theme, problems[i]),
+                    )
+                  : _buildQuestionPane(theme, selectedProblem),
+            ),
+            const SizedBox(
+              height: 0.5,
+              child: ColoredBox(color: Color(0x14000000)),
+            ),
+            Expanded(
+              flex: 1,
+              child: selectedProblem != null && !selectedProblem.isObjective
+                  ? _buildInputPanel(theme, selectedProblem)
+                  : const _EmptyInputCard(
+                      message: '이 문항은 카드에서 답을 선택해 주세요.',
                     ),
-                    Text(
-                      _pagePathLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.hintColor),
-                    ),
-                  ],
-                ),
-              ),
-              FilledButton.icon(
-                onPressed: _grading ? null : _grade,
-                style: FilledButton.styleFrom(
-                  backgroundColor: YggGlassTokens.confirmActionColor,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 22, vertical: 14),
-                ),
-                icon: _grading
-                    ? const YggLoadingIndicator(size: 18)
-                    : const Icon(Icons.fact_check_outlined, size: 20),
-                label: const Text('채점하기',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
-            itemCount: problems.length,
-            itemBuilder: (context, i) =>
-                _problemRow(theme, problems[i]),
-          ),
+            ),
+          ],
         ),
         if (selectedProblem != null && !selectedProblem.isObjective)
-          _buildInputPanel(theme, selectedProblem),
+          Positioned(
+            left: 16,
+            bottom: bottomInset / 2 + 6,
+            child: _buildInputModeButton(),
+          ),
+        Positioned(
+          right: 16,
+          bottom: bottomInset / 2 + 6,
+          child: _TextbookSolveFabBar(
+            pendingCount: _pendingGradeCount,
+            grading: _grading,
+            canEdit: selectedProblem != null &&
+                _results[selectedProblem.cropId] != true,
+            hasAnswer: selectedProblem != null &&
+                (_answers[selectedProblem.cropId]?.isNotEmpty ?? false),
+            onPrevious: () => _moveProblem(-1),
+            onNext: () => _moveProblem(1),
+            onErase: _eraseCurrentInput,
+            onClear: _clearCurrentInput,
+            onGrade: _grade,
+          ),
+        ),
       ],
     );
+  }
+
+  Widget _buildPaneModeButton() {
+    final showQuestion = _paneMode == _PaneMode.question;
+    return _SolveGlassButton(
+      tooltip: showQuestion ? '정답 목록으로 돌아가기' : '문항 보기',
+      icon:
+          showQuestion ? Icons.fact_check_outlined : Icons.description_outlined,
+      label: showQuestion ? '정답' : '문항',
+      onPressed: _togglePaneMode,
+    );
+  }
+
+  Widget _buildInputModeButton() {
+    final (icon, tooltip) = switch (_inputMode) {
+      _InputMode.pencil => (Icons.edit_rounded, '수식 입력으로 전환'),
+      _InputMode.editor => (Icons.functions_rounded, '키보드 입력으로 전환'),
+      _InputMode.keyboard => (Icons.keyboard_outlined, '펜슬 입력으로 전환'),
+    };
+    return _SolveGlassCircleButton(
+      tooltip: tooltip,
+      icon: icon,
+      onPressed: _cycleInputMode,
+    );
+  }
+
+  Widget _buildQuestionPane(ThemeData theme, PageProblem? problem) {
+    if (problem == null) {
+      return const Center(child: Text('표시할 문항이 없어요.'));
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 10),
+      child: Column(
+        children: [
+          _problemRow(theme, problem),
+          const SizedBox(height: 12),
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius:
+                    BorderRadius.circular(YggGroupedLayoutTokens.cardRadius),
+                border: Border.all(color: const Color(0x1F000000)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x14000000),
+                    blurRadius: 18,
+                    offset: Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(YggGroupedLayoutTokens.cardRadius),
+                child: _buildProblemPdf(theme),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProblemPdf(ThemeData theme) {
+    if (_loadingProblemView) {
+      return const Center(child: YggLoadingIndicator());
+    }
+    final error = _problemViewError;
+    if (error != null) {
+      return _problemViewMessage(
+        theme,
+        _problemViewErrorMessage(error),
+        icon: Icons.error_outline_rounded,
+      );
+    }
+    final view = _problemView;
+    if (view == null) {
+      return _problemViewMessage(theme, '문항을 선택해 주세요.');
+    }
+    if (view.isQueued) {
+      return _problemViewMessage(
+        theme,
+        '문항 PDF를 준비하고 있어요.\n잠시 후 문항을 다시 선택해 주세요.',
+        icon: Icons.hourglass_top_rounded,
+      );
+    }
+    final url =
+        view.isFallback ? (view.bodyPdfUrl ?? view.pdfUrl) : view.pdfUrl;
+    final uri = url == null ? null : Uri.tryParse(url);
+    if (uri == null) {
+      return _problemViewMessage(
+        theme,
+        view.isFallback ? '원본 교재 PDF를 열 수 없어요.' : '준비된 문항 PDF를 열 수 없어요.',
+        icon: Icons.error_outline_rounded,
+      );
+    }
+    return _ProblemPdfView(
+      key: ValueKey<String>(
+        '${view.status.name}|$url|${view.rawPage}|${view.itemRegion1k}',
+      ),
+      uri: uri,
+      fallbackPage: view.isFallback ? view.rawPage : null,
+      itemRegion1k: view.isFallback ? view.itemRegion1k : null,
+    );
+  }
+
+  Widget _problemViewMessage(
+    ThemeData theme,
+    String message, {
+    IconData? icon,
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 30, color: theme.hintColor),
+              const SizedBox(height: 10),
+            ],
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.hintColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _problemViewErrorMessage(Object error) {
+    if (error is! StudentTextbookProblemViewException) {
+      return '문항 PDF를 불러오지 못했어요.';
+    }
+    return switch (error.code) {
+      'unauthorized' || 'student_account_not_found' => '로그인 정보를 다시 확인해 주세요.',
+      'crop_not_assigned' => '이 문항의 교재 정보를 찾지 못했어요.',
+      'question_not_mapped' => '이 문항은 아직 PDF로 준비되지 않았어요.',
+      _ => '문항 PDF를 불러오지 못했어요. (${error.code})',
+    };
   }
 
   static const Map<String, String> _flagMessages = {
@@ -624,6 +1180,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     final isDark = theme.brightness == Brightness.dark;
     final answer = _answers[problem.cropId] ?? '';
     final result = _results[problem.cropId];
+    final attemptCount = _attemptCounts[problem.cropId] ?? 0;
     final graded = result != null &&
         (_selfGraded.contains(problem.cropId) ||
             _gradedAnswers[problem.cropId] == answer);
@@ -655,7 +1212,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: problem.isObjective
+          onTap: problem.isObjective || result == true
               ? null
               : () => setState(() => _selectPro(problem)),
           child: Container(
@@ -707,7 +1264,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                     const SizedBox(width: 12),
                     if (problem.isSelfCheck) ...[
                       OutlinedButton.icon(
-                        onPressed: () => _selfCheck(problem),
+                        onPressed:
+                            result == true ? null : () => _selfCheck(problem),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: graded ? theme.hintColor : accent,
                           side: BorderSide(
@@ -716,9 +1274,44 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                           ),
                         ),
                         icon: const Icon(Icons.visibility_outlined, size: 18),
-                        label: Text(graded ? '다시 확인' : '정답 확인'),
+                        label: Text(result == true
+                            ? '완료'
+                            : graded
+                                ? '다시 확인'
+                                : '정답 확인'),
                       ),
                       const SizedBox(width: 10),
+                    ],
+                    if (graded && result && attemptCount > 1) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.13),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '수정 · $attemptCount회 만에',
+                          style: const TextStyle(
+                            color: accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 9),
+                    ] else if (graded && !result) ...[
+                      const Text(
+                        '다시 풀기',
+                        style: TextStyle(
+                          color: wrongColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 9),
                     ],
                     if (graded)
                       Icon(
@@ -727,7 +1320,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                         color: result ? accent : wrongColor,
                       )
                     else if (answer.isNotEmpty)
-                      Icon(Icons.edit_rounded, size: 18, color: theme.hintColor),
+                      Icon(Icons.edit_rounded,
+                          size: 18, color: theme.hintColor),
                   ],
                 ),
                 for (final note in flagNotes)
@@ -804,123 +1398,558 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   Widget _buildInputPanel(ThemeData theme, PageProblem problem) {
-    final isDark = theme.brightness == Brightness.dark;
     final answer = _answers[problem.cropId] ?? '';
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF17201F) : const Color(0xFFF4F6F5),
-        border: Border(
-          top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.4)),
-        ),
+    final inputTheme = ThemeData.light(useMaterial3: true).copyWith(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: YggGlassTokens.confirmActionColor,
+        brightness: Brightness.light,
       ),
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Text(
-                '${problem.problemNumber}번 답',
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              if (_inputMode != _InputMode.editor) ...[
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    answer.isEmpty ? '(입력 전)' : answer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      color: answer.isEmpty
-                          ? theme.hintColor
-                          : YggGlassTokens.confirmActionColor,
-                      fontWeight: FontWeight.w800,
+      textTheme: theme.textTheme.apply(
+        bodyColor: const Color(0xFF17201F),
+        displayColor: const Color(0xFF17201F),
+      ),
+    );
+
+    return Theme(
+      data: inputTheme,
+      child: Container(
+        color: Colors.white,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: switch (_inputMode) {
+                _InputMode.pencil => LayoutBuilder(
+                    builder: (context, constraints) => PencilInputPad(
+                      key: _pencilKey,
+                      height: constraints.maxHeight,
+                      showControls: false,
+                      showEmptyHint: false,
+                      embedded: true,
+                      onRecognized: (text) => _setAnswer(problem.cropId, text),
+                    ),
+                  ),
+                _InputMode.editor => SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 56, 20, 90),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MathExpressionEditor(
+                          key: _editorKey,
+                          initialLinear: answer,
+                          onChanged: (linear) =>
+                              _setAnswer(problem.cropId, linear),
+                        ),
+                        const SizedBox(height: 8),
+                        MathKeypad(
+                          onInsert: (t) =>
+                              _editorKey.currentState?.insertText(t),
+                          onFraction: () =>
+                              _editorKey.currentState?.insertFraction(),
+                          onSqrt: () => _editorKey.currentState?.insertSqrt(),
+                          onNthRoot: () =>
+                              _editorKey.currentState?.insertNthRoot(),
+                          onPower: () => _editorKey.currentState?.insertPower(),
+                          onRepeatingDot: () =>
+                              _editorKey.currentState?.insertRepeatingDot(),
+                          onBackspace: () =>
+                              _editorKey.currentState?.backspace(),
+                          onClear: () => _editorKey.currentState?.clearAll(),
+                        ),
+                      ],
+                    ),
+                  ),
+                _InputMode.keyboard => Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 56, 20, 90),
+                    child: TextField(
+                      controller: _keyboardController,
+                      autofocus: true,
+                      expands: true,
+                      minLines: null,
+                      maxLines: null,
+                      textAlignVertical: TextAlignVertical.top,
+                      onChanged: (text) => _setAnswer(problem.cropId, text),
+                      style: theme.textTheme.titleMedium,
+                      decoration: const InputDecoration(
+                        hintText: '한글 답(예: 제2사분면, 유한소수)을 입력해 주세요',
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+              },
+            ),
+            Positioned(
+              top: 12,
+              left: 20,
+              right: 20,
+              child: IgnorePointer(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xD91F2928),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        '${problem.problemNumber}번 답  ·  '
+                        '${answer.isEmpty ? '입력 전' : answer}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ] else
-                const Spacer(),
-              SegmentedButton<_InputMode>(
-                segments: const [
-                  ButtonSegment(
-                    value: _InputMode.pencil,
-                    icon: Icon(Icons.draw_outlined, size: 18),
-                    label: Text('펜슬'),
-                  ),
-                  ButtonSegment(
-                    value: _InputMode.editor,
-                    icon: Icon(Icons.functions_rounded, size: 18),
-                    label: Text('수식'),
-                  ),
-                  ButtonSegment(
-                    value: _InputMode.keyboard,
-                    icon: Icon(Icons.keyboard_outlined, size: 18),
-                    label: Text('키보드'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProblemPdfView extends StatelessWidget {
+  const _ProblemPdfView({
+    super.key,
+    required this.uri,
+    this.fallbackPage,
+    this.itemRegion1k,
+  });
+
+  final Uri uri;
+  final int? fallbackPage;
+  final List<int>? itemRegion1k;
+
+  @override
+  Widget build(BuildContext context) {
+    if (fallbackPage != null) {
+      return _FallbackProblemPdfPage(
+        uri: uri,
+        pageNumber: fallbackPage!,
+        itemRegion1k: itemRegion1k,
+      );
+    }
+    return PdfViewer.uri(
+      uri,
+      params: PdfViewerParams(
+        backgroundColor: Colors.white,
+        margin: 12,
+        pageAnchor: PdfPageAnchor.center,
+        pageAnchorEnd: PdfPageAnchor.center,
+        panEnabled: true,
+        scaleEnabled: true,
+        panAxis: PanAxis.free,
+        minScale: 0.1,
+        maxScale: 8,
+        loadingBannerBuilder: (context, downloaded, total) =>
+            const Center(child: YggLoadingIndicator()),
+        errorBannerBuilder: (context, error, stackTrace, documentRef) =>
+            const Center(child: Text('문항 PDF를 표시할 수 없어요.')),
+      ),
+    );
+  }
+}
+
+class _FallbackProblemPdfPage extends StatefulWidget {
+  const _FallbackProblemPdfPage({
+    required this.uri,
+    required this.pageNumber,
+    this.itemRegion1k,
+  });
+
+  final Uri uri;
+  final int pageNumber;
+  final List<int>? itemRegion1k;
+
+  @override
+  State<_FallbackProblemPdfPage> createState() =>
+      _FallbackProblemPdfPageState();
+}
+
+class _FallbackProblemPdfPageState extends State<_FallbackProblemPdfPage> {
+  PdfDocument? _document;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final document = await PdfDocument.openUri(widget.uri);
+      if (!mounted) {
+        await document.dispose();
+        return;
+      }
+      setState(() => _document = document);
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
+  @override
+  void dispose() {
+    final document = _document;
+    if (document != null) unawaited(document.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return const Center(child: Text('원본 교재 PDF를 표시할 수 없어요.'));
+    }
+    final document = _document;
+    if (document == null) {
+      return const Center(child: YggLoadingIndicator());
+    }
+    final pageNumber =
+        widget.pageNumber.clamp(1, document.pages.length).toInt();
+    final region = widget.itemRegion1k;
+    if (region == null || region.length != 4) {
+      return InteractiveViewer(
+        minScale: 1,
+        maxScale: 6,
+        child: PdfPageView(
+          document: document,
+          pageNumber: pageNumber,
+          decoration: const BoxDecoration(color: Colors.white),
+        ),
+      );
+    }
+    return _CroppedPdfPage(
+      document: document,
+      pageNumber: pageNumber,
+      itemRegion1k: region,
+    );
+  }
+}
+
+class _CroppedPdfPage extends StatelessWidget {
+  const _CroppedPdfPage({
+    required this.document,
+    required this.pageNumber,
+    required this.itemRegion1k,
+  });
+
+  final PdfDocument document;
+  final int pageNumber;
+  final List<int> itemRegion1k;
+
+  @override
+  Widget build(BuildContext context) {
+    final page = document.pages[pageNumber - 1];
+    const padding = 16.0;
+    final top = ((itemRegion1k[0] - padding) / 1000).clamp(0.0, 1.0).toDouble();
+    final left =
+        ((itemRegion1k[1] - padding) / 1000).clamp(0.0, 1.0).toDouble();
+    final bottom =
+        ((itemRegion1k[2] + padding) / 1000).clamp(0.0, 1.0).toDouble();
+    final right =
+        ((itemRegion1k[3] + padding) / 1000).clamp(0.0, 1.0).toDouble();
+    final regionWidth = right - left;
+    final regionHeight = bottom - top;
+    if (regionWidth <= 0.01 || regionHeight <= 0.01) {
+      return InteractiveViewer(
+        minScale: 1,
+        maxScale: 6,
+        child: PdfPageView(
+          document: document,
+          pageNumber: pageNumber,
+          decoration: const BoxDecoration(color: Colors.white),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final widthScale = constraints.maxWidth / (page.width * regionWidth);
+        final heightScale =
+            constraints.maxHeight / (page.height * regionHeight);
+        final scale = widthScale < heightScale ? widthScale : heightScale;
+        final pageWidth = page.width * scale;
+        final pageHeight = page.height * scale;
+        final cropWidth = pageWidth * regionWidth;
+        final cropHeight = pageHeight * regionHeight;
+        final offsetX =
+            (constraints.maxWidth - cropWidth) / 2 - pageWidth * left;
+        final offsetY =
+            (constraints.maxHeight - cropHeight) / 2 - pageHeight * top;
+
+        return InteractiveViewer(
+          minScale: 1,
+          maxScale: 6,
+          boundaryMargin: const EdgeInsets.all(80),
+          child: SizedBox(
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            child: ClipRect(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: offsetX,
+                    top: offsetY,
+                    width: pageWidth,
+                    height: pageHeight,
+                    child: PdfPageView(
+                      document: document,
+                      pageNumber: pageNumber,
+                      decoration: const BoxDecoration(color: Colors.white),
+                    ),
                   ),
                 ],
-                selected: {_inputMode},
-                showSelectedIcon: false,
-                onSelectionChanged: (modes) {
-                  setState(() {
-                    _inputMode = modes.first;
-                    _keyboardController.text = _answers[problem.cropId] ?? '';
-                  });
-                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EmptyInputCard extends StatelessWidget {
+  const _EmptyInputCard({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      alignment: Alignment.center,
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Color(0xFF6B7280),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _SolveGlassButton extends StatelessWidget {
+  const _SolveGlassButton({
+    required this.tooltip,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Tooltip(
+          message: tooltip,
+          child: Material(
+            color: isDark
+                ? const Color(0xE62A3333)
+                : Colors.white.withValues(alpha: 0.92),
+            child: InkWell(
+              onTap: onPressed,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 20),
+                    const SizedBox(width: 7),
+                    Text(
+                      label,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SolveGlassCircleButton extends StatelessWidget {
+  const _SolveGlassCircleButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Material(
+          color: isDark
+              ? const Color(0xE62A3333)
+              : Colors.white.withValues(alpha: 0.92),
+          child: IconButton(
+            tooltip: tooltip,
+            onPressed: onPressed,
+            icon: Icon(icon, size: 22),
+            constraints: const BoxConstraints.tightFor(width: 56, height: 56),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TextbookSolveFabBar extends StatelessWidget {
+  const _TextbookSolveFabBar({
+    required this.pendingCount,
+    required this.grading,
+    required this.canEdit,
+    required this.hasAnswer,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onErase,
+    required this.onClear,
+    required this.onGrade,
+  });
+
+  final int pendingCount;
+  final bool grading;
+  final bool canEdit;
+  final bool hasAnswer;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+  final VoidCallback onErase;
+  final VoidCallback onClear;
+  final VoidCallback onGrade;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 7),
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xE62A3333)
+                : Colors.white.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: isDark ? Colors.white12 : Colors.black12,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x24000000),
+                blurRadius: 18,
+                offset: Offset(0, 7),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          switch (_inputMode) {
-            _InputMode.pencil => PencilInputPad(
-                key: ValueKey('pad-${problem.cropId}'),
-                onRecognized: (text) => _setAnswer(problem.cropId, text),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _SolveFabIconButton(
+                tooltip: '이전 문제',
+                icon: Icons.chevron_left_rounded,
+                onPressed: onPrevious,
               ),
-            _InputMode.editor => Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  MathExpressionEditor(
-                    key: _editorKey,
-                    initialLinear: answer,
-                    onChanged: (linear) => _setAnswer(problem.cropId, linear),
-                  ),
-                  const SizedBox(height: 8),
-                  MathKeypad(
-                    onInsert: (t) => _editorKey.currentState?.insertText(t),
-                    onFraction: () => _editorKey.currentState?.insertFraction(),
-                    onSqrt: () => _editorKey.currentState?.insertSqrt(),
-                    onNthRoot: () => _editorKey.currentState?.insertNthRoot(),
-                    onPower: () => _editorKey.currentState?.insertPower(),
-                    onRepeatingDot: () =>
-                        _editorKey.currentState?.insertRepeatingDot(),
-                    onBackspace: () => _editorKey.currentState?.backspace(),
-                    onClear: () => _editorKey.currentState?.clearAll(),
-                  ),
-                ],
+              _SolveFabIconButton(
+                tooltip: '다음 문제',
+                icon: Icons.chevron_right_rounded,
+                onPressed: onNext,
               ),
-            _InputMode.keyboard => Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: TextField(
-                  controller: _keyboardController,
-                  autofocus: true,
-                  onChanged: (text) => _setAnswer(problem.cropId, text),
-                  style: theme.textTheme.titleMedium,
-                  decoration: InputDecoration(
-                    hintText: '한글 답(예: 제2사분면, 유한소수)을 입력해 주세요',
-                    filled: true,
-                    fillColor: isDark
-                        ? Colors.white.withValues(alpha: 0.05)
-                        : Colors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
+              const SizedBox(
+                height: 26,
+                child: VerticalDivider(width: 12),
+              ),
+              _SolveFabIconButton(
+                tooltip: '한 단계 지우기',
+                icon: Icons.backspace_outlined,
+                onPressed: canEdit ? onErase : null,
+              ),
+              _SolveFabIconButton(
+                tooltip: '모두 지우기',
+                icon: Icons.delete_sweep_outlined,
+                onPressed: canEdit && hasAnswer ? onClear : null,
+              ),
+              const SizedBox(width: 5),
+              FilledButton.icon(
+                onPressed: pendingCount > 0 && !grading ? onGrade : null,
+                style: FilledButton.styleFrom(
+                  backgroundColor: YggGlassTokens.confirmActionColor,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(112, 44),
+                  shape: const StadiumBorder(),
+                ),
+                icon: grading
+                    ? const YggLoadingIndicator(size: 18)
+                    : Badge(
+                        isLabelVisible: pendingCount > 0,
+                        label: Text('$pendingCount'),
+                        child: const Icon(
+                          Icons.fact_check_outlined,
+                          size: 20,
+                        ),
+                      ),
+                label: const Text(
+                  '채점',
+                  style: TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
-          },
-        ],
+            ],
+          ),
+        ),
       ),
+    );
+  }
+}
+
+class _SolveFabIconButton extends StatelessWidget {
+  const _SolveFabIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 22),
+      constraints: const BoxConstraints.tightFor(width: 43, height: 43),
+      padding: EdgeInsets.zero,
     );
   }
 }
@@ -943,10 +1972,9 @@ class _SelfCheckDialog extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     const accent = YggGlassTokens.confirmActionColor;
     const wrongColor = Color(0xFFE57373);
-    final answerText =
-        (revealed.answerText?.trim().isNotEmpty ?? false)
-            ? revealed.answerText!.trim()
-            : revealed.answerLatex2d?.trim() ?? '';
+    final answerText = (revealed.answerText?.trim().isNotEmpty ?? false)
+        ? revealed.answerText!.trim()
+        : revealed.answerLatex2d?.trim() ?? '';
 
     return Dialog(
       backgroundColor: isDark ? const Color(0xFF1F2A2A) : Colors.white,
@@ -976,16 +2004,15 @@ class _SelfCheckDialog extends StatelessWidget {
                   child: Image.network(
                     revealed.imageUrl!,
                     fit: BoxFit.contain,
-                    loadingBuilder: (context, child, progress) =>
-                        progress == null
-                            ? child
-                            : const SizedBox(
-                                height: 80,
-                                child: Center(
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2),
-                                ),
-                              ),
+                    loadingBuilder: (context, child, progress) => progress ==
+                            null
+                        ? child
+                        : const SizedBox(
+                            height: 80,
+                            child: Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
                     errorBuilder: (_, __, ___) => Text(
                       answerText.isEmpty ? '(정답 이미지를 불러오지 못했어요)' : answerText,
                       style: theme.textTheme.titleMedium
@@ -1013,14 +2040,15 @@ class _SelfCheckDialog extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   '내가 쓴 답: ${myAnswer!.trim()}',
-                  style:
-                      theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor),
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.hintColor),
                 ),
               ],
               const SizedBox(height: 20),
               Text(
                 '내 풀이와 비교해서 스스로 채점해 주세요.',
-                style: theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.hintColor),
               ),
               const SizedBox(height: 12),
               Row(

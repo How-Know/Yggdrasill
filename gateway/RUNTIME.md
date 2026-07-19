@@ -68,3 +68,27 @@ pm2 monit
 - 10분 idle 후 앱↔M5 상태 반영이 5초 내 복구되는지 확인
 - 1시간 절전 후 M5 복귀 시 수동 재바인딩 없이 자동 복구되는지 확인
 - 장애 시 watchdog 로그(soft/hard)와 reconnect 로그가 순서대로 남는지 확인
+
+## 7) 단일 문항 PDF 캐시 워커
+
+`question-renders` private bucket에 학생 교재용 XeLaTeX v2 단일 문항 PDF를
+영구 캐시합니다. 운영 서버에는 `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`와 XeLaTeX 실행 환경이 필요합니다.
+
+```bash
+npm run worker:question-render:once
+pm2 start ecosystem.config.cjs --only ygg-question-render
+pm2 logs ygg-question-render --lines 200
+```
+
+환경 변수:
+
+- `QUESTION_RENDER_WORKER_BATCH_SIZE=4`: 한 poll에서 claim할 작업 수
+- `QUESTION_RENDER_WORKER_INTERVAL_MS=1500`: poll 간격
+- `QUESTION_RENDER_WORKER_STALE_MS=600000`: rendering 작업 회수 기준
+- `QUESTION_RENDER_WORKER_NAME`: 선택적 worker 식별자
+- `QUESTION_RENDER_WARM_BATCH_MAX=100`: Edge Function warm 요청 상한
+
+배포 순서는 migration 적용 → Edge Function 배포 → worker 시작입니다.
+작업은 priority `0`(현재 문항), `1`(이웃), `2`(warm) 순으로 처리되며,
+stale 작업은 retry 한도 내에서 자동 재큐잉됩니다.

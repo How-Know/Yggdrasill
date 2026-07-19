@@ -141,6 +141,55 @@ class StudentInfo {
   final int? duration;
 }
 
+class AcademyBranding {
+  const AcademyBranding({
+    required this.name,
+    this.logoUrl = '',
+  });
+
+  final String name;
+  final String logoUrl;
+}
+
+class QuickLoginStudent {
+  const QuickLoginStudent({
+    required this.id,
+    required this.name,
+    required this.school,
+    required this.grade,
+    required this.startHour,
+    required this.startMinute,
+  });
+
+  final String id;
+  final String name;
+  final String school;
+  final int? grade;
+  final int? startHour;
+  final int? startMinute;
+
+  static QuickLoginStudent fromRow(Map<String, dynamic> row) {
+    return QuickLoginStudent(
+      id: '${row['student_id'] ?? ''}',
+      name: '${row['name'] ?? ''}',
+      school: '${row['school'] ?? ''}',
+      grade: (row['grade'] as num?)?.toInt(),
+      startHour: (row['start_hour'] as num?)?.toInt(),
+      startMinute: (row['start_minute'] as num?)?.toInt(),
+    );
+  }
+}
+
+class QuickLoginRoster {
+  const QuickLoginRoster({
+    required this.students,
+    required this.networkProtected,
+  });
+
+  final List<QuickLoginStudent> students;
+  final bool networkProtected;
+}
+
 class TodayAttendance {
   const TodayAttendance({this.arrival, this.departure, this.classDateTime});
 
@@ -174,7 +223,8 @@ class StudentApi {
     required String username,
     required String password,
   }) async {
-    final uri = Uri.parse('${resolveSupabaseUrl()}/functions/v1/student_signup');
+    final uri =
+        Uri.parse('${resolveSupabaseUrl()}/functions/v1/student_signup');
     final res = await http.post(
       uri,
       headers: {
@@ -196,6 +246,86 @@ class StudentApi {
   }
 
   Future<void> signOut() => _client.auth.signOut();
+
+  Future<Map<String, dynamic>> _quickLoginRequest(
+    Map<String, dynamic> body,
+  ) async {
+    final uri =
+        Uri.parse('${resolveSupabaseUrl()}/functions/v1/student_pin_login');
+    final response = await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${resolveSupabaseAnonKey()}',
+        'apikey': resolveSupabaseAnonKey(),
+      },
+      body: jsonEncode(body),
+    );
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map) {
+      throw StudentApiException('빠른 로그인 서버 응답을 확인할 수 없어요.');
+    }
+    return Map<String, dynamic>.from(decoded);
+  }
+
+  Future<QuickLoginRoster> listQuickLoginStudents() async {
+    final result = await _quickLoginRequest(const {'action': 'list'});
+    if (result['ok'] != true) {
+      throw StudentApiException(_quickLoginErrorMessage('${result['error']}'));
+    }
+    final students = (result['students'] as List<dynamic>? ?? const [])
+        .whereType<Map>()
+        .map((row) => QuickLoginStudent.fromRow(
+              Map<String, dynamic>.from(row),
+            ))
+        .toList(growable: false);
+    return QuickLoginRoster(
+      students: students,
+      networkProtected: result['network_protected'] == true,
+    );
+  }
+
+  Future<void> signInWithPin({
+    required String studentId,
+    required String pin,
+  }) async {
+    final result = await _quickLoginRequest({
+      'action': 'login',
+      'student_id': studentId,
+      'pin': pin,
+    });
+    if (result['ok'] != true) {
+      throw StudentApiException(
+          _quickLoginErrorMessage('${result['error']}', result: result));
+    }
+    final tokenHash = '${result['token_hash'] ?? ''}'.trim();
+    if (tokenHash.isEmpty) {
+      throw StudentApiException('로그인 세션을 만들지 못했어요.');
+    }
+    await _client.auth.verifyOTP(
+      tokenHash: tokenHash,
+      type: OtpType.magiclink,
+    );
+  }
+
+  static String _quickLoginErrorMessage(
+    String code, {
+    Map<String, dynamic>? result,
+  }) {
+    switch (code) {
+      case 'network_not_allowed':
+        return '학원 Wi-Fi에 연결된 기기에서만 사용할 수 있어요.';
+      case 'pin_invalid':
+        return 'PIN이 맞지 않아요. ${result?['attempts_left'] ?? 0}번 더 입력할 수 있어요.';
+      case 'locked':
+        final seconds = (result?['locked_seconds'] as num?)?.toInt() ?? 300;
+        return '입력 횟수를 초과했어요. ${((seconds + 59) ~/ 60)}분 뒤 다시 시도해 주세요.';
+      case 'not_eligible':
+        return '지금은 이 학생으로 빠른 로그인할 수 없어요.';
+      default:
+        return '빠른 로그인에 실패했어요. ($code)';
+    }
+  }
 
   static String _signupErrorMessage(String code) {
     switch (code) {
@@ -219,6 +349,31 @@ class StudentApi {
   }
 
   // ---------------------------------------------------------------- 조회
+
+  /// 로그인 전에도 표시 가능한 전용 학원 공개 브랜딩.
+  Future<AcademyBranding> getPublicAcademyBranding() async {
+    final rows =
+        await _client.rpc('student_public_academy_branding') as List<dynamic>;
+    if (rows.isEmpty) {
+      return const AcademyBranding(name: '정현수학교습소');
+    }
+    final row = Map<String, dynamic>.from(rows.first as Map);
+    final bucket = '${row['logo_bucket'] ?? ''}'.trim();
+    final path = '${row['logo_path'] ?? ''}'.trim();
+    var logoUrl = '${row['logo_url'] ?? ''}'.trim();
+    if (bucket.isNotEmpty && path.isNotEmpty) {
+      try {
+        logoUrl =
+            await _client.storage.from(bucket).createSignedUrl(path, 60 * 60);
+      } catch (_) {
+        // 이전 공개 URL이 있으면 그대로 사용한다.
+      }
+    }
+    return AcademyBranding(
+      name: '${row['academy_name'] ?? '정현수학교습소'}'.trim(),
+      logoUrl: logoUrl,
+    );
+  }
 
   Future<StudentInfo?> getInfo() async {
     final rows = await _client.rpc('student_get_info') as List<dynamic>;
@@ -278,8 +433,7 @@ class StudentApi {
   }
 
   Future<TodayAttendance> todayAttendance() async {
-    final rows =
-        await _client.rpc('student_today_attendance') as List<dynamic>;
+    final rows = await _client.rpc('student_today_attendance') as List<dynamic>;
     if (rows.isEmpty) return const TodayAttendance();
     final row = rows.first as Map<String, dynamic>;
     DateTime? parse(String key) => row[key] != null

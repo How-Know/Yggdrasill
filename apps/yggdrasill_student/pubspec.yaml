@@ -15,6 +15,7 @@ dependencies:
   supabase_flutter: ^2.10.1
   shared_preferences: ^2.3.0
   http: ^1.4.0
+  pdfrx: ^1.0.77
   yggdrasill_ui:
     path: ../../packages/yggdrasill_ui
   google_mlkit_digital_ink_recognition: ^0.15.0
@@ -26,6 +27,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/branding/academy_logo.png
 
   # SPM+CocoaPods 하이브리드에서 Pods_Runner 링크 실패 버그가 있어
   # 이 앱은 CocoaPods만 사용한다.

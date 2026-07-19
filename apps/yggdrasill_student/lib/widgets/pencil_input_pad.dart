@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:ui' show PointMode;
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
@@ -103,21 +102,28 @@ class PencilInputPad extends StatefulWidget {
     super.key,
     required this.onRecognized,
     this.height = 220,
+    this.showControls = true,
+    this.showEmptyHint = true,
+    this.embedded = false,
   });
 
   final ValueChanged<String> onRecognized;
   final double height;
+  final bool showControls;
+  final bool showEmptyHint;
+  final bool embedded;
 
   static bool get supported =>
       !kIsWeb && (Platform.isIOS || Platform.isAndroid);
 
   @override
-  State<PencilInputPad> createState() => _PencilInputPadState();
+  State<PencilInputPad> createState() => PencilInputPadState();
 }
 
-class _PencilInputPadState extends State<PencilInputPad> {
+class PencilInputPadState extends State<PencilInputPad> {
   final List<List<Offset>> _strokes = <List<Offset>>[];
   final List<List<int>> _strokeTimes = <List<int>>[];
+  int? _activePointer;
 
   mlkit.DigitalInkRecognizer? _recognizer;
   bool _modelReady = false;
@@ -175,19 +181,28 @@ class _PencilInputPadState extends State<PencilInputPad> {
     super.dispose();
   }
 
-  void _startStroke(Offset position) {
+  void _startStroke(Offset position, int timestamp) {
     _debounce?.cancel();
     setState(() {
       _strokes.add(<Offset>[position]);
-      _strokeTimes.add(<int>[DateTime.now().millisecondsSinceEpoch]);
+      _strokeTimes.add(<int>[timestamp]);
     });
   }
 
-  void _extendStroke(Offset position) {
+  void _extendStroke(Offset position, int timestamp) {
     if (_strokes.isEmpty) return;
+    final previous = _strokes.last.last;
+    final previousTime = _strokeTimes.last.last;
+    final distance = (position - previous).distance;
+    final steps = (distance / 2.5).ceil().clamp(1, 48);
     setState(() {
-      _strokes.last.add(position);
-      _strokeTimes.last.add(DateTime.now().millisecondsSinceEpoch);
+      for (var step = 1; step <= steps; step++) {
+        final t = step / steps;
+        _strokes.last.add(Offset.lerp(previous, position, t)!);
+        _strokeTimes.last.add(
+          previousTime + ((timestamp - previousTime) * t).round(),
+        );
+      }
     });
   }
 
@@ -256,6 +271,13 @@ class _PencilInputPadState extends State<PencilInputPad> {
     _endStroke();
   }
 
+  bool undoStroke() {
+    _undo();
+    return _strokes.isNotEmpty;
+  }
+
+  void clearStrokes() => _clear();
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -271,8 +293,8 @@ class _PencilInputPadState extends State<PencilInputPad> {
               Text(
                 '$_modelError\nWi-Fi 연결을 확인한 뒤 다시 시도해 주세요.',
                 textAlign: TextAlign.center,
-                style:
-                    theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.hintColor),
               ),
               const SizedBox(height: 10),
               OutlinedButton.icon(
@@ -293,30 +315,65 @@ class _PencilInputPadState extends State<PencilInputPad> {
           Positioned.fill(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                _canvasSize =
-                    Size(constraints.maxWidth, constraints.maxHeight);
-                return GestureDetector(
-                  onPanStart:
-                      _modelReady ? (d) => _startStroke(d.localPosition) : null,
-                  onPanUpdate:
-                      _modelReady ? (d) => _extendStroke(d.localPosition) : null,
-                  onPanEnd: _modelReady ? (_) => _endStroke() : null,
+                _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+                return Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: _modelReady
+                      ? (event) {
+                          if (_activePointer != null) return;
+                          _activePointer = event.pointer;
+                          _startStroke(
+                            event.localPosition,
+                            event.timeStamp.inMilliseconds,
+                          );
+                        }
+                      : null,
+                  onPointerMove: _modelReady
+                      ? (event) {
+                          if (_activePointer != event.pointer) return;
+                          _extendStroke(
+                            event.localPosition,
+                            event.timeStamp.inMilliseconds,
+                          );
+                        }
+                      : null,
+                  onPointerUp: _modelReady
+                      ? (event) {
+                          if (_activePointer != event.pointer) return;
+                          _activePointer = null;
+                          _endStroke();
+                        }
+                      : null,
+                  onPointerCancel: _modelReady
+                      ? (event) {
+                          if (_activePointer != event.pointer) return;
+                          _activePointer = null;
+                          _endStroke();
+                        }
+                      : null,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: isDark
-                          ? Colors.white.withValues(alpha: 0.04)
-                          : Colors.black.withValues(alpha: 0.03),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: theme.dividerColor.withValues(alpha: 0.4),
-                      ),
+                      color: widget.embedded
+                          ? Colors.transparent
+                          : (isDark
+                              ? Colors.white.withValues(alpha: 0.04)
+                              : Colors.black.withValues(alpha: 0.03)),
+                      borderRadius:
+                          BorderRadius.circular(widget.embedded ? 0 : 14),
+                      border: widget.embedded
+                          ? null
+                          : Border.all(
+                              color: theme.dividerColor.withValues(alpha: 0.4),
+                            ),
                     ),
-                    child: CustomPaint(
-                      painter: _StrokePainter(
-                        strokes: _strokes,
-                        color: isDark ? Colors.white : Colors.black87,
+                    child: RepaintBoundary(
+                      child: CustomPaint(
+                        painter: _StrokePainter(
+                          strokes: _strokes,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                        size: Size.infinite,
                       ),
-                      size: Size.infinite,
                     ),
                   ),
                 );
@@ -336,9 +393,7 @@ class _PencilInputPadState extends State<PencilInputPad> {
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      _modelDownloading
-                          ? '필기 모델을 처음 다운로드하는 중…'
-                          : '필기 인식 준비 중…',
+                      _modelDownloading ? '필기 모델을 처음 다운로드하는 중…' : '필기 인식 준비 중…',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.hintColor),
                     ),
@@ -346,7 +401,7 @@ class _PencilInputPadState extends State<PencilInputPad> {
                 ),
               ),
             ),
-          if (_strokes.isEmpty && _modelReady)
+          if (_strokes.isEmpty && _modelReady && widget.showEmptyHint)
             Positioned.fill(
               child: IgnorePointer(
                 child: Center(
@@ -368,33 +423,34 @@ class _PencilInputPadState extends State<PencilInputPad> {
                     ?.copyWith(color: theme.colorScheme.error),
               ),
             ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Row(
-              children: [
-                if (_recognizing)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+          if (widget.showControls)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Row(
+                children: [
+                  if (_recognizing)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                     ),
+                  IconButton(
+                    tooltip: '한 획 지우기',
+                    onPressed: _strokes.isEmpty ? null : _undo,
+                    icon: const Icon(Icons.undo_rounded, size: 20),
                   ),
-                IconButton(
-                  tooltip: '한 획 지우기',
-                  onPressed: _strokes.isEmpty ? null : _undo,
-                  icon: const Icon(Icons.undo_rounded, size: 20),
-                ),
-                IconButton(
-                  tooltip: '모두 지우기',
-                  onPressed: _strokes.isEmpty ? null : _clear,
-                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                ),
-              ],
+                  IconButton(
+                    tooltip: '모두 지우기',
+                    onPressed: _strokes.isEmpty ? null : _clear,
+                    icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                  ),
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -411,23 +467,32 @@ class _StrokePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = color
-      ..strokeWidth = 3
+      ..strokeWidth = 2.8
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
+      ..style = PaintingStyle.stroke
+      ..isAntiAlias = true;
 
     for (final stroke in strokes) {
       if (stroke.length < 2) {
         if (stroke.isNotEmpty) {
-          canvas.drawPoints(PointMode.points, stroke, paint..strokeWidth = 4);
-          paint.strokeWidth = 3;
+          canvas.drawCircle(
+              stroke.first, 1.8, paint..style = PaintingStyle.fill);
+          paint.style = PaintingStyle.stroke;
         }
         continue;
       }
       final path = Path()..moveTo(stroke.first.dx, stroke.first.dy);
-      for (var i = 1; i < stroke.length; i++) {
-        path.lineTo(stroke[i].dx, stroke[i].dy);
+      for (var i = 1; i < stroke.length - 1; i++) {
+        final point = stroke[i];
+        final next = stroke[i + 1];
+        final midpoint = Offset(
+          (point.dx + next.dx) / 2,
+          (point.dy + next.dy) / 2,
+        );
+        path.quadraticBezierTo(point.dx, point.dy, midpoint.dx, midpoint.dy);
       }
+      path.lineTo(stroke.last.dx, stroke.last.dy);
       canvas.drawPath(path, paint);
     }
   }

@@ -120,207 +120,231 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: const Text(
-          '내 정보',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
-        actions: [
-          IconButton(
-            tooltip: '새로고침',
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: _error != null
-          ? Center(child: Text(_error!, textAlign: TextAlign.center))
-          : info == null
-              ? const Center(child: YggLoadingIndicator(size: 32))
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 560),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // 프로필 카드
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: dlg.cardBg,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: dlg.cardBorder),
-                          ),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 30,
-                                backgroundColor: YggGlassTokens
-                                    .confirmActionColor
-                                    .withValues(alpha: 0.18),
-                                child: Text(
-                                  info.name.isNotEmpty ? info.name[0] : '?',
-                                  style: const TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.w800,
-                                    color: YggGlassTokens.confirmActionColor,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    info.name,
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w800,
-                                      color: dlg.text,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    [
-                                      if (info.school.isNotEmpty) info.school,
-                                      if (info.grade != null)
-                                        '${info.grade}학년',
-                                    ].join(' · '),
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: dlg.textSub,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        // 오늘 출결 카드
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: dlg.cardBg,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: dlg.cardBorder),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '오늘 출결',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  color: dlg.text,
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _AttendanceTile(
-                                      label: '등원',
-                                      value: _formatTime(att?.arrival),
-                                      highlight: arrived,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: _AttendanceTile(
-                                      label: '하원',
-                                      value: _formatTime(att?.departure),
-                                      highlight: departed,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: FilledButton.icon(
-                                      onPressed: (_busy || arrived)
-                                          ? null
-                                          : _recordArrival,
-                                      style: FilledButton.styleFrom(
-                                        minimumSize:
-                                            const Size.fromHeight(48),
-                                        backgroundColor:
-                                            YggGlassTokens.confirmActionColor,
-                                      ),
-                                      icon: const Icon(Icons.login_rounded),
-                                      label: const Text('등원'),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      onPressed: (_busy || !arrived || departed)
-                                          ? null
-                                          : _recordDeparture,
-                                      style: OutlinedButton.styleFrom(
-                                        minimumSize:
-                                            const Size.fromHeight(48),
-                                      ),
-                                      icon: const Icon(Icons.logout_rounded),
-                                      label: const Text('하원'),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        // 설정 카드
-                        Material(
-                          color: dlg.cardBg,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide(color: dlg.cardBorder),
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Column(
-                            children: [
-                              ValueListenableBuilder<ThemeMode>(
-                                valueListenable: AppThemeController.mode,
-                                builder: (context, mode, _) => SwitchListTile(
-                                  title: Text(
-                                    '다크 모드',
-                                    style: TextStyle(color: dlg.text),
-                                  ),
-                                  activeTrackColor:
-                                      YggGlassTokens.confirmActionColor,
-                                  value: mode == ThemeMode.dark,
-                                  onChanged: (v) => AppThemeController.setMode(
-                                    v ? ThemeMode.dark : ThemeMode.light,
-                                  ),
-                                ),
-                              ),
-                              Divider(height: 1, color: dlg.divider),
-                              ListTile(
-                                leading: const Icon(
-                                  Icons.logout_rounded,
-                                  color: Colors.redAccent,
-                                ),
-                                title: const Text(
-                                  '로그아웃',
-                                  style: TextStyle(color: Colors.redAccent),
-                                ),
-                                onTap: () => StudentApi.instance.signOut(),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 32),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: YggGroupedLayoutTokens.maxContentWidth,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: YggGroupedLayoutTokens.horizontalInset,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  YggScreenMainTitle(
+                    title: '내 정보',
+                    trailing: IconButton(
+                      tooltip: '새로고침',
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh_rounded),
                     ),
                   ),
-                ),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 80),
+                      child: Text(_error!, textAlign: TextAlign.center),
+                    )
+                  else if (info == null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 80),
+                      child: Center(child: YggLoadingIndicator(size: 32)),
+                    )
+                  else ...[
+                    YggGroupedCard(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: YggGroupedLayoutTokens.rowHorizontalPadding,
+                        vertical: YggGroupedLayoutTokens.rowVerticalPadding,
+                      ),
+                      child: Column(
+                        children: [
+                          CircleAvatar(
+                            radius: 30,
+                            backgroundColor: YggGlassTokens.confirmActionColor
+                                .withValues(alpha: 0.18),
+                            child: Text(
+                              info.name.isNotEmpty ? info.name[0] : '?',
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                                color: YggGlassTokens.confirmActionColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            info.name,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: dlg.text,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            [
+                              if (info.school.isNotEmpty) info.school,
+                              if (info.grade != null) '${info.grade}학년',
+                            ].join(' · '),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: dlg.textSub,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(
+                      height: YggGroupedLayoutTokens.sectionSpacing,
+                    ),
+                    YggLabeledCardSection(
+                      label: '오늘 출결',
+                      child: YggGroupedCard(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal:
+                              YggGroupedLayoutTokens.rowHorizontalPadding,
+                          vertical: YggGroupedLayoutTokens.rowVerticalPadding,
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _AttendanceTile(
+                                    label: '등원',
+                                    value: _formatTime(att?.arrival),
+                                    highlight: arrived,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: _AttendanceTile(
+                                    label: '하원',
+                                    value: _formatTime(att?.departure),
+                                    highlight: departed,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: FilledButton.icon(
+                                    onPressed: (_busy || arrived)
+                                        ? null
+                                        : _recordArrival,
+                                    style: FilledButton.styleFrom(
+                                      minimumSize: const Size.fromHeight(48),
+                                      backgroundColor:
+                                          YggGlassTokens.confirmActionColor,
+                                    ),
+                                    icon: const Icon(Icons.login_rounded),
+                                    label: const Text('등원'),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: (_busy || !arrived || departed)
+                                        ? null
+                                        : _recordDeparture,
+                                    style: OutlinedButton.styleFrom(
+                                      minimumSize: const Size.fromHeight(48),
+                                    ),
+                                    icon: const Icon(Icons.logout_rounded),
+                                    label: const Text('하원'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(
+                      height: YggGroupedLayoutTokens.sectionSpacing,
+                    ),
+                    YggLabeledCardSection(
+                      label: '앱',
+                      child: YggGroupedCard(
+                        padding: EdgeInsets.zero,
+                        child: Column(
+                          children: [
+                            ValueListenableBuilder<ThemeMode>(
+                              valueListenable: AppThemeController.mode,
+                              builder: (context, mode, _) => Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: YggGroupedLayoutTokens
+                                      .rowHorizontalPadding,
+                                  vertical: 18,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      '다크 모드',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: dlg.text,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 18),
+                                    Switch(
+                                      activeTrackColor:
+                                          YggGlassTokens.confirmActionColor,
+                                      value: mode == ThemeMode.dark,
+                                      onChanged: (value) =>
+                                          AppThemeController.setMode(
+                                        value
+                                            ? ThemeMode.dark
+                                            : ThemeMode.light,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            Divider(
+                              height: 1,
+                              indent: 24,
+                              endIndent: 24,
+                              color: dlg.divider,
+                            ),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton.icon(
+                                onPressed: () => StudentApi.instance.signOut(),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: const Color(0xFFFF554F),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 22),
+                                ),
+                                icon: const Icon(Icons.logout_rounded),
+                                label: const Text(
+                                  '로그아웃',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -359,9 +383,7 @@ class _AttendanceTile extends StatelessWidget {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w800,
-              color: highlight
-                  ? YggGlassTokens.confirmActionColor
-                  : dlg.text,
+              color: highlight ? YggGlassTokens.confirmActionColor : dlg.text,
             ),
           ),
         ],

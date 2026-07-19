@@ -10,10 +10,26 @@ class TextbookApi {
 
   /// 정답 DB가 준비된(마이그레이션 된) 교재 목록 + 풀이 현황.
   Future<List<StudentTextbook>> listTextbooks() async {
-    final rows = await _client.rpc('student_list_textbooks') as List<dynamic>;
+    final results = await Future.wait([
+      _client.rpc('student_list_textbooks'),
+      _client.rpc('student_textbook_start_dates'),
+    ]);
+    final rows = results[0] as List<dynamic>;
+    final startDates = <String, DateTime>{};
+    for (final raw in (results[1] as List<dynamic>).whereType<Map>()) {
+      final row = Map<String, dynamic>.from(raw);
+      final startedAt = DateTime.tryParse('${row['started_at'] ?? ''}');
+      if (startedAt != null) {
+        startDates['${row['book_id']}|${row['grade_label']}'] =
+            startedAt.toLocal();
+      }
+    }
     return rows
         .whereType<Map<String, dynamic>>()
-        .map(StudentTextbook.fromRow)
+        .map((row) => StudentTextbook.fromRow(
+              row,
+              startedAt: startDates['${row['book_id']}|${row['grade_label']}'],
+            ))
         .toList(growable: false);
   }
 
@@ -46,6 +62,110 @@ class TextbookApi {
         .whereType<Map<String, dynamic>>()
         .map(PageProblem.fromRow)
         .toList(growable: false);
+  }
+
+  Future<TextbookProblemImage> problemImage({
+    required String cropId,
+  }) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_problem_image',
+        body: {'crop_id': cropId},
+      );
+    } on FunctionException catch (error) {
+      final details = error.details;
+      final map = details is Map
+          ? Map<String, dynamic>.from(details)
+          : const <String, dynamic>{};
+      throw TextbookProblemImageException(
+        code: '${map['error'] ?? 'http_${error.status}'}',
+        detail: '${map['detail'] ?? error.reasonPhrase ?? ''}',
+      );
+    }
+    final data = (response.data as Map<String, dynamic>?) ?? const {};
+    if (data['ok'] != true) {
+      throw TextbookProblemImageException(
+        code: '${data['error'] ?? 'unknown'}',
+        detail: '${data['detail'] ?? ''}',
+      );
+    }
+    return TextbookProblemImage(
+      url: '${data['image_url'] ?? ''}',
+      width: (data['width'] as num?)?.toInt(),
+      height: (data['height'] as num?)?.toInt(),
+    );
+  }
+
+  /// 렌더된 단일 문항 PDF 또는 원본 교재 PDF fallback을 조회한다.
+  Future<StudentTextbookProblemView> problemView({
+    required String cropId,
+    List<String> neighborCropIds = const <String>[],
+  }) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_problem_view',
+        body: {
+          'action': 'view',
+          'crop_id': cropId,
+          if (neighborCropIds.isNotEmpty) 'neighbor_crop_ids': neighborCropIds,
+        },
+      );
+    } on FunctionException catch (error) {
+      final details = error.details;
+      final map = details is Map
+          ? Map<String, dynamic>.from(details)
+          : const <String, dynamic>{};
+      throw StudentTextbookProblemViewException(
+        code: '${map['error'] ?? 'http_${error.status}'}',
+        detail: '${map['detail'] ?? error.reasonPhrase ?? ''}',
+      );
+    }
+    final rawData = response.data;
+    final data = rawData is Map
+        ? Map<String, dynamic>.from(rawData)
+        : const <String, dynamic>{};
+    if (data['ok'] != true) {
+      throw StudentTextbookProblemViewException(
+        code: '${data['error'] ?? 'unknown'}',
+        detail: '${data['detail'] ?? ''}',
+      );
+    }
+    return StudentTextbookProblemView.fromJson(data);
+  }
+
+  /// 활성 교재의 문항 PDF 렌더 큐를 비동기로 예열한다.
+  Future<void> warmProblemViews({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    var offset = 0;
+    for (var page = 0; page < 20; page++) {
+      final response = await _client.functions.invoke(
+        'student_textbook_problem_view',
+        body: {
+          'action': 'warm',
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'offset': offset,
+        },
+      );
+      final rawData = response.data;
+      final data = rawData is Map
+          ? Map<String, dynamic>.from(rawData)
+          : const <String, dynamic>{};
+      if (data['ok'] != true) {
+        throw StudentTextbookProblemViewException(
+          code: '${data['error'] ?? 'warm_failed'}',
+          detail: '${data['detail'] ?? ''}',
+        );
+      }
+      if (data['has_more'] != true) return;
+      final nextOffset = (data['next_offset'] as num?)?.toInt();
+      if (nextOffset == null || nextOffset <= offset) return;
+      offset = nextOffset;
+    }
   }
 
   /// 페이지 일괄 채점 (Edge Function — 수학 동치/단위/AI 판정 포함).
@@ -110,6 +230,109 @@ class TextbookApi {
   }
 }
 
+class TextbookProblemImageException implements Exception {
+  const TextbookProblemImageException({
+    required this.code,
+    this.detail = '',
+  });
+
+  final String code;
+  final String detail;
+
+  @override
+  String toString() => 'TextbookProblemImageException($code, $detail)';
+}
+
+class TextbookProblemImage {
+  const TextbookProblemImage({
+    required this.url,
+    this.width,
+    this.height,
+  });
+
+  final String url;
+  final int? width;
+  final int? height;
+}
+
+enum StudentTextbookProblemViewStatus { ready, queued, fallback }
+
+class StudentTextbookProblemViewException implements Exception {
+  const StudentTextbookProblemViewException({
+    required this.code,
+    this.detail = '',
+  });
+
+  final String code;
+  final String detail;
+
+  @override
+  String toString() => 'StudentTextbookProblemViewException($code, $detail)';
+}
+
+class StudentTextbookProblemView {
+  const StudentTextbookProblemView({
+    required this.status,
+    this.pdfUrl,
+    this.bodyPdfUrl,
+    this.rawPage,
+    this.itemRegion1k,
+    this.pollAfterMs,
+    this.expiresIn,
+    this.cacheKey,
+  });
+
+  final StudentTextbookProblemViewStatus status;
+  final String? pdfUrl;
+  final String? bodyPdfUrl;
+  final int? rawPage;
+  final List<int>? itemRegion1k;
+  final int? pollAfterMs;
+  final int? expiresIn;
+  final String? cacheKey;
+
+  bool get isReady => status == StudentTextbookProblemViewStatus.ready;
+  bool get isQueued => status == StudentTextbookProblemViewStatus.queued;
+  bool get isFallback => status == StudentTextbookProblemViewStatus.fallback;
+
+  static StudentTextbookProblemView fromJson(Map<String, dynamic> json) {
+    final fallback = json['fallback'] is Map
+        ? Map<String, dynamic>.from(json['fallback'] as Map)
+        : const <String, dynamic>{};
+    final status = switch ('${json['status'] ?? ''}') {
+      'ready' => StudentTextbookProblemViewStatus.ready,
+      'queued' => StudentTextbookProblemViewStatus.queued,
+      'fallback' => StudentTextbookProblemViewStatus.fallback,
+      final value => throw StudentTextbookProblemViewException(
+          code: 'unsupported_status',
+          detail: value,
+        ),
+    };
+    final rawRegion = json['item_region_1k'] ?? fallback['item_region_1k'];
+    final region = rawRegion is List
+        ? rawRegion
+            .whereType<num>()
+            .map((value) => value.toInt())
+            .toList(growable: false)
+        : null;
+    String? nullableString(Object? value) {
+      final text = value?.toString().trim() ?? '';
+      return text.isEmpty ? null : text;
+    }
+
+    return StudentTextbookProblemView(
+      status: status,
+      pdfUrl: nullableString(json['pdf_url']),
+      bodyPdfUrl: nullableString(json['body_pdf_url']),
+      rawPage: ((json['raw_page'] ?? fallback['raw_page']) as num?)?.toInt(),
+      itemRegion1k: region?.length == 4 ? region : null,
+      pollAfterMs: (json['poll_after_ms'] as num?)?.toInt(),
+      expiresIn: (json['expires_in'] as num?)?.toInt(),
+      cacheKey: nullableString(json['cache_key']),
+    );
+  }
+}
+
 /// 셀프 채점용으로 공개된 정답.
 class RevealedAnswer {
   const RevealedAnswer({
@@ -141,37 +364,96 @@ class StudentTextbook {
     required this.bookId,
     required this.gradeLabel,
     required this.name,
+    required this.description,
+    required this.colorValue,
+    required this.series,
+    required this.coverRef,
     required this.totalProblems,
     required this.gradedCount,
     required this.correctCount,
+    required this.completedCount,
+    required this.stageProgress,
     this.lastRawPage,
     this.lastDisplayPage,
     this.lastActivity,
+    this.startedAt,
   });
 
   final String bookId;
   final String gradeLabel;
   final String name;
+  final String description;
+  final int? colorValue;
+  final String series;
+  final String coverRef;
   final int totalProblems;
   final int gradedCount;
   final int correctCount;
+  final int completedCount;
+  final Map<String, TextbookStageProgress> stageProgress;
   final int? lastRawPage;
   final int? lastDisplayPage;
   final DateTime? lastActivity;
+  final DateTime? startedAt;
 
-  static StudentTextbook fromRow(Map<String, dynamic> row) {
+  static StudentTextbook fromRow(
+    Map<String, dynamic> row, {
+    DateTime? startedAt,
+  }) {
+    final stages = <String, TextbookStageProgress>{};
+    final rawStages = row['stage_progress'];
+    if (rawStages is Map) {
+      for (final entry in rawStages.entries) {
+        if (entry.value is! Map) continue;
+        stages['${entry.key}'.toUpperCase()] = TextbookStageProgress.fromMap(
+          Map<String, dynamic>.from(entry.value as Map),
+        );
+      }
+    }
     return StudentTextbook(
       bookId: row['book_id'] as String,
       gradeLabel: (row['grade_label'] as String?) ?? '',
       name: (row['book_name'] as String?) ?? '교재',
+      description: (row['book_description'] as String?) ?? '',
+      colorValue: (row['book_color'] as num?)?.toInt(),
+      series: (row['series'] as String?)?.trim().toLowerCase() ?? '',
+      coverRef: (row['cover_ref'] as String?)?.trim() ?? '',
       totalProblems: (row['total_problems'] as num?)?.toInt() ?? 0,
       gradedCount: (row['graded_count'] as num?)?.toInt() ?? 0,
       correctCount: (row['correct_count'] as num?)?.toInt() ?? 0,
+      completedCount: (row['correct_count'] as num?)?.toInt() ?? 0,
+      stageProgress: stages,
       lastRawPage: (row['last_raw_page'] as num?)?.toInt(),
       lastDisplayPage: (row['last_display_page'] as num?)?.toInt(),
       lastActivity: row['last_activity'] != null
           ? DateTime.tryParse(row['last_activity'] as String)?.toLocal()
           : null,
+      startedAt: startedAt,
+    );
+  }
+}
+
+class TextbookStageProgress {
+  const TextbookStageProgress({
+    required this.total,
+    required this.graded,
+    required this.correct,
+    required this.completed,
+  });
+
+  final int total;
+  final int graded;
+  final int correct;
+  final int completed;
+
+  double get progress => total <= 0 ? 0 : correct / total;
+
+  static TextbookStageProgress fromMap(Map<String, dynamic> map) {
+    return TextbookStageProgress(
+      total: (map['total'] as num?)?.toInt() ?? 0,
+      graded: (map['graded'] as num?)?.toInt() ?? 0,
+      correct: (map['correct'] as num?)?.toInt() ?? 0,
+      completed: (map['completed'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -254,7 +536,8 @@ class TextbookUnitTree {
 }
 
 class TbBigUnit {
-  const TbBigUnit({required this.name, required this.order, required this.mids});
+  const TbBigUnit(
+      {required this.name, required this.order, required this.mids});
   final String name;
   final int order;
   final List<TbMidUnit> mids;
@@ -306,7 +589,7 @@ class TbPageStat {
   final int correct;
 
   int get shownPage => displayPage ?? rawPage;
-  bool get done => graded >= total;
+  bool get done => correct >= total;
 
   static TbPageStat fromRow(Map<String, dynamic> row) {
     return TbPageStat(

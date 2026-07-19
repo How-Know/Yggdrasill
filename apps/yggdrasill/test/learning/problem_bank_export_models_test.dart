@@ -5,8 +5,8 @@ void main() {
   test('RenderConfig 표준 키를 포함한다', () {
     final settings = LearningProblemExportSettings.initial();
     final config = settings.toRenderConfig(
-      selectedQuestionIdsOrdered: const ['q1', 'q2'],
-      questionModeByQuestionId: const {
+      selectedQuestionUidsOrdered: const ['q1', 'q2'],
+      questionModeByQuestionUid: const {
         'q1': kLearningQuestionModeObjective,
         'q2': kLearningQuestionModeSubjective,
       },
@@ -22,16 +22,16 @@ void main() {
     final settings = LearningProblemExportSettings.initial();
     final hashA = buildLearningRenderHash(
       settings: settings,
-      selectedQuestionIdsOrdered: const ['q1', 'q2'],
-      questionModeByQuestionId: const {
+      selectedQuestionUidsOrdered: const ['q1', 'q2'],
+      questionModeByQuestionUid: const {
         'q2': kLearningQuestionModeSubjective,
         'q1': kLearningQuestionModeObjective,
       },
     );
     final hashB = buildLearningRenderHash(
       settings: settings,
-      selectedQuestionIdsOrdered: const ['q1', 'q2'],
-      questionModeByQuestionId: const {
+      selectedQuestionUidsOrdered: const ['q1', 'q2'],
+      questionModeByQuestionUid: const {
         'q1': kLearningQuestionModeObjective,
         'q2': kLearningQuestionModeSubjective,
       },

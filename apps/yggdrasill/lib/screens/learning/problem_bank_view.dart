@@ -1084,13 +1084,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   ) async {
     if (_academyId == null || _academyId!.isEmpty) return;
     if (questions.isEmpty) return;
-    if (!_service.hasGateway) {
-      _markAllPreviewsFailed(
-        questions,
-        '게이트웨이 연결이 없어 서버 미리보기를 불러올 수 없습니다.',
-      );
-      return;
-    }
 
     if (mounted) {
       setState(() {
@@ -1177,7 +1170,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final id = q.id.trim();
         if (id.isNotEmpty && !nextUrls.containsKey(id)) {
           nextStatus[id] = 'failed';
-          nextError[id] = '서버 미리보기 응답에서 누락되었습니다.';
+          nextError[id] = _service.hasGateway
+              ? '서버 미리보기 응답에서 누락되었습니다.'
+              : 'Supabase Storage에 저장된 Worker 미리보기가 없습니다.';
         }
       }
 
@@ -2340,14 +2335,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         renderConfigPatch: initialRenderPatch,
       );
       if (!mounted || completed == null) return;
-      if (completed.status != 'completed' ||
-          completed.outputUrl.trim().isEmpty) {
+      if (completed.status != 'completed') {
         final err = completed.errorMessage.isNotEmpty
             ? completed.errorMessage
             : completed.errorCode;
         _showSnack(
           '미리보기 생성 실패: ${err.isEmpty ? completed.status : err}',
         );
+        return;
+      }
+      final previewPdfUrl = await _service.resolveExportPdfUrl(completed);
+      if (!mounted) return;
+      if (previewPdfUrl.isEmpty) {
+        _showSnack('미리보기 생성 실패: Worker 산출물의 다운로드 URL을 발급하지 못했습니다.');
         return;
       }
       final presetRenderConfig =
@@ -2393,7 +2393,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final scoreEntries = buildScoreEntries(selected);
       await ProblemBankExportServerPreviewDialog.open(
         context,
-        pdfUrl: completed.outputUrl,
+        pdfUrl: previewPdfUrl,
         titleText: '서버 PDF 미리보기 (${selected.length}문항)',
         initialSubjectTitle:
             initialSubjectTitle.isEmpty ? '수학 영역' : initialSubjectTitle,
@@ -2491,14 +2491,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             settingsOverride: nextSettings,
           );
           if (!mounted || refreshed == null) return null;
-          if (refreshed.status != 'completed' ||
-              refreshed.outputUrl.trim().isEmpty) {
+          if (refreshed.status != 'completed') {
             final err = refreshed.errorMessage.isNotEmpty
                 ? refreshed.errorMessage
                 : refreshed.errorCode;
             _showSnack(
               '미리보기 생성 실패: ${err.isEmpty ? refreshed.status : err}',
             );
+            return null;
+          }
+          final refreshedPdfUrl = await _service.resolveExportPdfUrl(refreshed);
+          if (!mounted) return null;
+          if (refreshedPdfUrl.isEmpty) {
+            _showSnack('미리보기 생성 실패: Worker 산출물 URL 재발급에 실패했습니다.');
             return null;
           }
           final refreshedMathEngine = normalizeMathEngineValue(
@@ -2564,7 +2569,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               ? questionScoreByQuestionUid
               : questionScoreByQuestionId;
           return ProblemBankPreviewRefreshResult(
-            pdfUrl: refreshed.outputUrl,
+            pdfUrl: refreshedPdfUrl,
             mathEngine: refreshedMathEngine,
             titlePageTopText: titlePageTopText.isEmpty
                 ? kLearningDefaultTitlePageTopText
@@ -2935,15 +2940,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       if (savePath == null || savePath.trim().isEmpty) {
         _showSnack('로컬 저장이 취소되었습니다.');
       } else {
-        var rawUrl = job.outputUrl.trim();
-        if (rawUrl.isEmpty &&
-            job.outputStorageBucket.isNotEmpty &&
-            job.outputStoragePath.isNotEmpty) {
-          rawUrl = await _service.createStorageSignedUrl(
-            bucket: job.outputStorageBucket,
-            path: job.outputStoragePath,
-          );
-        }
+        var rawUrl = await _service.resolveExportPdfUrl(job);
         if (rawUrl.isEmpty) {
           throw Exception('PDF URL을 확보하지 못해 로컬 저장을 진행할 수 없습니다.');
         }

@@ -23,6 +23,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   List<HomeworkGroup>? _groups;
   String? _error;
   bool _busy = false;
+  String? _selectedGroupId;
   Timer? _ticker;
   Timer? _poller;
 
@@ -53,6 +54,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       setState(() {
         _groups = groups;
         _error = null;
+        if (_selectedGroupId == null && groups.isNotEmpty) {
+          _selectedGroupId = groups.first.groupId;
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -164,32 +168,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   }
 
   void _onGroupTap(HomeworkGroup group) {
-    if (group.isHomeworkOnly) {
-      TopGlassSnackBar.show(
-        context,
-        message: '숙제 검사를 먼저 받아야 해요.',
-        icon: Icons.info_outline_rounded,
-      );
-      return;
-    }
-    switch (group.phase) {
-      case 1:
-        _transition(group, 1, successMessage: '${group.title} 시작!');
-        break;
-      case 2:
-        _openDetail(group);
-        break;
-      case 3:
-        TopGlassSnackBar.show(
-          context,
-          message: '제출된 과제예요. 선생님 확인을 기다려요.',
-          icon: Icons.hourglass_top_rounded,
-        );
-        break;
-      case 4:
-        _confirmPhase4(group);
-        break;
-    }
+    setState(() => _selectedGroupId = group.groupId);
   }
 
   Future<void> _confirmPhase4(HomeworkGroup group) async {
@@ -218,24 +197,14 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     }
   }
 
-  void _openDetail(HomeworkGroup group) {
-    showUtilityGlassBottomSheet(
-      context: context,
-      title: group.title,
-      icon: Icons.menu_book_rounded,
-      preferredWidth: 560,
-      child: _GroupDetailSheet(
-        group: group,
-        onPause: () {
-          Navigator.of(context, rootNavigator: true).pop();
-          _pauseAll();
-        },
-        onSubmit: () {
-          Navigator.of(context, rootNavigator: true).pop();
-          _transition(group, 99, successMessage: '과제를 제출했어요!');
-        },
-      ),
-    );
+  HomeworkGroup? _detailGroup(List<HomeworkGroup> groups) {
+    for (final group in groups) {
+      if (group.running) return group;
+    }
+    for (final group in groups) {
+      if (group.groupId == _selectedGroupId) return group;
+    }
+    return groups.isEmpty ? null : groups.first;
   }
 
   @override
@@ -246,7 +215,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         title: const Text(
-          '오늘의 과제',
+          '홈',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [
@@ -263,16 +232,16 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: groups == null
-            ? Center(
-                child: _error == null
-                    ? const YggLoadingIndicator(size: 32)
-                    : Text(_error!, textAlign: TextAlign.center),
-              )
-            : groups.isEmpty
-                ? ListView(
+      body: groups == null
+          ? Center(
+              child: _error == null
+                  ? const YggLoadingIndicator(size: 32)
+                  : Text(_error!, textAlign: TextAlign.center),
+            )
+          : groups.isEmpty
+              ? RefreshIndicator(
+                  onRefresh: _refresh,
+                  child: ListView(
                     children: const [
                       SizedBox(height: 160),
                       Center(
@@ -282,31 +251,100 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
                         ),
                       ),
                     ],
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 440,
-                      mainAxisExtent: 148,
-                      crossAxisSpacing: 14,
-                      mainAxisSpacing: 14,
-                    ),
-                    itemCount: groups.length,
-                    itemBuilder: (context, i) => _GroupCard(
-                      group: groups[i],
-                      onTap: () => _onGroupTap(groups[i]),
-                    ),
                   ),
-      ),
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final detail = _detailGroup(groups);
+                    final detailWidth =
+                        ((constraints.maxWidth - 68) / 3).clamp(280.0, 380.0);
+                    return Stack(
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: RefreshIndicator(
+                                onRefresh: _refresh,
+                                child: GridView.builder(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(20, 8, 14, 112),
+                                  gridDelegate:
+                                      const SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: 440,
+                                    mainAxisExtent: 148,
+                                    crossAxisSpacing: 14,
+                                    mainAxisSpacing: 14,
+                                  ),
+                                  itemCount: groups.length,
+                                  itemBuilder: (context, i) => _GroupCard(
+                                    group: groups[i],
+                                    selected:
+                                        detail?.groupId == groups[i].groupId,
+                                    onTap: () => _onGroupTap(groups[i]),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: detailWidth,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(0, 8, 20, 112),
+                                child: _HomeworkDetailPanel(
+                                  group: detail!,
+                                  onSubmit: detail.phase == 2
+                                      ? () => _transition(
+                                            detail,
+                                            99,
+                                            successMessage: '과제를 제출했어요!',
+                                          )
+                                      : null,
+                                  onReset: detail.phase == 4
+                                      ? () => _confirmPhase4(detail)
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (!detail.isHomeworkOnly &&
+                            (detail.phase == 1 || detail.phase == 2))
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 24,
+                            child: Center(
+                              child: _HomeworkActionFab(
+                                busy: _busy,
+                                running: detail.phase == 2,
+                                onPressed: detail.phase == 2
+                                    ? _pauseAll
+                                    : () => _transition(
+                                          detail,
+                                          1,
+                                          successMessage: '${detail.title} 시작!',
+                                        ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
     );
   }
 }
 
 class _GroupCard extends StatelessWidget {
-  const _GroupCard({required this.group, required this.onTap});
+  const _GroupCard({
+    required this.group,
+    required this.selected,
+    required this.onTap,
+  });
 
   final HomeworkGroup group;
+  final bool selected;
   final VoidCallback onTap;
 
   static String _formatElapsed(int seconds) {
@@ -338,7 +376,7 @@ class _GroupCard extends StatelessWidget {
     final (badgeColor, badgeLabel) = _phaseBadge(context);
     final groupColor =
         group.color != 0 ? Color(group.color | 0xFF000000) : dlg.border;
-    final running = group.running;
+    final emphasized = group.running || selected;
 
     return Material(
       color: dlg.cardBg,
@@ -350,8 +388,10 @@ class _GroupCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: running ? YggGlassTokens.confirmActionColor : dlg.cardBorder,
-              width: running ? 1.6 : 0.8,
+              color: emphasized
+                  ? YggGlassTokens.confirmActionColor
+                  : dlg.cardBorder,
+              width: emphasized ? 1.6 : 0.8,
             ),
           ),
           padding: const EdgeInsets.all(16),
@@ -425,7 +465,7 @@ class _GroupCard extends StatelessWidget {
                   const Spacer(),
                   if (group.phase == 2) ...[
                     Icon(
-                      running
+                      group.running
                           ? Icons.play_arrow_rounded
                           : Icons.pause_rounded,
                       size: 18,
@@ -453,41 +493,60 @@ class _GroupCard extends StatelessWidget {
 }
 
 /// phase 2 상세 시트: 자식 과제 목록 + 일시정지/제출.
-class _GroupDetailSheet extends StatelessWidget {
-  const _GroupDetailSheet({
+class _HomeworkDetailPanel extends StatelessWidget {
+  const _HomeworkDetailPanel({
     required this.group,
-    required this.onPause,
     required this.onSubmit,
+    required this.onReset,
   });
 
   final HomeworkGroup group;
-  final VoidCallback onPause;
-  final VoidCallback onSubmit;
+  final VoidCallback? onSubmit;
+  final VoidCallback? onReset;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+    final theme = Theme.of(context);
+    return YggGroupedCard(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Text(
+            group.title.isEmpty ? '(제목 없음)' : group.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          if (group.pageSummary.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Text(
+              group.pageSummary,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.hintColor,
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          const Divider(height: 1),
+          const SizedBox(height: 8),
           Expanded(
             child: group.children.isEmpty
-                ? const Center(
+                ? Center(
                     child: Text(
                       '세부 항목이 없어요.',
-                      style: TextStyle(color: Color(0xFF9FB3B3)),
+                      style: TextStyle(color: theme.hintColor),
                     ),
                   )
                 : ListView.separated(
                     itemCount: group.children.length,
-                    separatorBuilder: (_, __) => const Divider(
-                      height: 1,
-                      color: UtilityGlassDialogTokens.dividerColor,
-                    ),
+                    separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (context, i) {
                       final child = group.children[i];
                       return ListTile(
+                        contentPadding: EdgeInsets.zero,
                         dense: true,
                         leading: Icon(
                           child.phase >= 3
@@ -501,15 +560,15 @@ class _GroupDetailSheet extends StatelessWidget {
                         title: Text(
                           child.title,
                           style: const TextStyle(
-                            color: Color(0xFFEAF2F2),
                             fontSize: 15,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                         subtitle: child.memo.isNotEmpty
                             ? Text(
                                 child.memo,
-                                style: const TextStyle(
-                                  color: Color(0xFF9FB3B3),
+                                style: TextStyle(
+                                  color: theme.hintColor,
                                   fontSize: 12.5,
                                 ),
                               )
@@ -517,8 +576,8 @@ class _GroupDetailSheet extends StatelessWidget {
                         trailing: child.page.isNotEmpty
                             ? Text(
                                 'p.${child.page}',
-                                style: const TextStyle(
-                                  color: Color(0xFF9FB3B3),
+                                style: TextStyle(
+                                  color: theme.hintColor,
                                   fontSize: 13,
                                 ),
                               )
@@ -527,39 +586,70 @@ class _GroupDetailSheet extends StatelessWidget {
                     },
                   ),
           ),
-          const SizedBox(height: 16),
-          Row(
+          if (onSubmit != null || onReset != null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onSubmit ?? onReset,
+              icon: Icon(onSubmit != null
+                  ? Icons.task_alt_rounded
+                  : Icons.replay_rounded),
+              label: Text(onSubmit != null ? '제출하기' : '대기로 되돌리기'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeworkActionFab extends StatelessWidget {
+  const _HomeworkActionFab({
+    required this.busy,
+    required this.running,
+    required this.onPressed,
+  });
+
+  final bool busy;
+  final bool running;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final background =
+        running ? const Color(0xFF6B7280) : YggGlassTokens.confirmActionColor;
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(28),
+      elevation: 8,
+      shadowColor: Colors.black26,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(28),
+        onTap: busy ? null : onPressed,
+        child: SizedBox(
+          height: 56,
+          width: 144,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onPause,
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(50),
-                    side: const BorderSide(color: Color(0x66FFFFFF)),
-                    foregroundColor: const Color(0xFFEAF2F2),
-                  ),
-                  icon: const Icon(Icons.pause_rounded),
-                  label: const Text('일시정지'),
+              if (busy)
+                const YggLoadingIndicator(size: 19)
+              else
+                Icon(
+                  running ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  color: Colors.white,
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: onSubmit,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(50),
-                    backgroundColor: YggGlassTokens.confirmActionColor,
-                  ),
-                  icon: const Icon(Icons.task_alt_rounded),
-                  label: const Text(
-                    '제출하기',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
+              const SizedBox(width: 8),
+              Text(
+                running ? '과제 중단' : '과제 수행',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

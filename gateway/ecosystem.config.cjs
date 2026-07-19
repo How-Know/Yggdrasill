@@ -128,6 +128,32 @@ module.exports = {
       time: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
       env: { NODE_ENV: 'production' }
+    },
+    {
+      name: 'ygg-question-render',
+      cwd: __dirname,
+      script: 'src/problem_bank_question_render_worker.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 30000,
+      max_memory_restart: '900M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      env: {
+        NODE_ENV: 'production',
+        QUESTION_RENDER_WORKER_BATCH_SIZE:
+          process.env.QUESTION_RENDER_WORKER_BATCH_SIZE || '4',
+        QUESTION_RENDER_WORKER_INTERVAL_MS:
+          process.env.QUESTION_RENDER_WORKER_INTERVAL_MS || '1500',
+        QUESTION_RENDER_WORKER_STALE_MS:
+          process.env.QUESTION_RENDER_WORKER_STALE_MS || '600000'
+      }
     }
   ]
 };

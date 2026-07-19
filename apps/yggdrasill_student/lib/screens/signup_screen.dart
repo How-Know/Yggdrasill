@@ -102,7 +102,6 @@ class _SignupScreenState extends State<SignupScreen> {
                     decoration: const InputDecoration(
                       labelText: '가입코드',
                       hintText: '예: A2B3C4D5',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -112,7 +111,6 @@ class _SignupScreenState extends State<SignupScreen> {
                     enableSuggestions: false,
                     decoration: const InputDecoration(
                       labelText: '아이디 (영문 소문자/숫자 3~20자)',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -121,7 +119,6 @@ class _SignupScreenState extends State<SignupScreen> {
                     obscureText: true,
                     decoration: const InputDecoration(
                       labelText: '비밀번호 (6자 이상)',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -131,7 +128,6 @@ class _SignupScreenState extends State<SignupScreen> {
                     onSubmitted: (_) => _signup(),
                     decoration: const InputDecoration(
                       labelText: '비밀번호 확인',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   if (_error != null) ...[

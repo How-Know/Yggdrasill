@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Resolves a textbook PDF into a usable local source for the in-app viewer.
 ///
@@ -27,13 +28,33 @@ import 'package:sqflite/sqflite.dart';
 /// - Thread a JWT (user/device bound) onto gateway requests instead of the
 ///   shared `x-api-key`.
 class TextbookPdfService {
-  TextbookPdfService._internal();
+  TextbookPdfService._internal({
+    SupabaseClient? supabaseClient,
+    String? gatewayBaseUrl,
+    http.Client? httpClient,
+  })  : _supabaseOverride = supabaseClient,
+        _gatewayBaseUrlOverride = gatewayBaseUrl {
+    if (httpClient != null) _http = httpClient;
+  }
+
+  /// 네트워크 경로를 격리해 검증하기 위한 생성자.
+  TextbookPdfService.forTesting({
+    required SupabaseClient supabaseClient,
+    required http.Client httpClient,
+    String gatewayBaseUrl = '',
+  }) : this._internal(
+          supabaseClient: supabaseClient,
+          httpClient: httpClient,
+          gatewayBaseUrl: gatewayBaseUrl,
+        );
 
   static final TextbookPdfService instance = TextbookPdfService._internal();
 
   http.Client _http = http.Client();
   Database? _db;
   String? _cacheDirPath;
+  final SupabaseClient? _supabaseOverride;
+  final String? _gatewayBaseUrlOverride;
 
   static const String _dbFileName = 'textbook_local_cache.db';
   static const String _cacheDirName = 'textbooks';
@@ -41,12 +62,31 @@ class TextbookPdfService {
   static String _resolveGatewayUrl() {
     const dartDefine =
         String.fromEnvironment('PB_GATEWAY_URL', defaultValue: '');
-    if (dartDefine.isNotEmpty) return dartDefine;
+    if (dartDefine.isNotEmpty) return _usableGatewayUrl(dartDefine);
     try {
       final envValue = Platform.environment['PB_GATEWAY_URL'] ?? '';
-      if (envValue.isNotEmpty) return envValue;
+      if (envValue.isNotEmpty) return _usableGatewayUrl(envValue);
     } catch (_) {}
-    return 'http://localhost:8787';
+    return _isMobilePlatform ? '' : 'http://localhost:8787';
+  }
+
+  static bool get _isMobilePlatform {
+    try {
+      return Platform.isIOS || Platform.isAndroid;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _usableGatewayUrl(String raw) {
+    final value = raw.trim();
+    if (!_isMobilePlatform) return value;
+    final uri = Uri.tryParse(value);
+    final host = (uri?.host ?? '').toLowerCase();
+    if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
+      return '';
+    }
+    return value;
   }
 
   static String _resolveGatewayApiKey() {
@@ -60,8 +100,10 @@ class TextbookPdfService {
     return '';
   }
 
-  String get _gatewayBaseUrl => _resolveGatewayUrl();
+  String get _gatewayBaseUrl => _gatewayBaseUrlOverride ?? _resolveGatewayUrl();
   String get _gatewayApiKey => _resolveGatewayApiKey();
+  bool get _hasGateway => _gatewayBaseUrl.isNotEmpty;
+  SupabaseClient get _supabase => _supabaseOverride ?? Supabase.instance.client;
 
   Map<String, String> _headers() {
     final out = <String, String>{
@@ -151,7 +193,7 @@ class TextbookPdfService {
   /// link id from the gateway, then checks the local cache table.
   Future<bool> isCached(TextbookPdfRef ref) async {
     try {
-      final target = await _askGateway(ref);
+      final target = await _resolveTarget(ref);
       final linkKey =
           target.linkId.isNotEmpty ? target.linkId : _fallbackLinkKey(ref);
       if (await _cacheExists(linkKey)) return true;
@@ -199,6 +241,23 @@ class TextbookPdfService {
 
   // ---------- Gateway round trips ----------
 
+  Future<_ResolvedTarget> _resolveTarget(TextbookPdfRef ref) async {
+    Object? gatewayError;
+    if (_hasGateway) {
+      try {
+        return await _askGateway(ref);
+      } catch (e) {
+        gatewayError = e;
+      }
+    }
+    try {
+      return await _resolveFromSupabase(ref);
+    } catch (e) {
+      final prefix = gatewayError == null ? '' : 'gateway=$gatewayError; ';
+      throw TextbookPdfException('${prefix}supabase_direct=$e');
+    }
+  }
+
   Future<_ResolvedTarget> _askGateway(TextbookPdfRef ref) async {
     final query = <String, String>{};
     if (ref.storageKey != null && ref.storageKey!.trim().isNotEmpty) {
@@ -230,6 +289,115 @@ class TextbookPdfService {
       fileSizeBytes: _asInt(body['file_size_bytes']),
       contentHash: '${body['content_hash'] ?? ''}',
     );
+  }
+
+  Future<_ResolvedTarget> _resolveFromSupabase(TextbookPdfRef ref) async {
+    const columns =
+        'id,academy_id,file_id,grade,url,storage_driver,storage_bucket,'
+        'storage_key,migration_status,file_size_bytes,content_hash,uploaded_at';
+    dynamic row;
+    final storageKey = ref.storageKey?.trim() ?? '';
+    if (storageKey.isNotEmpty) {
+      row = await _supabase
+          .from('resource_file_links')
+          .select(columns)
+          .eq('storage_key', storageKey)
+          .maybeSingle();
+    }
+    if (row == null && ref.linkId != null) {
+      row = await _supabase
+          .from('resource_file_links')
+          .select(columns)
+          .eq('id', ref.linkId!)
+          .maybeSingle();
+    }
+    if (row == null &&
+        ref.academyId != null &&
+        ref.fileId != null &&
+        ref.gradeLabel != null &&
+        ref.kind != null) {
+      final composite =
+          '${ref.gradeLabel!.trim()}#${ref.kind!.trim().toLowerCase()}';
+      row = await _supabase
+          .from('resource_file_links')
+          .select(columns)
+          .eq('academy_id', ref.academyId!)
+          .eq('file_id', ref.fileId!)
+          .eq('grade', composite)
+          .maybeSingle();
+    }
+    if (row == null) {
+      throw TextbookPdfException('link_not_found');
+    }
+
+    final map = Map<String, dynamic>.from(row as Map<dynamic, dynamic>);
+    final status = '${map['migration_status'] ?? 'legacy'}'.trim();
+    final bucket = '${map['storage_bucket'] ?? ''}'.trim();
+    final key = '${map['storage_key'] ?? ''}'.trim();
+    final driver = '${map['storage_driver'] ?? ''}'.trim().toLowerCase();
+    final legacyUrl = '${map['url'] ?? ''}'.trim();
+    final linkId = '${map['id'] ?? ''}'.trim();
+    final hasSupabaseStorage =
+        bucket.isNotEmpty && key.isNotEmpty && driver == 'supabase';
+
+    if (status == 'legacy' || !hasSupabaseStorage) {
+      if (_looksLikeTextbookStoragePath(legacyUrl)) {
+        final signed = await _supabase.storage
+            .from(bucket.isEmpty ? 'textbooks' : bucket)
+            .createSignedUrl(legacyUrl.split('?').first, 60 * 60);
+        return _ResolvedTarget(
+          kind: 'storage',
+          url: signed,
+          migrationStatus: status,
+          linkId: linkId,
+          fileSizeBytes: _asInt(map['file_size_bytes']),
+          contentHash: '${map['content_hash'] ?? ''}',
+          fallbackUrl: legacyUrl,
+        );
+      }
+      if (legacyUrl.isEmpty) {
+        throw TextbookPdfException('no_url_available');
+      }
+      return _ResolvedTarget(
+        kind: 'legacy',
+        url: legacyUrl,
+        migrationStatus: status,
+        linkId: linkId,
+        fileSizeBytes: _asInt(map['file_size_bytes']),
+        contentHash: '${map['content_hash'] ?? ''}',
+      );
+    }
+
+    try {
+      final signed =
+          await _supabase.storage.from(bucket).createSignedUrl(key, 60 * 60);
+      return _ResolvedTarget(
+        kind: 'storage',
+        url: signed,
+        migrationStatus: status,
+        linkId: linkId,
+        fileSizeBytes: _asInt(map['file_size_bytes']),
+        contentHash: '${map['content_hash'] ?? ''}',
+        fallbackUrl: status == 'dual' ? legacyUrl : '',
+      );
+    } catch (e) {
+      if (status == 'dual' && legacyUrl.isNotEmpty) {
+        return _ResolvedTarget(
+          kind: 'legacy',
+          url: legacyUrl,
+          migrationStatus: status,
+          linkId: linkId,
+          fileSizeBytes: _asInt(map['file_size_bytes']),
+          contentHash: '${map['content_hash'] ?? ''}',
+        );
+      }
+      throw TextbookPdfException('storage_signed_url_failed: $e');
+    }
+  }
+
+  bool _looksLikeTextbookStoragePath(String value) {
+    return RegExp(r'^academies/.+\.pdf(?:\?.*)?$', caseSensitive: false)
+        .hasMatch(value);
   }
 
   Map<String, dynamic> _decodeJsonMap(String raw) {
@@ -270,7 +438,7 @@ class TextbookPdfService {
 
     // First ask the gateway so we know the current migration status and the
     // canonical link_id to key the cache off of.
-    final target = await _askGateway(ref);
+    final target = await _resolveTarget(ref);
     final linkKey = target.linkId.isNotEmpty
         ? target.linkId
         : (ref.linkId != null
@@ -329,6 +497,13 @@ class TextbookPdfService {
       // practice we can just return the signed URL as a streaming viewer
       // source so the dialog can use `PdfViewer.uri` without caching.
       if (target.migrationStatus == 'dual') {
+        if (target.fallbackUrl.isNotEmpty) {
+          return TextbookPdfSource.legacyUrl(
+            url: target.fallbackUrl,
+            migrationStatus: target.migrationStatus,
+            linkId: linkKey,
+          );
+        }
         return TextbookPdfSource.remoteUrl(
           url: target.url,
           migrationStatus: target.migrationStatus,
@@ -348,7 +523,7 @@ class TextbookPdfService {
   /// Returns null when the link is not storage-backed (e.g. still `legacy`),
   /// letting callers fall back to the full-PDF flow.
   Future<TextbookPagePdf?> resolvePage(TextbookPdfRef ref, int page) async {
-    if (page < 1) return null;
+    if (page < 1 || !_hasGateway) return null;
     final query = <String, String>{'page': '$page'};
     if (ref.storageKey != null && ref.storageKey!.trim().isNotEmpty) {
       query['storage_key'] = ref.storageKey!.trim();
@@ -361,8 +536,15 @@ class TextbookPdfService {
       if (ref.gradeLabel != null) query['grade_label'] = ref.gradeLabel!;
       if (ref.kind != null) query['kind'] = ref.kind!;
     }
-    final uri = _uri('/textbook/pdf/page', query);
-    final res = await _http.get(uri, headers: _headers());
+    late http.Response res;
+    try {
+      final uri = _uri('/textbook/pdf/page', query);
+      res = await _http.get(uri, headers: _headers());
+    } catch (_) {
+      // 단일 페이지 추출은 Gateway 최적화 기능이다. 연결할 수 없으면
+      // 호출자가 전체 PDF 로컬 캐시 경로를 사용하도록 한다.
+      return null;
+    }
     final body = _decodeJsonMap(res.body);
     if (res.statusCode == 409) {
       // Not eligible for page splitting (legacy / no storage) -> fall back.
@@ -675,6 +857,7 @@ class _ResolvedTarget {
     required this.linkId,
     required this.fileSizeBytes,
     required this.contentHash,
+    this.fallbackUrl = '',
   });
   final String kind; // 'storage' | 'legacy'
   final String url;
@@ -682,6 +865,7 @@ class _ResolvedTarget {
   final String linkId;
   final int fileSizeBytes;
   final String contentHash;
+  final String fallbackUrl;
 }
 
 class TextbookPdfException implements Exception {
