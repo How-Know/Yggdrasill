@@ -28,7 +28,7 @@ function randomPairingCode(): string {
   const limit = max - (max % 1_000_000);
   const value = new Uint32Array(1);
   do crypto.getRandomValues(value); while (value[0] >= limit);
-  return value[0].toString().padStart(6, '0');
+  return (value[0] % 1_000_000).toString().padStart(6, '0');
 }
 
 function randomDeviceToken(): string {
@@ -174,6 +174,29 @@ Deno.serve(async (req) => {
         p_pin: pin,
         p_request_id: requestId,
         p_walk_in: body.walk_in === true,
+      });
+      if (error) throw error;
+      const result = data as JsonObject;
+      return json(result, rpcStatus(result));
+    }
+
+    if (action === 'check_out') {
+      const studentId = stringValue(body.student_id);
+      const requestId = stringValue(body.request_id);
+      const pin = typeof body.pin === 'string' ? body.pin : null;
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(studentId) ||
+        !requestId
+      ) {
+        return fail('invalid_request');
+      }
+
+      const { data, error } = await admin.rpc('kiosk_check_out', {
+        p_token_hash: tokenHash,
+        p_student_id: studentId,
+        p_pin: pin,
+        p_request_id: requestId,
       });
       if (error) throw error;
       const result = data as JsonObject;

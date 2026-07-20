@@ -60,6 +60,7 @@ import {
 import {
   detectProblemsOnPage,
   detectRpmSetHeadersOnPage,
+  classifyWonriPage,
   normalizeDetectResult,
 } from './textbook/vlm_detect_client.js';
 import {
@@ -6117,11 +6118,12 @@ async function handleTextbookVlmDetectProblems(body, res) {
     'basic_drill',
     'type_practice',
     'mastery',
-    // 개념원리 전용 섹션 (sub_key A/B/C/D 슬롯 대응).
+    // 개념원리 전용 섹션 (sub_key A~E 슬롯 대응).
     'concept_drill',
     'type_example',
     'check',
     'exercise',
+    'special_lecture',
   ].includes(rawSectionHint)
     ? rawSectionHint
     : '';
@@ -6230,6 +6232,61 @@ async function handleTextbookVlmDetectProblems(body, res) {
     expectedStartNumber,
     series,
   });
+  // 개념원리: 문항이 감지된 페이지는 전용 2차 판독으로 페이지 종류를 확정한다.
+  //   concept("개념원리 이해" 개념 페이지)이면 참조 라벨("필수 04" 등) 오인
+  //   문항을 전부 버리고, 익히기/필수유형/기타 문제 페이지는 문항을 보존한다.
+  if (series === 'wonri' && normalized.items.length > 0) {
+    let classResult;
+    try {
+      classResult = await classifyWonriPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      });
+    } catch (err) {
+      const message = compact(err?.message || err);
+      console.warn(
+        '[textbook-vlm-detect] wonri_page_class_failed',
+        JSON.stringify({ rawPage, bookId, gradeLabel, message }),
+      );
+      sendJson(res, isTextbookVlmQuotaError(message) ? 429 : 502, {
+        ok: false,
+        error: isTextbookVlmQuotaError(message)
+          ? 'vlm_daily_quota_exceeded'
+          : 'vlm_wonri_page_class_failed',
+        message,
+      });
+      return;
+    }
+    const pageClass = String(
+      classResult?.parsedJson?.page_class || '',
+    ).trim().toLowerCase();
+    const classNote = `wonri_page_class=${pageClass || 'unknown'}`;
+    normalized.notes = normalized.notes
+      ? `${normalized.notes}; ${classNote}`
+      : classNote;
+    if (pageClass === 'concept') {
+      normalized.page_kind = 'concept_page';
+      normalized.items = [];
+      normalized.concept_drill_header_visible = false;
+    } else if (pageClass === 'concept_drill') {
+      normalized.concept_drill_header_visible = true;
+      if (normalized.page_kind === 'concept_page') {
+        normalized.page_kind = 'problem_page';
+      }
+    } else if (pageClass === 'type_example' || pageClass === 'other') {
+      // 필수유형/연습문제 페이지에는 "개념원리 익히기" 헤더가 없다. 문항을
+      // 보존하고 개념 페이지로 오분류된 page_kind만 바로잡는다.
+      if (normalized.page_kind === 'concept_page') {
+        normalized.page_kind = 'problem_page';
+      }
+    }
+  }
   let rpmSetHeaderCount = 0;
   let rpmComplexRegionCount = 0;
   if (
@@ -6710,7 +6767,7 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     return;
   }
   // A/B/C = 쎈/RPM 3슬롯, D = 개념원리의 연습문제 슬롯 (DB CHECK 와 동일).
-  if (!['A', 'B', 'C', 'D'].includes(subKeyRaw)) {
+  if (!['A', 'B', 'C', 'D', 'E'].includes(subKeyRaw)) {
     sendJson(res, 400, { ok: false, error: `invalid_sub_key: ${subKeyRaw}` });
     return;
   }
@@ -6900,6 +6957,32 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       deskew_angle_deg: Number.isFinite(deskewAngle) ? deskewAngle : null,
       updated_at: new Date().toISOString(),
     });
+  }
+
+  // 한 배치 안에 같은 problem_number 가 두 번 있으면 Postgres upsert 가
+  // "ON CONFLICT DO UPDATE command cannot affect row a second time" 로
+  // 통째로 실패한다 (예: 개념원리 특강 01 이 필수 01 과 충돌). 원인을 알 수
+  // 있도록 여기서 중복 번호를 찾아 명확한 오류로 돌려준다.
+  {
+    const seen = new Set();
+    const dup = new Set();
+    for (const row of rows) {
+      const key = row.problem_number;
+      if (seen.has(key)) dup.add(key);
+      seen.add(key);
+    }
+    if (dup.size > 0) {
+      sendJson(res, 400, {
+        ok: false,
+        error: 'duplicate_problem_numbers_in_batch',
+        duplicates: [...dup],
+        hint:
+          '같은 번호의 문항이 한 범위(sub_key/sub_index)에 두 번 담겼습니다. '
+          + '특강 예제 오인식 등 크롭 결과를 확인하세요.',
+        uploaded_keys: uploadedKeys,
+      });
+      return;
+    }
   }
 
   const { data, error } = await supa

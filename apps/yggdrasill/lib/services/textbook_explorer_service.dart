@@ -30,6 +30,8 @@ class TbExItem {
     required this.problemNumber,
     required this.difficultyLabel,
     required this.answerKind,
+    required this.section,
+    required this.isWonri,
     required this.typeGroupKind,
     required this.typeGroupLabel,
     required this.typeGroupTitle,
@@ -57,6 +59,8 @@ class TbExItem {
   final String problemNumber;
   final String difficultyLabel;
   final TbAnswerKind answerKind;
+  final String section;
+  final bool isWonri;
   final String typeGroupKind;
   final String typeGroupLabel;
   final String typeGroupTitle;
@@ -103,6 +107,7 @@ class TbExItem {
     if (typeGroupKind == 'type' && typeGroupLabel.isNotEmpty) {
       return '$typeGroupLabel|$typeGroupTitle';
     }
+    if (isWonri && section == 'check') return '확인 체크|';
     return '유형 미지정|';
   }
 
@@ -125,6 +130,8 @@ class TbExItem {
       problemNumber: problemNumber,
       difficultyLabel: difficultyLabel,
       answerKind: answerKind ?? this.answerKind,
+      section: section,
+      isWonri: isWonri,
       typeGroupKind: typeGroupKind,
       typeGroupLabel: typeGroupLabel,
       typeGroupTitle: typeGroupTitle,
@@ -176,6 +183,9 @@ class TbExPage {
   int get numberedQuestionCount => items
       .where((e) => !e.isSetHeader && e.problemNumber.trim().isNotEmpty)
       .length;
+
+  /// 메타데이터 범위에는 있지만 탐지 문항이 없는 교재 개념 페이지.
+  bool get isConceptPage => items.isEmpty;
 }
 
 class TbExSmallUnit {
@@ -272,11 +282,16 @@ class TextbookExplorerService {
       bookId: safeBookId,
       gradeLabel: safeGrade.isEmpty ? null : safeGrade,
     );
+    final payload = payloadRow?['payload'];
+    final payloadMap =
+        payload is Map ? _asMap(payload) : const <String, dynamic>{};
+    final isWonri =
+        '${payloadMap['series'] ?? ''}'.trim().toLowerCase() == 'wonri';
 
     final items = <TbExItem>[];
     var order = 0;
     for (final row in cropRows) {
-      final item = _itemFromRow(row, order);
+      final item = _itemFromRow(row, order, isWonri: isWonri);
       if (item == null) continue;
       items.add(item);
       order += 1;
@@ -393,7 +408,11 @@ class TextbookExplorerService {
     );
   }
 
-  TbExItem? _itemFromRow(Map<String, dynamic> row, int sortOrder) {
+  TbExItem? _itemFromRow(
+    Map<String, dynamic> row,
+    int sortOrder, {
+    required bool isWonri,
+  }) {
     final rawPage = _toInt(row['raw_page']) ?? 0;
     final region = _toIntList(row['item_region_1k']);
     final numberBbox = _toIntList(row['bbox_1k']);
@@ -416,6 +435,8 @@ class TextbookExplorerService {
       problemNumber: number,
       difficultyLabel: _normalizeDifficulty('${row['label'] ?? ''}'),
       answerKind: TbAnswerKind.unknown,
+      section: '${row['section'] ?? ''}'.trim(),
+      isWonri: isWonri,
       typeGroupKind: '${row['content_group_kind'] ?? ''}'.trim(),
       typeGroupLabel: '${row['content_group_label'] ?? ''}'.trim(),
       typeGroupTitle: '${row['content_group_title'] ?? ''}'.trim(),
@@ -487,36 +508,34 @@ class TextbookExplorerService {
             // 문항이 페이지 기준으로 모인다.
             final midKey = '${big.order}|${mid.order}';
             final midItems = itemsByMid[midKey] ?? const <TbExItem>[];
-            if (midItems.isNotEmpty) {
-              final buckets =
-                  List<List<TbExItem>>.generate(mid.smalls.length, (_) => []);
-              final ranges = mid.smalls
-                  .map((s) => _ConceptRange(s.startPage, s.endPage))
-                  .toList(growable: false);
-              for (final it in midItems) {
-                final page = it.displayPage ?? it.rawPage;
-                final idx = _conceptBucketForPage(ranges, page);
-                if (idx != null) buckets[idx].add(it);
-              }
-              for (var si = 0; si < mid.smalls.length; si += 1) {
-                final small = mid.smalls[si];
-                final list = buckets[si];
-                if (list.isEmpty) continue;
-                list.sort(_compareItems);
-                smalls.add(
-                  _buildSmall(
-                    '${big.order}|${mid.order}|${small.subKey}',
-                    small.name,
-                    small.order,
-                    list,
-                    small.pageNumbers,
-                  ),
-                );
-              }
-              // 이 중단원의 모든 sub_key 문항을 소비 처리(leftover 방지).
-              for (final entry in itemsByKey.keys) {
-                if (entry.startsWith('$midKey|')) usedKeys.add(entry);
-              }
+            final buckets =
+                List<List<TbExItem>>.generate(mid.smalls.length, (_) => []);
+            final ranges = mid.smalls
+                .map((s) => _ConceptRange(s.startPage, s.endPage))
+                .toList(growable: false);
+            for (final it in midItems) {
+              final page = it.displayPage ?? it.rawPage;
+              final idx = _conceptBucketForPage(ranges, page);
+              if (idx != null) buckets[idx].add(it);
+            }
+            for (var si = 0; si < mid.smalls.length; si += 1) {
+              final small = mid.smalls[si];
+              final list = buckets[si]..sort(_compareItems);
+              if (small.pageNumbers.isEmpty && list.isEmpty) continue;
+              smalls.add(
+                _buildSmall(
+                  '${big.order}|${mid.order}|${small.subKey}',
+                  small.name,
+                  small.order,
+                  list,
+                  metadataPageNumbers: small.pageNumbers,
+                  includeMetadataPages: true,
+                ),
+              );
+            }
+            // 이 중단원의 모든 sub_key 문항을 소비 처리(leftover 방지).
+            for (final entry in itemsByKey.keys) {
+              if (entry.startsWith('$midKey|')) usedKeys.add(entry);
             }
           } else {
             for (final small in mid.smalls) {
@@ -530,7 +549,8 @@ class TextbookExplorerService {
                   small.name,
                   small.order,
                   list,
-                  small.pageNumbers,
+                  metadataPageNumbers: small.pageNumbers,
+                  includeMetadataPages: true,
                 ),
               );
             }
@@ -561,11 +581,15 @@ class TextbookExplorerService {
     String key,
     String name,
     int order,
-    List<TbExItem> items, [
+    List<TbExItem> items, {
     Set<int> metadataPageNumbers = const <int>{},
-  ]) {
+    bool includeMetadataPages = false,
+  }) {
     final byPage = <int, List<TbExItem>>{};
+    final displayPageByRaw = <int, int>{};
     int? displayPageOf(int raw) {
+      final fromMetadata = displayPageByRaw[raw];
+      if (fromMetadata != null) return fromMetadata;
       for (final it in items) {
         if (it.rawPage == raw && it.displayPage != null) return it.displayPage;
       }
@@ -575,6 +599,24 @@ class TextbookExplorerService {
     for (final it in items) {
       if (it.rawPage <= 0) continue;
       byPage.putIfAbsent(it.rawPage, () => <TbExItem>[]).add(it);
+    }
+    if (includeMetadataPages) {
+      TbExItem? offsetSample;
+      for (final item in items) {
+        if (item.displayPage == null) continue;
+        offsetSample = item;
+        break;
+      }
+      final rawOffset = offsetSample == null
+          ? 0
+          : offsetSample.rawPage - offsetSample.displayPage!;
+      for (final displayPage in metadataPageNumbers) {
+        if (displayPage <= 0) continue;
+        final rawPage = displayPage + rawOffset;
+        if (rawPage <= 0) continue;
+        displayPageByRaw[rawPage] = displayPage;
+        byPage.putIfAbsent(rawPage, () => <TbExItem>[]);
+      }
     }
     final pageKeys = byPage.keys.toList()..sort();
     final pages = <TbExPage>[

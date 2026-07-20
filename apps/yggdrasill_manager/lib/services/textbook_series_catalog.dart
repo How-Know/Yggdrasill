@@ -111,6 +111,10 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       TextbookSubSectionPreset(key: 'B', displayName: '필수유형'),
       TextbookSubSectionPreset(key: 'C', displayName: '확인 체크'),
       TextbookSubSectionPreset(key: 'D', displayName: '연습문제'),
+      // 특강(sub_key 'E')은 payload 슬롯이 아니라 크롭 저장 전용 카테고리다.
+      // 필수유형과 같은 지면 구성이지만 번호가 01부터 새로 시작해 B와 분리
+      // 저장한다. 슬롯으로 넣으면 특강이 없는 중단원까지 미완료로 집계되므로
+      // 여기(payload)에는 두지 않는다.
     ],
   ),
 ];

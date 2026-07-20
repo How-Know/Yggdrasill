@@ -836,6 +836,10 @@ async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log
   const subKey = compact(textbookScope.sub_key || textbookScope.subKey);
   const bigOrder = Number.parseInt(String(textbookScope.big_order ?? ''), 10);
   const midOrder = Number.parseInt(String(textbookScope.mid_order ?? ''), 10);
+  const subIndex = Number.parseInt(
+    String(textbookScope.sub_index ?? textbookScope.subIndex ?? ''),
+    10,
+  );
   if (
     !academyId ||
     !bookId ||
@@ -942,15 +946,19 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
     return emptyTextbookCropIndex();
   }
   try {
-    const { data: crops, error } = await supa
+    let cropQuery = supa
       .from('textbook_problem_crops')
-      .select('problem_number,raw_page,display_page,label,is_set_header,set_from,set_to,content_group_kind,content_group_label,content_group_title,content_group_order,item_region_1k')
+      .select('id,problem_number,raw_page,display_page,label,is_set_header,set_from,set_to,content_group_kind,content_group_label,content_group_title,content_group_order,item_region_1k')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
       .eq('big_order', bigOrder)
       .eq('mid_order', midOrder)
       .eq('sub_key', subKey);
+    if (Number.isFinite(subIndex) && subIndex >= 0) {
+      cropQuery = cropQuery.eq('sub_index', subIndex);
+    }
+    const { data: crops, error } = await cropQuery;
     if (error || !Array.isArray(crops) || crops.length === 0) {
       if (typeof log === 'function') {
         log('vlm_textbook_crop_page_skip', {
@@ -974,6 +982,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
       const rawPage = Number(crop?.raw_page);
       if (!key || !Number.isFinite(rawPage) || rawPage <= 0) continue;
       out.set(key, {
+        cropId: compact(crop?.id),
         problemNumber: compact(crop?.problem_number),
         rawPage,
         displayPage: Number.isFinite(Number(crop?.display_page))
@@ -1534,6 +1543,7 @@ export async function runVlmExtraction({
         ...(enrichedVlmQ || {}),
         source_page: cropPage.displayPage || cropPage.rawPage,
         textbook_crop_page: {
+          crop_id: cropPage.cropId,
           raw_page: cropPage.rawPage,
           display_page: cropPage.displayPage,
           ...(cropPage.problemLabel

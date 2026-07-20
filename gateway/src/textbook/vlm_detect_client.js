@@ -8,6 +8,7 @@
 import {
   buildDetectProblemsPrompt,
   buildRpmSetHeaderPrompt,
+  buildWonriPageClassPrompt,
   VLM_DETECT_LABELS,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
@@ -207,6 +208,18 @@ export function detectRpmSetHeadersOnPage(options) {
   });
 }
 
+export function classifyWonriPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    series: 'wonri',
+    includeContentGroups: false,
+    promptOverride: buildWonriPageClassPrompt({
+      rawPage: options?.rawPage,
+      displayPage: options?.displayPage,
+    }),
+  });
+}
+
 function compactErrMsg(err) {
   if (!err) return '';
   const name = err?.name ? `${err.name}: ` : '';
@@ -228,11 +241,12 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     'basic_drill',
     'type_practice',
     'mastery',
-    // 개념원리 전용 섹션 (sub_key A/B/C/D 슬롯 대응).
+    // 개념원리 전용 섹션 (sub_key A~E 슬롯 대응).
     'concept_drill',
     'type_example',
     'check',
     'exercise',
+    'special_lecture',
   ];
   const section = String(parsedJson.section || '').trim();
   out.section = [...knownSections, 'unknown'].includes(section)
@@ -306,9 +320,10 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
     const category = normalizeWonriCategory(raw, label, series);
     // 유형 그룹(content_group)은 문항 단위로 판단한다.
-    // 개념원리는 B 필수유형(type_example)만 "필수유형 01" 그룹을 갖는다.
+    // 개념원리는 B 필수유형(type_example)과 E 특강(special_lecture)만
+    // "필수유형 01"/"특강 01" 그룹(제목 포함)을 갖는다.
     const groupDisallowed = category
-      ? category !== 'type_example'
+      ? category !== 'type_example' && category !== 'special_lecture'
       : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
     const group = groupDisallowed
       ? { kind: 'none', label: '', title: '', order: null }
@@ -338,9 +353,26 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   return out;
 }
 
+// 개념원리 "특강 NN" 예제 판별. 모델이 배지 문구를 label 이나
+// content_group(label/title)에 담아 보내는 어느 경우든 잡는다.
+// 특강은 필수유형과 지면 구성이 같지만 번호가 01부터 새로 시작하므로,
+// type_example 로 두면 같은 소단원 필수 번호와 unique key 충돌이 난다.
+function isWonriSpecialLectureItem(raw) {
+  const texts = [
+    raw?.label,
+    raw?.content_group?.label,
+    raw?.content_group?.title,
+  ];
+  return texts.some((t) => String(t || '').replace(/\s+/g, '').includes('특강'));
+}
+
 // 개념원리 단일 패스 — 문항의 category 를 검증/보정한다.
-// 우선순위: 모델이 준 category → 라벨 기반 추정(필수/STEP/실력).
+// 우선순위: 특강 배지(카테고리 오분류 교정) → 모델이 준 category →
+// 라벨 기반 추정(필수/STEP/실력).
 function normalizeWonriCategory(raw, label, series) {
+  if ((!series || series === 'wonri') && isWonriSpecialLectureItem(raw)) {
+    return 'special_lecture';
+  }
   const value = String(raw?.category ?? '').trim();
   if (WONRI_ITEM_CATEGORIES.includes(value)) return value;
   if (series && series !== 'wonri') return '';
@@ -527,7 +559,8 @@ function validateBasicDrillItems(result, series = '') {
 
   const kept = [];
   let dropped = 0;
-  const allowIndependentSetGeometry = series === 'rpm';
+  const allowIndependentSetGeometry =
+    series === 'rpm' || hasStrongBasicDrillPageEvidence(result.items);
   for (const item of result.items) {
     if (isValidBasicDrillItem(item, allowIndependentSetGeometry)) {
       kept.push(item);
@@ -545,6 +578,24 @@ function validateBasicDrillItems(result, series = '') {
     const suffix = 'concept_page:auto_no_valid_basic_number';
     result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
   }
+}
+
+function hasStrongBasicDrillPageEvidence(items) {
+  const values = [];
+  for (const item of items || []) {
+    if (item?.is_set_header === true) continue;
+    if (String(item?.label || '').trim()) continue;
+    const number = String(item?.number || '').trim();
+    if (!/^\d{4}$/.test(number)) continue;
+    if (!isValidBasicDrillItem(item, true)) continue;
+    const value = Number.parseInt(number, 10);
+    if (Number.isFinite(value)) values.push(value);
+  }
+  const unique = [...new Set(values)].sort((a, b) => a - b);
+  if (unique.length < 3) return false;
+  return unique.some((value, index) =>
+    index > 0 && value - unique[index - 1] >= 1 && value - unique[index - 1] <= 3
+  );
 }
 
 function isValidBasicDrillItem(

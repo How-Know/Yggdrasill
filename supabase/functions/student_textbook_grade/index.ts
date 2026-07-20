@@ -124,7 +124,7 @@ async function buildAiContext(
     const { data } = await admin
       .from('pb_questions')
       .select('stem')
-      .eq('id', crop.pb_question_uid)
+      .eq('question_uid', crop.pb_question_uid)
       .maybeSingle();
     const stem = String(data?.stem ?? '').trim();
     if (stem) return { stem, imageBase64: null, imageMime: 'image/png' };

@@ -48,6 +48,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function problemNumberKey(value) {
+  const compact = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  if (/^\d+$/.test(compact)) {
+    return compact.replace(/^0+(?=\d)/, '');
+  }
+  return compact;
+}
+
 function hashQuestionContent(
   question,
   renderProfile,
@@ -140,7 +151,10 @@ async function resolveQuestion(client, job) {
 
   const { data: crop, error: cropError } = await client
     .from('textbook_problem_crops')
-    .select('id,pb_question_uid')
+    .select(
+      'id,pb_question_uid,book_id,grade_label,big_order,mid_order,' +
+        'sub_key,sub_index,raw_page,problem_number',
+    )
     .eq('academy_id', job.academy_id)
     .eq('id', job.crop_id)
     .maybeSingle();
@@ -168,8 +182,37 @@ async function resolveQuestion(client, job) {
   if (fallbackError) {
     throw new Error(`question_meta_lookup_failed:${fallbackError.message}`);
   }
-  if (!fallback?.[0]) throw new Error('pb_question_not_mapped');
-  return fallback[0];
+  if (fallback?.[0]) return fallback[0];
+
+  const scope = {
+    book_id: String(crop.book_id),
+    grade_label: String(crop.grade_label || ''),
+    big_order: Number(crop.big_order || 0),
+    mid_order: Number(crop.mid_order || 0),
+    sub_key: String(crop.sub_key || ''),
+    sub_index: Number(crop.sub_index || 0),
+  };
+  const { data: scoped, error: scopedError } = await client
+    .from('pb_questions')
+    .select(fields)
+    .eq('academy_id', job.academy_id)
+    .contains('meta', {
+      textbook_scope: scope,
+      textbook_crop_page: { raw_page: Number(crop.raw_page || 0) },
+    })
+    .limit(20);
+  if (scopedError) {
+    throw new Error(`question_scope_lookup_failed:${scopedError.message}`);
+  }
+  const numberKey = problemNumberKey(crop.problem_number);
+  const scopedMatches = (scoped || []).filter(
+    (row) => problemNumberKey(row?.question_number) === numberKey,
+  );
+  if (scopedMatches.length === 1) return scopedMatches[0];
+  if (scopedMatches.length > 1) {
+    throw new Error('pb_question_mapping_ambiguous');
+  }
+  throw new Error('pb_question_not_mapped');
 }
 
 async function completeJob(client, job, patch = {}) {
@@ -375,6 +418,7 @@ async function main() {
 export {
   canonicalize,
   hashQuestionContent,
+  problemNumberKey,
   claimJobs,
   reclaimStaleJobs,
   processJob,

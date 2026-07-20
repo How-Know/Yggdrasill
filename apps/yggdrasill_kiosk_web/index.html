@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Yggdrasill 출석</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 메인 (잠금화면 스타일) -->
+    <main id="main" class="hidden">
+      <header id="header">
+        <div id="subline">
+          <span id="dateText"></span>
+          <span id="sep1" class="sep">·</span>
+          <span id="academyText"></span>
+          <span id="sep2" class="sep hidden">·</span>
+          <span id="weatherText" class="hidden"></span>
+        </div>
+        <div id="clock">00:00</div>
+      </header>
+
+      <section id="stage">
+        <img id="poster" src="assets/poster.png" alt="공지 포스터" />
+        <div id="announcement" class="hidden">
+          <h1 id="annTitle"></h1>
+          <p id="annBody"></p>
+        </div>
+      </section>
+
+      <button id="fab" type="button">
+        <span class="fab-icon" aria-hidden="true">&#10003;</span>
+        <span>출석체크</span>
+      </button>
+    </main>
+
+    <!-- 오른쪽 슬라이드 시트 -->
+    <aside id="sheet" aria-hidden="true">
+      <div class="sheet-top">
+        <button id="searchBtn" type="button" class="search-btn">
+          <span class="search-icon">&#128269;</span>
+          <span>학생 이름 검색</span>
+        </button>
+        <button id="closeBtn" type="button" class="close-btn" aria-label="닫기">&#10005;</button>
+      </div>
+      <div class="sheet-label">오늘 예정</div>
+      <div id="studentList" class="student-list"></div>
+      <div id="pinPanel" class="pin-panel hidden">
+        <div id="pinTitle" class="pin-title"></div>
+        <div id="pinDots" class="pin-dots"></div>
+        <div id="pinFeedback" class="pin-feedback"></div>
+        <div id="keypad" class="keypad"></div>
+      </div>
+    </aside>
+
+    <!-- 검색 다이얼로그 -->
+    <div id="searchOverlay" class="overlay hidden">
+      <div class="search-dialog">
+        <div class="search-dialog-top">
+          <input id="searchInput" type="text" inputmode="text"
+                 placeholder="학생 이름 또는 초성 검색" autocomplete="off" />
+          <button id="searchClose" type="button" class="close-btn dark" aria-label="닫기">&#10005;</button>
+        </div>
+        <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <!-- 설정 / 페어링 오버레이 -->
+    <div id="setup" class="overlay">
+      <div class="setup-panel">
+        <div class="setup-logo">&#127794;</div>
+        <div id="setupBody"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

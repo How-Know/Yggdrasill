@@ -6,7 +6,7 @@
 // 본문에 "풀이" 단락이 인쇄돼 있고 그 안의 굵은 값이 정답이다.
 // 한 번의 호출로 정답(answer_text)과 해설 좌표(content_region)를 함께 얻는다.
 
-import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
+import { parseTextbookVlmJson } from './vlm_json_parse.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
@@ -42,8 +42,10 @@ export function buildBodySolutionsPrompt({ rawPage, displayPage, expectedNumbers
     pageLine,
     '',
     '=== 페이지 구조 ===',
-    '유형 페이지에는 위쪽에 "필수" 표시가 붙은 필수유형 예제(번호+유형 제목+문제)가 있고,',
-    '그 아래에 "풀이" 라고 적힌 단락이 이어진다. 풀이 안에 굵은 글씨로 인쇄된 최종 값이 정답이다.',
+    '유형 페이지에는 위쪽에 "필수"(또는 "발전"/"특강") 배지가 붙은 예제',
+    '(번호+유형 제목+문제)가 있고, 그 아래에 "풀이" 라고 적힌 단락이 이어진다.',
+    '풀이 안에 굵은 글씨로 인쇄된 최종 값이 정답이다.',
+    '"필수"/"발전"/"특강" 어느 배지든 처리 방식은 동일하다. 배지 번호를 problem_number 로 쓴다.',
     '페이지 하단의 "확인 체크" 문항들은 이번 호출 대상이 아니다.',
     '',
     ...expectedBlock,
@@ -176,24 +178,9 @@ export async function extractBodySolutionsOnPage({
       .map((p) => p?.text || '')
       .join('\n')
       .trim();
-    let parsedJson = null;
-    try {
-      parsedJson = JSON.parse(modelText);
-    } catch (_) {
-      const repaired = repairLatexBackslashes(modelText);
-      try {
-        parsedJson = JSON.parse(repaired);
-      } catch (_) {
-        const m = repaired.match(/\{[\s\S]*\}/);
-        if (m) {
-          try {
-            parsedJson = JSON.parse(m[0]);
-          } catch (_) {
-            // leave null
-          }
-        }
-      }
-    }
+    // LaTeX 백슬래시가 많은 풀이에서 Gemini JSON 이 그대로 파싱되지 않는
+    // 사례가 잦다(예: \sqrt, \frac 연속). 교재 공통 복구 파서를 사용한다.
+    const parsedJson = parseTextbookVlmJson(modelText);
     if (!parsedJson) {
       throw new Error(
         `vlm_body_solutions_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(0, 180)}"`,

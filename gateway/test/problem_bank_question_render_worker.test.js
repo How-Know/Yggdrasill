@@ -5,8 +5,15 @@ import {
   canonicalize,
   hashQuestionContent,
 } from '../src/question_render_cache_key.js';
+import { problemNumberKey } from '../src/problem_bank_question_render_worker.js';
 
 const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v1';
+
+test('problem number keys match padded textbook numbers safely', () => {
+  assert.equal(problemNumberKey('0009'), '9');
+  assert.equal(problemNumberKey('9'), '9');
+  assert.equal(problemNumberKey(' 01 A '), '01a');
+});
 
 test('canonicalize sorts nested object keys deterministically', () => {
   assert.deepEqual(

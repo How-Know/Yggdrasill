@@ -894,11 +894,12 @@ export async function renderPdfWithXeLatex({
       Array.isArray(clientColumnCounts) && clientColumnCounts.length > 0;
     const shouldMeasureSlots =
       !slotMeasureDisabled &&
-      isMockProfile &&
+      (isMockProfile || renderConfig?.singleQuestionContentPage === true) &&
       cols >= 2 &&
       !hasClientColumnCounts &&
       renderConfig?.reviewPdf !== true &&
       renderConfig?.review_pdf !== true;
+    let slotMeasure = null;
 
     if (shouldMeasureSlots) {
       try {
@@ -908,6 +909,7 @@ export async function renderPdfWithXeLatex({
         await runXeLatex(measureTexPath, workDir);
         const parsed = parseSlotMeasureFile(path.join(workDir, 'measure.hgt'));
         if (parsed && parsed.heightsPt.length > 0) {
+          slotMeasure = parsed;
           const rawRatio = Number(renderConfig?.slotFillRatio);
           baseBuildOptions.measuredSlotPlan = {
             ...parsed,
@@ -1042,6 +1044,7 @@ export async function renderPdfWithXeLatex({
           }))
         : [],
       slotPlacement: layoutMeta?.slotPlacement || null,
+      slotMeasure,
       exportQuestions: questions || [],
       // V2 파이프라인이 자기 자신을 V2 라고 보고. 클라이언트(Flutter) 가 응답의
       //   mathEngine 과 요청 mathEngine 을 비교해 mismatch 시 미리보기를 차단하기 때문에

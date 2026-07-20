@@ -1110,7 +1110,7 @@ class TextbookExplorerTreePanel extends StatelessWidget {
               SharedFolderTreeNode(
                 id: 'page:${small.key}#${page.rawPage}',
                 label: '${page.displayPage ?? page.rawPage}쪽 · '
-                    '${page.numberedQuestionCount}문항',
+                    '${page.isConceptPage ? '개념' : '${page.numberedQuestionCount}문항'}',
                 icon: Icons.description_outlined,
                 selectedIcon: Icons.check_circle_outline,
                 data: _NodeTag.page(small, page),
@@ -1345,7 +1345,9 @@ class TextbookExplorerTreePanel extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      '${page.numberedQuestionCount}문항',
+                      page.isConceptPage
+                          ? '개념'
+                          : '${page.numberedQuestionCount}문항',
                       style: TextStyle(
                         color: style.label,
                         fontWeight: FontWeight.w700,

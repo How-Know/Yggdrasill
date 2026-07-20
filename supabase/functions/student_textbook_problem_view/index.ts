@@ -2,7 +2,7 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { createAdminClient } from '../_shared/supabase.ts';
 
 const RENDER_PROFILE = 'student-single-v1';
-const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v1';
+const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v3';
 const SIGNED_URL_SECONDS = 10 * 60;
 const DEFAULT_WARM_BATCH_MAX = 100;
 
@@ -140,10 +140,45 @@ async function enqueueOne(
     available_at: new Date().toISOString(),
   });
   // Partial unique index enforces dedup; a duplicate live job is success.
-  if (error && error.code !== '23505') {
+  if (error?.code === '23505') {
+    // A warm-up job may already be queued at low priority. When the student
+    // opens that exact problem, promote the existing job instead of leaving it
+    // behind the entire warm-up backlog.
+    if (priority < 2) {
+      const { data: existing } = await admin
+        .from('question_render_jobs')
+        .select('id,priority,status')
+        .eq('academy_id', academyId)
+        .eq('crop_id', cropId)
+        .eq('render_profile', RENDER_PROFILE)
+        .in('status', ['queued', 'rendering'])
+        .order('priority', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (
+        existing?.status === 'queued' &&
+        Number(existing.priority ?? 100) > priority
+      ) {
+        const { error: promoteError } = await admin
+          .from('question_render_jobs')
+          .update({
+            priority,
+            available_at: new Date().toISOString(),
+            error: '',
+          })
+          .eq('id', existing.id)
+          .eq('status', 'queued');
+        if (promoteError) {
+          throw new Error(`enqueue_promote_failed:${promoteError.message}`);
+        }
+      }
+    }
+    return false;
+  }
+  if (error) {
     throw new Error(`enqueue_failed:${error.message}`);
   }
-  return !error;
+  return true;
 }
 
 async function enqueueInChunks(
@@ -285,12 +320,14 @@ async function handleView(
     }
   }
 
-  const queue = allowed.map((crop) => ({
-    id: crop.id,
-    priority: crop.id === cropId ? 0 : 1,
-    pb_question_id:
-      crop.id === cropId ? String(question.id ?? '') || undefined : undefined,
-  }));
+  const queue = allowed
+    .filter((crop) => crop.id === cropId || Boolean(crop.pb_question_uid))
+    .map((crop) => ({
+      id: crop.id,
+      priority: crop.id === cropId ? 0 : 1,
+      pb_question_id:
+        crop.id === cropId ? String(question.id ?? '') || undefined : undefined,
+    }));
   const inserted = await enqueueInChunks(admin, account.academy_id, queue);
   const bodyFallback = await signedBodyFallback(
     admin,
@@ -359,6 +396,7 @@ async function handleWarm(
       .eq('book_id', link.book_id)
       .eq('grade_label', link.grade_label)
       .eq('is_set_header', false)
+      .not('pb_question_uid', 'is', null)
       .order('raw_page', { ascending: true })
       .order('problem_number', { ascending: true })
       .range(linkOffset, linkOffset + remaining);

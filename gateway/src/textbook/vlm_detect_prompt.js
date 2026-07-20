@@ -119,6 +119,36 @@ export function buildRpmSetHeaderPrompt({ rawPage, displayPage }) {
   ].join('\n');
 }
 
+export function buildWonriPageClassPrompt({ rawPage, displayPage }) {
+  return [
+    '당신은 한국 수학 교재 개념원리의 페이지 종류를 판정하는 비전 AI다.',
+    '문항이나 좌표는 추출하지 말고, 페이지에 인쇄된 헤더/배지 문구만 근거로 판정하라.',
+    '반드시 JSON만 출력한다.',
+    '',
+    `현재 PDF raw page=${rawPage}, display page=${displayPage}.`,
+    '',
+    '=== 페이지 종류 (우선순위 순으로 검사) ===',
+    '1) "concept" — 페이지 왼쪽 상단에 "개념원리 이해"가 인쇄된 개념 설명 페이지.',
+    '   - 개념명 오른쪽에 "필수 01", "필수 04" 같은 작은 라벨이 보여도 이는 관련',
+    '     필수유형의 위치를 안내하는 참조 표시일 뿐이다. 문항이 아니며,',
+    '     이 라벨 때문에 다른 종류로 판정하지 마라.',
+    '2) "concept_drill" — 왼쪽 상단에 "개념원리 익히기"가 인쇄된 연습 문항 페이지.',
+    '3) "type_example" — 왼쪽에 "필수 NN" 배지와 유형명이 크게 인쇄된 필수유형 페이지.',
+    '   - 유형 예제 본문과 그 아래 "풀이" 단락이 있고,',
+    '   - 페이지 하단에 "확인 체크" 문항이 최소 1개 있다.',
+    '   - concept 페이지의 작은 참조 라벨과 달리, 필수유형 배지는 페이지 왼쪽',
+    '     문제 시작 위치에 유형명과 함께 크게 인쇄된다.',
+    '4) "other" — 위 셋에 해당하지 않는 페이지(연습문제 STEP 구간, 특강 등).',
+    '',
+    '판정 규칙:',
+    '- 반드시 이 페이지에 실제로 인쇄된 문구만 근거로 삼는다.',
+    '- 이전/다음 페이지 문맥이나 문항 유무로 추측하지 마라.',
+    '- "개념원리 이해"가 보이면 다른 요소와 무관하게 "concept"다.',
+    '',
+    '{"page_class":"concept"|"concept_drill"|"type_example"|"other","visible_header":"실제로 읽힌 헤더/배지 문구 또는 빈 문자열"}',
+  ].join('\n');
+}
+
 // 시리즈별 파트 이름/라벨/추가 규칙. key 는 textbook_metadata.payload.series 와 동일.
 const SERIES_CONFIGS = Object.freeze({
   ssen: {
@@ -457,11 +487,12 @@ function normalizeExpectedStartNumber(input) {
 // 섞여서 순서대로 나온다. 그래서 같은 페이지를 카테고리별로 여러 번 읽지 않고
 // **한 번의 호출로 페이지의 모든 문항을 감지하면서 문항마다 category 를 붙인다**.
 //
-// 카테고리 (sub_key A~D 슬롯과 1:1):
-//   concept_drill — A 개념원리 익히기
-//   type_example  — B 필수유형 (본문에 "풀이" 단락 포함, label="필수")
-//   check         — C 확인 체크 (유형 페이지 하단, 특강 하단에도 등장)
-//   exercise      — D 연습문제 (STEP1/STEP2/실력 UP)
+// 카테고리 (sub_key A~E 슬롯과 1:1):
+//   concept_drill   — A 개념원리 익히기
+//   type_example    — B 필수유형 (본문에 "풀이" 단락 포함, label="필수")
+//   check           — C 확인 체크 (유형 페이지 하단, 특강 하단에도 등장)
+//   exercise        — D 연습문제 (STEP1/STEP2/실력 UP)
+//   special_lecture — E 특강 (필수유형과 같은 지면 구성, 번호는 01부터 별도)
 //
 // 문항 번호는 카테고리별로 1번부터 책 전체에 걸쳐 이어진다. 카테고리만
 // 정확하면 정답/해설 매칭은 기존 쎈 흐름 그대로 동작한다.
@@ -472,6 +503,7 @@ export const WONRI_ITEM_CATEGORIES = Object.freeze([
   'type_example',
   'check',
   'exercise',
+  'special_lecture',
 ]);
 
 function buildWonriDetectPrompt({ displayPage, rawPage }) {
@@ -513,8 +545,14 @@ function buildWonriDetectPrompt({ displayPage, rawPage }) {
     '        헤더가 페이지 중간에서 시작하면 헤더 아래 문항부터 해당 라벨을 적용한다.',
     '        이전 페이지에서 이어져 헤더가 안 보이면 label="" 로 두고 notes 에',
     '        "step_header_not_visible" 이라고 적어라.',
-    '  (5) 특강 — 가끔 등장하는 심화 코너. 하단에 확인 체크 문항이 있을 수 있다.',
-    '      → 특강 하단 확인 체크도 category="check" 로 수집한다.',
+    '  (5) 특강 — "특강 01" 처럼 "특강" 배지가 붙은 심화 예제 코너.',
+    '      지면 구성은 필수유형과 같다 (배지+번호+제목, 문제 본문, 아래 "풀이" 단락,',
+    '      페이지 하단 "확인 체크" 문항). 단, 번호가 01부터 새로 시작해',
+    '      필수유형 번호와 별개다.',
+    '      → 특강 예제: category="special_lecture", number=배지 번호 원문(예: "01"),',
+    '        label="특강". 번호 오른쪽 같은 줄의 제목을 content_group.title 에 담아라',
+    '        (kind="type", label="특강 01", title="그 제목").',
+    '      → 특강 페이지 하단의 "확인 체크" 문항은 category="check" 로 수집한다.',
     '',
     '=== 출력 스키마 ===',
     '{',
@@ -525,7 +563,7 @@ function buildWonriDetectPrompt({ displayPage, rawPage }) {
     '  "items": [',
     '    {',
     '      "number": "<문항번호 문자열. 원문 그대로>",',
-    '      "category": "concept_drill" | "type_example" | "check" | "exercise",',
+    '      "category": "concept_drill" | "type_example" | "check" | "exercise" | "special_lecture",',
     '      "label": "<라벨. 없으면 빈 문자열 \\"\\">",',
     '      "is_set_header": <bool>,',
     '      "set_range": {"from": <int>, "to": <int>} | null,',
@@ -551,7 +589,9 @@ function buildWonriDetectPrompt({ displayPage, rawPage }) {
     '     같은 페이지에 필수유형과 확인 체크가 함께 있으면 둘 다 수집한다.',
     '[D0-Cat] category 판단 기준:',
     '     - "개념원리 익히기" 라벨 구간의 문항 → "concept_drill".',
-    '     - "필수" 배지가 붙은 유형 예제 → "type_example".',
+    '     - "필수" 또는 "발전" 배지가 붙은 유형 예제 → "type_example".',
+    '     - "특강" 배지가 붙은 예제 → "special_lecture" (label="특강").',
+    '       특강 번호는 01부터 새로 시작하므로 절대 type_example 로 분류하지 마라.',
     '     - "확인 체크" 헤더 아래 문항 → "check".',
     '     - STEP1/STEP2/실력 UP/수능·평가원·교육청 기출 구간 문항 → "exercise".',
     '[D0-Gate] concept_drill_header_visible 은 이 페이지에 정확한 인쇄 문구',
@@ -560,6 +600,10 @@ function buildWonriDetectPrompt({ displayPage, rawPage }) {
     '     문맥을 근거로 true 로 추측하지 마라. 정확한 문구가 없으면 반드시 false.',
     '     소단원 시작 뒤 이 헤더가 처음 나타나기 전 페이지는 모두 개념 페이지다.',
     '     따라서 헤더 전 개념 설명의 큰 숫자·개념 번호·예제 번호는 문항이 아니다.',
+    '[D0-Ref] 개념 페이지에서 개념명 오른쪽에 붙은 "필수 04", "필수유형 04" 같은',
+    '     표시는 관련 필수유형의 위치를 안내하는 참조 라벨이지 현재 페이지의 문항이 아니다.',
+    '     이를 type_example item으로 추출하지 마라. 실제 필수유형은 "필수" 배지,',
+    '     문제 본문, 아래 "풀이" 단락이 함께 있는 유형 페이지에서만 추출한다.',
     '[D1] 본문 안의 "(1), (2)" 같은 소문항 레이블, "①~⑤" 같은 선택지 기호,',
     '     "풀이/해설/정답" 같은 섹션 헤더는 문항 번호가 아니다. items 에 넣지 마라.',
     '     개념 설명 박스, "예제", "보기", 요약 표 등도 문항이 아니다.',

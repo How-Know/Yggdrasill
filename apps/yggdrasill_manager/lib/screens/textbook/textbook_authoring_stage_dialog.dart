@@ -280,11 +280,12 @@ class _TextbookAuthoringStageDialogState
   static final Map<String, TextbookVlmBodySolutionPageResult>
       _bodyVlmPageCache = <String, TextbookVlmBodySolutionPageResult>{};
 
-  /// 개념원리(wonri)의 B(필수유형) 슬롯 여부. 이 경우 정답과 풀이가 모두
-  /// 본문 PDF의 "풀이" 단락에 있으므로 Stage 2/3 VLM이 본문 추출로 대체된다.
+  /// 개념원리(wonri)의 B(필수유형)·E(특강) 슬롯 여부. 이 경우 정답과 풀이가
+  /// 모두 본문 PDF의 "풀이" 단락에 있으므로 Stage 2/3 VLM이 본문 추출로
+  /// 대체된다.
   bool get _isWonriEssential =>
       widget.seriesKey.trim().toLowerCase() == 'wonri' &&
-      widget.subKey.trim().toUpperCase() == 'B';
+      const {'B', 'E'}.contains(widget.subKey.trim().toUpperCase());
 
   bool _savingSolRefs = false;
   bool _loadingPbRuns = false;

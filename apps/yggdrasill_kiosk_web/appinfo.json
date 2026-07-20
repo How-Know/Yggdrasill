@@ -1,0 +1,21 @@
+{
+  "id": "com.howknow.yggdrasill.kioskweb",
+  "version": "1.0.0",
+  "vendor": "How-Know",
+  "type": "web",
+  "main": "index.html",
+  "title": "Yggdrasill 출석",
+  "icon": "icon.png",
+  "largeIcon": "icon.png",
+  "bgColor": "#ffffff",
+  "iconColor": "#101722",
+  "handlesRelaunch": true,
+  "supportTouchMode": "full",
+  "supportPortraitMode": false,
+  "closeOnRotation": false,
+  "disableBackHistoryAPI": true,
+  "requiredPermissions": [
+    "time.query",
+    "networking"
+  ]
+}

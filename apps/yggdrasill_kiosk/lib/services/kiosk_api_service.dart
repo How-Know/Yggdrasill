@@ -77,6 +77,10 @@ class KioskApiService {
             : 'PIN 입력이 잠겼습니다. $seconds초 후 다시 시도해 주세요.';
       case 'already_checked_in':
         return '이미 등원 처리된 학생입니다.';
+      case 'not_checked_in':
+        return '아직 등원 기록이 없는 학생입니다.';
+      case 'already_checked_out':
+        return '이미 하원 처리된 학생입니다.';
       case 'not_scheduled':
         return '오늘 예정에 없는 학생입니다. 추가수업으로 다시 시도해 주세요.';
       case 'student_not_found':
@@ -250,6 +254,43 @@ class KioskApiService {
         },
       );
       return CheckInResult.fromJson(json);
+    } on KioskApiException catch (error) {
+      return CheckInResult(
+        success: false,
+        code: error.code,
+        message: error.message,
+      );
+    }
+  }
+
+  Future<CheckInResult> checkOut(
+    KioskSession session,
+    StudentVisit student,
+    String pin,
+  ) async {
+    final requestId =
+        '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    try {
+      final json = await _call(
+        'check_out',
+        session: session,
+        body: {
+          'student_id': student.id,
+          'studentId': student.id,
+          'pin': pin,
+          'request_id': requestId,
+        },
+      );
+      final root = mapFor(json, const ['data', 'result']) ?? json;
+      final success = boolFor(root, const ['success', 'ok', 'checked_out']);
+      return CheckInResult(
+        success: success,
+        code: stringFor(root, const ['code', 'error_code', 'status']),
+        message: stringFor(root, const [
+          'message',
+          'detail',
+        ], success ? '하원이 완료되었습니다.' : '하원 처리에 실패했습니다.'),
+      );
     } on KioskApiException catch (error) {
       return CheckInResult(
         success: false,

@@ -580,6 +580,7 @@ class TextbookVlmItem {
       'type_example',
       'check',
       'exercise',
+      'special_lecture',
     };
     final categoryRaw = '${map['category'] ?? ''}'.trim();
 

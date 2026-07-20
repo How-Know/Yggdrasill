@@ -4906,6 +4906,76 @@ async function updateTextbookExtractRunForJob({
   }
 }
 
+async function reconcileTextbookCropQuestionLinks({
+  academyId,
+  documentId,
+  questionIds = [],
+}) {
+  if (!academyId || !documentId) {
+    return { candidates: 0, linked: 0, ambiguous: 0, failed: 0 };
+  }
+  let query = supa
+    .from('pb_questions')
+    .select('id,question_uid,meta')
+    .eq('academy_id', academyId)
+    .eq('document_id', documentId);
+  const ids = uniqueNonEmptyStrings(questionIds);
+  if (ids.length > 0) query = query.in('id', ids);
+  const { data: rows, error } = await query;
+  if (error) {
+    throw new Error(`textbook_crop_link_question_fetch_failed:${error.message}`);
+  }
+
+  const byCropId = new Map();
+  const ambiguousCropIds = new Set();
+  for (const row of rows || []) {
+    const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
+    const cropPage =
+      meta?.textbook_crop_page && typeof meta.textbook_crop_page === 'object'
+        ? meta.textbook_crop_page
+        : {};
+    const cropId = normalizeWhitespace(cropPage?.crop_id || '');
+    const questionUid = normalizeWhitespace(row?.question_uid || '');
+    if (!cropId || !questionUid) continue;
+    if (ambiguousCropIds.has(cropId)) continue;
+    const prior = byCropId.get(cropId);
+    if (prior && prior !== questionUid) {
+      byCropId.delete(cropId);
+      ambiguousCropIds.add(cropId);
+      continue;
+    }
+    byCropId.set(cropId, questionUid);
+  }
+
+  const links = Array.from(byCropId.entries()).filter(
+    ([, questionUid]) => questionUid,
+  );
+  let linked = 0;
+  let failed = 0;
+  const concurrency = 20;
+  for (let offset = 0; offset < links.length; offset += concurrency) {
+    const chunk = links.slice(offset, offset + concurrency);
+    const results = await Promise.all(
+      chunk.map(async ([cropId, questionUid]) => {
+        const { error: updateError } = await supa
+          .from('textbook_problem_crops')
+          .update({ pb_question_uid: questionUid })
+          .eq('academy_id', academyId)
+          .eq('id', cropId);
+        return !updateError;
+      }),
+    );
+    linked += results.filter(Boolean).length;
+    failed += results.filter((ok) => !ok).length;
+  }
+  return {
+    candidates: links.length,
+    linked,
+    ambiguous: ambiguousCropIds.size,
+    failed,
+  };
+}
+
 async function processOneJob(job) {
   const { data: doc, error: docErr } = await supa
     .from('pb_documents')
@@ -5535,6 +5605,36 @@ async function processOneJob(job) {
     }
   }
 
+  let textbookCropLinkStats = {
+    candidates: 0,
+    linked: 0,
+    ambiguous: 0,
+    failed: 0,
+    skipped: true,
+  };
+  const hasTextbookScope =
+    doc?.meta?.textbook_scope &&
+    typeof doc.meta.textbook_scope === 'object';
+  if (hasPdfSource && hasTextbookScope && questions.length > 0) {
+    textbookCropLinkStats = {
+      ...(await reconcileTextbookCropQuestionLinks({
+        academyId: job.academy_id,
+        documentId: job.document_id,
+        questionIds: partialUpdatedQuestionIds,
+      })),
+      skipped: false,
+    };
+    if (textbookCropLinkStats.failed > 0) {
+      throw new Error(
+        `textbook_crop_link_update_failed:${textbookCropLinkStats.failed}`,
+      );
+    }
+    console.log(
+      '[pb-extract-worker] textbook_crop_links',
+      JSON.stringify({ jobId: job.id, ...textbookCropLinkStats }),
+    );
+  }
+
   let setDeliveryStats = { sets: 0, items: 0, deliveryUnits: 0, skipped: true };
   if (questions.length > 0) {
     try {
@@ -5697,6 +5797,7 @@ async function processOneJob(job) {
     sourceLineCount: stats.sourceLineCount,
     segmentedLineCount: stats.segmentedLineCount,
     answerHintCount: Number(stats.answerHintCount || 0),
+    textbookCropLinks: textbookCropLinkStats,
     setDelivery: setDeliveryStats,
     scoreHeaderHint: Number(parsed?.hints?.scoreHeaderCount || 0),
     previewLineCount: Number(parsed?.hints?.previewLineCount || 0),

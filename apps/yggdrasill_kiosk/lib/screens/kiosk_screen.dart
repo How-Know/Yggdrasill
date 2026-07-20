@@ -4,7 +4,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../models/kiosk_models.dart';
 import '../services/kiosk_api_service.dart';
@@ -36,25 +35,19 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
   String _message = '키오스크를 준비하고 있습니다.';
   bool _sheetOpen = false;
   bool _refreshing = false;
-  Timer? _clockTimer;
   Timer? _pollTimer;
   Timer? _pairTimer;
-  DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _now = DateTime.now());
-    });
     unawaited(_initialize());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _clockTimer?.cancel();
     _pollTimer?.cancel();
     _pairTimer?.cancel();
     super.dispose();
@@ -220,33 +213,32 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
     return result;
   }
 
+  Future<CheckInResult> _checkOut(StudentVisit student, String pin) async {
+    final session = _session;
+    if (session == null) {
+      return const CheckInResult(
+        success: false,
+        code: 'session',
+        message: '기기 연결이 만료되었습니다.',
+      );
+    }
+    final result = await _api!.checkOut(session, student, pin);
+    if (result.success) await _refresh();
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        const designSize = Size(3840, 2160);
-        final scale = (constraints.maxWidth / designSize.width).clamp(
-          0.0,
-          constraints.maxHeight / designSize.height,
-        );
-        return ColoredBox(
-          color: const Color(0xFF080A0F),
-          child: Center(
-            child: SizedBox(
-              width: designSize.width * scale,
-              height: designSize.height * scale,
-              child: Transform.scale(
-                scale: scale,
-                alignment: Alignment.topLeft,
-                child: SizedBox.fromSize(
-                  size: designSize,
-                  child: _buildDesign(),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+    const designSize = Size(3840, 2160);
+    return ColoredBox(
+      color: Colors.white,
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.contain,
+          alignment: Alignment.center,
+          child: SizedBox.fromSize(size: designSize, child: _buildDesign()),
+        ),
+      ),
     );
   }
 
@@ -256,57 +248,48 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
     }
     return Stack(
       children: [
-        const Positioned.fill(child: _PremiumBackground()),
-        Positioned.fill(child: _buildContent()),
+        const Positioned.fill(
+          key: ValueKey('bg'),
+          child: _PremiumBackground(),
+        ),
+        Positioned.fill(
+          key: const ValueKey('content'),
+          child: RepaintBoundary(child: _buildContent()),
+        ),
         Positioned(
+          key: const ValueKey('fab'),
           right: 92,
           bottom: 82,
-          child: AnimatedOpacity(
-            opacity: _sheetOpen ? 0 : 1,
-            duration: const Duration(milliseconds: 220),
-            child: IgnorePointer(
-              ignoring: _sheetOpen,
-              child: YggGlassButton(
+          child: IgnorePointer(
+            ignoring: _sheetOpen,
+            child: AnimatedOpacity(
+              opacity: _sheetOpen ? 0 : 1,
+              duration: const Duration(milliseconds: 200),
+              child: _SolidActionButton(
                 onPressed: () => setState(() => _sheetOpen = true),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 48,
-                  vertical: 30,
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.how_to_reg_rounded,
-                      size: 42,
-                      color: Colors.white,
-                    ),
-                    SizedBox(width: 20),
-                    Text(
-                      '출석체크',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 34,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
+                icon: Icons.how_to_reg_rounded,
+                label: '출석체크',
               ),
             ),
           ),
         ),
         AnimatedPositioned(
+          key: const ValueKey('sheet'),
           duration: const Duration(milliseconds: 420),
           curve: Curves.easeOutCubic,
           right: _sheetOpen ? 0 : -960,
           top: 0,
           bottom: 0,
           width: 930,
-          child: AttendanceSheet(
-            students: _students,
-            onClose: () => setState(() => _sheetOpen = false),
-            onSearch: _search,
-            onCheckIn: _checkIn,
+          child: RepaintBoundary(
+            child: AttendanceSheet(
+              students: _students,
+              onClose: () => setState(() => _sheetOpen = false),
+              onReopen: () => setState(() => _sheetOpen = true),
+              onSearch: _search,
+              onCheckIn: _checkIn,
+              onCheckOut: _checkOut,
+            ),
           ),
         ),
       ],
@@ -319,47 +302,17 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
       minimum: const EdgeInsets.fromLTRB(120, 70, 120, 90),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                DateFormat('M월 d일 EEEE', 'ko_KR').format(_now),
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 44,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -1,
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 22),
-                child: Text(
-                  '·',
-                  style: TextStyle(color: Colors.white38, fontSize: 38),
-                ),
-              ),
-              Text(
-                _weather?.label ?? _bootstrap!.academy.name,
-                style: const TextStyle(color: Colors.white54, fontSize: 34),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            DateFormat('HH:mm').format(_now),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 172,
-              fontWeight: FontWeight.w200,
-              height: 1.05,
-              letterSpacing: -9,
-            ),
+          _ClockHeader(
+            subtitle: [
+              _bootstrap!.academy.name,
+              if (_weather != null) _weather!.label,
+            ].join(' · '),
           ),
           const SizedBox(height: 40),
           Expanded(
             child: announcement != null
                 ? _AnnouncementView(announcement: announcement)
-                : _PosterView(sheetOpen: _sheetOpen),
+                : const _PosterView(),
           ),
         ],
       ),
@@ -371,7 +324,7 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
       children: [
         const Positioned.fill(child: _PremiumBackground()),
         Center(
-          child: YggGlassSurface(
+          child: _SolidPanel(
             padding: const EdgeInsets.symmetric(horizontal: 110, vertical: 90),
             borderRadius: BorderRadius.circular(54),
             child: SizedBox(
@@ -448,21 +401,175 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
   }
 }
 
+class _SolidPanel extends StatelessWidget {
+  const _SolidPanel({
+    required this.child,
+    this.padding = const EdgeInsets.all(20),
+    this.borderRadius = const BorderRadius.all(Radius.circular(32)),
+    this.tint = const Color(0xF01B1D22),
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final BorderRadius borderRadius;
+  final Color tint;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tint,
+        borderRadius: borderRadius,
+        border: Border.all(color: const Color(0x22FFFFFF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 30,
+            offset: Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Padding(padding: padding, child: child),
+    );
+  }
+}
+
+class _SolidActionButton extends StatelessWidget {
+  const _SolidActionButton({
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+  });
+
+  final VoidCallback onPressed;
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF33A373),
+      borderRadius: BorderRadius.circular(999),
+      elevation: 6,
+      shadowColor: const Color(0x55000000),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 40),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 55, color: Colors.white),
+              const SizedBox(width: 26),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 45,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ClockHeader extends StatefulWidget {
+  const _ClockHeader({required this.subtitle});
+
+  final String subtitle;
+
+  @override
+  State<_ClockHeader> createState() => _ClockHeaderState();
+}
+
+class _ClockHeaderState extends State<_ClockHeader> {
+  Timer? _timer;
+  late DateTime _now;
+
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) {
+      final next = DateTime.now();
+      final sameMinute = next.minute == _now.minute && next.day == _now.day;
+      _now = next;
+      if (!sameMinute && mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: Column(
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                DateFormat('M월 d일 EEEE', 'ko_KR').format(_now),
+                style: const TextStyle(
+                  color: Color(0xB8000000),
+                  fontSize: 88,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -1,
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  '·',
+                  style: TextStyle(color: Color(0x52000000), fontSize: 72),
+                ),
+              ),
+              Text(
+                widget.subtitle,
+                style: const TextStyle(
+                  color: Color(0x8A000000),
+                  fontSize: 90,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            DateFormat('HH:mm').format(_now),
+            style: const TextStyle(
+              color: Color(0xE6000000),
+              fontSize: 227,
+              fontWeight: FontWeight.w200,
+              height: 1.05,
+              letterSpacing: -12,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PremiumBackground extends StatelessWidget {
   const _PremiumBackground();
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: Alignment(-.35, -.65),
-          radius: 1.45,
-          colors: [Color(0xFF18273C), Color(0xFF0E1420), Color(0xFF07090E)],
-          stops: [0, .52, 1],
-        ),
-      ),
-    );
+    return const ColoredBox(color: Colors.white);
   }
 }
 
@@ -475,10 +582,10 @@ class _AnnouncementView extends StatelessWidget {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 2700),
-        child: YggGlassSurface(
+        child: _SolidPanel(
           padding: const EdgeInsets.symmetric(horizontal: 150, vertical: 100),
           borderRadius: BorderRadius.circular(52),
-          tint: const Color(0x94131721),
+          tint: const Color(0xFF131721),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -515,19 +622,18 @@ class _AnnouncementView extends StatelessWidget {
 }
 
 class _PosterView extends StatelessWidget {
-  const _PosterView({required this.sheetOpen});
-  final bool sheetOpen;
+  const _PosterView();
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 420),
-      padding: EdgeInsets.only(right: sheetOpen ? 900 : 0),
+    return FractionallySizedBox(
+      widthFactor: .9,
+      heightFactor: .9,
       child: Image.asset(
         'assets/poster.png',
         fit: BoxFit.contain,
-        filterQuality: FilterQuality.high,
-        isAntiAlias: true,
+        filterQuality: FilterQuality.medium,
+        isAntiAlias: false,
         errorBuilder: (context, error, stackTrace) => Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,

@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -19,20 +21,34 @@ class YggdrasillKioskApp extends StatelessWidget {
     return MaterialApp(
       title: 'Yggdrasill Kiosk',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const _KioskScrollBehavior(),
       theme: ThemeData(
-        brightness: Brightness.dark,
+        brightness: Brightness.light,
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF6EA8FF),
-          brightness: Brightness.dark,
+          brightness: Brightness.light,
         ),
-        scaffoldBackgroundColor: const Color(0xFF080A0F),
+        scaffoldBackgroundColor: Colors.white,
         fontFamilyFallback: const [
           'Pretendard',
           'Noto Sans KR',
           'Malgun Gothic',
         ],
       ),
-      home: const Scaffold(body: KioskScreen()),
+      home: const Scaffold(
+        resizeToAvoidBottomInset: false,
+        body: KioskScreen(),
+      ),
     );
   }
+}
+
+class _KioskScrollBehavior extends MaterialScrollBehavior {
+  const _KioskScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    ...super.dragDevices,
+    PointerDeviceKind.mouse,
+  };
 }

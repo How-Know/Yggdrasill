@@ -61,7 +61,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   동일 입력 → 동일 캐시 키가 산출된다.
 const RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_slotmeasure_01';
 const SINGLE_QUESTION_RENDERER_VERSION =
-  `${RENDER_CONFIG_VERSION_V2}:student-single-v1`;
+  `${RENDER_CONFIG_VERSION_V2}:student-single-v3`;
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -2578,6 +2578,10 @@ function buildRenderConfigFromJob(job) {
     mathEngine: mathEngineFinal,
     reviewPdf: normalizeBool(options.reviewPdf ?? options.review_pdf, false),
     disableAutoLabels,
+    singleQuestionContentPage: normalizeBool(
+      options.singleQuestionContentPage,
+      false,
+    ),
     // 독립형 세트(independent_set) 공통발문을 각 문항에 붙여 렌더할지 여부.
     //   학습앱/매니저앱이 옵션으로 실어 보내며, 비-assignment 프로필에서도 공통발문이
     //   누락되지 않도록 렌더 엔진에 그대로 전달한다.
@@ -4834,6 +4838,52 @@ async function main() {
   console.log('[pb-export-worker] exit');
 }
 
+async function cropSingleQuestionPdfToContent(bytes, slotMeasure) {
+  const sourceDoc = await PDFDocument.load(bytes);
+  const measuredHeight = Number(
+    Array.isArray(slotMeasure?.heightsPt)
+      ? slotMeasure.heightsPt.find((height) => Number.isFinite(Number(height)))
+      : Number.NaN,
+  );
+  if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
+    console.warn('[pb-single-render] content crop skipped: no measured height');
+    return bytes;
+  }
+  if (sourceDoc.getPageCount() !== 1) {
+    console.warn('[pb-single-render] content crop skipped: multiple content pages', {
+      pageCount: sourceDoc.getPageCount(),
+    });
+    return bytes;
+  }
+  const sourcePage = sourceDoc.getPage(0);
+  const size = sourcePage.getSize();
+
+  // 2단 조판의 왼쪽 한 열만 새 PDF 페이지에 옮긴다. CropBox 좌표만
+  // 바꾸면 일부 iOS PDF 뷰어가 원래 A4 좌표계를 유지하므로, 원점이
+  // (0, 0)인 새 페이지를 만들어 화면 초과와 불필요한 스크롤을 막는다.
+  const pageWidth = size.width / 2;
+  const pageHeight = Math.min(
+    size.height,
+    Math.max(120, measuredHeight + 56),
+  );
+  const bottom = Math.max(0, size.height - pageHeight);
+  const outputDoc = await PDFDocument.create();
+  const embeddedPage = await outputDoc.embedPage(sourcePage, {
+    left: 0,
+    bottom,
+    right: pageWidth,
+    top: size.height,
+  });
+  const outputPage = outputDoc.addPage([pageWidth, pageHeight]);
+  outputPage.drawPage(embeddedPage, {
+    x: 0,
+    y: 0,
+    width: pageWidth,
+    height: pageHeight,
+  });
+  return Buffer.from(await outputDoc.save());
+}
+
 async function renderSingleQuestionPdf({
   academyId,
   question,
@@ -4866,19 +4916,25 @@ async function renderSingleQuestionPdf({
     options: {
       mathEngine: 'xelatex-v2',
       selectedQuestionUidsOrdered: questionUid ? [questionUid] : [],
-      layoutColumns: 1,
+      layoutColumns: 2,
       maxQuestionsPerPage: 1,
       hidePreviewHeader: true,
       hideQuestionNumber: true,
       includeAcademyLogo: false,
       includeCoverPage: false,
+      disableAutoLabels: true,
+      singleQuestionContentPage: true,
       renderProfile,
     },
   };
   const renderConfig = buildRenderConfigFromJob(job);
   const rendered = await renderPdf(job, [normalizedQuestion], renderConfig);
+  const bytes = await cropSingleQuestionPdfToContent(
+    rendered.bytes,
+    rendered.slotMeasure,
+  );
   return {
-    bytes: rendered.bytes,
+    bytes,
     pageCount: Number(rendered.pageCount || 0),
     rendererVersion: SINGLE_QUESTION_RENDERER_VERSION,
     renderProfile,

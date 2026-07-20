@@ -8,6 +8,7 @@
   "icon": "icon.png",
   "iconColor": "#101722",
   "largeIcon": "icon.png",
+  "resolution": "1920x1080",
   "handlesRelaunch": true,
   "visible": true,
   "defaultWindowType": "card",
