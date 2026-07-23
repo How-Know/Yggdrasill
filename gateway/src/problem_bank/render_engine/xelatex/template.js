@@ -6025,6 +6025,10 @@ export function buildAnswerTexSource(answer, options = {}) {
     textColor = '000000',
     backgroundColor = 'FFFFFF',
     maxWidthCm = 13.5,
+    // v11 uniform-line 모드: 모든 줄에 고정 스트럿을 깔아 한 줄짜리 정답이
+    // 내용과 무관하게 동일한 TeX 박스 높이를 갖게 한다.
+    // (크롭은 렌더러에서 잉크 기준이 아닌 페이지=박스 기준으로 수행)
+    uniformLineBox = false,
   } = options;
 
   const safeFontSize = Math.max(8, Math.min(32, Number(fontSizePt) || 18));
@@ -6032,28 +6036,33 @@ export function buildAnswerTexSource(answer, options = {}) {
   const safeWidth = Math.max(4, Math.min(18, Number(maxWidthCm) || 13.5));
   const colorHex = String(textColor || '000000').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || '000000';
   const backgroundHex = String(backgroundColor || 'FFFFFF').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || 'FFFFFF';
+  const strut = uniformLineBox ? '\\YggUniformStrut{}' : '';
   const bodyLines = splitAnswerRenderLines(answer)
     .map((line) => {
       const subpart = answerSubpartLine(line);
       if (!subpart) {
         const tex = scaleAnswerCjkTextInTex(smartTexLine(line, []), answerCjkFontSize);
-        return tex && tex.trim() ? `{${tex}\\par}` : '';
+        return tex && tex.trim() ? `{${strut}${tex}\\par}` : '';
       }
       const label = escapeLatexText(subpart.label);
       const valueTex = scaleAnswerCjkTextInTex(smartTexLine(subpart.value, []), answerCjkFontSize);
       return [
         '\\noindent\\begin{tabular}{@{}l@{\\hspace{0.58em}}>{\\raggedright\\arraybackslash}p{\\dimexpr\\linewidth-2.65em\\relax}@{}}',
-        `{${label}} & {${valueTex}}`,
+        `{${strut}${label}} & {${strut}${valueTex}}`,
         '\\end{tabular}\\par',
       ].join('');
     })
     .filter((line) => line && line.trim())
     .join('\n');
 
+  // uniform 모드는 픽셀 트림 없이 페이지 박스를 그대로 쓰므로 상하 보더가 곧
+  // 최종 이미지 여백이 된다. 스트럿(1.5em)이 이미 상하 여유를 확보하므로
+  // 보더는 최소한(2.5pt)만 남겨 카드 높이를 타이트하게 유지한다.
+  const borderSpec = uniformLineBox ? '6pt 2.5pt 6pt 2.5pt' : '6pt 8pt 6pt 16pt';
   const lines = [
     // border 상단을 넉넉히 줘서 분수 분자처럼 콘텐츠 박스를 살짝 넘치는 잉크가
     // standalone crop 에 잘리지 않도록 한다. (최종 프레이밍은 픽셀 단위 트림이 함)
-    `\\documentclass[12pt,border={6pt 8pt 6pt 16pt},varwidth=${safeWidth}cm]{standalone}`,
+    `\\documentclass[12pt,border={${borderSpec}},varwidth=${safeWidth}cm]{standalone}`,
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
     '\\usepackage{array}',
@@ -6091,6 +6100,20 @@ export function buildAnswerTexSource(answer, options = {}) {
     // 상단 22px 패딩으로 프레이밍함) 오히려 잘림만 유발하므로 identity 로 끈다.
     // (멀티라인 박스 경로도 같은 이유로 \mtsymmathbox 를 identity 로 둔다.)
     '\\renewcommand{\\mtsymmathbox}[1]{#1}',
+    // 균일 줄박스 스트럿 (uniformLineBox 모드에서만 본문에 삽입됨).
+    '\\newcommand{\\YggUniformStrut}{\\rule[-0.45em]{0pt}{1.5em}}',
+    // 지수/첨자 안 분수 축소: smartTexLine 이 모든 \frac 을 \dfrac(강제 display)로
+    // 승격하는데, 지수 자리(script style)에서는 분수가 본문 크기 그대로 나와
+    // 줄 높이를 키운다. uniform 모드에서는 \dfrac 을 \mathchoice 로 재정의해
+    // display/text 에선 기존 dfrac, script/scriptscript 에선 자동 축소되는
+    // 원본 \frac 으로 강등시킨다. (본문 엔진과 같은 시각 결과)
+    ...(uniformLineBox
+      ? [
+        '\\let\\YggOrigDfrac\\dfrac',
+        '\\let\\YggOrigFrac\\frac',
+        '\\renewcommand{\\dfrac}[2]{\\mathchoice{\\YggOrigDfrac{#1}{#2}}{\\YggOrigDfrac{#1}{#2}}{\\YggOrigFrac{#1}{#2}}{\\YggOrigFrac{#1}{#2}}}',
+      ]
+      : []),
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
     hangulFontDirective(fontRegularPath, fontFamily, fontBold),

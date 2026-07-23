@@ -174,6 +174,7 @@ Deno.serve(async (req) => {
         p_pin: pin,
         p_request_id: requestId,
         p_walk_in: body.walk_in === true,
+        p_setup_pin: body.setup_pin === true,
       });
       if (error) throw error;
       const result = data as JsonObject;
@@ -197,6 +198,24 @@ Deno.serve(async (req) => {
         p_student_id: studentId,
         p_pin: pin,
         p_request_id: requestId,
+        p_print_notice: body.print_notice === true,
+      });
+      if (error) throw error;
+      const result = data as JsonObject;
+      return json(result, rpcStatus(result));
+    }
+
+    if (action === 'notice_status') {
+      const attendanceId = stringValue(body.attendance_id);
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(attendanceId)
+      ) {
+        return fail('invalid_request');
+      }
+      const { data, error } = await admin.rpc('kiosk_notice_status', {
+        p_token_hash: tokenHash,
+        p_attendance_id: attendanceId,
       });
       if (error) throw error;
       const result = data as JsonObject;

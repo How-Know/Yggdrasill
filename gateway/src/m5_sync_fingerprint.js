@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 
 const DEFAULT_GROUP_LIMIT = 8;
-const DEFAULT_CHILDREN_LIMIT = 8;
+const DEFAULT_CHILDREN_LIMIT = 3;
 
 function stableNormalize(value) {
   if (Array.isArray(value)) {

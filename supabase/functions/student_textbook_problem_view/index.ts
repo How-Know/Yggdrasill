@@ -2,7 +2,7 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { createAdminClient } from '../_shared/supabase.ts';
 
 const RENDER_PROFILE = 'student-single-v1';
-const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v3';
+const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v4';
 const SIGNED_URL_SECONDS = 10 * 60;
 const DEFAULT_WARM_BATCH_MAX = 100;
 
@@ -96,12 +96,56 @@ function isActiveCrop(
   );
 }
 
+function isMissingRelationError(error: unknown, relationName: string) {
+  const source = error && typeof error === 'object'
+    ? error as { code?: unknown; message?: unknown }
+    : {};
+  const code = String(source.code ?? '').trim().toUpperCase();
+  const message = String(source.message ?? error ?? '');
+  const referencesRelation =
+    message.toLowerCase().includes(relationName.toLowerCase());
+  return (
+    referencesRelation &&
+    (
+      code === '42P01' ||
+      code === 'PGRST205' ||
+      /relation .* does not exist/i.test(message) ||
+      /could not find .*schema cache/i.test(message)
+    )
+  );
+}
+
 async function resolveQuestion(
   admin: AdminClient,
   academyId: string,
   crop: { id: string; pb_question_uid?: string | null },
 ) {
   const fields = 'id,question_uid,stem,choices,figure_refs,meta';
+  const { data: canonicalLink, error: canonicalError } = await admin
+    .from('textbook_crop_question_links')
+    .select('pb_question_id')
+    .eq('academy_id', academyId)
+    .eq('crop_id', crop.id)
+    .maybeSingle();
+  if (
+    canonicalError &&
+    !isMissingRelationError(canonicalError, 'textbook_crop_question_links')
+  ) {
+    throw new Error(`canonical_link_lookup_failed:${canonicalError.message}`);
+  }
+  if (canonicalLink?.pb_question_id) {
+    const { data, error } = await admin
+      .from('pb_questions')
+      .select(fields)
+      .eq('academy_id', academyId)
+      .eq('id', canonicalLink.pb_question_id)
+      .maybeSingle();
+    if (error) {
+      throw new Error(`canonical_question_lookup_failed:${error.message}`);
+    }
+    if (data) return data as Record<string, unknown>;
+  }
+
   if (crop.pb_question_uid) {
     const { data } = await admin
       .from('pb_questions')

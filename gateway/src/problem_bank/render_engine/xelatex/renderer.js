@@ -364,6 +364,12 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
   cropAlphaThreshold = 3,
   topBleedPx = 0,
   strokePx = 0,
+  // true: 잉크 기준으로 상하좌우 크롭 (기본).
+  // false: 크롭 생략, 페이지(=TeX 콘텐츠 박스) 전체 유지.
+  // 'horizontal': 가로만 잉크 기준 크롭, 세로는 전체 유지.
+  //   uniform-line 렌더에서 줄 스트럿이 만든 고정 높이는 보존하면서
+  //   이미지 폭이 항상 최대 폭으로 나와 클라이언트에서 축소되는 것을 막는다.
+  cropToInk = true,
 } = {}) {
   const color = normalizeHexColor(textColor);
   const rgb = [
@@ -456,6 +462,16 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
         data[idx + 3] = 255;
       }
     }
+  }
+
+  if (cropToInk === 'horizontal') {
+    minY = 0;
+    maxY = height - 1;
+  } else if (!cropToInk) {
+    minX = 0;
+    minY = 0;
+    maxX = width - 1;
+    maxY = height - 1;
   }
 
   if (maxX < minX || maxY < minY) {
@@ -650,6 +666,7 @@ export async function renderAnswerWithXeLatex({
   backgroundColor = '151C21',
   transparent = true,
   transparentOptions = {},
+  uniformLineBox = false,
 }) {
   await ensureInstalled();
 
@@ -670,6 +687,7 @@ export async function renderAnswerWithXeLatex({
       // alpha/composite pass that looked better in the right sheet.
       textColor: '000000',
       backgroundColor: 'FFFFFF',
+      uniformLineBox,
     });
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);

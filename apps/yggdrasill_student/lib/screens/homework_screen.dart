@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_api.dart';
+import '../widgets/student_page_title.dart';
 
 /// 과제 그룹 목록 + 상세(수행/제출) 화면.
 ///
@@ -210,128 +211,132 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   @override
   Widget build(BuildContext context) {
     final groups = _groups;
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: const Text(
-          '홈',
-          style: TextStyle(fontWeight: FontWeight.w800),
+    final Widget body;
+    if (groups == null) {
+      body = Center(
+        child: _error == null
+            ? const YggLoadingIndicator(size: 32)
+            : Text(_error!, textAlign: TextAlign.center),
+      );
+    } else if (groups.isEmpty) {
+      body = RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          children: const [
+            SizedBox(height: 160),
+            Center(
+              child: Text(
+                '오늘은 등록된 과제가 없어요.',
+                style: TextStyle(fontSize: 16),
+              ),
+            ),
+          ],
         ),
-        actions: [
-          IconButton(
-            tooltip: '서술형 쓰기 추가',
-            onPressed: _busy ? null : _addDescriptiveWriting,
-            icon: const Icon(Icons.edit_note_rounded, size: 28),
-          ),
-          IconButton(
-            tooltip: '새로고침',
-            onPressed: _refresh,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: groups == null
-          ? Center(
-              child: _error == null
-                  ? const YggLoadingIndicator(size: 32)
-                  : Text(_error!, textAlign: TextAlign.center),
-            )
-          : groups.isEmpty
-              ? RefreshIndicator(
-                  onRefresh: _refresh,
-                  child: ListView(
-                    children: const [
-                      SizedBox(height: 160),
-                      Center(
-                        child: Text(
-                          '오늘은 등록된 과제가 없어요.',
-                          style: TextStyle(fontSize: 16),
+      );
+    } else {
+      body = LayoutBuilder(
+        builder: (context, constraints) {
+          final detail = _detailGroup(groups);
+          final detailWidth =
+              ((constraints.maxWidth - 68) / 3).clamp(280.0, 380.0);
+          return Stack(
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _refresh,
+                      child: GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 14, 112),
+                        gridDelegate:
+                            const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 440,
+                          mainAxisExtent: 148,
+                          crossAxisSpacing: 14,
+                          mainAxisSpacing: 14,
+                        ),
+                        itemCount: groups.length,
+                        itemBuilder: (context, i) => _GroupCard(
+                          group: groups[i],
+                          selected: detail?.groupId == groups[i].groupId,
+                          onTap: () => _onGroupTap(groups[i]),
                         ),
                       ),
-                    ],
+                    ),
                   ),
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    final detail = _detailGroup(groups);
-                    final detailWidth =
-                        ((constraints.maxWidth - 68) / 3).clamp(280.0, 380.0);
-                    return Stack(
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(
-                              child: RefreshIndicator(
-                                onRefresh: _refresh,
-                                child: GridView.builder(
-                                  padding:
-                                      const EdgeInsets.fromLTRB(20, 8, 14, 112),
-                                  gridDelegate:
-                                      const SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: 440,
-                                    mainAxisExtent: 148,
-                                    crossAxisSpacing: 14,
-                                    mainAxisSpacing: 14,
-                                  ),
-                                  itemCount: groups.length,
-                                  itemBuilder: (context, i) => _GroupCard(
-                                    group: groups[i],
-                                    selected:
-                                        detail?.groupId == groups[i].groupId,
-                                    onTap: () => _onGroupTap(groups[i]),
-                                  ),
-                                ),
+                  SizedBox(
+                    width: detailWidth,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(0, 8, 20, 112),
+                      child: _HomeworkDetailPanel(
+                        group: detail!,
+                        onSubmit: detail.phase == 2
+                            ? () => _transition(
+                                  detail,
+                                  99,
+                                  successMessage: '과제를 제출했어요!',
+                                )
+                            : null,
+                        onReset: detail.phase == 4
+                            ? () => _confirmPhase4(detail)
+                            : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (!detail.isHomeworkOnly &&
+                  (detail.phase == 1 || detail.phase == 2))
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 24,
+                  child: Center(
+                    child: _HomeworkActionFab(
+                      busy: _busy,
+                      running: detail.phase == 2,
+                      onPressed: detail.phase == 2
+                          ? _pauseAll
+                          : () => _transition(
+                                detail,
+                                1,
+                                successMessage: '${detail.title} 시작!',
                               ),
-                            ),
-                            SizedBox(
-                              width: detailWidth,
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(0, 8, 20, 112),
-                                child: _HomeworkDetailPanel(
-                                  group: detail!,
-                                  onSubmit: detail.phase == 2
-                                      ? () => _transition(
-                                            detail,
-                                            99,
-                                            successMessage: '과제를 제출했어요!',
-                                          )
-                                      : null,
-                                  onReset: detail.phase == 4
-                                      ? () => _confirmPhase4(detail)
-                                      : null,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (!detail.isHomeworkOnly &&
-                            (detail.phase == 1 || detail.phase == 2))
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 24,
-                            child: Center(
-                              child: _HomeworkActionFab(
-                                busy: _busy,
-                                running: detail.phase == 2,
-                                onPressed: detail.phase == 2
-                                    ? _pauseAll
-                                    : () => _transition(
-                                          detail,
-                                          1,
-                                          successMessage: '${detail.title} 시작!',
-                                        ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    );
-                  },
+                    ),
+                  ),
                 ),
+            ],
+          );
+        },
+      );
+    }
+
+    return StudentCollapsingTitlePage(
+      title: '홈',
+      onRefresh: _refresh,
+      actions: [
+        IconButton(
+          tooltip: '서술형 쓰기 추가',
+          onPressed: _busy ? null : _addDescriptiveWriting,
+          icon: const Icon(Icons.edit_note_rounded, size: 28),
+        ),
+        IconButton(
+          tooltip: '새로고침',
+          onPressed: _refresh,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+      bodyBuilder: (context, topInset, bottomInset) {
+        return Padding(
+          padding: EdgeInsets.only(top: topInset),
+          child: MediaQuery.removePadding(
+            context: context,
+            removeTop: true,
+            child: body,
+          ),
+        );
+      },
     );
   }
 }

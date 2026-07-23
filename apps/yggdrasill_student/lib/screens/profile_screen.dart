@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_api.dart';
+import '../widgets/student_page_title.dart';
 
 /// 내 정보 + 오늘 출결 + 테마/로그아웃.
 class ProfileScreen extends StatefulWidget {
@@ -118,31 +119,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final arrived = att?.arrival != null;
     final departed = att?.departure != null;
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.only(bottom: 32),
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: YggGroupedLayoutTokens.maxContentWidth,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: YggGroupedLayoutTokens.horizontalInset,
+    return StudentCollapsingTitlePage(
+      title: '내 정보',
+      onRefresh: _load,
+      actions: [
+        IconButton(
+          tooltip: '새로고침',
+          onPressed: _load,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+      bodyBuilder: (context, topInset, bottomInset) {
+        return SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics(),
+          ),
+          padding: EdgeInsets.fromLTRB(0, topInset, 0, bottomInset),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: YggGroupedLayoutTokens.maxContentWidth,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  YggScreenMainTitle(
-                    title: '내 정보',
-                    trailing: IconButton(
-                      tooltip: '새로고침',
-                      onPressed: _load,
-                      icon: const Icon(Icons.refresh_rounded),
-                    ),
-                  ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: YggGroupedLayoutTokens.horizontalInset,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                   if (_error != null)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 80),
@@ -339,12 +344,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     ),
                   ],
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

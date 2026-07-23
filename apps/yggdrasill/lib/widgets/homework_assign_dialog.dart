@@ -28,6 +28,7 @@ class HomeworkAssignSelection {
   final bool printTodoOnConfirm;
   final List<String> selectedBehaviorIds;
   final Map<String, int> irregularBehaviorCounts;
+  final Map<String, DateTime> dueDateByItemId;
   const HomeworkAssignSelection({
     required this.itemIds,
     required this.dueDate,
@@ -35,6 +36,7 @@ class HomeworkAssignSelection {
     this.printTodoOnConfirm = false,
     this.selectedBehaviorIds = const <String>[],
     this.irregularBehaviorCounts = const <String, int>{},
+    this.dueDateByItemId = const <String, DateTime>{},
   });
 }
 
@@ -196,10 +198,143 @@ class _HomeworkPhaseEvent {
   });
 }
 
+/// 하원 다이얼로그의 "기본 선택"을 UI 없이 그대로 재현한다.
+/// 키오스크 하원 → PC 자동 인쇄 경로에서 사용한다. (미완료 숙제 전체 +
+/// 다음 예정 수업 마감일 + 정기 행동) 인쇄 대상이 없으면 null 을 반환한다.
+Future<HomeworkAssignSelection?> buildDefaultHomeworkAssignSelection(
+  String studentId, {
+  DateTime? anchorTime,
+  Set<String>? initialSelectedGroupIds,
+  Map<String, DateTime> initialDueDateByGroupId = const <String, DateTime>{},
+}) async {
+  final allItems = HomeworkStore.instance.items(studentId);
+  if (allItems.isEmpty) return null;
+
+  final activeAssignments =
+      await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+  final hiddenAssignedItemIds = activeAssignments
+      .map((a) => a.homeworkItemId.trim())
+      .where((id) => id.isNotEmpty)
+      .toSet();
+
+  final allGroups = HomeworkStore.instance.groups(studentId);
+  final allGroupChildIds = <String>[];
+  final selectedGroupChildIds = <String>[];
+  final groupIdByChildId = <String, String>{};
+  for (final group in allGroups) {
+    final children = HomeworkStore.instance
+        .itemsInGroup(studentId, group.id, includeCompleted: true)
+        .where((e) => e.status != HomeworkStatus.completed)
+        .where((e) => !hiddenAssignedItemIds.contains(e.id))
+        .toList();
+    for (final c in children) {
+      allGroupChildIds.add(c.id);
+      groupIdByChildId[c.id] = group.id;
+      if (initialSelectedGroupIds == null ||
+          initialSelectedGroupIds.contains(group.id)) {
+        selectedGroupChildIds.add(c.id);
+      }
+    }
+  }
+
+  final behaviorAssignments = await StudentBehaviorAssignmentStore.instance
+      .loadForStudent(studentId, force: true);
+  behaviorAssignments.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+
+  // 다음 예정 수업 시각 = 마감일 기본값
+  final anchor = anchorTime ?? DateTime.now();
+  final Set<int> seenKeys = <int>{};
+  int keyOf(DateTime dt) =>
+      DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
+          .millisecondsSinceEpoch;
+  final List<DateTime> optionTimes = [];
+  void addOption(DateTime dt) {
+    if (!dt.isAfter(anchor)) return;
+    final key = keyOf(dt);
+    if (seenKeys.contains(key)) return;
+    seenKeys.add(key);
+    optionTimes.add(dt);
+  }
+
+  final records = DataManager.instance.attendanceRecords
+      .where((r) => r.studentId == studentId)
+      .toList()
+    ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+  for (final r in records) {
+    addOption(r.classDateTime);
+  }
+
+  final day = DateTime(anchor.year, anchor.month, anchor.day);
+  final dayIdx = day.weekday - 1;
+  bool isActiveOn(StudentTimeBlock b, DateTime date) {
+    final target = DateTime(date.year, date.month, date.day);
+    final start =
+        DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+    final end = b.endDate != null
+        ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+        : null;
+    return !start.isAfter(target) && (end == null || !end.isBefore(target));
+  }
+
+  final blocks = DataManager.instance.studentTimeBlocks
+      .where((b) =>
+          b.studentId == studentId &&
+          b.dayIndex == dayIdx &&
+          isActiveOn(b, day))
+      .toList();
+  final Map<String, List<StudentTimeBlock>> blocksBySessionKey =
+      <String, List<StudentTimeBlock>>{};
+  for (final b in blocks) {
+    final setId = (b.setId ?? '').trim();
+    final key = setId.isNotEmpty ? 'set:$setId' : 'single:${b.id}';
+    blocksBySessionKey.putIfAbsent(key, () => <StudentTimeBlock>[]).add(b);
+  }
+  for (final group in blocksBySessionKey.values) {
+    group.sort((a, b) {
+      if (a.startHour != b.startHour) return a.startHour - b.startHour;
+      return a.startMinute - b.startMinute;
+    });
+    final first = group.first;
+    addOption(
+      DateTime(
+          day.year, day.month, day.day, first.startHour, first.startMinute),
+    );
+  }
+
+  optionTimes.sort((a, b) => a.compareTo(b));
+  final DateTime? dueDate = optionTimes.isNotEmpty ? optionTimes.first : null;
+
+  final selectedBehaviorIds = behaviorAssignments
+      .where((b) => !b.isIrregular)
+      .map((b) => b.id)
+      .toList();
+  final irregularBehaviorCounts = <String, int>{
+    for (final b in behaviorAssignments.where((e) => e.isIrregular)) b.id: 1,
+  };
+
+  return HomeworkAssignSelection(
+    itemIds: List<String>.from(selectedGroupChildIds),
+    dueDate: dueDate,
+    dueDateByItemId: <String, DateTime>{
+      for (final itemId in selectedGroupChildIds)
+        if ((initialDueDateByGroupId[groupIdByChildId[itemId]] ?? dueDate) !=
+            null)
+          itemId:
+              (initialDueDateByGroupId[groupIdByChildId[itemId]] ?? dueDate)!,
+    },
+    selectableItemIds: List<String>.from(allGroupChildIds),
+    printTodoOnConfirm: true,
+    selectedBehaviorIds: selectedBehaviorIds,
+    irregularBehaviorCounts: irregularBehaviorCounts,
+  );
+}
+
 Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   BuildContext context,
   String studentId, {
   DateTime? anchorTime,
+  Set<String>? initialSelectedGroupIds,
+  Map<String, DateTime> initialDueDateByGroupId = const <String, DateTime>{},
 }) async {
   final allItems = HomeworkStore.instance.items(studentId);
   if (allItems.isEmpty) return null;
@@ -314,12 +449,17 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   final nextSessions = options.length > 12 ? options.sublist(0, 12) : options;
   DateTime? selectedDueDate =
       nextSessions.isNotEmpty ? nextSessions.first.dateTime : null;
+  bool dueDateChanged = false;
   final Map<String, bool> selectedGroups = {
-    for (final entry in groupEntries) entry.group.id: true,
+    for (final entry in groupEntries)
+      entry.group.id: initialSelectedGroupIds == null ||
+          initialSelectedGroupIds.contains(entry.group.id),
   };
   final Map<String, bool> selected = {
     for (final entry in groupEntries)
-      for (final c in entry.children) c.id: true,
+      for (final c in entry.children)
+        c.id: initialSelectedGroupIds == null ||
+            initialSelectedGroupIds.contains(entry.group.id),
   };
   final Map<String, bool> selectedBehaviors = {
     for (final b in behaviorAssignments) b.id: !b.isIrregular,
@@ -391,6 +531,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                           onChanged: (v) {
                             setState(() {
                               selectedDueDate = v;
+                              dueDateChanged = true;
                             });
                           },
                           dropdownColor: kDlgBg,
@@ -870,6 +1011,21 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                   Navigator.of(ctx).pop(HomeworkAssignSelection(
                     itemIds: ids,
                     dueDate: selectedDueDate,
+                    dueDateByItemId: <String, DateTime>{
+                      for (final entry in groupEntries)
+                        for (final child in entry.children)
+                          if (ids.contains(child.id) &&
+                              (dueDateChanged
+                                      ? selectedDueDate
+                                      : (initialDueDateByGroupId[
+                                              entry.group.id] ??
+                                          selectedDueDate)) !=
+                                  null)
+                            child.id: (dueDateChanged
+                                ? selectedDueDate!
+                                : (initialDueDateByGroupId[entry.group.id] ??
+                                    selectedDueDate!)),
+                    },
                     selectableItemIds: allGroupChildIds.toList(),
                     printTodoOnConfirm: printTodoOnConfirm,
                     selectedBehaviorIds: selectedBehaviorIds,
@@ -1623,9 +1779,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final hwCount = hw?.count;
     final count = (hwCount != null && hwCount > 0) ? hwCount.toString() : '-';
     final window = _progressWindowForChecks(checks, classDateTime);
-    final int latestDueProgress = dueAssignments.isEmpty
-        ? 0
-        : dueAssignments.last.progress;
+    final int latestDueProgress =
+        dueAssignments.isEmpty ? 0 : dueAssignments.last.progress;
     final previousProgress = hasTodayCheck
         ? window.previous
         : math.max(window.previous, latestDueProgress);
@@ -1797,8 +1952,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         final t = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
         final ct =
             (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
-        subs.add(
-            _SubWorkEntry(title: t, page: p.isEmpty ? '-' : p, count: ct));
+        subs.add(_SubWorkEntry(title: t, page: p.isEmpty ? '-' : p, count: ct));
       }
       if (groupStudyMs <= 0) continue;
       final groupObj = HomeworkStore.instance.groupById(studentId, entry.key);
@@ -2250,7 +2404,11 @@ Future<sf.PdfBitmap?> _loadTodoEmojiBitmap(String assetPath) async {
     );
   }
   if (ratioPct <= 40) {
-    return (asset: 'assets/emoji/emoji_crying.png', label: '많이 덜함', fire: false);
+    return (
+      asset: 'assets/emoji/emoji_crying.png',
+      label: '많이 덜함',
+      fire: false
+    );
   }
   if (ratioPct <= 60) {
     return (asset: 'assets/emoji/emoji_neutral.png', label: '덜함', fire: false);
@@ -2607,8 +2765,7 @@ Future<String> _buildHomeworkTodoPdf({
     final csLine2Font = await _loadTodoPdfFont(9.0);
     double csY = contentTop + 27;
 
-    final hasCheckData =
-        payload.checkRates.any((e) => e.progress != null);
+    final hasCheckData = payload.checkRates.any((e) => e.progress != null);
     if (hasCheckData) {
       // 분자: 오늘 추가된 % 합(정규 오늘검사예정 + 자의 추가분 모두 포함)
       // 분모: 정규 오늘검사예정 과제의 "내준 시점 기준 남은 %"만 합산
@@ -2644,8 +2801,8 @@ Future<String> _buildHomeworkTodoPdf({
         if (mood.fire) {
           final flameBmp = await _loadTodoEmojiBitmap('assets/emoji/flame.png');
           if (flameBmp != null) {
-            graphics.drawImage(flameBmp,
-                Rect.fromLTWH(blockX + emSize - 11, emY - 7, 15, 15));
+            graphics.drawImage(
+                flameBmp, Rect.fromLTWH(blockX + emSize - 11, emY - 7, 15, 15));
           }
         }
       }

@@ -30,8 +30,12 @@
       </section>
 
       <button id="fab" type="button">
-        <span class="fab-icon" aria-hidden="true">&#10003;</span>
-        <span>출석체크</span>
+        <svg class="fab-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <polyline points="4,13 9.5,18.5 20,6"
+                    fill="none" stroke="currentColor" stroke-width="3"
+                    stroke-linecap="square" stroke-linejoin="miter" />
+        </svg>
+        <span>출석</span>
       </button>
     </main>
 
@@ -39,7 +43,10 @@
     <aside id="sheet" aria-hidden="true">
       <div class="sheet-top">
         <button id="searchBtn" type="button" class="search-btn">
-          <span class="search-icon">&#128269;</span>
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2.2" />
+            <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
           <span>학생 이름 검색</span>
         </button>
         <button id="closeBtn" type="button" class="close-btn" aria-label="닫기">&#10005;</button>
@@ -48,6 +55,16 @@
       <div id="studentList" class="student-list"></div>
       <div id="pinPanel" class="pin-panel hidden">
         <div id="pinTitle" class="pin-title"></div>
+        <div id="pinGuide" class="pin-guide"></div>
+        <label id="noticePrintRow" class="notice-print-row hidden">
+          <input type="checkbox" id="noticePrintCheck" checked />
+          <span class="notice-print-box" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><polyline points="4,13 9.5,18.5 20,6"
+              fill="none" stroke="currentColor" stroke-width="3"
+              stroke-linecap="square" stroke-linejoin="miter" /></svg>
+          </span>
+          <span class="notice-print-label">알림장 인쇄</span>
+        </label>
         <div id="pinDots" class="pin-dots"></div>
         <div id="pinFeedback" class="pin-feedback"></div>
         <div id="keypad" class="keypad"></div>
@@ -58,11 +75,28 @@
     <div id="searchOverlay" class="overlay hidden">
       <div class="search-dialog">
         <div class="search-dialog-top">
-          <input id="searchInput" type="text" inputmode="text"
-                 placeholder="학생 이름 또는 초성 검색" autocomplete="off" />
+          <div class="search-field">
+            <svg class="search-field-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2.2" />
+              <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+            </svg>
+            <input id="searchInput" type="text" inputmode="text"
+                   placeholder="학생 이름 또는 초성 검색" autocomplete="off" />
+          </div>
           <button id="searchClose" type="button" class="close-btn dark" aria-label="닫기">&#10005;</button>
         </div>
         <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <!-- 알림장 인쇄 진행 다이얼로그 -->
+    <div id="printOverlay" class="overlay hidden">
+      <div class="print-dialog">
+        <div id="printSpinner" class="spinner spinner-green"></div>
+        <div id="printPercent" class="print-percent">0%</div>
+        <div id="printTitle" class="print-title">알림장 인쇄 중…</div>
+        <div id="printMsg" class="print-msg">잠시만 기다려 주세요</div>
+        <button id="printClose" type="button" class="setup-btn hidden">닫기</button>
       </div>
     </div>
 

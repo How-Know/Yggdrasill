@@ -1068,6 +1068,8 @@ class RightSheetGradingSearchService {
                     'questionIndex': cell.questionIndex,
                     if (cell.questionLabel.trim().isNotEmpty)
                       'questionLabel': cell.questionLabel.trim(),
+                    if (cell.questionCategory.trim().isNotEmpty)
+                      'questionCategory': cell.questionCategory.trim(),
                     'answer': cell.answer,
                     'answerMode': cell.answerMode,
                     if (cell.answerImageUrl.trim().isNotEmpty)

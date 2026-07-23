@@ -135,13 +135,13 @@ html, body {
   bottom: 4vh;
   display: flex;
   align-items: center;
-  gap: 1.2vw;
-  padding: 1.5vh 2.4vw;
+  gap: 1.08vw;
+  padding: 1.35vh 2.16vw;
   border: none;
   border-radius: 999px;
   background: var(--green);
   color: #fff;
-  font-size: 2.2vw;
+  font-size: 1.98vw;
   font-weight: 700;
   box-shadow: 0 0.6vh 2vh rgba(0, 0, 0, 0.33);
   cursor: pointer;
@@ -150,7 +150,7 @@ html, body {
 }
 #fab:active { transform: scale(0.97); }
 #fab.hidden-fade { opacity: 0; pointer-events: none; }
-.fab-icon { font-size: 2.4vw; line-height: 1; }
+.fab-icon { width: 2.2vw; height: 2.2vw; display: block; }
 
 /* ---------------- 슬라이드 시트 ---------------- */
 #sheet {
@@ -158,59 +158,62 @@ html, body {
   top: 0;
   right: 0;
   height: 100vh;
-  width: 40vw;
+  width: 32vw;
   background: var(--sheet-bg);
   border-left: 1px solid rgba(255, 255, 255, 0.1);
-  border-top-left-radius: 3vw;
-  border-bottom-left-radius: 3vw;
-  box-shadow: -1.2vw 0 4vw rgba(0, 0, 0, 0.35);
+  border-top-left-radius: 2.4vw;
+  border-bottom-left-radius: 2.4vw;
+  box-shadow: -1vw 0 3.2vw rgba(0, 0, 0, 0.35);
   transform: translateX(100%);
   transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
   display: flex;
   flex-direction: column;
-  padding: 4vh 2.6vw 3vh;
+  padding: 3.2vh 2.08vw 2.4vh;
   z-index: 30;
   will-change: transform;
+  overflow: hidden;
 }
 #sheet.open { transform: translateX(0); }
 
 .sheet-top {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 1vw;
+  gap: 0.8vw;
 }
 .search-btn {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1vw;
-  height: 8vh;
+  gap: 0.8vw;
+  height: 6.4vh;
   border: none;
-  border-radius: 1.5vw;
+  border-radius: 1.2vw;
   background: rgba(255, 255, 255, 0.09);
   color: #fff;
-  font-size: 1.7vw;
+  font-size: 1.36vw;
   font-weight: 700;
   cursor: pointer;
 }
-.search-icon { font-size: 2vw; }
+.search-icon { width: 1.6vw; height: 1.6vw; }
 .close-btn {
-  width: 6vh;
-  height: 6vh;
+  width: 4.8vh;
+  height: 4.8vh;
   border: none;
   border-radius: 50%;
   background: transparent;
   color: #fff;
-  font-size: 2.4vw;
+  font-size: 1.92vw;
   cursor: pointer;
 }
-.close-btn.dark { color: #333; }
+.close-btn.dark { color: #fff; }
 
 .sheet-label {
-  margin: 2.6vh 0 1.4vh;
+  flex: 0 0 auto;
+  margin: 2.1vh 0 1.1vh;
   color: rgba(255, 255, 255, 0.7);
-  font-size: 1.5vw;
+  font-size: 1.2vw;
   font-weight: 600;
 }
 
@@ -220,32 +223,48 @@ html, body {
   -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
-  gap: 1.6vh;
+  gap: 1.15vh;
   min-height: 0;
+  padding-right: 0.5vw;
 }
-.student-list.shrink { flex: 0 0 26vh; }
+/* 학습앱 스타일 커스텀 스크롤바 */
+.student-list::-webkit-scrollbar,
+.search-results::-webkit-scrollbar { width: 0.55vw; }
+.student-list::-webkit-scrollbar-track,
+.search-results::-webkit-scrollbar-track { background: transparent; }
+.student-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+}
+.student-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.42); }
+.search-results::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+}
+.search-results::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.42); }
 
 .student-card {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 1.5vw;
-  padding: 2.6vh 1.8vw;
-  border-radius: 2vw;
+  gap: 1.08vw;
+  padding: 1.87vh 1.30vw;
+  border-radius: 1.44vw;
   background: var(--card-bg);
   cursor: pointer;
 }
 .student-card.selected { background: var(--card-sel); }
 .student-card .time {
   flex: 0 0 auto;
-  width: 10vw;
-  font-size: 2.2vw;
+  width: 7.2vw;
+  font-size: 1.58vw;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.55);
 }
 .student-card .time.extra { color: #ffc86a; }
 .student-card .name {
   flex: 1;
-  font-size: 3vw;
+  font-size: 2.16vw;
   font-weight: 600;
   color: #fff;
   overflow: hidden;
@@ -254,18 +273,18 @@ html, body {
 }
 .student-card .status {
   flex: 0 0 auto;
-  font-size: 2.2vw;
+  font-size: 1.58vw;
   font-weight: 700;
   color: #79e2ae;
 }
 .student-card .chev {
   flex: 0 0 auto;
-  font-size: 3vw;
+  font-size: 2.16vw;
   color: rgba(255, 255, 255, 0.35);
 }
 .student-list .empty {
   color: rgba(255, 255, 255, 0.38);
-  font-size: 1.6vw;
+  font-size: 1.28vw;
   text-align: center;
   margin-top: 4vh;
 }
@@ -276,47 +295,85 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin-top: 2vh;
+  margin-top: 1.4vh;
 }
 .pin-title {
-  margin-top: 2vh;
   color: #fff;
-  font-size: 2vw;
+  font-size: 1.6vw;
   font-weight: 700;
 }
-.pin-dots {
-  margin-top: 1.4vh;
-  height: 3vw;
+.pin-guide {
+  margin-top: 0.35vh;
+  text-align: center;
+  font-size: 1.16vw;
+  font-weight: 600;
+  color: #79e2ae;
+}
+.pin-guide.checkout { color: #ff8f86; }
+.notice-print-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7vw;
+  margin-top: 1.1vh;
+  cursor: pointer;
+}
+.notice-print-row input { position: absolute; opacity: 0; width: 0; height: 0; }
+.notice-print-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2vw;
+  height: 2.2vw;
+  border-radius: 0.5vw;
+  border: 0.18vw solid rgba(255, 255, 255, 0.4);
+  color: transparent;
+  background: transparent;
+}
+.notice-print-box svg { width: 1.5vw; height: 1.5vw; display: block; }
+.notice-print-row input:checked + .notice-print-box {
+  background: var(--green);
+  border-color: var(--green);
   color: #fff;
-  font-size: 2.6vw;
-  letter-spacing: 0.6vw;
+}
+.notice-print-label {
+  font-size: 1.36vw;
+  font-weight: 700;
+  color: #fff;
+}
+.pin-dots {
+  margin-top: 0.5vh;
+  height: 2.2vw;
+  color: #fff;
+  font-size: 2.08vw;
+  letter-spacing: 0.5vw;
 }
 .pin-feedback {
-  min-height: 4vh;
-  margin-top: 0.8vh;
+  min-height: 3vh;
+  margin-top: 0.5vh;
   text-align: center;
-  font-size: 1.5vw;
+  font-size: 1.2vw;
   color: #ffb0a8;
 }
 .pin-feedback.ok { color: #79e2ae; }
 .keypad {
-  margin-top: 1vh;
+  margin-top: 0.8vh;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.8vw;
+  gap: 0.64vw;
   width: 100%;
 }
 .keypad button {
-  height: 8.5vh;
+  height: 6.6vh;
   border: none;
-  border-radius: 1.2vw;
+  border-radius: 0.96vw;
   background: rgba(255, 255, 255, 0.09);
   color: #fff;
-  font-size: 2.8vw;
+  font-size: 2.24vw;
   font-weight: 600;
   cursor: pointer;
 }
-.keypad button.small { font-size: 1.8vw; }
+.keypad button.small { font-size: 1.44vw; }
 .keypad button:active { background: rgba(255, 255, 255, 0.2); }
 
 /* ---------------- 오버레이 / 다이얼로그 ---------------- */
@@ -332,45 +389,100 @@ html, body {
 .search-dialog {
   width: 60vw;
   max-height: 80vh;
-  background: #fff;
-  border-radius: 2vw;
+  background: var(--sheet-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2.4vw;
+  box-shadow: 0 1vw 3.2vw rgba(0, 0, 0, 0.45);
   padding: 2.4vh 2vw;
   display: flex;
   flex-direction: column;
 }
-.search-dialog-top { display: flex; gap: 1vw; align-items: center; }
+.search-dialog-top { display: flex; gap: 0.8vw; align-items: center; }
+.search-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.8vw;
+  height: 6.4vh;
+  border-radius: 1.2vw;
+  background: rgba(255, 255, 255, 0.09);
+  padding: 0 1.6vw;
+}
+.search-field-icon {
+  flex: 0 0 auto;
+  width: 1.6vw;
+  height: 1.6vw;
+  color: rgba(255, 255, 255, 0.6);
+}
 #searchInput {
   flex: 1;
-  height: 7vh;
+  height: 100%;
   border: none;
-  border-radius: 1.4vw;
-  background: #f1f3f6;
-  padding: 0 1.6vw;
-  font-size: 2vw;
-  color: #111;
+  background: transparent;
+  font-size: 1.8vw;
+  color: #fff;
   outline: none;
 }
+#searchInput::placeholder { color: rgba(255, 255, 255, 0.4); }
 .search-results {
   margin-top: 2vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 1.2vh;
+  gap: 1.15vh;
+  padding-right: 0.5vw;
 }
 .search-results .row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2vh 1.6vw;
-  border-radius: 1.4vw;
-  background: #f1f3f6;
+  padding: 1.87vh 1.6vw;
+  border-radius: 1.44vw;
+  background: var(--card-bg);
   cursor: pointer;
 }
+.search-results .row.selected { background: var(--card-sel); }
 .search-results .row.disabled { opacity: 0.55; }
-.search-results .row .name { font-size: 2vw; font-weight: 700; color: #111; }
-.search-results .row .status { font-size: 1.5vw; font-weight: 600; color: #555; }
-.search-results .row .status.in { color: #299968; }
-.search-results .empty { text-align: center; color: #999; font-size: 1.8vw; padding: 4vh 0; }
+.search-results .row .name { font-size: 2.16vw; font-weight: 700; color: #fff; }
+.search-results .row .status { font-size: 1.58vw; font-weight: 600; color: rgba(255, 255, 255, 0.55); }
+.search-results .row .status.in { color: #79e2ae; }
+.search-results .empty { text-align: center; color: rgba(255, 255, 255, 0.38); font-size: 1.6vw; padding: 4vh 0; }
+
+/* ---------------- 알림장 인쇄 진행 다이얼로그 ---------------- */
+.print-dialog {
+  min-width: 34vw;
+  max-width: 60vw;
+  background: var(--sheet-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2.4vw;
+  box-shadow: 0 1vw 3.2vw rgba(0, 0, 0, 0.45);
+  padding: 5vh 4vw;
+  text-align: center;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.print-dialog .spinner { margin: 0 auto 2vh; }
+.spinner-green { border-top-color: var(--green) !important; }
+.print-percent {
+  font-size: 3.4vw;
+  font-weight: 800;
+  color: #79e2ae;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 1.2vh;
+}
+.print-title { font-size: 2.4vw; font-weight: 700; }
+.print-msg {
+  margin-top: 1.6vh;
+  font-size: 1.5vw;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  min-height: 2vh;
+}
+.print-dialog.done .print-title { color: #79e2ae; }
+.print-dialog.failed .print-title { color: #ff8f86; }
+.print-dialog .setup-btn { margin-top: 3vh; }
 
 /* ---------------- 설정 / 페어링 ---------------- */
 .setup-panel {

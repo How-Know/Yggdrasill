@@ -37,7 +37,8 @@ class ErrorReporter {
     try {
       _logFile = await _resolveLogFile();
       _sink = _logFile!.openWrite(mode: FileMode.writeOnlyAppend);
-      _writeRaw('\n==== Manager session start @ ${DateTime.now().toIso8601String()} ====\n');
+      _writeRaw(
+          '\n==== Manager session start @ ${DateTime.now().toIso8601String()} ====\n');
     } catch (e) {
       debugPrint('[ErrorReporter] failed to open log file: $e');
     }
@@ -57,8 +58,8 @@ class ErrorReporter {
       //   - mouse_tracker.* 카테고리 전체
       //   - 그로 인한 2차 피해 ('Cannot hit test a render box with no size',
       //     'RenderBox was not laid out') 도 프레임당 폭주하므로 같은 취급.
-      final shouldSwallow = category.startsWith('mouse_tracker.')
-          || _isSecondaryLayoutStorm(details);
+      final shouldSwallow = category.startsWith('mouse_tracker.') ||
+          _isSecondaryLayoutStorm(details);
       if (shouldSwallow) {
         return;
       }
@@ -133,6 +134,10 @@ class ErrorReporter {
   bool _isSecondaryLayoutStorm(FlutterErrorDetails details) {
     final msg = details.exceptionAsString();
     if (msg.contains('Cannot hit test a render box with no size')) return true;
+    if (msg.contains(
+        'Cannot hit test a render box that has never been laid out')) {
+      return true;
+    }
     if (msg.contains('RenderBox was not laid out')) return true;
     return false;
   }

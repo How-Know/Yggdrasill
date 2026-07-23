@@ -1683,13 +1683,16 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
   }
 }
 
+/// 오른쪽 채점 시트 실제 폭 — 정답 PDF 패널 rightInset 과 반드시 동일해야
+/// 두 시트가 틈 없이 붙는다.
+/// (+8 4자리 번호, +12 번호 왼쪽 여백, *0.9 시트 10% 축소)
+const double kRightSideSheetPanelWidth =
+    (238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26 + 8 + 12) * 0.9;
+
 class _GlobalRightSheetPdfPanel extends StatelessWidget {
   const _GlobalRightSheetPdfPanel();
 
   static const double _navRailInset = 86.0;
-  // 오른쪽 시트는 채점 전용이므로 이전 채점 확장 폭을 기본 폭으로 사용한다.
-  static const double _rightSheetBaseWidth =
-      238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26;
 
   void _closePanelAndRightSheet() {
     rightSideSheetPdfPanelSession.value = null;
@@ -1712,7 +1715,7 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
         return ValueListenableBuilder<bool>(
           valueListenable: rightSideSheetOpen,
           builder: (context, sheetOpen, __) {
-            final rightInset = sheetOpen ? _rightSheetBaseWidth : 0.0;
+            final rightInset = sheetOpen ? kRightSideSheetPanelWidth : 0.0;
             final overlayEntries = session.overlayEntries
                 .map(
                   (entry) => HomeworkAnswerOverlayEntry(
@@ -6181,8 +6184,8 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      // 오른쪽 시트는 채점 전용이므로 이전 채점 확장 폭을 항상 사용한다.
-      const double panelWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26;
+      // 오른쪽 시트 폭 — 정답 PDF 패널 inset 과 공유 (kRightSideSheetPanelWidth).
+      const double panelWidth = kRightSideSheetPanelWidth;
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,

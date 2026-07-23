@@ -8,8 +8,14 @@
 //
 // actions:
 //   grade     { book_id, grade_label, items: [{crop_id, answer}] }
+//             세트형 파트 채점: items: [{crop_id, parts: [{key, answer}]}]
 //   reveal    { crop_id }                          — self 모드 문항만 정답 공개
+//             세트형이면 parts([{key, mode, text?}] — text는 self 파트만) 동봉
 //   self_mark { book_id, grade_label, crop_id, correct, answer? }
+//             세트형 파트 O/X: { crop_id, part_marks: [{key, correct}] }
+//
+// 세트형 문항은 crop당 기록 하나를 유지하되 part_results에 파트별 결과를
+// 누적하고, is_correct는 서버가 "모든 파트 정답"으로 계산한다.
 //
 // AI 제공자: GEMINI_API_KEY 있으면 Gemini, 없으면 OPENAI_API_KEY 로 OpenAI.
 // 둘 다 없으면 AI 판정 없이 안전한 기본값(단위 주의 표시)으로 동작한다.
@@ -20,6 +26,8 @@ import {
   compareAnswers,
   gradingMode,
   normalizeMathLinear,
+  type SetAnswerPart,
+  splitSetAnswerParts,
 } from './grading.ts';
 
 function json(body: unknown, status = 200) {
@@ -266,6 +274,7 @@ async function upsertRecord(
     correct: boolean;
     gradedBy: 'auto' | 'self';
     flags: string[];
+    partResults?: PartResult[];
   },
 ) {
   const { data: existing } = await admin
@@ -278,23 +287,89 @@ async function upsertRecord(
   const firstCorrectAt = existing?.first_correct_at ??
     (args.correct ? new Date().toISOString() : null);
 
+  const row: Record<string, unknown> = {
+    academy_id: args.academyId,
+    student_id: args.studentId,
+    book_id: args.bookId,
+    grade_label: args.gradeLabel,
+    crop_id: args.cropId,
+    last_answer: args.answer,
+    is_correct: args.correct,
+    attempt_count: (existing?.attempt_count ?? 0) + 1,
+    first_correct_at: firstCorrectAt,
+    graded_by: args.gradedBy,
+    flags: args.flags,
+    updated_at: new Date().toISOString(),
+  };
+  if (args.partResults !== undefined) row.part_results = args.partResults;
+
   await admin.from('student_textbook_answer_records').upsert(
-    {
-      academy_id: args.academyId,
-      student_id: args.studentId,
-      book_id: args.bookId,
-      grade_label: args.gradeLabel,
-      crop_id: args.cropId,
-      last_answer: args.answer,
-      is_correct: args.correct,
-      attempt_count: (existing?.attempt_count ?? 0) + 1,
-      first_correct_at: firstCorrectAt,
-      graded_by: args.gradedBy,
-      flags: args.flags,
-      updated_at: new Date().toISOString(),
-    },
+    row,
     { onConflict: 'student_id,crop_id' },
   );
+}
+
+// ---------------------------------------------------------------------------
+// 세트형 파트 결과
+// ---------------------------------------------------------------------------
+
+interface PartResult {
+  key: string; // '(1)'
+  answer: string | null;
+  correct: boolean;
+  graded_by: 'auto' | 'self';
+  flags: string[];
+}
+
+async function loadPartResults(
+  admin: Admin,
+  studentId: string,
+  cropId: string,
+): Promise<PartResult[]> {
+  const { data } = await admin
+    .from('student_textbook_answer_records')
+    .select('part_results')
+    .eq('student_id', studentId)
+    .eq('crop_id', cropId)
+    .maybeSingle();
+  const raw = data?.part_results;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((p: Record<string, unknown>) => typeof p?.key === 'string')
+    .map((p: Record<string, unknown>) => ({
+      key: String(p.key),
+      answer: p.answer == null ? null : String(p.answer),
+      correct: p.correct === true,
+      graded_by: p.graded_by === 'self' ? 'self' as const : 'auto' as const,
+      flags: Array.isArray(p.flags) ? p.flags.map(String) : [],
+    }));
+}
+
+function mergePartResults(
+  existing: PartResult[],
+  updates: PartResult[],
+): PartResult[] {
+  const byKey = new Map<string, PartResult>();
+  for (const p of existing) byKey.set(p.key, p);
+  for (const p of updates) byKey.set(p.key, p);
+  return [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/** 모든 파트가 채점되어 정답일 때만 true — is_correct의 세트형 정의. */
+function allPartsCorrect(
+  setParts: SetAnswerPart[],
+  results: PartResult[],
+): boolean {
+  const byKey = new Map(results.map((p) => [p.key, p]));
+  return setParts.every((part) => byKey.get(part.key)?.correct === true);
+}
+
+/** 파트별 답을 사람이 읽을 수 있는 한 줄로 합성 (last_answer 표시용). */
+function composePartAnswer(results: PartResult[]): string | null {
+  const chunks = results
+    .filter((p) => (p.answer ?? '').trim() !== '')
+    .map((p) => `${p.key} ${p.answer!.trim()}`);
+  return chunks.length === 0 ? null : chunks.join('  ');
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +413,23 @@ const answerTextOf = (c: CropRow) =>
   c.textbook_problem_answers?.answer_latex_2d ??
   null;
 
+// 신고로 보류(open/accepted)된 문항은 채점·기록하지 않는다.
+async function isCropOnHold(
+  admin: Admin,
+  studentId: string,
+  cropId: string,
+): Promise<boolean> {
+  const { data } = await admin
+    .from('student_textbook_problem_reports')
+    .select('id')
+    .eq('student_id', studentId)
+    .eq('crop_id', cropId)
+    .in('status', ['open', 'accepted'])
+    .limit(1)
+    .maybeSingle();
+  return data != null;
+}
+
 async function actionGrade(
   admin: Admin,
   student: { academyId: string; studentId: string },
@@ -358,9 +450,11 @@ async function actionGrade(
   let wrongCount = 0;
 
   for (const raw of items) {
-    const cropId = String((raw as Record<string, unknown>)?.crop_id ?? '');
-    const answer = String((raw as Record<string, unknown>)?.answer ?? '').trim();
-    if (!cropId || !answer) continue;
+    const rawItem = raw as Record<string, unknown>;
+    const cropId = String(rawItem?.crop_id ?? '');
+    const answer = String(rawItem?.answer ?? '').trim();
+    const rawParts = Array.isArray(rawItem?.parts) ? rawItem.parts : null;
+    if (!cropId || (!answer && !(rawParts && rawParts.length > 0))) continue;
 
     const crop = await loadCrop(admin, cropId);
     if (
@@ -376,8 +470,104 @@ async function actionGrade(
 
     const kind = crop.textbook_problem_answers.answer_kind;
     const correctAnswer = answerTextOf(crop);
+
+    // 세트형 파트 채점: 파트 정답이 파싱되고 파트 답이 제출된 경우
+    const setParts = kind === 'subjective'
+      ? splitSetAnswerParts(correctAnswer)
+      : null;
+    if (setParts !== null && rawParts !== null && rawParts.length > 0) {
+      if (await isCropOnHold(admin, student.studentId, cropId)) {
+        results.push({ crop_id: cropId, skipped: 'on_hold' });
+        continue;
+      }
+      const partByKey = new Map(setParts.map((p) => [p.key, p]));
+      const updates: PartResult[] = [];
+      const partOutcomes: Record<string, unknown>[] = [];
+      for (const rawPart of rawParts) {
+        const partRecord = rawPart as Record<string, unknown>;
+        const key = String(partRecord?.key ?? '');
+        const partAnswer = String(partRecord?.answer ?? '').trim();
+        const partDef = partByKey.get(key);
+        if (!partDef || !partAnswer) continue;
+        if (gradingMode('subjective', partDef.text) !== 'auto') {
+          partOutcomes.push({ key, skipped: 'self_mode' });
+          continue;
+        }
+        const out = compareAnswers('subjective', partDef.text, partAnswer);
+        let partCorrect = out.correct;
+        let partFlags = [...out.flags];
+        if (out.needsUnitAi) {
+          let specified: boolean | null = null;
+          try {
+            specified = await judgeUnitSpecified(admin, crop);
+          } catch (_) {
+            specified = null;
+          }
+          if (specified !== false) partFlags.push('unit_caution');
+        }
+        if (out.needsEquivAi) {
+          try {
+            const eq = await judgeEquivalence(
+              admin,
+              crop,
+              partDef.text,
+              partAnswer,
+            );
+            if (eq === true) {
+              partCorrect = true;
+              partFlags = partFlags.filter((f) => f !== 'form_differs');
+            }
+          } catch (_) {
+            // AI 실패 시 결정적 결과(오답) 유지
+          }
+        }
+        updates.push({
+          key,
+          answer: partAnswer,
+          correct: partCorrect,
+          graded_by: 'auto',
+          flags: partFlags,
+        });
+        partOutcomes.push({ key, correct: partCorrect, flags: partFlags });
+        if (partCorrect) correctCount += 1;
+        else wrongCount += 1;
+      }
+      if (updates.length === 0) {
+        results.push({ crop_id: cropId, parts: partOutcomes });
+        continue;
+      }
+      const merged = mergePartResults(
+        await loadPartResults(admin, student.studentId, cropId),
+        updates,
+      );
+      const overall = allPartsCorrect(setParts, merged);
+      await upsertRecord(admin, {
+        academyId: student.academyId,
+        studentId: student.studentId,
+        bookId,
+        gradeLabel,
+        cropId,
+        answer: composePartAnswer(merged),
+        correct: overall,
+        gradedBy: 'auto',
+        flags: [],
+        partResults: merged,
+      });
+      results.push({
+        crop_id: cropId,
+        correct: overall,
+        parts: partOutcomes,
+        part_results: merged,
+      });
+      continue;
+    }
+
     if (gradingMode(kind, correctAnswer) !== 'auto' || correctAnswer === null) {
       continue; // self 모드 문항은 grade 대상 아님
+    }
+    if (await isCropOnHold(admin, student.studentId, cropId)) {
+      results.push({ crop_id: cropId, skipped: 'on_hold' });
+      continue;
     }
 
     const out = compareAnswers(kind, correctAnswer, answer);
@@ -479,12 +669,31 @@ async function actionReveal(
   // 텍스트 정답은 LaTeX 원문 대신 학생이 읽을 수 있는 선형 표기로 변환해 반환
   const displayText = normalizeMathLinear(answerTextOf(crop));
 
+  // 세트형이면 파트 정보 동봉 — 정답 텍스트는 self 파트만 포함해
+  // 자동 채점 파트의 정답이 미리 새지 않게 한다.
+  const setParts = answers.answer_kind === 'subjective'
+    ? splitSetAnswerParts(answerTextOf(crop))
+    : null;
+  const parts = setParts?.map((part) => {
+    const mode = gradingMode('subjective', part.text);
+    return {
+      key: part.key,
+      mode,
+      text: mode === 'self' ? (normalizeMathLinear(part.text) || part.text) : null,
+    };
+  }) ?? null;
+
+  // 자동 채점 파트가 하나라도 있으면 전체 정답(텍스트/렌더)은 감춘다 —
+  // 전체 정답에 자동 파트의 답이 포함되어 있기 때문.
+  const hasAutoPart = parts?.some((p) => p.mode === 'auto') ?? false;
+
   return json({
     ok: true,
     answer_kind: answers.answer_kind,
-    answer_text: displayText || answers.answer_text,
-    answer_latex_2d: answers.answer_latex_2d,
-    image_url: imageUrl,
+    answer_text: hasAutoPart ? null : (displayText || answers.answer_text),
+    answer_latex_2d: hasAutoPart ? null : answers.answer_latex_2d,
+    image_url: hasAutoPart ? null : imageUrl,
+    parts,
   });
 }
 
@@ -510,6 +719,57 @@ async function actionSelfMark(
     crop.grade_label !== gradeLabel
   ) {
     return json({ ok: false, error: 'not_found' }, 404);
+  }
+
+  if (await isCropOnHold(admin, student.studentId, cropId)) {
+    return json({ ok: false, error: 'on_hold' }, 409);
+  }
+
+  // 세트형 파트 O/X: part_marks가 오고 파트 정답이 파싱되는 경우
+  const rawMarks = Array.isArray(body.part_marks) ? body.part_marks : null;
+  const answers = crop.textbook_problem_answers;
+  const setParts = answers?.answer_kind === 'subjective'
+    ? splitSetAnswerParts(answerTextOf(crop))
+    : null;
+  if (rawMarks !== null && rawMarks.length > 0 && setParts !== null) {
+    const partByKey = new Map(setParts.map((p) => [p.key, p]));
+    const updates: PartResult[] = [];
+    for (const rawMark of rawMarks) {
+      const markRecord = rawMark as Record<string, unknown>;
+      const key = String(markRecord?.key ?? '');
+      const partDef = partByKey.get(key);
+      if (!partDef) continue;
+      // self 파트만 자기 채점 허용 (auto 파트는 grade 액션으로만)
+      if (gradingMode('subjective', partDef.text) !== 'self') continue;
+      updates.push({
+        key,
+        answer: markRecord?.answer == null ? null : String(markRecord.answer),
+        correct: markRecord?.correct === true,
+        graded_by: 'self',
+        flags: [],
+      });
+    }
+    if (updates.length === 0) {
+      return json({ ok: false, error: 'invalid_part_marks' }, 400);
+    }
+    const merged = mergePartResults(
+      await loadPartResults(admin, student.studentId, cropId),
+      updates,
+    );
+    const overall = allPartsCorrect(setParts, merged);
+    await upsertRecord(admin, {
+      academyId: student.academyId,
+      studentId: student.studentId,
+      bookId,
+      gradeLabel,
+      cropId,
+      answer: composePartAnswer(merged) ?? answer,
+      correct: overall,
+      gradedBy: 'self',
+      flags: [],
+      partResults: merged,
+    });
+    return json({ ok: true, correct: overall, part_results: merged });
   }
 
   await upsertRecord(admin, {

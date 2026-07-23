@@ -6521,6 +6521,10 @@ export function buildAnswerTexSource(answer, options = {}) {
     textColor = '000000',
     backgroundColor = 'FFFFFF',
     maxWidthCm = 13.5,
+    // v11 uniform-line 모드: 모든 줄에 고정 스트럿(어센더+디센더 박스)을 깔아
+    // 한 줄짜리 정답이 내용과 무관하게 동일한 TeX 박스 높이를 갖게 한다.
+    // (크롭은 렌더러에서 잉크 기준이 아닌 페이지=박스 기준으로 수행)
+    uniformLineBox = false,
   } = options;
 
   const safeFontSize = Math.max(8, Math.min(32, Number(fontSizePt) || 18));
@@ -6528,18 +6532,21 @@ export function buildAnswerTexSource(answer, options = {}) {
   const safeWidth = Math.max(4, Math.min(18, Number(maxWidthCm) || 13.5));
   const colorHex = String(textColor || '000000').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || '000000';
   const backgroundHex = String(backgroundColor || 'FFFFFF').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || 'FFFFFF';
+  // 스트럿: 높이 1.05em / 깊이 0.45em — 한글+수식 혼용 기준으로 어센더·디센더를
+  // 모두 덮는 고정 줄박스. 분수 등 tall math 는 자연히 더 커진다(=2줄 취급).
+  const strut = uniformLineBox ? '\\YggUniformStrut{}' : '';
   const bodyLines = splitAnswerRenderLines(answer)
     .map((line) => {
       const subpart = answerSubpartLine(line);
       if (!subpart) {
         const tex = scaleAnswerCjkTextInTex(smartTexLine(line, []), answerCjkFontSize);
-        return tex && tex.trim() ? `{${tex}\\par}` : '';
+        return tex && tex.trim() ? `{${strut}${tex}\\par}` : '';
       }
       const label = escapeLatexText(subpart.label);
       const valueTex = scaleAnswerCjkTextInTex(smartTexLine(subpart.value, []), answerCjkFontSize);
       return [
         '\\noindent\\begin{tabular}{@{}l@{\\hspace{0.58em}}>{\\raggedright\\arraybackslash}p{\\dimexpr\\linewidth-2.65em\\relax}@{}}',
-        `{${label}} & {${valueTex}}`,
+        `{${strut}${label}} & {${strut}${valueTex}}`,
         '\\end{tabular}\\par',
       ].join('');
     })
@@ -6577,6 +6584,17 @@ export function buildAnswerTexSource(answer, options = {}) {
     ...boxMathVisualCenterMacroLines(),
     ...setBuilderMacroLines(),
     '\\providecommand{\\questionnumber}[1]{\\textbf{#1}}',
+    // 균일 줄박스 스트럿 (uniformLineBox 모드에서만 본문에 삽입됨).
+    '\\newcommand{\\YggUniformStrut}{\\rule[-0.45em]{0pt}{1.5em}}',
+    // uniform 모드: 지수/첨자(script style) 자리의 \dfrac 을 자동 축소되는
+    // 원본 \frac 으로 강등 (v1 템플릿과 동일 규칙).
+    ...(uniformLineBox
+      ? [
+        '\\let\\YggOrigDfrac\\dfrac',
+        '\\let\\YggOrigFrac\\frac',
+        '\\renewcommand{\\dfrac}[2]{\\mathchoice{\\YggOrigDfrac{#1}{#2}}{\\YggOrigDfrac{#1}{#2}}{\\YggOrigFrac{#1}{#2}}{\\YggOrigFrac{#1}{#2}}}',
+      ]
+      : []),
     '',
     fontSpecDirective(fontRegularPath, fontFamily, fontBold),
     hangulFontDirective(fontRegularPath, fontFamily, fontBold),
@@ -8068,6 +8086,10 @@ function buildSlotMeasureDocumentLatex(visualQList, {
   parts.push('\\newbox\\YggSlotMeasureBox');
   parts.push('\\immediate\\write\\YggSlotHgtOut{COLW:\\the\\dimexpr 0.4775\\linewidth-4pt\\relax}');
   parts.push('\\immediate\\write\\YggSlotHgtOut{NORMALH:\\the\\textheight}');
+  // 단일 문항 크롭용 — 일반 페이지에서 본문 텍스트 영역이 시작하는 절대 좌표.
+  // (종이 상단/좌측 가장자리 기준. 크롭 시 상단 여백·헤더 영역을 제외하는 데 쓴다.)
+  parts.push('\\immediate\\write\\YggSlotHgtOut{BODYTOP:\\the\\dimexpr 1in+\\voffset+\\topmargin+\\headheight+\\headsep\\relax}');
+  parts.push('\\immediate\\write\\YggSlotHgtOut{BODYLEFT:\\the\\dimexpr 1in+\\hoffset+\\oddsidemargin\\relax}');
   // 제목페이지 geometry 의 textheight 도 측정 (buildDocumentTexSource 의 titleGeom 과 동일 값).
   const titleTopMm = isAssignmentProfile ? '36.81mm' : '52.59mm';
   const titleHeadSepPt = isAssignmentProfile ? '27.08pt' : '38.68pt';
@@ -8153,6 +8175,10 @@ export function buildDocumentTexSource(questions, options = {}) {
     layoutMeta = null,
     // 측정 패스 모드: 페이지를 만들지 않고 문항별 조판 높이만 .hgt 로 기록하는 문서 생성.
     slotHeightMeasure = false,
+    // 단일 문항 콘텐츠 페이지 모드(학생앱 문항 뷰). multicols 의 마지막 페이지
+    // 균형 배치가 짧은 문항을 좌/우 단으로 갈라놓으면(줄기는 왼쪽, 보기는
+    // 오른쪽) 왼쪽 단 크롭에서 보기가 사라지므로, 균형 배치 없는 multicols* 를 쓴다.
+    singleQuestionContentPage = false,
     // 측정 패스 결과. { heightsPt: number[], normalColumnHeightPt, titleColumnHeightPt, fillRatio }
     //   있으면 mock/assignment 그리드 배치를 휴리스틱 대신 측정 높이 기반으로 결정한다.
     measuredSlotPlan = null,
@@ -8682,7 +8708,14 @@ export function buildDocumentTexSource(questions, options = {}) {
       if (pageIdx > 0) parts.push('\\newpage\n');
 
       if (columns >= 2) {
-        parts.push(`\\begin{multicols}{${columns}}\n`);
+        // multicols(비스타 버전)는 마지막 페이지에서 좌우 단을 균형 배치해
+        // 단일 문항도 줄기/보기가 두 단으로 갈라질 수 있다. 단일 문항 모드는
+        // 왼쪽 단만 크롭하므로 균형 배치 없는 multicols* 를 쓴다.
+        parts.push(
+          singleQuestionContentPage
+            ? `\\begin{multicols*}{${columns}}\n`
+            : `\\begin{multicols}{${columns}}\n`,
+        );
       }
 
       for (let i = 0; i < pageQuestions.length; i++) {
@@ -8729,7 +8762,11 @@ export function buildDocumentTexSource(questions, options = {}) {
       }
 
       if (columns >= 2) {
-        parts.push('\\end{multicols}\n');
+        parts.push(
+          singleQuestionContentPage
+            ? '\\end{multicols*}\n'
+            : '\\end{multicols}\n',
+        );
       }
     }
   }

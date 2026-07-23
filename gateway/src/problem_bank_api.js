@@ -4033,6 +4033,40 @@ const UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS = {
   topBleedPx: 0,
   strokePx: 0,
 };
+// v11 uniform-line 파일럿 스타일:
+//   * 모든 줄에 고정 스트럿을 깔고(uniformLineBox), 잉크 크롭 대신
+//     TeX 박스(=페이지) 기준으로 잘라 한 줄짜리 정답 높이를 통일한다.
+//   * 세트형 정답은 파트별 이미지를 추가로 렌더한다 (answer_kind 'subjective#(1)').
+//   * 행 높이는 줄 단위 사다리로 양자화해 내려준다.
+const UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11 = 'answer-xelatex-v11-uniform-line';
+const UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS = [
+  UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+  UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11,
+];
+const UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS = {
+  // 세로는 스트럿이 만든 고정 높이를 유지하고, 가로만 잉크 기준으로 크롭한다.
+  // (가로를 페이지 전체로 두면 클라이언트에서 컨테이너에 맞춰 축소되어
+  //  세트형 파트/일반형 간 글자 크기가 달라 보이는 문제가 있었음)
+  cropToInk: 'horizontal',
+  paddingPx: 3,
+  topPaddingPx: 0,
+  bottomPaddingPx: 0,
+  alphaGamma: 0.56,
+  cropAlphaThreshold: 1,
+  topBleedPx: 0,
+  strokePx: 0,
+};
+// v11 행 높이 양자화 상수 (pt == dp, dpi = 72 * pixel_ratio 기준).
+// 템플릿 rev2(상하 보더 2.5pt) 실측: 일반 한 줄 27.6dp, dfrac 한 줄 34.4dp,
+// 두 줄 wrap 57.5dp.
+// base: 분수 한 줄까지 같은 행 높이로 통일 → 35.
+// step: 줄이 하나 늘 때 증가분 → 30.
+const UNIFIED_ANSWER_RENDER_V11_ROW_BASE_DP =
+  Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_V11_ROW_BASE_DP || '35') || 35;
+const UNIFIED_ANSWER_RENDER_V11_ROW_STEP_DP =
+  Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_V11_ROW_STEP_DP || '30') || 30;
+// 개념원리 '확인 체크'류는 (1)~(10)까지 있어 상한 12 (SQL/Edge 파서와 동일).
+const UNIFIED_ANSWER_RENDER_MAX_SET_PARTS = 12;
 const ANSWER_RENDER_CONCURRENCY = Math.max(
   1,
   Math.min(4, Number.parseInt(process.env.PB_ANSWER_RENDER_CONCURRENCY || '2', 10) || 2),
@@ -4260,18 +4294,76 @@ function pbAnswerTextForUnifiedRenderKind(questionRow, answerKindRaw) {
   return pbSubjectiveAnswerFromObjectiveChoiceText(questionRow);
 }
 
+// 세트형 정답 파서 — grading.ts(splitSetAnswerParts) / SQL(_split_set_answer_parts)과
+// 동일 규칙: (1)부터 1씩 증가하는 순차 마커만 인정, 마커는 시작 또는 공백 뒤,
+// 파트 내용이 비면 그 후보는 이전 파트의 내용으로 취급. 애매하면 null.
+function splitSetAnswerPartsForRender(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const markerRe = /^[(（]\s*(\d{1,2})\s*[)）]/;
+  const parts = [];
+  let expected = 1;
+  let contentStart = null;
+  let i = 0;
+  while (i < text.length) {
+    const head = text.slice(i);
+    const match = head.match(markerRe);
+    if (match && Number.parseInt(match[1], 10) === expected) {
+      const prevCh = i === 0 ? ' ' : text[i - 1];
+      if (/\s/.test(prevCh)) {
+        if (expected === 1) {
+          if (text.slice(0, i).trim() === '') {
+            contentStart = i + match[0].length;
+            expected = 2;
+            i += match[0].length;
+            continue;
+          }
+        } else {
+          const partText = text.slice(contentStart, i).trim();
+          if (partText !== '') {
+            parts.push({ key: `(${expected - 1})`, text: partText });
+            contentStart = i + match[0].length;
+            expected += 1;
+            i += match[0].length;
+            continue;
+          }
+        }
+      }
+    }
+    i += 1;
+  }
+  if (expected < 3) return null;
+  const last = text.slice(contentStart).trim();
+  if (!last) return null;
+  parts.push({ key: `(${expected - 1})`, text: last });
+  if (parts.length > UNIFIED_ANSWER_RENDER_MAX_SET_PARTS) return null;
+  return parts;
+}
+
+function normalizeUnifiedAnswerRenderStyleVersion(raw) {
+  const style = String(raw || '').trim();
+  return UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS.includes(style)
+    ? style
+    : UNIFIED_ANSWER_RENDER_STYLE_VERSION;
+}
+
 function unifiedAnswerRenderDescriptor({
   sourceKind,
   sourceId,
   answerKind,
   answerText,
+  styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+  partKey = '',
 }) {
   const safeSourceKind = String(sourceKind || '').trim();
   const safeSourceId = String(sourceId || '').trim();
   const safeAnswerKind = normalizeUnifiedAnswerKind(answerKind);
   const safeAnswerText = normalizeAnswerValueForTexRender(answerText);
+  const safeStyle = normalizeUnifiedAnswerRenderStyleVersion(styleVersion);
+  const safePartKey = String(partKey || '').trim();
   if (!['textbook_crop', 'pb_question'].includes(safeSourceKind)) return null;
   if (!isUuid(safeSourceId) || !safeAnswerText) return null;
+  const isV11 = safeStyle === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
   const sourceHash = createHash('sha256')
     .update(JSON.stringify({
       source_kind: safeSourceKind,
@@ -4279,27 +4371,67 @@ function unifiedAnswerRenderDescriptor({
       answer_kind: safeAnswerKind,
       answer: safeAnswerText,
       engine: UNIFIED_ANSWER_RENDER_ENGINE,
-      style_version: UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+      style_version: safeStyle,
       font_size_pt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
       max_width_cm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
       text_color: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
       background_color: UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
       pixel_ratio: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
-      transparent: false,
-      transparent_options: UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
+      // v11 은 배경 없는 알파 글리프 PNG 로 굽고 앱에서 테마 색을 입힌다
+      // (라이트=검정, 다크=흰색). v10 해시는 그대로 유지된다.
+      transparent: isV11,
+      transparent_options: isV11
+        ? UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS
+        : UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
+      // v10 해시 불변 유지: v11에서만 추가 필드를 포함한다.
+      // uniform_line 은 v11 템플릿 리비전 — 템플릿(보더/지수분수 강등 등)이
+      // 바뀌면 값을 올려 기존 v11 자산을 재렌더시킨다.
+      ...(isV11 ? { part_key: safePartKey, uniform_line: 2 } : {}),
     }))
     .digest('hex');
   return {
     sourceKind: safeSourceKind,
     sourceId: safeSourceId,
-    answerKind: safeAnswerKind,
+    // 파트 렌더는 answer_kind 에 '#(n)' 을 붙여 기존 유니크 키를 재사용한다.
+    answerKind: safePartKey ? `${safeAnswerKind}#${safePartKey}` : safeAnswerKind,
     answerText: safeAnswerText,
+    styleVersion: safeStyle,
     sourceHash,
-    storagePath: `academies/${safeSourceKind}/${safeSourceId}/${UNIFIED_ANSWER_RENDER_STYLE_VERSION}/${sourceHash}.png`,
+    storagePath: `academies/${safeSourceKind}/${safeSourceId}/${safeStyle}/${sourceHash}.png`,
   };
 }
 
-function textbookAnswerUnifiedDescriptor(answerRow) {
+// 세트형이면 파트별 파일럿 렌더 디스크립터를 추가로 만든다 (v11 전용).
+function unifiedAnswerPartDescriptors({
+  sourceKind,
+  sourceId,
+  answerKind,
+  answerText,
+  styleVersion,
+}) {
+  if (normalizeUnifiedAnswerRenderStyleVersion(styleVersion)
+      !== UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11) {
+    return [];
+  }
+  if (normalizeUnifiedAnswerKind(answerKind) !== 'subjective') return [];
+  const parts = splitSetAnswerPartsForRender(answerText);
+  if (!parts) return [];
+  return parts
+    .map((part) => unifiedAnswerRenderDescriptor({
+      sourceKind,
+      sourceId,
+      answerKind,
+      answerText: part.text,
+      styleVersion,
+      partKey: part.key,
+    }))
+    .filter(Boolean);
+}
+
+function textbookAnswerUnifiedDescriptor(
+  answerRow,
+  { styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION } = {},
+) {
   const cropId = String(answerRow?.crop_id || '').trim();
   const answerText = normalizeTextbookAnswerForRender(answerRow);
   if (!isUuid(cropId) || !answerText) return null;
@@ -4308,10 +4440,29 @@ function textbookAnswerUnifiedDescriptor(answerRow) {
     sourceId: cropId,
     answerKind: answerRow?.answer_kind,
     answerText,
+    styleVersion,
   });
 }
 
-function pbAnswerUnifiedDescriptors(questionRow) {
+function textbookAnswerUnifiedDescriptorsWithParts(answerRow, { styleVersion } = {}) {
+  const main = textbookAnswerUnifiedDescriptor(answerRow, { styleVersion });
+  if (!main) return [];
+  return [
+    main,
+    ...unifiedAnswerPartDescriptors({
+      sourceKind: 'textbook_crop',
+      sourceId: String(answerRow?.crop_id || '').trim(),
+      answerKind: answerRow?.answer_kind,
+      answerText: normalizeTextbookAnswerForRender(answerRow),
+      styleVersion,
+    }),
+  ];
+}
+
+function pbAnswerUnifiedDescriptors(
+  questionRow,
+  { styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION } = {},
+) {
   const sourceId = String(questionRow?.id || '').trim();
   if (!isUuid(sourceId)) return [];
   const out = [];
@@ -4322,8 +4473,18 @@ function pbAnswerUnifiedDescriptors(questionRow) {
       sourceId,
       answerKind,
       answerText,
+      styleVersion,
     });
-    if (descriptor) out.push(descriptor);
+    if (descriptor) {
+      out.push(descriptor);
+      out.push(...unifiedAnswerPartDescriptors({
+        sourceKind: 'pb_question',
+        sourceId,
+        answerKind,
+        answerText,
+        styleVersion,
+      }));
+    }
   }
   return out;
 }
@@ -4353,6 +4514,25 @@ function computeRightSheetAnswerDisplayMetrics(row) {
   const naturalHeight = heightPx > 0 ? heightPx / pixelRatio : 38;
   const displayHeight = naturalHeight;
   const displayWidth = naturalWidth;
+  const styleVersion = String(row?.style_version || row?.styleVersion || '').trim();
+  if (styleVersion === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11) {
+    // 줄 수 사다리로 행 높이를 양자화한다. 스트럿보다 큰 콘텐츠(분수 등)는
+    // 위로 올림해 절대 잘리지 않게 한다.
+    const base = UNIFIED_ANSWER_RENDER_V11_ROW_BASE_DP;
+    const step = UNIFIED_ANSWER_RENDER_V11_ROW_STEP_DP;
+    const tolerance = 3;
+    const lines = Math.max(
+      1,
+      Math.ceil((displayHeight - base - tolerance) / step) + 1,
+    );
+    const snapped = Math.max(displayHeight, base + step * (lines - 1));
+    return {
+      display_width_dp: Number(displayWidth.toFixed(2)),
+      display_height_dp: Number(displayHeight.toFixed(2)),
+      row_height_dp: Number(Math.max(46, snapped + 18).toFixed(2)),
+      layout_profile: 'rightsheet_xelatex_uniform_line_v11',
+    };
+  }
   const rowHeight = Math.max(46, displayHeight + 18);
   return {
     display_width_dp: Number(displayWidth.toFixed(2)),
@@ -4378,11 +4558,15 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
       ? body.styleVersions
       : [])
     .map((style) => String(style || '').trim())
-    .filter(Boolean);
-  const orderedStyles = [UNIFIED_ANSWER_RENDER_STYLE_VERSION];
+    .filter((style) => UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS.includes(style));
+  // 요청한 스타일(허용 목록 내)을 우선순위대로 존중하고, 없으면 기본 v10.
+  const orderedStyles = styleVersions.length > 0
+    ? [...new Set(styleVersions)]
+    : [UNIFIED_ANSWER_RENDER_STYLE_VERSION];
   const requestedAnswerKind = normalizeUnifiedAnswerKind(
     body?.answer_kind || body?.answerKind || 'subjective',
   );
+  const wantsV11 = orderedStyles[0] === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
 
   if (!isUuid(academyId)) {
     sendJson(res, 400, { ok: false, error: 'academy_id(uuid) required' });
@@ -4401,56 +4585,95 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     return;
   }
 
+  // 파트 렌더(answer_kind 'subjective#(1)'…)도 함께 조회한다 (v11 전용 행).
+  const answerKindCandidates = [
+    requestedAnswerKind,
+    ...Array.from(
+      { length: UNIFIED_ANSWER_RENDER_MAX_SET_PARTS },
+      (_, idx) => `${requestedAnswerKind}#(${idx + 1})`,
+    ),
+  ];
   const { data, error } = await supa
     .from('answer_render_assets')
     .select(
       'source_id, answer_kind, engine, storage_bucket, storage_path, width_px, height_px, '
-      + 'pixel_ratio, style_version, render_error',
+      + 'pixel_ratio, style_version, render_error, transparent',
     )
     .eq('academy_id', academyId)
     .eq('source_kind', sourceKind)
-    .eq('answer_kind', requestedAnswerKind)
+    .in('answer_kind', answerKindCandidates)
     .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
     .eq('render_error', '')
     .in('source_id', sourceIds)
-    .eq('style_version', UNIFIED_ANSWER_RENDER_STYLE_VERSION);
+    .in('style_version', orderedStyles);
   if (error) {
     sendJson(res, 500, { ok: false, error: `answer_render_assets_resolve_failed: ${error.message || error}` });
     return;
   }
 
   const styleRank = new Map(orderedStyles.map((style, index) => [style, index]));
-  const bestBySourceId = new Map();
+  // 키 = `${sourceId}\n${answerKind}` — 파트 행은 별도 엔트리로 유지된다.
+  const bestByEntryKey = new Map();
   for (const row of Array.isArray(data) ? data : []) {
     const sourceId = String(row?.source_id || '').trim();
     const style = String(row?.style_version || '').trim();
-    if (!sourceId || !style) continue;
-    const previous = bestBySourceId.get(sourceId);
+    const answerKind = String(row?.answer_kind || '').trim();
+    if (!sourceId || !style || !answerKind) continue;
+    const entryKey = `${sourceId}\n${answerKind}`;
+    const previous = bestByEntryKey.get(entryKey);
     const rank = styleRank.get(style) ?? 999;
     const previousRank = previous ? (styleRank.get(previous.style_version) ?? 999) : 999;
-    if (!previous || rank < previousRank) bestBySourceId.set(sourceId, row);
+    if (!previous || rank < previousRank) bestByEntryKey.set(entryKey, row);
   }
 
   const renders = [];
+  const v11MissingSourceIds = [];
   for (const sourceId of sourceIds) {
-    const row = bestBySourceId.get(sourceId);
-    if (!row) continue;
-    const url = await createAnswerRenderAssetSignedUrl(row.storage_bucket, row.storage_path);
-    if (!url) continue;
-    const displayMetrics = computeRightSheetAnswerDisplayMetrics(row);
-    renders.push({
-      key: sourceId,
-      source_id: sourceId,
-      answer_kind: String(row.answer_kind || '').trim(),
-      url,
-      width: Number(row.width_px || 0),
-      height: Number(row.height_px || 0),
-      pixelRatio: Number(row.pixel_ratio || UNIFIED_ANSWER_RENDER_PIXEL_RATIO),
-      styleVersion: String(row.style_version || '').trim(),
-      engine: String(row.engine || '').trim(),
-      ...displayMetrics,
-      cached: true,
-      error: '',
+    const mainRow = bestByEntryKey.get(`${sourceId}\n${requestedAnswerKind}`);
+    if (wantsV11) {
+      const mainStyle = String(mainRow?.style_version || '').trim();
+      if (mainStyle !== UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11) {
+        v11MissingSourceIds.push(sourceId);
+      }
+    }
+    for (const answerKind of answerKindCandidates) {
+      const row = bestByEntryKey.get(`${sourceId}\n${answerKind}`);
+      if (!row) continue;
+      const url = await createAnswerRenderAssetSignedUrl(row.storage_bucket, row.storage_path);
+      if (!url) continue;
+      const partKey = answerKind.includes('#')
+        ? answerKind.slice(answerKind.indexOf('#') + 1)
+        : '';
+      const displayMetrics = computeRightSheetAnswerDisplayMetrics(row);
+      renders.push({
+        key: partKey ? `${sourceId}#${partKey}` : sourceId,
+        source_id: sourceId,
+        answer_kind: String(row.answer_kind || '').trim(),
+        part_key: partKey,
+        url,
+        width: Number(row.width_px || 0),
+        height: Number(row.height_px || 0),
+        pixelRatio: Number(row.pixel_ratio || UNIFIED_ANSWER_RENDER_PIXEL_RATIO),
+        styleVersion: String(row.style_version || '').trim(),
+        engine: String(row.engine || '').trim(),
+        // 알파 글리프 PNG 여부 — true 면 앱이 테마 색으로 틴트해 그린다.
+        transparent: row.transparent === true,
+        ...displayMetrics,
+        cached: true,
+        error: '',
+      });
+    }
+  }
+
+  // v11 파일럿: 요청 소스 전체를 백그라운드 백필에 넘긴다. 백필이 소스 해시를
+  // 비교해 (a) v11 자산이 없거나 (b) 템플릿 리비전이 바뀌어 해시가 달라졌거나
+  // (c) 파트 렌더가 아직 없는 것만 실제로 렌더하므로, 최신 상태면 조회만 하고
+  // 끝난다. (이번 응답은 기존/폴백 자산을 그대로 내려주고 다음 열람부터 반영)
+  if (wantsV11 && sourceIds.length > 0) {
+    scheduleUnifiedAnswerRenderV11Backfill({
+      academyId,
+      sourceKind,
+      sourceIds,
     });
   }
 
@@ -4460,8 +4683,55 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     source_kind: sourceKind,
     answer_kind: requestedAnswerKind,
     requested: sourceIds.length,
+    v11_pending: wantsV11 ? v11MissingSourceIds.length : 0,
     renders,
   });
+}
+
+// v11 백그라운드 렌더 — 동일 대상 중복 트리거 방지용 인플라이트 키 집합.
+const unifiedAnswerV11InflightKeys = new Set();
+
+function scheduleUnifiedAnswerRenderV11Backfill({ academyId, sourceKind, sourceIds }) {
+  const ids = [...new Set(sourceIds)].sort();
+  const inflightKey = `${academyId}\n${sourceKind}\n${ids.join(',')}`;
+  if (unifiedAnswerV11InflightKeys.has(inflightKey)) return;
+  unifiedAnswerV11InflightKeys.add(inflightKey);
+  (async () => {
+    try {
+      const styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
+      const descriptorPage = sourceKind === 'textbook_crop'
+        ? await fetchUnifiedTextbookAnswerDescriptors({
+          academyId,
+          limit: ids.length,
+          offset: 0,
+          sourceIds: ids,
+          styleVersion,
+        })
+        : await fetchUnifiedPbAnswerDescriptors({
+          academyId,
+          limit: ids.length,
+          offset: 0,
+          sourceIds: ids,
+          styleVersion,
+        });
+      const targets = await filterUnifiedDescriptorsNeedingRender({
+        academyId,
+        descriptors: descriptorPage.descriptors || [],
+      });
+      const result = await renderUnifiedAnswerAssetsForDescriptors({
+        academyId,
+        descriptors: targets,
+      });
+      console.log(
+        '[answer-render-v11] background backfill done:',
+        JSON.stringify({ sourceKind, requested: ids.length, ...result }),
+      );
+    } catch (err) {
+      console.warn('[answer-render-v11] background backfill failed:', err?.message || err);
+    } finally {
+      unifiedAnswerV11InflightKeys.delete(inflightKey);
+    }
+  })();
 }
 
 async function upsertUnifiedAnswerRenderAsset({
@@ -4470,6 +4740,8 @@ async function upsertUnifiedAnswerRenderAsset({
   font,
 }) {
   if (!isUuid(academyId) || !descriptor) return { ok: false, skipped: true };
+  const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(descriptor.styleVersion);
+  const isV11 = styleVersion === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
   const baseRow = {
     academy_id: academyId,
     source_kind: descriptor.sourceKind,
@@ -4477,13 +4749,13 @@ async function upsertUnifiedAnswerRenderAsset({
     answer_kind: descriptor.answerKind,
     source_hash: descriptor.sourceHash,
     engine: UNIFIED_ANSWER_RENDER_ENGINE,
-    style_version: UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+    style_version: styleVersion,
     storage_bucket: UNIFIED_ANSWER_RENDER_BUCKET,
     storage_path: descriptor.storagePath,
     pixel_ratio: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
     font_size_pt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
     text_color: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
-    transparent: false,
+    transparent: isV11,
   };
   try {
     const rendered = await renderAnswerWithXeLatex({
@@ -4497,8 +4769,11 @@ async function upsertUnifiedAnswerRenderAsset({
       maxWidthCm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
       textColor: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
       backgroundColor: UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
-      transparent: false,
-      transparentOptions: UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
+      transparent: isV11,
+      transparentOptions: isV11
+        ? UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS
+        : UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
+      uniformLineBox: isV11,
     });
     const uploaded = await storageUploadBytes({
       driver: DEFAULT_TEXTBOOK_DRIVER,
@@ -4603,32 +4878,36 @@ async function filterUnifiedDescriptorsNeedingRender({
   if (force || !isUuid(academyId) || candidates.length === 0) return candidates;
   const out = [];
   for (const sourceKind of ['textbook_crop', 'pb_question']) {
-    const group = candidates.filter((item) => item.sourceKind === sourceKind);
-    if (group.length === 0) continue;
-    const { data, error } = await supa
-      .from('answer_render_assets')
-      .select('source_id, answer_kind, source_hash, render_error')
-      .eq('academy_id', academyId)
-      .eq('source_kind', sourceKind)
-      .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
-      .eq('style_version', UNIFIED_ANSWER_RENDER_STYLE_VERSION)
-      .in('source_id', group.map((item) => item.sourceId));
-    if (error) {
-      out.push(...group);
-      continue;
-    }
-    const existingBySourceId = new Map();
-    for (const asset of Array.isArray(data) ? data : []) {
-      const sourceId = String(asset?.source_id || '').trim();
-      const answerKind = normalizeUnifiedAnswerKind(asset?.answer_kind);
-      if (sourceId) existingBySourceId.set(`${sourceId}\n${answerKind}`, asset);
-    }
-    for (const item of group) {
-      const asset = existingBySourceId.get(`${item.sourceId}\n${item.answerKind}`);
-      const storedHash = String(asset?.source_hash || '').trim();
-      const renderError = String(asset?.render_error || '').trim();
-      if (!asset || storedHash !== item.sourceHash || renderError.length > 0) {
-        out.push(item);
+    for (const styleVersion of UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS) {
+      const group = candidates.filter((item) => item.sourceKind === sourceKind
+        && normalizeUnifiedAnswerRenderStyleVersion(item.styleVersion) === styleVersion);
+      if (group.length === 0) continue;
+      const { data, error } = await supa
+        .from('answer_render_assets')
+        .select('source_id, answer_kind, source_hash, render_error')
+        .eq('academy_id', academyId)
+        .eq('source_kind', sourceKind)
+        .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
+        .eq('style_version', styleVersion)
+        .in('source_id', [...new Set(group.map((item) => item.sourceId))]);
+      if (error) {
+        out.push(...group);
+        continue;
+      }
+      const existingBySourceId = new Map();
+      for (const asset of Array.isArray(data) ? data : []) {
+        const sourceId = String(asset?.source_id || '').trim();
+        // 파트 렌더('subjective#(1)')는 answer_kind 를 그대로 키로 사용한다.
+        const answerKind = String(asset?.answer_kind || '').trim();
+        if (sourceId) existingBySourceId.set(`${sourceId}\n${answerKind}`, asset);
+      }
+      for (const item of group) {
+        const asset = existingBySourceId.get(`${item.sourceId}\n${item.answerKind}`);
+        const storedHash = String(asset?.source_hash || '').trim();
+        const renderError = String(asset?.render_error || '').trim();
+        if (!asset || storedHash !== item.sourceHash || renderError.length > 0) {
+          out.push(item);
+        }
       }
     }
   }
@@ -4771,7 +5050,7 @@ async function renderUnifiedTextbookAnswerAssetsForRows({
   force = false,
 }) {
   const descriptors = (Array.isArray(answerRows) ? answerRows : [])
-    .map(textbookAnswerUnifiedDescriptor)
+    .map((row) => textbookAnswerUnifiedDescriptor(row))
     .filter(Boolean);
   const targets = await filterUnifiedDescriptorsNeedingRender({
     academyId,
@@ -7760,6 +8039,7 @@ async function fetchUnifiedTextbookAnswerDescriptors({
   limit,
   offset,
   sourceIds = [],
+  styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION,
 }) {
   let query = supa
     .from('textbook_problem_answers')
@@ -7783,7 +8063,7 @@ async function fetchUnifiedTextbookAnswerDescriptors({
     rawFetched: rawRows.length,
     hasMore: sourceIds.length === 0 && rawRows.length >= limit,
     descriptors: rawRows
-      .map(textbookAnswerUnifiedDescriptor)
+      .flatMap((row) => textbookAnswerUnifiedDescriptorsWithParts(row, { styleVersion }))
       .filter(Boolean),
   };
 }
@@ -7793,6 +8073,7 @@ async function fetchUnifiedPbAnswerDescriptors({
   limit,
   offset,
   sourceIds = [],
+  styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION,
 }) {
   let query = supa
     .from('pb_questions')
@@ -7815,7 +8096,9 @@ async function fetchUnifiedPbAnswerDescriptors({
   return {
     rawFetched: rawRows.length,
     hasMore: sourceIds.length === 0 && rawRows.length >= limit,
-    descriptors: rawRows.flatMap(pbAnswerUnifiedDescriptors).filter(Boolean),
+    descriptors: rawRows
+      .flatMap((row) => pbAnswerUnifiedDescriptors(row, { styleVersion }))
+      .filter(Boolean),
   };
 }
 
@@ -7842,6 +8125,9 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
   );
   const offset = Math.max(0, Number.parseInt(String(body?.offset || '0'), 10) || 0);
   const force = body?.force === true;
+  const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(
+    body?.style_version || body?.styleVersion || '',
+  );
   const requestedSourceIds = (Array.isArray(body?.source_ids)
     ? body.source_ids
     : Array.isArray(body?.sourceIds)
@@ -7868,12 +8154,14 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
           limit,
           offset,
           sourceIds: requestedSourceIds,
+          styleVersion,
         })
         : await fetchUnifiedPbAnswerDescriptors({
           academyId,
           limit,
           offset,
           sourceIds: requestedSourceIds,
+          styleVersion,
         });
       const descriptors = descriptorPage.descriptors || [];
       rawFetched += descriptorPage.rawFetched || 0;
@@ -7913,7 +8201,7 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
 
   sendJson(res, 200, {
     ok: true,
-    style_version: UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+    style_version: styleVersion,
     source_kind: sourceKindRaw,
     limit,
     offset,
@@ -8111,26 +8399,62 @@ function parseStageScope(raw) {
   );
   const subIndex =
     Number.isFinite(subIndexParsed) && subIndexParsed > 0 ? subIndexParsed : 0;
+  const scopeKind = String(raw?.scope_kind ?? raw?.scopeKind ?? '').trim();
+  const bodyStartParsed = Number.parseInt(
+    String(raw?.body_start_page ?? raw?.bodyStartPage ?? ''),
+    10,
+  );
+  const bodyEndParsed = Number.parseInt(
+    String(raw?.body_end_page ?? raw?.bodyEndPage ?? ''),
+    10,
+  );
+  const isWonriSubUnit =
+    scopeKind === 'wonri_sub_unit' &&
+    Number.isFinite(bodyStartParsed) &&
+    bodyStartParsed > 0 &&
+    Number.isFinite(bodyEndParsed) &&
+    bodyEndParsed >= bodyStartParsed;
   return {
     big_order: bigOrder,
     mid_order: midOrder,
     sub_key: subKey,
     sub_index: subIndex,
+    ...(isWonriSubUnit
+      ? {
+          scope_kind: 'wonri_sub_unit',
+          body_start_page: bodyStartParsed,
+          body_end_page: bodyEndParsed,
+          unit_row_index: Number.parseInt(
+            String(raw?.unit_row_index ?? raw?.unitRowIndex ?? '0'),
+            10,
+          ) || 0,
+        }
+      : {}),
   };
 }
 
 async function fetchTextbookStageStatusRows({ academyId, bookId, gradeLabel, scopes }) {
   const statuses = [];
   for (const scope of scopes) {
-    const { data: crops, error: cropErr } = await supa
+    let cropQuery = supa
       .from('textbook_problem_crops')
       .select('id,is_set_header')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
       .eq('big_order', scope.big_order)
-      .eq('mid_order', scope.mid_order)
-      .eq('sub_key', scope.sub_key);
+      .eq('mid_order', scope.mid_order);
+    if (scope.scope_kind === 'wonri_sub_unit') {
+      // 개념원리는 목차 소단원 페이지 범위가 실제 작업 단위다. 범위 안의
+      // 익히기/필수유형/확인체크/연습문제/특강(A~E)을 모두 합쳐 상태를
+      // 계산한다. 존재하지 않는 고정 카테고리가 미완료로 잡히는 일을 막는다.
+      cropQuery = cropQuery
+        .gte('raw_page', scope.body_start_page)
+        .lte('raw_page', scope.body_end_page);
+    } else {
+      cropQuery = cropQuery.eq('sub_key', scope.sub_key);
+    }
+    const { data: crops, error: cropErr } = await cropQuery;
     if (cropErr) throw new Error(`stage_status_crops_failed: ${cropErr.message || cropErr}`);
     const cropRows = Array.isArray(crops) ? crops : [];
     const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
@@ -8233,6 +8557,7 @@ async function deleteTextbookPdfOnlyDocumentsForScope({
       big_order: scope.big_order,
       mid_order: scope.mid_order,
       sub_key: scope.sub_key,
+      sub_index: scope.sub_index,
     },
   };
   const { data: docs, error: docErr } = await supa
@@ -8293,7 +8618,8 @@ async function handleTextbookStageDelete(body, res) {
       .eq('grade_label', gradeLabel)
       .eq('big_order', scope.big_order)
       .eq('mid_order', scope.mid_order)
-      .eq('sub_key', scope.sub_key);
+      .eq('sub_key', scope.sub_key)
+      .eq('sub_index', scope.sub_index);
     if (cropErr) throw new Error(`stage_delete_crops_lookup_failed: ${cropErr.message || cropErr}`);
     const cropRows = Array.isArray(crops) ? crops : [];
     const affectedSubKeys = Array.from(
@@ -8397,6 +8723,7 @@ async function handleTextbookStageDelete(body, res) {
         .eq('big_order', scope.big_order)
         .eq('mid_order', scope.mid_order)
         .eq('sub_key', scope.sub_key)
+        .eq('sub_index', scope.sub_index)
         .select('id');
       if (runDelErr) warnings.push(`textbook_pb_extract_runs_delete: ${runDelErr.message || runDelErr}`);
       removed.pb_extract_runs = Array.isArray(deletedRuns) ? deletedRuns.length : 0;

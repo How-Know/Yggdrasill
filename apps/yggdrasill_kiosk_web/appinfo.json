@@ -1,6 +1,6 @@
 {
   "id": "com.howknow.yggdrasill.kioskweb",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "vendor": "How-Know",
   "type": "web",
   "main": "index.html",
@@ -9,7 +9,7 @@
   "largeIcon": "icon.png",
   "bgColor": "#ffffff",
   "iconColor": "#101722",
-  "handlesRelaunch": true,
+  "handlesRelaunch": false,
   "supportTouchMode": "full",
   "supportPortraitMode": false,
   "closeOnRotation": false,

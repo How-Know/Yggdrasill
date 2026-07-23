@@ -59,6 +59,23 @@ function problemNumberKey(value) {
   return compact;
 }
 
+function isMissingRelationError(error, relationName = '') {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const message = String(error?.message || error || '');
+  const relation = String(relationName || '').trim();
+  const referencesRelation =
+    !relation || message.toLowerCase().includes(relation.toLowerCase());
+  return (
+    referencesRelation &&
+    (
+      code === '42P01' ||
+      code === 'PGRST205' ||
+      /relation .* does not exist/i.test(message) ||
+      /could not find .*schema cache/i.test(message)
+    )
+  );
+}
+
 function hashQuestionContent(
   question,
   renderProfile,
@@ -139,6 +156,31 @@ async function claimJobs(client) {
 async function resolveQuestion(client, job) {
   const fields =
     'id,academy_id,document_id,question_uid,question_number,question_type,stem,choices,figure_refs,equations,meta';
+  const { data: canonicalLink, error: canonicalError } = await client
+    .from('textbook_crop_question_links')
+    .select('pb_question_id')
+    .eq('academy_id', job.academy_id)
+    .eq('crop_id', job.crop_id)
+    .maybeSingle();
+  if (
+    canonicalError &&
+    !isMissingRelationError(canonicalError, 'textbook_crop_question_links')
+  ) {
+    throw new Error(`canonical_link_lookup_failed:${canonicalError.message}`);
+  }
+  if (canonicalLink?.pb_question_id) {
+    const { data, error } = await client
+      .from('pb_questions')
+      .select(fields)
+      .eq('academy_id', job.academy_id)
+      .eq('id', canonicalLink.pb_question_id)
+      .maybeSingle();
+    if (error) {
+      throw new Error(`canonical_question_lookup_failed:${error.message}`);
+    }
+    if (data) return data;
+  }
+
   if (job.pb_question_id) {
     const { data } = await client
       .from('pb_questions')
@@ -423,6 +465,8 @@ export {
   reclaimStaleJobs,
   processJob,
   processBatch,
+  resolveQuestion,
+  isMissingRelationError,
 };
 
 if (IS_DIRECT_RUN) {

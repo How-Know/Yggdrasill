@@ -22,6 +22,9 @@ class HomeworkAnswerGradingCell {
   final String key;
   final int questionIndex;
   final String questionLabel;
+
+  /// 문항 종류 짧은 라벨 (개념/필수/확인/연습/특강 등). 문항번호 위에 표시.
+  final String questionCategory;
   final String answer;
   final String answerMode;
   final String answerImageUrl;
@@ -46,6 +49,7 @@ class HomeworkAnswerGradingCell {
     required this.key,
     required this.questionIndex,
     this.questionLabel = '',
+    this.questionCategory = '',
     required this.answer,
     this.answerMode = '',
     this.answerImageUrl = '',

@@ -19,6 +19,9 @@ const state = {
   students: [],
   selected: null,
   checkoutMode: false,
+  setupMode: false,
+  setupStage: 'first',
+  setupFirstPin: '',
   pin: '',
   submitting: false,
   pollTimer: null,
@@ -286,32 +289,49 @@ async function searchStudents(query) {
   }
 }
 
-async function checkIn(student, pin) {
+async function checkIn(student, pin, setupPin = false) {
   const requestId = Date.now() + '-' + Math.floor(Math.random() * 1e9);
   try {
     const json = await callApi('check_in', {
       student_id: student.id, studentId: student.id,
       pin, request_id: requestId, walk_in: !student.scheduledToday,
+      setup_pin: setupPin,
     }, true);
     const root = asMap(json, ['data', 'result']) || json;
     const ok = pickBool(root, ['success', 'ok', 'checked_in']);
     return { success: ok, message: pickStr(root, ['message', 'detail'], ok ? '등원이 완료되었습니다.' : '등원 처리에 실패했습니다.') };
   } catch (e) {
-    return { success: false, message: (e && e.message) || '등원 처리에 실패했습니다.' };
+    return { success: false, code: (e && e.code) || '', message: (e && e.message) || '등원 처리에 실패했습니다.' };
   }
 }
 
-async function checkOut(student, pin) {
+async function checkOut(student, pin, printNotice = false) {
   const requestId = Date.now() + '-' + Math.floor(Math.random() * 1e9);
   try {
     const json = await callApi('check_out', {
       student_id: student.id, studentId: student.id, pin, request_id: requestId,
+      print_notice: printNotice,
     }, true);
     const root = asMap(json, ['data', 'result']) || json;
     const ok = pickBool(root, ['success', 'ok', 'checked_out']);
-    return { success: ok, message: pickStr(root, ['message', 'detail'], ok ? '하원이 완료되었습니다.' : '하원 처리에 실패했습니다.') };
+    return {
+      success: ok,
+      attendanceId: pickStr(root, ['attendance_id', 'attendanceId']),
+      printRequested: pickBool(root, ['print_requested', 'printRequested']),
+      message: pickStr(root, ['message', 'detail'], ok ? '하원이 완료되었습니다.' : '하원 처리에 실패했습니다.'),
+    };
   } catch (e) {
     return { success: false, message: (e && e.message) || '하원 처리에 실패했습니다.' };
+  }
+}
+
+async function noticeStatus(attendanceId) {
+  try {
+    const json = await callApi('notice_status', { attendance_id: attendanceId }, true);
+    const root = asMap(json, ['data', 'result']) || json;
+    return { ok: pickBool(root, ['ok'], true), state: pickStr(root, ['state'], 'printing'), error: pickStr(root, ['error']) };
+  } catch (e) {
+    return { ok: false, state: 'printing', error: '' };
   }
 }
 
@@ -404,6 +424,56 @@ function renderStudents() {
     card.addEventListener('click', () => selectStudent(student));
     list.appendChild(card);
   }
+  scrollToCurrentTime(list);
+}
+
+function timeToMinutes(label) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(label || '');
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function scrollToCurrentTime(list) {
+  if (state.selected) return; // PIN 입력 중에는 스크롤 유지
+  const cards = list.querySelectorAll('.student-card');
+  if (!cards.length) return;
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  let bestIdx = -1;
+  let bestDiff = Infinity;
+  state.students.forEach((s, i) => {
+    const t = timeToMinutes(s.timeLabel);
+    if (t === null) return;
+    const diff = Math.abs(t - nowMin);
+    if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+  });
+  const target = bestIdx >= 0 ? cards[bestIdx] : cards[0];
+  if (target) {
+    requestAnimationFrame(() => {
+      list.scrollTop = target.offsetTop - list.offsetTop;
+    });
+  }
+}
+
+/* ============================ 유휴 자동 닫힘 ============================ */
+const IDLE_MS = 8000;          // 평상시 무입력 자동 닫힘
+const SUCCESS_CLOSE_MS = 3000; // 등하원 성공 후 닫힘
+let idleTimer = null;
+
+function isSheetOpen() { return $('sheet').classList.contains('open'); }
+function isSearchOpen() { return !$('searchOverlay').classList.contains('hidden'); }
+
+function resetIdleTimer(ms) {
+  clearTimeout(idleTimer);
+  if (!isSheetOpen() && !isSearchOpen()) return;
+  idleTimer = setTimeout(() => {
+    if (isSearchOpen()) closeSearch();
+    if (isSheetOpen()) closeSheet();
+  }, ms || IDLE_MS);
+}
+function bumpIdle() {
+  if (!isSheetOpen() && !isSearchOpen()) return;
+  resetIdleTimer(IDLE_MS);
 }
 
 /* ============================ 시트 / PIN ============================ */
@@ -411,31 +481,35 @@ function openSheet() {
   $('sheet').classList.add('open');
   $('sheet').setAttribute('aria-hidden', 'false');
   $('fab').classList.add('hidden-fade');
+  resetIdleTimer(IDLE_MS);
 }
 function closeSheet() {
   $('sheet').classList.remove('open');
   $('sheet').setAttribute('aria-hidden', 'true');
   $('fab').classList.remove('hidden-fade');
+  clearTimeout(idleTimer);
   clearSelection();
 }
 
 function selectStudent(student) {
   state.selected = student;
   state.checkoutMode = student.checkedIn;
+  state.setupMode = false;
+  state.setupStage = 'first';
+  state.setupFirstPin = '';
   state.pin = '';
-  const fb = student.checkedIn
-    ? '등원 중인 학생입니다. PIN을 입력하면 하원 처리됩니다.'
-    : (student.scheduledToday ? '' : '오늘 예정에 없는 학생입니다. 추가수업으로 등원 처리됩니다.');
-  showPinPanel(fb, false);
+  showPinPanel('', false);
   renderStudents();
 }
 
 function clearSelection() {
   state.selected = null;
   state.checkoutMode = false;
+  state.setupMode = false;
+  state.setupStage = 'first';
+  state.setupFirstPin = '';
   state.pin = '';
   $('pinPanel').classList.add('hidden');
-  $('studentList').classList.remove('shrink');
   renderStudents();
 }
 
@@ -443,10 +517,25 @@ function showPinPanel(feedback, isOk) {
   const s = state.selected;
   if (!s) return;
   $('pinPanel').classList.remove('hidden');
-  $('studentList').classList.add('shrink');
-  $('pinTitle').textContent = state.checkoutMode
-    ? `${s.name} 학생 하원 PIN`
-    : `${s.name} 학생 PIN`;
+  const guide = $('pinGuide');
+  if (state.setupMode) {
+    $('pinTitle').textContent = `${s.name} 학생 PIN 설정`;
+    guide.textContent = state.setupStage === 'confirm'
+      ? '확인을 위해 PIN을 한 번 더 입력하세요.'
+      : '처음이시네요. 사용할 PIN 4자리를 설정하세요.';
+    guide.classList.remove('checkout');
+  } else {
+    $('pinTitle').textContent = state.checkoutMode
+      ? `${s.name} 학생 하원 PIN`
+      : `${s.name} 학생 PIN`;
+    guide.textContent = state.checkoutMode
+      ? 'PIN을 입력하면 하원기록이 됩니다.'
+      : 'PIN을 입력하면 등원기록이 됩니다.';
+    guide.classList.toggle('checkout', state.checkoutMode);
+  }
+  const showNotice = state.checkoutMode && !state.setupMode;
+  $('noticePrintRow').classList.toggle('hidden', !showNotice);
+  if (showNotice) $('noticePrintCheck').checked = true;
   updatePinDots();
   const fb = $('pinFeedback');
   fb.textContent = feedback || '';
@@ -476,28 +565,154 @@ function pressKey(value) {
 async function submitPin() {
   const student = state.selected;
   if (!student || state.pin.length === 0 || state.submitting) return;
+
+  // 신규 PIN 설정 흐름 (2회 입력 확인)
+  if (state.setupMode) {
+    if (state.setupStage === 'first') {
+      state.setupFirstPin = state.pin;
+      state.pin = '';
+      state.setupStage = 'confirm';
+      showPinPanel('', false);
+      return;
+    }
+    if (state.pin !== state.setupFirstPin) {
+      state.pin = '';
+      state.setupFirstPin = '';
+      state.setupStage = 'first';
+      showPinPanel('PIN이 일치하지 않습니다. 다시 설정해 주세요.', false);
+      return;
+    }
+    const pinToSet = state.pin;
+    state.submitting = true;
+    const result = await checkIn(student, pinToSet, true);
+    state.submitting = false;
+    state.pin = '';
+    updatePinDots();
+    finishSubmit(result);
+    return;
+  }
+
+  const wasCheckout = state.checkoutMode;
+  const printNotice = wasCheckout && $('noticePrintCheck').checked;
   state.submitting = true;
-  const result = state.checkoutMode
-    ? await checkOut(student, state.pin)
+  const result = wasCheckout
+    ? await checkOut(student, state.pin, printNotice)
     : await checkIn(student, state.pin);
   state.submitting = false;
   state.pin = '';
   updatePinDots();
+
+  // PIN이 아직 없는 학생 → 신규 설정 모드로 전환
+  if (!result.success && result.code === 'pin_setup_required') {
+    state.setupMode = true;
+    state.setupStage = 'first';
+    state.setupFirstPin = '';
+    showPinPanel('', false);
+    return;
+  }
+
+  finishSubmit(result);
+
+  // 하원 + 알림장 인쇄 요청 → PC 인쇄 진행 상태 폴링
+  if (wasCheckout && result.success && printNotice && result.printRequested && result.attendanceId) {
+    startNoticePrintPolling(result.attendanceId);
+  }
+}
+
+/* ============================ 알림장 인쇄 진행 ============================ */
+let noticePollTimer = null;
+let noticePercentTimer = null;
+let noticePercent = 0;
+function stopNoticePolling() {
+  clearTimeout(noticePollTimer); noticePollTimer = null;
+  clearInterval(noticePercentTimer); noticePercentTimer = null;
+}
+function setPrintPercent(n) {
+  noticePercent = Math.max(0, Math.min(100, Math.round(n)));
+  $('printPercent').textContent = noticePercent + '%';
+}
+
+function startNoticePrintPolling(attendanceId) {
+  stopNoticePolling();
+  const overlay = $('printOverlay');
+  const dialog = overlay.querySelector('.print-dialog');
+  dialog.classList.remove('done', 'failed');
+  $('printSpinner').classList.remove('hidden');
+  $('printPercent').classList.remove('hidden');
+  $('printTitle').textContent = '알림장 인쇄 중…';
+  $('printMsg').textContent = '잠시만 기다려 주세요';
+  $('printClose').classList.add('hidden');
+  setPrintPercent(3);
+  overlay.classList.remove('hidden');
+
+  // 실제 진행률은 알 수 없어, 대기 동안 90%까지 서서히 증가시키고
+  // 완료 시 100%로 채운다.
+  noticePercentTimer = setInterval(() => {
+    if (noticePercent < 90) setPrintPercent(noticePercent + Math.random() * 7 + 1);
+  }, 500);
+
+  const started = Date.now();
+  const TIMEOUT_MS = 30000;
+  const tick = async () => {
+    const st = await noticeStatus(attendanceId);
+    if (st.state === 'done') {
+      stopNoticePolling();
+      setPrintPercent(100);
+      dialog.classList.add('done');
+      $('printSpinner').classList.add('hidden');
+      $('printTitle').textContent = '알림장 인쇄 완료';
+      $('printMsg').textContent = '';
+      setTimeout(hidePrintOverlay, 1600);
+      return;
+    }
+    if (st.state === 'failed') {
+      stopNoticePolling();
+      dialog.classList.add('failed');
+      $('printSpinner').classList.add('hidden');
+      $('printPercent').classList.add('hidden');
+      $('printTitle').textContent = '알림장 인쇄 실패';
+      $('printMsg').textContent = 'PC에서 인쇄에 실패했습니다. PC 화면을 확인해 주세요.';
+      $('printClose').classList.remove('hidden');
+      return;
+    }
+    if (Date.now() - started > TIMEOUT_MS) {
+      stopNoticePolling();
+      $('printSpinner').classList.add('hidden');
+      $('printPercent').classList.add('hidden');
+      $('printTitle').textContent = 'PC 인쇄 대기 중';
+      $('printMsg').textContent = 'PC(메인앱)가 켜져 있는지 확인해 주세요. 켜지면 자동으로 인쇄됩니다.';
+      $('printClose').classList.remove('hidden');
+      return;
+    }
+    noticePollTimer = setTimeout(tick, 1500);
+  };
+  tick();
+}
+
+function hidePrintOverlay() {
+  stopNoticePolling();
+  $('printOverlay').classList.add('hidden');
+}
+
+function finishSubmit(result) {
+  const fb = $('pinFeedback');
   if (result.success) {
-    const fb = $('pinFeedback');
     fb.textContent = result.message;
     fb.classList.add('ok');
     state.selected = null;
     state.checkoutMode = false;
-    await refreshStudents();
+    state.setupMode = false;
+    state.setupStage = 'first';
+    state.setupFirstPin = '';
+    refreshStudents();
     setTimeout(() => {
       $('pinPanel').classList.add('hidden');
-      $('studentList').classList.remove('shrink');
     }, 900);
+    resetIdleTimer(SUCCESS_CLOSE_MS);
   } else {
-    const fb = $('pinFeedback');
     fb.textContent = result.message;
     fb.classList.remove('ok');
+    resetIdleTimer(IDLE_MS);
   }
 }
 
@@ -531,6 +746,7 @@ function openSearch() {
     searchRemote = [];
     renderSearchResults();
     $('searchInput').focus();
+    resetIdleTimer(IDLE_MS);
   }, 380);
 }
 function closeSearch() {
@@ -593,7 +809,7 @@ function renderSearchResults() {
 }
 
 /* ============================ 시계 / 날씨 ============================ */
-const DAYS = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 let clockTimer = null;
 function startClock() {
   updateClock();
@@ -660,5 +876,40 @@ window.addEventListener('DOMContentLoaded', () => {
   $('searchClose').addEventListener('click', closeSearch);
   $('searchInput').addEventListener('input', onSearchInput);
   $('searchOverlay').addEventListener('click', (e) => { if (e.target.id === 'searchOverlay') closeSearch(); });
+  $('printClose').addEventListener('click', hidePrintOverlay);
+  // 사용자 상호작용이 있으면 유휴 타이머 리셋 (시트/검색이 열린 동안에만 동작)
+  ['pointerdown', 'keydown', 'touchstart', 'touchmove', 'wheel', 'scroll']
+    .forEach((ev) => document.addEventListener(ev, bumpIdle, { capture: true, passive: true }));
+  preventScreenSaver();
   initialize();
 });
+
+/* ============================ 화면보호기 차단 (webOS) ============================ */
+// webOS TV는 입력이 없으면 화면보호기가 작동한다. 공식 API로는 끌 수 없어,
+// 화면보호기 진입 신호를 구독한 뒤 ack:false 로 응답해 진입을 거부한다.
+// (비공식 방식이지만 자체 설치(IPK) 키오스크에서 안정적으로 동작. PC 등 미지원
+//  환경에서는 WebOSServiceBridge 가 없으므로 조용히 무시된다.)
+function preventScreenSaver() {
+  const Bridge = window.WebOSServiceBridge || window.PalmServiceBridge;
+  if (typeof Bridge !== 'function') return;
+  const CLIENT = 'com.howknow.yggdrasill.kioskweb';
+  try {
+    const reg = new Bridge();
+    reg.onservicecallback = (raw) => {
+      let m = {};
+      try { m = JSON.parse(raw); } catch (e) { return; }
+      if (m.state !== 'Active') return;
+      try {
+        const res = new Bridge();
+        res.call(
+          'luna://com.webos.service.tvpower/power/responseScreenSaverRequest',
+          JSON.stringify({ clientName: CLIENT, ack: false, timestamp: m.timestamp })
+        );
+      } catch (e) { /* ignore */ }
+    };
+    reg.call(
+      'luna://com.webos.service.tvpower/power/registerScreenSaverRequest',
+      JSON.stringify({ subscribe: true, clientName: CLIENT })
+    );
+  } catch (e) { /* ignore */ }
+}

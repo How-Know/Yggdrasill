@@ -141,6 +141,11 @@ class RightSheetAnswerPreloadService {
     required Iterable<String> sourceIds,
     String answerKind = 'subjective',
     String styleVersion = kUnifiedAnswerRenderStyleVersion,
+    List<String> fallbackStyleVersions = const <String>[],
+    // 세트형(파트 렌더가 있어야 하는) source id 목록. 본체 렌더만 캐시된 채
+    // 파트가 비어 있으면 짧은 backoff 후 재조회해 백그라운드 v11 파트 생성
+    // 결과를 다시 가져온다.
+    Set<String> partExpectedSourceIds = const <String>{},
   }) async {
     final safeAcademyId = academyId.trim();
     final safeSourceKind = sourceKind.trim();
@@ -155,6 +160,8 @@ class RightSheetAnswerPreloadService {
     }
     _pruneIfNeeded();
 
+    // v11 파일럿은 세트형 파트 렌더('id#(1)' 키)가 함께 내려온다.
+    final expectParts = styleVersion == kUnifiedAnswerRenderStyleVersionV11;
     final now = DateTime.now();
     final out = <String, LearningProblemAnswerRender>{};
     final missing = <String>[];
@@ -167,12 +174,38 @@ class RightSheetAnswerPreloadService {
         styleVersion: styleVersion,
       );
       final cached = _assetCache[key];
+      final failureUntil = _assetFailureUntil[key];
+      final inBackoff = failureUntil != null && now.isBefore(failureUntil);
       if (cached != null && cached.isFresh) {
+        var anyPartCached = false;
+        if (expectParts) {
+          for (var p = 1; p <= 12; p++) {
+            final partId = '$id#($p)';
+            final cachedPart = _assetCache[_assetKey(
+              academyId: safeAcademyId,
+              sourceKind: safeSourceKind,
+              sourceId: partId,
+              answerKind: safeAnswerKind,
+              styleVersion: styleVersion,
+            )];
+            if (cachedPart != null && cachedPart.isFresh) {
+              out[partId] = cachedPart.value;
+              anyPartCached = true;
+            }
+          }
+        }
+        // 세트형인데 파트 렌더가 캐시에 없다 — 본체 캐시가 살아 있어도
+        // (backoff 가 끝났으면) 재조회해 파트를 다시 찾는다.
+        if (expectParts &&
+            partExpectedSourceIds.contains(id) &&
+            !anyPartCached &&
+            !inBackoff) {
+          missing.add(id);
+        }
         out[id] = cached.value;
         continue;
       }
-      final failureUntil = _assetFailureUntil[key];
-      if (failureUntil != null && now.isBefore(failureUntil)) {
+      if (inBackoff) {
         continue;
       }
       missing.add(id);
@@ -194,6 +227,7 @@ class RightSheetAnswerPreloadService {
           sourceIds: missing,
           answerKind: safeAnswerKind,
           styleVersion: styleVersion,
+          fallbackStyleVersions: fallbackStyleVersions,
         );
       } finally {
         scheduleMicrotask(() => _assetInflight.remove(requestKey));
@@ -212,12 +246,42 @@ class RightSheetAnswerPreloadService {
         styleVersion: styleVersion,
       );
       if (render != null && render.hasImage) {
-        _assetCache[key] = _TimedValue(value: render, expiresAt: expiresAt);
-        _assetFailureUntil.remove(key);
+        // v11 요청에 v10 폴백이 내려온 경우 짧게만 캐시한다 — 서버가
+        // 백그라운드에서 v11 을 생성하므로 곧 갱신된 렌더를 받아야 한다.
+        final isStaleStyleFallback =
+            expectParts && render.styleVersion != styleVersion;
+        _assetCache[key] = _TimedValue(
+          value: render,
+          expiresAt: isStaleStyleFallback ? failureExpiresAt : expiresAt,
+        );
+        // 세트형인데 이번 응답에도 파트 렌더가 없으면 backoff 를 걸어
+        // 다음 로드에서 재조회하도록 남겨둔다.
+        final partsStillMissing = expectParts &&
+            partExpectedSourceIds.contains(id) &&
+            !fetched.keys.any((k) => k.startsWith('$id#'));
+        if (partsStillMissing) {
+          _assetFailureUntil[key] = failureExpiresAt;
+        } else {
+          _assetFailureUntil.remove(key);
+        }
         out[id] = render;
       } else {
         _assetFailureUntil[key] = failureExpiresAt;
       }
+    }
+    // 파트 렌더 엔트리('id#(1)')는 요청 id 목록에 없어도 캐시하고 결과에 포함.
+    for (final entry in fetched.entries) {
+      if (!entry.key.contains('#')) continue;
+      if (!entry.value.hasImage) continue;
+      final key = _assetKey(
+        academyId: safeAcademyId,
+        sourceKind: safeSourceKind,
+        sourceId: entry.key,
+        answerKind: safeAnswerKind,
+        styleVersion: styleVersion,
+      );
+      _assetCache[key] = _TimedValue(value: entry.value, expiresAt: expiresAt);
+      out[entry.key] = entry.value;
     }
     _pruneIfNeeded();
     return out;

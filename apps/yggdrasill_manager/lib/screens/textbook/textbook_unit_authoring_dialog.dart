@@ -2371,8 +2371,7 @@ class _TextbookUnitAuthoringDialogState
               final cropId = idByNumberKey[numberKey];
               if (cropId == null || cropId.isEmpty) continue;
               matchedKeys.add(numberKey);
-              if (item.answerText.isNotEmpty ||
-                  item.answerLatex2d.isNotEmpty) {
+              if (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty) {
                 answers.add(TextbookAnswerUpload(
                   cropId: cropId,
                   answerKind: item.answerKind,
@@ -5443,8 +5442,13 @@ class _StageProgressChip extends StatelessWidget {
         : completed > 0
             ? const Color(0xFFEAB968)
             : const Color(0xFF9FB3B3);
-    return Tooltip(
-      message: '본문 → 정답 → 해설 추출 상태를 확인합니다',
+    // Windows에서 단원 트리가 갱신되는 프레임에 Tooltip의 OverlayPortal이
+    // 제거되면 MouseTracker가 아직 layout되지 않은 오버레이를 hit-test하며
+    // assertion 폭주를 일으킬 수 있다. 이 칩은 행마다 동적으로 생성되므로
+    // 오버레이 대신 접근성 라벨만 제공한다.
+    return Semantics(
+      label: '본문, 정답, 해설 추출 상태 $label. 눌러서 상세 상태 확인',
+      button: true,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),

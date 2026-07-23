@@ -7537,6 +7537,10 @@ class DataManager {
       ResourceService.instance.loadTextbooksWithMetadata();
   Future<List<Map<String, dynamic>>> loadFlowTextbookLinks(String flowId) =>
       ResourceService.instance.loadFlowTextbookLinks(flowId);
+  Future<List<Map<String, dynamic>>> loadFlowTextbookLinksForFlows(
+    Iterable<String> flowIds,
+  ) =>
+      ResourceService.instance.loadFlowTextbookLinksForFlows(flowIds);
   Future<void> saveFlowTextbookLinks(
     String flowId,
     List<Map<String, dynamic>> links,

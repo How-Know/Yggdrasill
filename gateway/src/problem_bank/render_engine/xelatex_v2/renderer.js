@@ -373,6 +373,9 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
   cropAlphaThreshold = 3,
   topBleedPx = 0,
   strokePx = 0,
+  // false 면 잉크 기준 크롭을 생략하고 페이지(=TeX 콘텐츠 박스) 전체를 유지한다.
+  // uniform-line 렌더에서 줄 스트럿이 만든 고정 높이를 보존하기 위한 모드.
+  cropToInk = true,
 } = {}) {
   const color = normalizeHexColor(textColor);
   const rgb = [
@@ -465,6 +468,13 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
         data[idx + 3] = 255;
       }
     }
+  }
+
+  if (!cropToInk) {
+    minX = 0;
+    minY = 0;
+    maxX = width - 1;
+    maxY = height - 1;
   }
 
   if (maxX < minX || maxY < minY) {
@@ -659,6 +669,7 @@ export async function renderAnswerWithXeLatex({
   backgroundColor = '151C21',
   transparent = true,
   transparentOptions = {},
+  uniformLineBox = false,
 }) {
   await ensureInstalled();
 
@@ -679,6 +690,7 @@ export async function renderAnswerWithXeLatex({
       // alpha/composite pass that looked better in the right sheet.
       textColor: '000000',
       backgroundColor: 'FFFFFF',
+      uniformLineBox,
     });
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
@@ -735,6 +747,8 @@ function parseSlotMeasureFile(hgtPath) {
   let normalH = null;
   let titleH = null;
   let colW = null;
+  let bodyTop = null;
+  let bodyLeft = null;
   for (const line of text.split(/\r?\n/)) {
     let m = line.match(/^Q(\d+):(-?[\d.]+)pt:(-?[\d.]+)pt/);
     if (m) {
@@ -747,6 +761,10 @@ function parseSlotMeasureFile(hgtPath) {
     if (m) { titleH = Number(m[1]); continue; }
     m = line.match(/^COLW:(-?[\d.]+)pt/);
     if (m) { colW = Number(m[1]); continue; }
+    m = line.match(/^BODYTOP:(-?[\d.]+)pt/);
+    if (m) { bodyTop = Number(m[1]); continue; }
+    m = line.match(/^BODYLEFT:(-?[\d.]+)pt/);
+    if (m) { bodyLeft = Number(m[1]); continue; }
   }
   if (heightsPt.length === 0 || !Number.isFinite(normalH) || normalH <= 0) return null;
   return {
@@ -754,6 +772,9 @@ function parseSlotMeasureFile(hgtPath) {
     normalColumnHeightPt: normalH,
     titleColumnHeightPt: Number.isFinite(titleH) && titleH > 0 ? titleH : normalH,
     columnWidthPt: Number.isFinite(colW) ? colW : null,
+    // 단일 문항 크롭용 본문 시작 절대 좌표(종이 가장자리 기준, pt).
+    bodyTopPt: Number.isFinite(bodyTop) && bodyTop > 0 ? bodyTop : null,
+    bodyLeftPt: Number.isFinite(bodyLeft) && bodyLeft > 0 ? bodyLeft : null,
   };
 }
 
@@ -873,6 +894,9 @@ export async function renderPdfWithXeLatex({
       reviewPdf: renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true,
       // 새로고침/PDF 생성 경로에서 auto 라벨 생성을 전면 중단.
       disableAutoLabels: renderConfig?.disableAutoLabels === true,
+      // 학생앱 단일 문항 모드 — multicols 균형 배치를 끄고(multicols*) 왼쪽
+      // 단에만 조판되게 한다 (크롭이 왼쪽 단 기준이므로).
+      singleQuestionContentPage: renderConfig?.singleQuestionContentPage === true,
     };
     const buildTex = (extra = {}) => buildDocumentTexSource(questions || [], {
       ...baseBuildOptions,

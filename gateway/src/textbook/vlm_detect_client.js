@@ -287,6 +287,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
 
   const series = String(opts?.series || '').trim().toLowerCase();
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
+  let droppedLectureConceptNumbers = 0;
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
     const number = String(raw.number ?? '').trim();
@@ -319,6 +320,17 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 개념원리 단일 패스: 문항마다 카테고리를 붙인다. 모델이 category 를
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
     const category = normalizeWonriCategory(raw, label, series);
+    // 특강 예제는 배지에 "특강 01" 처럼 2자리 번호가 인쇄된다. 특강 개념
+    // 페이지의 사각 박스 개념 번호(1, 2 같은 한 자리 수)를 모델이 특강
+    // 예제로 오인하면 존재하지 않는 문항이 저장되므로 여기서 걸러낸다.
+    if (
+      series === 'wonri' &&
+      category === 'special_lecture' &&
+      !/^\d{2,}$/.test(number)
+    ) {
+      droppedLectureConceptNumbers += 1;
+      continue;
+    }
     // 유형 그룹(content_group)은 문항 단위로 판단한다.
     // 개념원리는 B 필수유형(type_example)과 E 특강(special_lecture)만
     // "필수유형 01"/"특강 01" 그룹(제목 포함)을 갖는다.
@@ -343,6 +355,15 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       bbox,
       item_region: itemRegion,
     });
+  }
+  if (droppedLectureConceptNumbers > 0) {
+    const suffix =
+      `wonri_lecture_concept_numbers_dropped=${droppedLectureConceptNumbers}`;
+    out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+    // 걸러낸 개념 번호뿐이던 페이지는 개념 페이지로 되돌린다.
+    if (out.items.length === 0 && out.page_kind === 'problem_page') {
+      out.page_kind = 'concept_page';
+    }
   }
   backfillWonriCategories(out, series);
   backfillMissingItemRegions(out);

@@ -33,18 +33,69 @@ class TextbookApi {
         .toList(growable: false);
   }
 
+  /// 아직 내 목록에 없는, 등록 가능한(정답 준비·발행) 교재.
+  Future<List<AvailableTextbook>> listAvailableTextbooks() async {
+    final rows =
+        await _client.rpc('student_list_available_textbooks') as List<dynamic>;
+    return rows
+        .whereType<Map>()
+        .map((raw) => AvailableTextbook.fromRow(Map<String, dynamic>.from(raw)))
+        .toList(growable: false);
+  }
+
+  /// 교재 자가 등록 (flow_textbook_links). 등록 시각부터 시작일 계산.
+  Future<void> enrollTextbook({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final result = await _client.rpc(
+      'student_enroll_textbook',
+      params: {
+        'p_book_id': bookId,
+        'p_grade_label': gradeLabel,
+      },
+    );
+    final map = result is Map
+        ? Map<String, dynamic>.from(result)
+        : const <String, dynamic>{};
+    if (map['ok'] != true) {
+      throw Exception('교재를 추가하지 못했어요.');
+    }
+  }
+
   /// 단원트리(메타데이터) + 페이지별 풀이 현황.
   Future<TextbookUnitTree> unitTree({
     required String bookId,
     required String gradeLabel,
   }) async {
-    final result = await _client.rpc('student_textbook_unit_tree', params: {
+    final params = {
       'p_book_id': bookId,
       'p_grade_label': gradeLabel,
-    });
+    };
+    dynamic result;
+    try {
+      result = await _client.rpc(
+        'textbook_resolved_unit_tree',
+        params: params,
+      );
+    } on PostgrestException catch (error) {
+      if (!_isMissingResolvedUnitTree(error)) rethrow;
+      result = await _client.rpc(
+        'student_textbook_unit_tree',
+        params: params,
+      );
+    }
     return TextbookUnitTree.fromJson(
-      (result as Map<String, dynamic>?) ?? const {},
+      result is Map
+          ? Map<String, dynamic>.from(result)
+          : const <String, dynamic>{},
     );
+  }
+
+  bool _isMissingResolvedUnitTree(PostgrestException error) {
+    return error.code == 'PGRST202' ||
+        error.code == '42883' ||
+        error.message.contains('textbook_resolved_unit_tree');
   }
 
   /// 페이지 내 문항 목록 (정답 없이 answer_kind만).
@@ -53,11 +104,29 @@ class TextbookApi {
     required String gradeLabel,
     required int rawPage,
   }) async {
-    final rows = await _client.rpc('student_textbook_page_problems', params: {
+    final params = {
       'p_book_id': bookId,
       'p_grade_label': gradeLabel,
       'p_raw_page': rawPage,
-    }) as List<dynamic>;
+    };
+    dynamic result;
+    try {
+      result = await _client.rpc(
+        'student_textbook_page_problems_v2',
+        params: params,
+      );
+    } on PostgrestException catch (error) {
+      if (error.code != 'PGRST202' &&
+          error.code != '42883' &&
+          !error.message.contains('student_textbook_page_problems_v2')) {
+        rethrow;
+      }
+      result = await _client.rpc(
+        'student_textbook_page_problems',
+        params: params,
+      );
+    }
+    final rows = result is List ? result : const <dynamic>[];
     return rows
         .whereType<Map<String, dynamic>>()
         .map(PageProblem.fromRow)
@@ -169,14 +238,25 @@ class TextbookApi {
   }
 
   /// 페이지 일괄 채점 (Edge Function — 수학 동치/단위/AI 판정 포함).
+  ///
+  /// [partAnswersByCropId]: 세트형 문항의 파트별 답
+  /// (crop_id → 파트 키('(1)') → 답).
   Future<GradeResult> gradePage({
     required String bookId,
     required String gradeLabel,
     required Map<String, String> answersByCropId,
+    Map<String, Map<String, String>> partAnswersByCropId = const {},
   }) async {
-    final items = answersByCropId.entries
-        .map((e) => {'crop_id': e.key, 'answer': e.value})
-        .toList(growable: false);
+    final items = <Map<String, dynamic>>[
+      ...answersByCropId.entries
+          .map((e) => {'crop_id': e.key, 'answer': e.value}),
+      ...partAnswersByCropId.entries.map((e) => {
+            'crop_id': e.key,
+            'parts': e.value.entries
+                .map((p) => {'key': p.key, 'answer': p.value})
+                .toList(growable: false),
+          }),
+    ];
     final response = await _client.functions.invoke(
       'student_textbook_grade',
       body: {
@@ -205,12 +285,16 @@ class TextbookApi {
   }
 
   /// 셀프 채점 결과 기록 (학생이 정답 확인 후 O/X 선택).
-  Future<void> selfMark({
+  ///
+  /// 세트형 파트별 O/X는 [partMarks](파트 키 → 맞음 여부)로 보낸다.
+  /// 반환값은 서버가 계산한 문항 전체 정오와 누적 파트 결과.
+  Future<SelfMarkResult> selfMark({
     required String bookId,
     required String gradeLabel,
     required String cropId,
     required bool correct,
     String? answer,
+    Map<String, bool>? partMarks,
   }) async {
     final response = await _client.functions.invoke(
       'student_textbook_grade',
@@ -221,11 +305,46 @@ class TextbookApi {
         'crop_id': cropId,
         'correct': correct,
         if (answer != null) 'answer': answer,
+        if (partMarks != null && partMarks.isNotEmpty)
+          'part_marks': partMarks.entries
+              .map((e) => {'key': e.key, 'correct': e.value})
+              .toList(growable: false),
       },
     );
     final data = (response.data as Map<String, dynamic>?) ?? const {};
     if (data['ok'] != true) {
       throw Exception('self_mark_failed: ${data['error']}');
+    }
+    return SelfMarkResult(
+      correct: data['correct'] == true,
+      partResults: ProblemPartResult.listFromJson(data['part_results']),
+    );
+  }
+
+  /// 문항 신고 — 접수 즉시 검토 중(보류) 상태가 된다.
+  ///
+  /// 보류 문항은 선생님 판정 전까지 채점·통계에서 제외되고,
+  /// 풀지 않아도 페이지 완료 판정에 포함되지 않는다.
+  Future<void> reportProblem({
+    required String bookId,
+    required String gradeLabel,
+    required String cropId,
+    required List<String> issueTypes,
+    String note = '',
+  }) async {
+    final result =
+        await _client.rpc('student_report_textbook_problem', params: {
+      'p_book_id': bookId,
+      'p_grade_label': gradeLabel,
+      'p_crop_id': cropId,
+      'p_issue_types': issueTypes,
+      'p_note': note,
+    });
+    final data = result is Map
+        ? Map<String, dynamic>.from(result)
+        : const <String, dynamic>{};
+    if (data['ok'] != true) {
+      throw Exception('report_failed: ${data['error']}');
     }
   }
 }
@@ -340,6 +459,7 @@ class RevealedAnswer {
     this.answerText,
     this.answerLatex2d,
     this.imageUrl,
+    this.parts = const [],
   });
 
   final String answerKind;
@@ -349,12 +469,85 @@ class RevealedAnswer {
   /// 미리 렌더된 정답 PNG (분수/행렬 등 2D 표기) 서명 URL.
   final String? imageUrl;
 
+  /// 세트형 파트 정보. self 파트만 text가 채워진다 (auto 파트 정답 미노출).
+  final List<RevealedAnswerPart> parts;
+
   static RevealedAnswer fromJson(Map<String, dynamic> json) {
+    final rawParts = json['parts'];
     return RevealedAnswer(
       answerKind: (json['answer_kind'] as String?) ?? 'subjective',
       answerText: json['answer_text'] as String?,
       answerLatex2d: json['answer_latex_2d'] as String?,
       imageUrl: json['image_url'] as String?,
+      parts: rawParts is List
+          ? rawParts
+              .whereType<Map>()
+              .map((p) => RevealedAnswerPart(
+                    key: '${p['key'] ?? ''}',
+                    mode: '${p['mode'] ?? 'self'}',
+                    text: p['text'] as String?,
+                  ))
+              .where((p) => p.key.isNotEmpty)
+              .toList(growable: false)
+          : const [],
+    );
+  }
+}
+
+class RevealedAnswerPart {
+  const RevealedAnswerPart({
+    required this.key,
+    required this.mode,
+    this.text,
+  });
+
+  final String key; // '(1)'
+  final String mode; // auto | self
+  final String? text;
+
+  bool get isSelfCheck => mode == 'self';
+}
+
+/// 셀프 채점 기록 결과 (서버가 계산한 전체 정오 + 누적 파트 결과).
+class SelfMarkResult {
+  const SelfMarkResult({required this.correct, this.partResults = const []});
+
+  final bool correct;
+  final List<ProblemPartResult> partResults;
+}
+
+/// 자가 등록 카탈로그용 교재 (진행 통계 없음).
+class AvailableTextbook {
+  const AvailableTextbook({
+    required this.bookId,
+    required this.gradeLabel,
+    required this.name,
+    required this.description,
+    required this.colorValue,
+    required this.series,
+    required this.coverRef,
+    required this.totalProblems,
+  });
+
+  final String bookId;
+  final String gradeLabel;
+  final String name;
+  final String description;
+  final int? colorValue;
+  final String series;
+  final String coverRef;
+  final int totalProblems;
+
+  static AvailableTextbook fromRow(Map<String, dynamic> row) {
+    return AvailableTextbook(
+      bookId: row['book_id'] as String,
+      gradeLabel: (row['grade_label'] as String?) ?? '',
+      name: (row['book_name'] as String?) ?? '교재',
+      description: (row['book_description'] as String?) ?? '',
+      colorValue: (row['book_color'] as num?)?.toInt(),
+      series: (row['series'] as String?)?.trim().toLowerCase() ?? '',
+      coverRef: (row['cover_ref'] as String?)?.trim() ?? '',
+      totalProblems: (row['total_problems'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -463,18 +656,123 @@ class TextbookUnitTree {
   const TextbookUnitTree({
     required this.bigUnits,
     required this.pageOffset,
+    this.categoryCatalog = const [],
   });
 
   final List<TbBigUnit> bigUnits;
   final int? pageOffset;
+  final List<TbCategory> categoryCatalog;
 
   static TextbookUnitTree fromJson(Map<String, dynamic> json) {
+    final schemaVersion = _toInt(json['schema_version']);
+    final normalizedRoot = _map(json['tree']);
+    final root = normalizedRoot.isEmpty ? json : normalizedRoot;
+    final normalizedUnits =
+        _list(root['bigs'] ?? root['big_units'] ?? root['units']);
+    if ((schemaVersion ?? _toInt(root['schema_version']) ?? 0) >= 2 ||
+        normalizedUnits.isNotEmpty) {
+      return _fromNormalized(json, root, normalizedUnits);
+    }
+    return _fromLegacy(json);
+  }
+
+  static TextbookUnitTree _fromNormalized(
+    Map<String, dynamic> json,
+    Map<String, dynamic> root,
+    List<dynamic> rawBigs,
+  ) {
+    final bigs = <TbBigUnit>[];
+    for (var bigIndex = 0; bigIndex < rawBigs.length; bigIndex++) {
+      final big = _map(rawBigs[bigIndex]);
+      if (big.isEmpty) continue;
+      final bigOrder =
+          _toInt(big['order'] ?? big['order_index'] ?? big['big_order']) ??
+              bigIndex;
+      final mids = <TbMidUnit>[];
+      final rawMids = _list(big['mids'] ?? big['middles'] ?? big['mid_units']);
+      for (var midIndex = 0; midIndex < rawMids.length; midIndex++) {
+        final mid = _map(rawMids[midIndex]);
+        if (mid.isEmpty) continue;
+        final midOrder =
+            _toInt(mid['order'] ?? mid['order_index'] ?? mid['mid_order']) ??
+                midIndex;
+        final smalls = <TbSmallUnit>[];
+        final rawSmalls =
+            _list(mid['smalls'] ?? mid['small_units'] ?? mid['sub_units']);
+        for (var smallIndex = 0; smallIndex < rawSmalls.length; smallIndex++) {
+          final small = _map(rawSmalls[smallIndex]);
+          if (small.isEmpty) continue;
+          final subKey = _text(
+                small['sub_key'] ?? small['key'] ?? small['unit_key'],
+              ) ??
+              '${smallIndex + 1}';
+          final pages = <TbPageStat>[];
+          for (final rawPage in _list(small['pages'])) {
+            final page = _map(rawPage);
+            if (page.isEmpty) continue;
+            final stat = TbPageStat.fromRow(
+              page,
+              bigOrder: bigOrder,
+              midOrder: midOrder,
+              subKey: subKey,
+            );
+            if (stat.rawPage > 0) pages.add(stat);
+          }
+          if (pages.isEmpty) continue;
+          pages.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+          smalls.add(
+            TbSmallUnit(
+              subKey: subKey,
+              name: _text(small['name'] ?? small['title']) ?? '',
+              order: _toInt(
+                    small['order'] ??
+                        small['order_index'] ??
+                        small['small_order'],
+                  ) ??
+                  smallIndex,
+              pages: pages,
+            ),
+          );
+        }
+        if (smalls.isEmpty) continue;
+        smalls.sort((a, b) => a.order.compareTo(b.order));
+        mids.add(
+          TbMidUnit(
+            name: _text(mid['name'] ?? mid['title']) ?? '',
+            order: midOrder,
+            smalls: smalls,
+          ),
+        );
+      }
+      if (mids.isEmpty) continue;
+      mids.sort((a, b) => a.order.compareTo(b.order));
+      bigs.add(
+        TbBigUnit(
+          name: _text(big['name'] ?? big['title']) ?? '',
+          order: bigOrder,
+          mids: mids,
+        ),
+      );
+    }
+    bigs.sort((a, b) => a.order.compareTo(b.order));
+    return TextbookUnitTree(
+      bigUnits: bigs,
+      pageOffset: _toInt(root['page_offset'] ?? json['page_offset']),
+      categoryCatalog: _parseCategoryCatalog(
+        root['category_catalog'] ?? json['category_catalog'],
+      ),
+    );
+  }
+
+  static TextbookUnitTree _fromLegacy(Map<String, dynamic> json) {
     // 페이지 현황을 (big|mid|sub) 키로 그룹핑
     final pageStats = <String, List<TbPageStat>>{};
     final rawPages = json['pages'];
     if (rawPages is List) {
-      for (final p in rawPages.whereType<Map<String, dynamic>>()) {
-        final stat = TbPageStat.fromRow(p);
+      for (final rawPage in rawPages) {
+        final page = _map(rawPage);
+        if (page.isEmpty) continue;
+        final stat = TbPageStat.fromRow(page);
         final key = '${stat.bigOrder}|${stat.midOrder}|${stat.subKey}';
         pageStats.putIfAbsent(key, () => <TbPageStat>[]).add(stat);
       }
@@ -533,6 +831,45 @@ class TextbookUnitTree {
       pageOffset: (json['page_offset'] as num?)?.toInt(),
     );
   }
+
+  static List<TbCategory> _parseCategoryCatalog(Object? raw) {
+    final categories = <TbCategory>[];
+    for (final value in _list(raw)) {
+      final row = _map(value);
+      final code = _text(row['code'] ?? row['category_code']);
+      final label = _text(row['label'] ?? row['category_label'] ?? row['name']);
+      if (code == null && label == null) continue;
+      categories.add(TbCategory(code: code ?? '', label: label ?? ''));
+    }
+    return categories;
+  }
+
+  static Map<String, dynamic> _map(Object? value) {
+    return value is Map
+        ? value.map((key, item) => MapEntry('$key', item))
+        : const <String, dynamic>{};
+  }
+
+  static List<dynamic> _list(Object? value) {
+    return value is List ? value : const <dynamic>[];
+  }
+
+  static int? _toInt(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse('${value ?? ''}'.trim());
+  }
+
+  static String? _text(Object? value) {
+    final text = '${value ?? ''}'.trim();
+    return text.isEmpty ? null : text;
+  }
+}
+
+class TbCategory {
+  const TbCategory({required this.code, required this.label});
+
+  final String code;
+  final String label;
 }
 
 class TbBigUnit {
@@ -577,6 +914,7 @@ class TbPageStat {
     required this.total,
     required this.graded,
     required this.correct,
+    this.reported = 0,
   });
 
   final int bigOrder;
@@ -584,24 +922,46 @@ class TbPageStat {
   final String subKey;
   final int rawPage;
   final int? displayPage;
+
+  /// 보류(신고) 문항을 제외한 문항 수. 통계·완료 판정 기준.
   final int total;
   final int graded;
   final int correct;
 
+  /// 검토 중/신고 인정으로 보류된 문항 수 (통계 제외 대상).
+  final int reported;
+
   int get shownPage => displayPage ?? rawPage;
   bool get done => correct >= total;
 
-  static TbPageStat fromRow(Map<String, dynamic> row) {
+  static TbPageStat fromRow(
+    Map<String, dynamic> row, {
+    int? bigOrder,
+    int? midOrder,
+    String? subKey,
+  }) {
     return TbPageStat(
-      bigOrder: (row['big_order'] as num?)?.toInt() ?? 0,
-      midOrder: (row['mid_order'] as num?)?.toInt() ?? 0,
-      subKey: (row['sub_key'] as String?) ?? 'A',
-      rawPage: (row['raw_page'] as num?)?.toInt() ?? 0,
-      displayPage: (row['display_page'] as num?)?.toInt(),
+      bigOrder: _intOf(row['big_order']) ?? bigOrder ?? 0,
+      midOrder: _intOf(row['mid_order']) ?? midOrder ?? 0,
+      subKey: _stringOf(row['sub_key']) ?? subKey ?? 'A',
+      rawPage:
+          _intOf(row['raw_page'] ?? row['page'] ?? row['page_number']) ?? 0,
+      displayPage: _intOf(row['display_page'] ?? row['shown_page']),
       total: (row['total'] as num?)?.toInt() ?? 0,
       graded: (row['graded'] as num?)?.toInt() ?? 0,
       correct: (row['correct'] as num?)?.toInt() ?? 0,
+      reported: (row['reported'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  static int? _intOf(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse('${value ?? ''}'.trim());
+  }
+
+  static String? _stringOf(Object? value) {
+    final text = '${value ?? ''}'.trim();
+    return text.isEmpty ? null : text;
   }
 }
 
@@ -617,6 +977,12 @@ class PageProblem {
     this.attemptCount,
     this.gradedBy,
     this.flags = const [],
+    this.reportStatus,
+    this.setParts = const [],
+    this.partResults = const [],
+    this.categoryCode,
+    this.categoryLabel,
+    this.itemName,
   });
 
   final String cropId;
@@ -632,10 +998,31 @@ class PageProblem {
   final String? gradedBy; // auto | self
   final List<String> flags; // unit_hint | unit_caution | form_differs
 
+  /// 신고 상태: open(검토 중) | accepted(신고 인정) | rejected(반려) | null
+  final String? reportStatus;
+
+  /// 세트형 파트 메타 (파트 키 + 파트별 auto/self). 비어 있으면 일반 문항.
+  final List<SetPartMeta> setParts;
+
+  /// 서버에 누적된 파트별 채점 결과.
+  final List<ProblemPartResult> partResults;
+
+  /// 정규화 v2의 문항별 분류 메타데이터. 단원 트리 계층과는 무관하다.
+  final String? categoryCode;
+  final String? categoryLabel;
+  final String? itemName;
+
   bool get isObjective => answerKind == 'objective';
   bool get isSelfCheck => gradingMode == 'self';
 
+  /// 파트별 입력·채점이 가능한 세트형 문항.
+  bool get hasParts => setParts.length >= 2;
+
+  /// 신고로 보류된 문항 — 채점·통계에서 제외되고 입력이 잠긴다.
+  bool get isOnHold => reportStatus == 'open' || reportStatus == 'accepted';
+
   static PageProblem fromRow(Map<String, dynamic> row) {
+    final rawSetParts = row['set_parts'];
     return PageProblem(
       cropId: row['crop_id'] as String,
       problemNumber: (row['problem_number'] as String?) ?? '',
@@ -647,7 +1034,73 @@ class PageProblem {
       attemptCount: (row['attempt_count'] as num?)?.toInt(),
       gradedBy: row['graded_by'] as String?,
       flags: (row['flags'] as List<dynamic>?)?.cast<String>() ?? const [],
+      reportStatus: row['report_status'] as String?,
+      categoryCode: _nullableText(
+        row['category_code'] ?? row['categoryCode'],
+      ),
+      categoryLabel: _nullableText(
+        row['category_label'] ?? row['categoryLabel'],
+      ),
+      itemName: _nullableText(row['item_name'] ?? row['itemName']),
+      setParts: rawSetParts is List
+          ? rawSetParts
+              .whereType<Map>()
+              .map((p) => SetPartMeta(
+                    key: '${p['key'] ?? ''}',
+                    mode: '${p['mode'] ?? 'self'}',
+                  ))
+              .where((p) => p.key.isNotEmpty)
+              .toList(growable: false)
+          : const [],
+      partResults: ProblemPartResult.listFromJson(row['part_results']),
     );
+  }
+
+  static String? _nullableText(Object? value) {
+    final text = '${value ?? ''}'.trim();
+    return text.isEmpty ? null : text;
+  }
+}
+
+/// 세트형 문항의 파트 메타 (정답 내용은 포함하지 않음).
+class SetPartMeta {
+  const SetPartMeta({required this.key, required this.mode});
+
+  final String key; // '(1)'
+  final String mode; // auto | self
+
+  bool get isSelfCheck => mode == 'self';
+}
+
+/// 파트별 채점 결과.
+class ProblemPartResult {
+  const ProblemPartResult({
+    required this.key,
+    this.answer,
+    required this.correct,
+    this.gradedBy,
+    this.flags = const [],
+  });
+
+  final String key; // '(1)'
+  final String? answer;
+  final bool correct;
+  final String? gradedBy; // auto | self
+  final List<String> flags;
+
+  static List<ProblemPartResult> listFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((p) => ProblemPartResult(
+              key: '${p['key'] ?? ''}',
+              answer: p['answer'] as String?,
+              correct: p['correct'] == true,
+              gradedBy: p['graded_by'] as String?,
+              flags: (p['flags'] as List<dynamic>?)?.cast<String>() ?? const [],
+            ))
+        .where((p) => p.key.isNotEmpty)
+        .toList(growable: false);
   }
 }
 
@@ -658,6 +1111,7 @@ class GradeResult {
     required this.flagsByCropId,
     required this.correctCount,
     required this.wrongCount,
+    this.partResultsByCropId = const {},
   });
 
   final bool ok;
@@ -666,9 +1120,13 @@ class GradeResult {
   final int correctCount;
   final int wrongCount;
 
+  /// 세트형 문항의 누적 파트 결과 (crop_id → 파트 결과 목록).
+  final Map<String, List<ProblemPartResult>> partResultsByCropId;
+
   static GradeResult fromJson(Map<String, dynamic> json) {
     final map = <String, bool>{};
     final flags = <String, List<String>>{};
+    final partResults = <String, List<ProblemPartResult>>{};
     final results = json['results'];
     if (results is List) {
       for (final r in results.whereType<Map>()) {
@@ -677,6 +1135,8 @@ class GradeResult {
           map[id] = r['correct'] == true;
           flags[id] =
               (r['flags'] as List<dynamic>?)?.cast<String>() ?? const [];
+          final parts = ProblemPartResult.listFromJson(r['part_results']);
+          if (parts.isNotEmpty) partResults[id] = parts;
         }
       }
     }
@@ -686,6 +1146,7 @@ class GradeResult {
       flagsByCropId: flags,
       correctCount: (json['correct_count'] as num?)?.toInt() ?? 0,
       wrongCount: (json['wrong_count'] as num?)?.toInt() ?? 0,
+      partResultsByCropId: partResults,
     );
   }
 }

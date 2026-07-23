@@ -69,6 +69,34 @@ test('normalizeDetectResult accepts single-wrapped bbox arrays', () => {
   assert.deepEqual(result.items[0].item_region, [102, 58, 220, 418]);
 });
 
+test('wonri special-lecture concept numbers (1-digit, no badge number) are dropped', () => {
+  // 특강 "개념 페이지"의 사각 박스 개념 번호(예: 1)를 모델이 특강 예제로
+  // 오인한 경우 — 진짜 특강 예제는 배지에 "특강 01" 처럼 2자리 번호가 있다.
+  const result = normalizeDetectResult(
+    {
+      section: 'type_example',
+      page_kind: 'problem_page',
+      page_layout: 'one_column',
+      items: [
+        {
+          number: '1',
+          category: 'special_lecture',
+          label: '특강',
+          content_group: { kind: 'type', label: '특강 1', title: 'ax^4+bx^3+cx^2+bx+a=0의 꼴의 방정식의 풀이', order: 1 },
+          bbox: [140, 60, 170, 90],
+          item_region: [140, 60, 900, 940],
+        },
+      ],
+      notes: '',
+    },
+    { series: 'wonri' },
+  );
+
+  assert.equal(result.items.length, 0);
+  assert.equal(result.page_kind, 'concept_page');
+  assert.match(result.notes, /wonri_lecture_concept_numbers_dropped=1/);
+});
+
 test('wonri special-lecture items are recategorized, not merged into type_example', () => {
   const result = normalizeDetectResult(
     {

@@ -61,7 +61,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   동일 입력 → 동일 캐시 키가 산출된다.
 const RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_slotmeasure_01';
 const SINGLE_QUESTION_RENDERER_VERSION =
-  `${RENDER_CONFIG_VERSION_V2}:student-single-v3`;
+  `${RENDER_CONFIG_VERSION_V2}:student-single-v4`;
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -4861,18 +4861,37 @@ async function cropSingleQuestionPdfToContent(bytes, slotMeasure) {
   // 2단 조판의 왼쪽 한 열만 새 PDF 페이지에 옮긴다. CropBox 좌표만
   // 바꾸면 일부 iOS PDF 뷰어가 원래 A4 좌표계를 유지하므로, 원점이
   // (0, 0)인 새 페이지를 만들어 화면 초과와 불필요한 스크롤을 막는다.
-  const pageWidth = size.width / 2;
+  //
+  // 크롭 창은 종이 상단이 아니라 **본문 텍스트 시작 좌표(BODYTOP/BODYLEFT)**
+  // 기준이어야 한다. 종이 상단부터 자르면 상단 여백(~30mm)+헤더가 포함되고,
+  // 그 높이만큼 문항 하단(객관식 보기)이 창 밖으로 잘려나간다.
+  const padX = 10;
+  const padTop = 10;
+  const padBottom = 16;
+  const bodyTopPt = Number(slotMeasure?.bodyTopPt);
+  const bodyLeftPt = Number(slotMeasure?.bodyLeftPt);
+  const columnWidthPt = Number(slotMeasure?.columnWidthPt);
+  const cropTop = Number.isFinite(bodyTopPt) && bodyTopPt > 0
+    ? Math.max(0, bodyTopPt - padTop)
+    : 0;
+  const cropLeft = Number.isFinite(bodyLeftPt) && bodyLeftPt > 0
+    ? Math.max(0, bodyLeftPt - padX)
+    : 0;
+  const pageWidth = Number.isFinite(columnWidthPt) && columnWidthPt > 0
+    ? Math.min(size.width - cropLeft, columnWidthPt + padX * 2)
+    : size.width / 2;
   const pageHeight = Math.min(
-    size.height,
-    Math.max(120, measuredHeight + 56),
+    size.height - cropTop,
+    Math.max(72, measuredHeight + padTop + padBottom),
   );
-  const bottom = Math.max(0, size.height - pageHeight);
+  const top = size.height - cropTop;
+  const bottom = Math.max(0, top - pageHeight);
   const outputDoc = await PDFDocument.create();
   const embeddedPage = await outputDoc.embedPage(sourcePage, {
-    left: 0,
+    left: cropLeft,
     bottom,
-    right: pageWidth,
-    top: size.height,
+    right: cropLeft + pageWidth,
+    top,
   });
   const outputPage = outputDoc.addPage([pageWidth, pageHeight]);
   outputPage.drawPage(embeddedPage, {

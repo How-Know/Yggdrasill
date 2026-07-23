@@ -303,6 +303,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     if (payload == null) return const <Map<String, dynamic>>[];
     final units = payload['units'];
     if (units is! List) return const <Map<String, dynamic>>[];
+    final isWonri = '${payload['series'] ?? ''}'.trim().toLowerCase() == 'wonri';
     final out = <Map<String, dynamic>>[];
     for (var b = 0; b < units.length; b += 1) {
       final rawBig = units[b];
@@ -316,6 +317,41 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         if (rawMid is! Map) continue;
         final mid = Map<String, dynamic>.from(rawMid);
         final midOrder = _asIntLocal(mid['order_index']) ?? m;
+
+        // 개념원리는 고정 카테고리(A~D)가 아니라 목차에서 추출한 실제
+        // 소단원(sub_units)을 진행률 단위로 사용한다. 연습문제 행도
+        // sub_units에 하나의 행으로 들어 있으므로 동일하게 한 단위가 된다.
+        // 해당 페이지 범위 안의 A~E 문항을 서버가 합쳐 3단계 상태를 계산한다.
+        if (isWonri) {
+          final subUnits = mid['sub_units'];
+          if (subUnits is! List || subUnits.isEmpty) continue;
+          for (var s = 0; s < subUnits.length; s += 1) {
+            final rawSubUnit = subUnits[s];
+            if (rawSubUnit is! Map) continue;
+            final subUnit = Map<String, dynamic>.from(rawSubUnit);
+            final startPage = _asIntLocal(subUnit['start_page']);
+            final endPage = _asIntLocal(subUnit['end_page']);
+            if (startPage == null ||
+                endPage == null ||
+                startPage <= 0 ||
+                endPage < startPage) {
+              continue;
+            }
+            out.add(<String, dynamic>{
+              'big_order': bigOrder,
+              'mid_order': midOrder,
+              // 상태 응답의 안정 키. DB sub_key로 조회하지 않고 아래 페이지
+              // 범위로 조회하므로 실제 크롭 슬롯과 충돌하지 않는다.
+              'sub_key': 'W$s',
+              'scope_kind': 'wonri_sub_unit',
+              'unit_row_index': _asIntLocal(subUnit['order_index']) ?? s,
+              'body_start_page': startPage,
+              'body_end_page': endPage,
+            });
+          }
+          continue;
+        }
+
         final smalls = mid['smalls'];
         if (smalls is! List || smalls.isEmpty) continue;
         for (var s = 0; s < smalls.length; s += 1) {

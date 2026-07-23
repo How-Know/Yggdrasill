@@ -22,6 +22,7 @@ import '../app_overlays.dart';
 import '../services/tenant_service.dart';
 import '../services/watch_bridge_service.dart';
 import '../services/m5_question_request_store.dart';
+import '../services/kiosk_notice_print_service.dart';
 import '../models/class_info.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
@@ -31,6 +32,7 @@ import '../models/education_level.dart';
 import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
 import '../services/homework_assignment_store.dart';
+import '../services/homework_departure_draft_service.dart';
 import '../services/consult_trial_lesson_service.dart';
 import '../services/student_flow_store.dart';
 import '../services/student_behavior_assignment_store.dart';
@@ -2062,6 +2064,8 @@ class _MainScreenState extends State<MainScreen>
     final id = await TenantService.instance.getActiveAcademyId();
     if (!mounted || id == null) return;
     await M5QuestionRequestStore.instance.start(id);
+    // 키오스크(webOS) 하원 시 요청된 알림장 인쇄를 PC에서 대신 수행한다.
+    await KioskNoticePrintService.instance.start(id);
   }
 
   void _onPrintControllerChanged() {
@@ -4508,6 +4512,25 @@ class _MainScreenState extends State<MainScreen>
               dragAxisExtent: dragAxisExtent,
               onConfirmDismiss: () async {
                 final now = DateTime.now();
+                final existingAttendance =
+                    DataManager.instance.getAttendanceRecord(
+                  t.student.id,
+                  t.classDateTime,
+                );
+                HomeworkDepartureDraft? departureDraft;
+                final attendanceId = (existingAttendance?.id ?? '').trim();
+                if (attendanceId.isNotEmpty) {
+                  try {
+                    departureDraft =
+                        await HomeworkDepartureDraftService.instance.load(
+                      attendanceId,
+                      force: true,
+                    );
+                  } catch (_) {
+                    departureDraft = null;
+                  }
+                }
+                if (!context.mounted) return false;
                 final hasHomeworkItems =
                     HomeworkStore.instance.items(t.student.id).isNotEmpty;
                 final HomeworkAssignSelection? selection = hasHomeworkItems
@@ -4515,6 +4538,12 @@ class _MainScreenState extends State<MainScreen>
                         context,
                         t.student.id,
                         anchorTime: t.classDateTime,
+                        initialSelectedGroupIds: departureDraft?.isSaved == true
+                            ? departureDraft!.groupIds
+                            : null,
+                        initialDueDateByGroupId: departureDraft?.isSaved == true
+                            ? departureDraft!.dueDateByGroupId
+                            : const <String, DateTime>{},
                       )
                     : const HomeworkAssignSelection(itemIds: [], dueDate: null);
                 if (selection == null) {
@@ -4527,12 +4556,9 @@ class _MainScreenState extends State<MainScreen>
                 });
                 try {
                   final classDateTime = t.classDateTime;
-                  final existing = DataManager.instance.getAttendanceRecord(
-                    t.student.id,
-                    classDateTime,
-                  );
-                  final DateTime arrival2 =
-                      existing?.arrivalTime ?? _attendTimes[t.setId] ?? now;
+                  final DateTime arrival2 = existingAttendance?.arrivalTime ??
+                      _attendTimes[t.setId] ??
+                      now;
                   await DataManager.instance.saveOrUpdateAttendance(
                     studentId: t.student.id,
                     classDateTime: classDateTime,
@@ -4551,12 +4577,15 @@ class _MainScreenState extends State<MainScreen>
                         .where((e) => e.isNotEmpty)
                         .toSet()
                         .toList(growable: false);
-                    HomeworkStore.instance.markItemsAsHomework(
-                      t.student.id,
-                      selectedItemIds,
-                      dueDate: selection.dueDate,
-                      cloneCompletedItems: true,
-                    );
+                    for (final itemId in selectedItemIds) {
+                      HomeworkStore.instance.markItemsAsHomework(
+                        t.student.id,
+                        <String>[itemId],
+                        dueDate: selection.dueDateByItemId[itemId] ??
+                            selection.dueDate,
+                        cloneCompletedItems: true,
+                      );
+                    }
                   }
                   final selectedIds = selection.itemIds
                       .map((e) => e.trim())

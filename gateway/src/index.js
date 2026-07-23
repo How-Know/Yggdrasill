@@ -78,8 +78,8 @@ const M5_BIND_CONFIRM_REFRESH_DELAY_MS = validInt(
   1500
 );
 const M5_GROUP_CHILDREN_LIMIT = validInt(
-  Number.parseInt(process.env.M5_GROUP_CHILDREN_LIMIT ?? '8', 10),
-  8
+  Number.parseInt(process.env.M5_GROUP_CHILDREN_LIMIT ?? '3', 10),
+  3
 );
 const M5_GROUP_COUNT_LIMIT = validInt(
   Number.parseInt(process.env.M5_GROUP_COUNT_LIMIT ?? '8', 10),

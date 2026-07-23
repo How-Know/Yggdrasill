@@ -162,6 +162,14 @@ function textbookSubKey(textbookScope) {
   return compact(textbookScope?.sub_key || textbookScope?.subKey).toUpperCase();
 }
 
+function normalizedTextbookSubIndex(textbookScope) {
+  const parsed = Number.parseInt(
+    String(textbookScope?.sub_index ?? textbookScope?.subIndex ?? ''),
+    10,
+  );
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function stripStructuralPreviewMarkers(lines) {
   return lines.filter((line) => {
     const s = compact(line);
@@ -836,10 +844,7 @@ async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log
   const subKey = compact(textbookScope.sub_key || textbookScope.subKey);
   const bigOrder = Number.parseInt(String(textbookScope.big_order ?? ''), 10);
   const midOrder = Number.parseInt(String(textbookScope.mid_order ?? ''), 10);
-  const subIndex = Number.parseInt(
-    String(textbookScope.sub_index ?? textbookScope.subIndex ?? ''),
-    10,
-  );
+  const subIndex = normalizedTextbookSubIndex(textbookScope);
   if (
     !academyId ||
     !bookId ||
@@ -852,7 +857,7 @@ async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log
   }
 
   try {
-    const { data: crops, error: cropErr } = await supa
+    let cropQuery = supa
       .from('textbook_problem_crops')
       .select('id,problem_number')
       .eq('academy_id', academyId)
@@ -861,6 +866,10 @@ async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log
       .eq('big_order', bigOrder)
       .eq('mid_order', midOrder)
       .eq('sub_key', subKey);
+    if (subIndex !== null) {
+      cropQuery = cropQuery.eq('sub_index', subIndex);
+    }
+    const { data: crops, error: cropErr } = await cropQuery;
     if (cropErr || !Array.isArray(crops) || crops.length === 0) {
       if (typeof log === 'function') {
         log('vlm_textbook_answer_sidecar_skip', {
@@ -935,6 +944,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
   const subKey = compact(textbookScope.sub_key || textbookScope.subKey);
   const bigOrder = Number.parseInt(String(textbookScope.big_order ?? ''), 10);
   const midOrder = Number.parseInt(String(textbookScope.mid_order ?? ''), 10);
+  const subIndex = normalizedTextbookSubIndex(textbookScope);
   if (
     !academyId ||
     !bookId ||
@@ -955,7 +965,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
       .eq('big_order', bigOrder)
       .eq('mid_order', midOrder)
       .eq('sub_key', subKey);
-    if (Number.isFinite(subIndex) && subIndex >= 0) {
+    if (subIndex !== null) {
       cropQuery = cropQuery.eq('sub_index', subIndex);
     }
     const { data: crops, error } = await cropQuery;
@@ -1660,3 +1670,9 @@ export async function runVlmExtraction({
     },
   };
 }
+
+export {
+  fetchTextbookAnswerSidecars,
+  fetchTextbookCropPages,
+  normalizedTextbookSubIndex,
+};

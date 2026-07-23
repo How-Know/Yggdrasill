@@ -4906,15 +4906,33 @@ async function updateTextbookExtractRunForJob({
   }
 }
 
+function isMissingRelationError(error, relationName = '') {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const message = String(error?.message || error || '');
+  const relation = String(relationName || '').trim();
+  const referencesRelation =
+    !relation || message.toLowerCase().includes(relation.toLowerCase());
+  return (
+    referencesRelation &&
+    (
+      code === '42P01' ||
+      code === 'PGRST205' ||
+      /relation .* does not exist/i.test(message) ||
+      /could not find .*schema cache/i.test(message)
+    )
+  );
+}
+
 async function reconcileTextbookCropQuestionLinks({
   academyId,
   documentId,
   questionIds = [],
+  client = supa,
 }) {
   if (!academyId || !documentId) {
     return { candidates: 0, linked: 0, ambiguous: 0, failed: 0 };
   }
-  let query = supa
+  let query = client
     .from('pb_questions')
     .select('id,question_uid,meta')
     .eq('academy_id', academyId)
@@ -4935,42 +4953,70 @@ async function reconcileTextbookCropQuestionLinks({
         ? meta.textbook_crop_page
         : {};
     const cropId = normalizeWhitespace(cropPage?.crop_id || '');
+    const questionId = normalizeWhitespace(row?.id || '');
     const questionUid = normalizeWhitespace(row?.question_uid || '');
-    if (!cropId || !questionUid) continue;
+    if (!cropId || !questionId) continue;
     if (ambiguousCropIds.has(cropId)) continue;
     const prior = byCropId.get(cropId);
-    if (prior && prior !== questionUid) {
+    if (prior && prior.questionId !== questionId) {
       byCropId.delete(cropId);
       ambiguousCropIds.add(cropId);
       continue;
     }
-    byCropId.set(cropId, questionUid);
+    byCropId.set(cropId, { questionId, questionUid });
   }
 
-  const links = Array.from(byCropId.entries()).filter(
-    ([, questionUid]) => questionUid,
-  );
+  const links = Array.from(byCropId.entries());
   let linked = 0;
   let failed = 0;
   const concurrency = 20;
   for (let offset = 0; offset < links.length; offset += concurrency) {
     const chunk = links.slice(offset, offset + concurrency);
     const results = await Promise.all(
-      chunk.map(async ([cropId, questionUid]) => {
-        const { error: updateError } = await supa
+      chunk.map(async ([cropId, link]) => {
+        if (!link.questionUid) return null;
+        const { error: updateError } = await client
           .from('textbook_problem_crops')
-          .update({ pb_question_uid: questionUid })
+          .update({ pb_question_uid: link.questionUid })
           .eq('academy_id', academyId)
           .eq('id', cropId);
         return !updateError;
       }),
     );
-    linked += results.filter(Boolean).length;
-    failed += results.filter((ok) => !ok).length;
+    linked += results.filter((ok) => ok === true).length;
+    failed += results.filter((ok) => ok === false).length;
   }
+
+  let canonicalLinked = 0;
+  let canonicalUnavailable = false;
+  for (const chunk of arrayChunks(links, 100)) {
+    const canonicalRows = chunk.map(([cropId, link]) => ({
+      crop_id: cropId,
+      academy_id: academyId,
+      pb_question_id: link.questionId,
+      source: 'extract',
+      confidence: 1,
+    }));
+    const { error: canonicalError } = await client
+      .from('textbook_crop_question_links')
+      .upsert(canonicalRows, { onConflict: 'crop_id' });
+    if (!canonicalError) {
+      canonicalLinked += canonicalRows.length;
+      continue;
+    }
+    if (isMissingRelationError(canonicalError, 'textbook_crop_question_links')) {
+      canonicalUnavailable = true;
+      canonicalLinked = 0;
+      break;
+    }
+    throw new Error(`textbook_crop_canonical_link_upsert_failed:${canonicalError.message}`);
+  }
+
   return {
     candidates: links.length,
     linked,
+    canonicalLinked,
+    canonicalUnavailable,
     ambiguous: ambiguousCropIds.size,
     failed,
   };
@@ -6087,4 +6133,6 @@ export {
   injectSubQuestionMarkers,
   buildHwpxFigureMapByQuestionNumber as _buildHwpxFigureMapByQuestionNumber,
   applyHwpxFigureOverlayToVlmPayload as _applyHwpxFigureOverlayToVlmPayload,
+  isMissingRelationError as _isMissingRelationError,
+  reconcileTextbookCropQuestionLinks as _reconcileTextbookCropQuestionLinks,
 };

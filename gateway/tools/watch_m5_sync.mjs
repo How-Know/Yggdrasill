@@ -50,7 +50,7 @@ const serialSilentMs = intArg('--serial-silent-ms', Number.parseInt(process.env.
 const statusMs = intArg('--status-ms', Number.parseInt(process.env.M5_SYNC_STATUS_MS || '15000', 10));
 const alertCooldownMs = intArg('--alert-cooldown-ms', Number.parseInt(process.env.M5_SYNC_ALERT_COOLDOWN_MS || '300000', 10));
 const groupLimit = intArg('--group-limit', Number.parseInt(process.env.M5_GROUP_COUNT_LIMIT || '8', 10));
-const childrenLimit = intArg('--children-limit', Number.parseInt(process.env.M5_GROUP_CHILDREN_LIMIT || '8', 10));
+const childrenLimit = intArg('--children-limit', Number.parseInt(process.env.M5_GROUP_CHILDREN_LIMIT || '3', 10));
 
 const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE);
 

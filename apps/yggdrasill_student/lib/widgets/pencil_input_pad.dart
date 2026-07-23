@@ -124,6 +124,9 @@ class PencilInputPadState extends State<PencilInputPad> {
   final List<List<Offset>> _strokes = <List<Offset>>[];
   final List<List<int>> _strokeTimes = <List<int>>[];
   int? _activePointer;
+  /// 동시에 내려온 포인터 수. 2개 이상이면 필기를 막고(두 손가락 스와이프용)
+  /// 진행 중 획을 취소한다.
+  int _pointerCount = 0;
 
   mlkit.DigitalInkRecognizer? _recognizer;
   bool _modelReady = false;
@@ -209,6 +212,17 @@ class PencilInputPadState extends State<PencilInputPad> {
   void _endStroke() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), _recognize);
+  }
+
+  /// 두 손가락 제스처가 시작되면 방금 시작한 획을 버린다.
+  void _cancelActiveStroke() {
+    _debounce?.cancel();
+    _activePointer = null;
+    if (_strokes.isEmpty) return;
+    setState(() {
+      _strokes.removeLast();
+      _strokeTimes.removeLast();
+    });
   }
 
   Future<void> _recognize() async {
@@ -320,6 +334,12 @@ class PencilInputPadState extends State<PencilInputPad> {
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: _modelReady
                       ? (event) {
+                          _pointerCount += 1;
+                          // 두 손가락 이상: 필기 대신 상위 스와이프 제스처에 맡긴다.
+                          if (_pointerCount >= 2) {
+                            _cancelActiveStroke();
+                            return;
+                          }
                           if (_activePointer != null) return;
                           _activePointer = event.pointer;
                           _startStroke(
@@ -330,6 +350,7 @@ class PencilInputPadState extends State<PencilInputPad> {
                       : null,
                   onPointerMove: _modelReady
                       ? (event) {
+                          if (_pointerCount >= 2) return;
                           if (_activePointer != event.pointer) return;
                           _extendStroke(
                             event.localPosition,
@@ -339,16 +360,20 @@ class PencilInputPadState extends State<PencilInputPad> {
                       : null,
                   onPointerUp: _modelReady
                       ? (event) {
+                          _pointerCount =
+                              (_pointerCount - 1).clamp(0, 10).toInt();
                           if (_activePointer != event.pointer) return;
                           _activePointer = null;
-                          _endStroke();
+                          if (_pointerCount == 0) _endStroke();
                         }
                       : null,
                   onPointerCancel: _modelReady
                       ? (event) {
+                          _pointerCount =
+                              (_pointerCount - 1).clamp(0, 10).toInt();
                           if (_activePointer != event.pointer) return;
                           _activePointer = null;
-                          _endStroke();
+                          if (_pointerCount == 0) _endStroke();
                         }
                       : null,
                   child: Container(

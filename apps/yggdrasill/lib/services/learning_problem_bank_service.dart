@@ -632,6 +632,7 @@ class LearningProblemAnswerRender {
     this.displayHeightDp,
     this.rowHeightDp,
     this.layoutProfile = '',
+    this.transparent = false,
   });
 
   final String key;
@@ -646,6 +647,9 @@ class LearningProblemAnswerRender {
   final double? displayHeightDp;
   final double? rowHeightDp;
   final String layoutProfile;
+
+  /// 배경 없는 알파 글리프 PNG 여부 — true 면 앱이 테마 색으로 틴트해 그린다.
+  final bool transparent;
 
   bool get hasImage => url.trim().isNotEmpty;
 
@@ -670,6 +674,7 @@ class LearningProblemAnswerRender {
           _positiveDoubleOrNull(map['rowHeightDp'] ?? map['row_height_dp']),
       layoutProfile:
           '${map['layoutProfile'] ?? map['layout_profile'] ?? ''}'.trim(),
+      transparent: map['transparent'] == true,
     );
   }
 }
@@ -677,6 +682,11 @@ class LearningProblemAnswerRender {
 const String kUnifiedAnswerRenderStyleVersion =
     'answer-xelatex-v10-rightsheet-asset-driven';
 const List<String> kUnifiedAnswerRenderStyleVersionFallbacks = <String>[];
+
+/// v11 uniform-line 파일럿 스타일 — 줄 스트럿으로 한 줄짜리 정답 높이를 통일하고
+/// 세트형 정답은 파트별 이미지('sourceId#(1)' 키)를 추가로 내려준다.
+const String kUnifiedAnswerRenderStyleVersionV11 =
+    'answer-xelatex-v11-uniform-line';
 
 Map<String, dynamic> _withConsistentAssignmentSubjectTitle(
   Map<String, dynamic> renderConfig,
@@ -3366,15 +3376,22 @@ class LearningProblemBankService {
       return const <String, LearningProblemAnswerRender>{};
     }
     try {
+      // v11 요청 시 세트형 파트 렌더('subjective#(1)' 등)도 함께 조회한다.
+      final answerKindCandidates = <String>[
+        safeAnswerKind,
+        if (styles.contains(kUnifiedAnswerRenderStyleVersionV11))
+          for (var p = 1; p <= 12; p++) '$safeAnswerKind#($p)',
+      ];
       final rows = await _client
           .from('answer_render_assets')
           .select(
             'source_id,answer_kind,engine,storage_bucket,storage_path,'
-            'width_px,height_px,pixel_ratio,style_version,render_error',
+            'width_px,height_px,pixel_ratio,style_version,render_error,'
+            'transparent',
           )
           .eq('academy_id', safeAcademyId)
           .eq('source_kind', safeSourceKind)
-          .eq('answer_kind', safeAnswerKind)
+          .inFilter('answer_kind', answerKindCandidates)
           .eq('engine', 'xelatex')
           .eq('render_error', '')
           .inFilter('source_id', ids)
@@ -3388,12 +3405,17 @@ class LearningProblemBankService {
         final row = Map<String, dynamic>.from(raw);
         final sourceId = '${row['source_id'] ?? ''}'.trim();
         final style = '${row['style_version'] ?? ''}'.trim();
+        final answerKind = '${row['answer_kind'] ?? ''}'.trim();
         if (sourceId.isEmpty || style.isEmpty) continue;
-        final previous = bestRows[sourceId];
+        final partKey = answerKind.contains('#')
+            ? answerKind.substring(answerKind.indexOf('#') + 1)
+            : '';
+        final entryKey = partKey.isEmpty ? sourceId : '$sourceId#$partKey';
+        final previous = bestRows[entryKey];
         final previousStyle = '${previous?['style_version'] ?? ''}'.trim();
         if (previous == null ||
             (styleRank[style] ?? 999) < (styleRank[previousStyle] ?? 999)) {
-          bestRows[sourceId] = row;
+          bestRows[entryKey] = row;
         }
       }
       final out = <String, LearningProblemAnswerRender>{};
@@ -3412,6 +3434,22 @@ class LearningProblemBankService {
             : _doubleOrZero(row['pixel_ratio']);
         final displayWidth = width > 0 ? width / ratio : 48.0;
         final displayHeight = height > 0 ? height / ratio : 38.0;
+        final rowStyle = '${row['style_version'] ?? ''}'.trim();
+        final isV11 = rowStyle == kUnifiedAnswerRenderStyleVersionV11;
+        // v11 은 게이트웨이의 양자화 규칙(base 35 / step 30)을 미러링한다.
+        double rowHeight;
+        if (isV11) {
+          const base = 35.0;
+          const step = 30.0;
+          const tolerance = 3.0;
+          final lines = ((displayHeight - base - tolerance) / step).ceil() + 1;
+          final snapped =
+              base + step * ((lines < 1 ? 1 : lines) - 1).toDouble();
+          rowHeight = (snapped < displayHeight ? displayHeight : snapped) + 18;
+          if (rowHeight < 46) rowHeight = 46;
+        } else {
+          rowHeight = displayHeight + 18 < 46 ? 46 : displayHeight + 18;
+        }
         out[entry.key] = LearningProblemAnswerRender(
           key: entry.key,
           url: url,
@@ -3420,11 +3458,14 @@ class LearningProblemBankService {
           pixelRatio: ratio,
           cached: true,
           error: '',
-          styleVersion: '${row['style_version'] ?? ''}'.trim(),
+          styleVersion: rowStyle,
           displayWidthDp: displayWidth,
           displayHeightDp: displayHeight,
-          rowHeightDp: displayHeight + 18 < 46 ? 46 : displayHeight + 18,
-          layoutProfile: 'rightsheet_xelatex_asset_driven',
+          rowHeightDp: rowHeight,
+          layoutProfile: isV11
+              ? 'rightsheet_xelatex_uniform_line_v11'
+              : 'rightsheet_xelatex_asset_driven',
+          transparent: row['transparent'] == true,
         );
       }
       return out;

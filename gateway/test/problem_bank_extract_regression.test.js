@@ -11,6 +11,7 @@ const SNAPSHOTS_DIR = path.join(__dirname, 'snapshots', 'extract');
 const {
   _parseHwpxBuffer: parseHwpxBuffer,
   _buildQuestionRows: buildQuestionRows,
+  _reconcileTextbookCropQuestionLinks: reconcileTextbookCropQuestionLinks,
 } = await import('../src/problem_bank_extract_worker.js');
 
 function loadFixture(name) {
@@ -138,3 +139,108 @@ for (const snapshotFile of snapshotFiles) {
     }
   });
 }
+
+function reconcileClient({ canonicalError = null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    from(table) {
+      const call = { table, operation: '', payload: null };
+      calls.push(call);
+      const builder = {
+        select() { return builder; },
+        eq() { return builder; },
+        in() { return builder; },
+        update(payload) {
+          call.operation = 'update';
+          call.payload = payload;
+          return builder;
+        },
+        async upsert(payload, options) {
+          call.operation = 'upsert';
+          call.payload = payload;
+          call.options = options;
+          return { error: canonicalError };
+        },
+        then(resolve, reject) {
+          const result = table === 'pb_questions'
+            ? {
+                data: [{
+                  id: 'question-1',
+                  question_uid: 'uid-1',
+                  meta: { textbook_crop_page: { crop_id: 'crop-1' } },
+                }],
+                error: null,
+              }
+            : { data: null, error: null };
+          return Promise.resolve(result).then(resolve, reject);
+        },
+      };
+      return builder;
+    },
+  };
+}
+
+test('textbook crop reconciliation writes canonical and legacy links', async () => {
+  const client = reconcileClient();
+  const result = await reconcileTextbookCropQuestionLinks({
+    academyId: 'academy-1',
+    documentId: 'document-1',
+    client,
+  });
+
+  assert.equal(result.canonicalLinked, 1);
+  assert.equal(result.canonicalUnavailable, false);
+  assert.equal(result.linked, 1);
+  const canonical = client.calls.find(
+    (call) => call.table === 'textbook_crop_question_links',
+  );
+  assert.deepEqual(canonical.payload, [{
+    crop_id: 'crop-1',
+    academy_id: 'academy-1',
+    pb_question_id: 'question-1',
+    source: 'extract',
+    confidence: 1,
+  }]);
+  const legacy = client.calls.find(
+    (call) =>
+      call.table === 'textbook_problem_crops' &&
+      call.operation === 'update',
+  );
+  assert.deepEqual(legacy.payload, { pb_question_uid: 'uid-1' });
+});
+
+test('textbook crop reconciliation falls back only for a missing link table', async () => {
+  const missingClient = reconcileClient({
+    canonicalError: {
+      code: '42P01',
+      message: 'relation "textbook_crop_question_links" does not exist',
+    },
+  });
+  const result = await reconcileTextbookCropQuestionLinks({
+    academyId: 'academy-1',
+    documentId: 'document-1',
+    client: missingClient,
+  });
+  assert.equal(result.canonicalUnavailable, true);
+  assert.equal(result.linked, 1);
+
+  const brokenClient = reconcileClient({
+    canonicalError: { code: '42501', message: 'permission denied' },
+  });
+  await assert.rejects(
+    reconcileTextbookCropQuestionLinks({
+      academyId: 'academy-1',
+      documentId: 'document-1',
+      client: brokenClient,
+    }),
+    /textbook_crop_canonical_link_upsert_failed:permission denied/,
+  );
+  assert.ok(
+    brokenClient.calls.some(
+      (call) =>
+        call.table === 'textbook_problem_crops' &&
+        call.operation === 'update',
+    ),
+  );
+});

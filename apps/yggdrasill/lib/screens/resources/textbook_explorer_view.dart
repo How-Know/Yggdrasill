@@ -1601,6 +1601,10 @@ class TextbookExplorerContent extends StatelessWidget {
     }
     final keys = grouped.keys.toList(growable: false);
     final showSelectAll = controller.homeworkSelectionMode;
+    // 과제 추가 다이얼로그에서만 문항카드를 작게 렌더링한다.
+    // 원본 교재 탐색기(resources)는 homeworkSelectionMode=false라 영향 없음.
+    final cardScale = controller.homeworkSelectionMode ? 0.78 : 1.0;
+    final cardGap = 12.0 * cardScale;
     return Listener(
       onPointerUp: (_) => controller.finishItemDrag(),
       onPointerCancel: (_) => controller.cancelItemDrag(),
@@ -1635,8 +1639,8 @@ class TextbookExplorerContent extends StatelessWidget {
                         _tbExQuestionCardExtraInset,
                   ),
                   child: Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
+                    spacing: cardGap,
+                    runSpacing: cardGap,
                     children: [
                       for (final item in groupItems)
                         MouseRegion(
@@ -1652,6 +1656,7 @@ class TextbookExplorerContent extends StatelessWidget {
                               selected: controller
                                   .isItemEffectivelySelected(item.selKey),
                               style: style,
+                              scale: cardScale,
                               onTap: () =>
                                   controller.toggleSelectKey(item.selKey),
                             ),
@@ -2440,37 +2445,40 @@ class _QuestionCard extends StatelessWidget {
     required this.selected,
     required this.style,
     required this.onTap,
+    this.scale = 1.0,
   });
 
   final TbExItem item;
   final bool selected;
   final PreviewAcademyPanelStyle style;
   final VoidCallback onTap;
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF33A373);
     final brightness = Theme.of(context).brightness;
+    final s = scale.clamp(0.5, 1.0);
     final cardBg = selected
         ? accent.withValues(alpha: brightness == Brightness.dark ? 0.18 : 0.10)
         : style.dropdownBackground;
     return SizedBox(
-      width: 118,
+      width: 118 * s,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(12 * s),
           onTap: onTap,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
-                height: 58,
+                height: 58 * s,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(12 * s),
                   border: Border.all(
                     color: selected ? accent : style.border,
                     width: selected ? 2 : 1,
@@ -2482,25 +2490,25 @@ class _QuestionCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: style.title,
-                    fontSize: 20,
+                    fontSize: 20 * s,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
-              const SizedBox(height: 6),
+              SizedBox(height: 6 * s),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   if (item.difficultyLabel.trim().isNotEmpty) ...[
-                    _DiffDot(label: item.difficultyLabel),
-                    const SizedBox(width: 5),
+                    _DiffDot(label: item.difficultyLabel, scale: s),
+                    SizedBox(width: 5 * s),
                   ],
                   if (item.answerKind.label.isNotEmpty)
                     Text(
                       item.answerKind.label,
                       style: TextStyle(
                         color: style.hint,
-                        fontSize: 11,
+                        fontSize: 11 * s,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -2515,19 +2523,24 @@ class _QuestionCard extends StatelessWidget {
 }
 
 class _DiffDot extends StatelessWidget {
-  const _DiffDot({required this.label});
+  const _DiffDot({
+    required this.label,
+    this.scale = 1.0,
+  });
 
   final String label;
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
     final colors = _colorsFor(label);
     final display = _displayLabel(label);
+    final s = scale.clamp(0.5, 1.0);
     return Tooltip(
       message: '난이도 $label',
       child: Container(
-        width: 16,
-        height: 16,
+        width: 16 * s,
+        height: 16 * s,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
@@ -2539,7 +2552,7 @@ class _DiffDot extends StatelessWidget {
           maxLines: 1,
           style: TextStyle(
             color: colors.$3,
-            fontSize: display.length >= 2 ? 7.5 : 9,
+            fontSize: (display.length >= 2 ? 7.5 : 9) * s,
             fontWeight: FontWeight.w800,
             height: 1,
           ),

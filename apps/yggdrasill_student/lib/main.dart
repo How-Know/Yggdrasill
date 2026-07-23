@@ -5,6 +5,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'services/app_config.dart';
+import 'widgets/student_status_island.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -36,6 +37,7 @@ class StudentApp extends StatelessWidget {
           themeMode: mode,
           theme: buildYggLightTheme(),
           darkTheme: buildYggDarkTheme(),
+          builder: (context, child) => StudentStatusIslandHost(child: child),
           home: const _AuthGate(),
         );
       },

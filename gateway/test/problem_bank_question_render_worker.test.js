@@ -5,7 +5,10 @@ import {
   canonicalize,
   hashQuestionContent,
 } from '../src/question_render_cache_key.js';
-import { problemNumberKey } from '../src/problem_bank_question_render_worker.js';
+import {
+  problemNumberKey,
+  resolveQuestion,
+} from '../src/problem_bank_question_render_worker.js';
 
 const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v1';
 
@@ -92,4 +95,55 @@ test('cache key isolates identical content assigned to different crops', () => {
 
   assert.equal(first.contentHash, second.contentHash);
   assert.notEqual(first.cacheKey, second.cacheKey);
+});
+
+test('question resolution prefers the canonical crop link', async () => {
+  const tables = [];
+  const client = {
+    from(table) {
+      tables.push(table);
+      const filters = [];
+      const builder = {
+        select() { return builder; },
+        eq(column, value) {
+          filters.push([column, value]);
+          return builder;
+        },
+        async maybeSingle() {
+          if (table === 'textbook_crop_question_links') {
+            assert.deepEqual(filters, [
+              ['academy_id', 'academy-1'],
+              ['crop_id', 'crop-1'],
+            ]);
+            return { data: { pb_question_id: 'question-1' }, error: null };
+          }
+          if (table === 'pb_questions') {
+            assert.ok(
+              filters.some(([column, value]) =>
+                column === 'id' && value === 'question-1'
+              ),
+            );
+            return {
+              data: { id: 'question-1', stem: 'canonical question' },
+              error: null,
+            };
+          }
+          throw new Error(`unexpected table: ${table}`);
+        },
+      };
+      return builder;
+    },
+  };
+
+  const question = await resolveQuestion(client, {
+    academy_id: 'academy-1',
+    crop_id: 'crop-1',
+    pb_question_id: 'stale-question',
+  });
+
+  assert.equal(question.id, 'question-1');
+  assert.deepEqual(tables, [
+    'textbook_crop_question_links',
+    'pb_questions',
+  ]);
 });

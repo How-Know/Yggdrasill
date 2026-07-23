@@ -40,6 +40,21 @@ const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
 
+/// 정답 리스트 문항번호 열 — 왼쪽 여백 12 + 번호 영역 64 (4자리 수용).
+const double _rsAnswerQuestionColLeftPad = 12.0;
+const double _rsAnswerQuestionColWidth = 64.0 + _rsAnswerQuestionColLeftPad;
+const double _rsAnswerQuestionGap = 8.0;
+
+/// 정답 카드 안쪽 콘텐츠(이미지·세트형 칩) 공통 왼쪽 들여쓰기.
+const double _rsAnswerContentLeftPad = 16.0;
+
+/// 세트형 하위 카드 — 본 정답 카드와 같은 왼쪽(같은 너비). 내용물만 별도 들여쓰기.
+const double _rsSetPartCardLeft =
+    _rsAnswerQuestionColWidth + _rsAnswerQuestionGap;
+
+/// 정답 리스트 문항번호·세트형 파트 번호 공통 크기.
+const double _rsAnswerQuestionNumberSize = 22.0;
+
 class _RightSheetFabColors {
   const _RightSheetFabColors({
     required this.surface,
@@ -2774,6 +2789,9 @@ class _RightSheetGradingCellVm {
   final String key;
   final int questionIndex;
   final String questionLabel;
+
+  /// 문항 종류 짧은 라벨 (개념/필수/확인/연습/특강). 문항번호 위에 표시.
+  final String questionCategory;
   final String answer;
   final String answerMode;
   final String answerImageUrl;
@@ -2798,6 +2816,7 @@ class _RightSheetGradingCellVm {
     required this.key,
     required this.questionIndex,
     this.questionLabel = '',
+    this.questionCategory = '',
     required this.answer,
     this.answerMode = '',
     this.answerImageUrl = '',
@@ -2837,6 +2856,9 @@ class _RightSheetGradingPageVm {
 
 class _RightSheetAnswerListRow extends StatefulWidget {
   final String questionLabel;
+
+  /// 문항 종류 짧은 라벨 (개념/필수/확인/연습/특강) — 문항번호 위에 표시.
+  final String questionCategory;
   final bool editLocked;
   final String state;
   final String baselineState;
@@ -2851,11 +2873,18 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final VoidCallback onToggleState;
   final VoidCallback onShowSourceInfo;
   final Widget answerChild;
+
+  /// 세트형 문항 파트 수 (0이면 일반 문항). 배지·펼침 화살표 표시에 사용.
+  final int setPartCount;
+
+  /// 세트형 파트 카드가 펼쳐져 있는지.
+  final bool setExpanded;
   final bool solutionOpening;
   final bool solutionOpenBlocked;
 
   const _RightSheetAnswerListRow({
     required this.questionLabel,
+    this.questionCategory = '',
     required this.editLocked,
     required this.state,
     this.baselineState = '',
@@ -2870,6 +2899,8 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     required this.onToggleState,
     required this.onShowSourceInfo,
     required this.answerChild,
+    this.setPartCount = 0,
+    this.setExpanded = false,
     this.solutionOpening = false,
     this.solutionOpenBlocked = false,
   });
@@ -2883,8 +2914,13 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
     with SingleTickerProviderStateMixin {
   static const double _actionPaneWidth = 62;
   static const Duration _snapDuration = Duration(milliseconds: 170);
-  static const double _cardRadius = 12.0;
+
+  /// 카드 모서리 — 아이패드(학생앱) 정답 리스트 카드(r=14)와 동일.
+  static const double _cardRadius = 14.0;
   static const double _cardBorderWidth = 2.2;
+
+  static const double _questionColumnLeftPad = _rsAnswerQuestionColLeftPad;
+  static const double _questionColumnWidth = _rsAnswerQuestionColWidth;
 
   late final AnimationController _ctrl =
       AnimationController(vsync: this, duration: _snapDuration);
@@ -2962,29 +2998,54 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
               : () => unawaited(_openSolution()),
           onLongPress: widget.solutionOpenBlocked ? null : widget.onReportIssue,
           child: SizedBox(
-            width: 56,
+            width: _questionColumnWidth,
             height: 44,
-            child: Center(
-              child: busy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.2,
-                        color: _rsAccent,
+            child: Padding(
+              padding: const EdgeInsets.only(left: _questionColumnLeftPad),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.2,
+                          color: _rsAccent,
+                        ),
+                      )
+                    // 번호(위) + 문항 종류(아래), 왼쪽 정렬.
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            questionLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.visible,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  fontSize: _rsAnswerQuestionNumberSize,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.0,
+                                ),
+                          ),
+                          if (widget.questionCategory.trim().isNotEmpty)
+                            Text(
+                              widget.questionCategory.trim(),
+                              maxLines: 1,
+                              overflow: TextOverflow.visible,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context).hintColor,
+                                  ),
+                            ),
+                        ],
                       ),
-                    )
-                  : Text(
-                      questionLabel,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        height: 1.0,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
+              ),
             ),
           ),
         ),
@@ -3029,11 +3090,23 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                     ),
                   ),
                 ),
+                if (widget.setPartCount > 0) ...[
+                  const SizedBox(width: 8),
+                  Icon(
+                    widget.setExpanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 26,
+                    color: _rsTextSub,
+                  ),
+                ],
                 if (widget.correctedRetry) ...[
                   const SizedBox(width: 8),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
                       color: _rsAccent.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(999),
@@ -3160,6 +3233,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _answerImageBottomPadding = 10.0;
   static const double _answerImageVerticalPadding =
       _answerImageTopPadding + _answerImageBottomPadding;
+
+  /// v11(uniform-line) 렌더 전용 상하 여백 — 세트형 하위 카드와 동일한
+  /// 타이트한 프레이밍.
+  static const double _answerImageTightPadding = 3.0;
+
+  /// v11 uniform-line 렌더 한 줄의 표시 높이(dp).
+  /// (템플릿 스트럿 1.5em @15pt, 상하 보더 2.5pt, 160dpi 기준 실측 61px)
+  static const double _answerV11OneLineHeight = 61.0;
   static const double _answerRenderDefaultPixelRatio = 7.0;
   static const double _inlineAnswerLineHeight = 30.0;
 
@@ -3188,6 +3269,31 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Map<String, String> _baselineStates = <String, String>{};
   Map<String, String> _correctionStates = <String, String>{};
   Map<String, int> _correctionAttemptNumbers = <String, int>{};
+
+  /// 파트 카드가 펼쳐진 세트형 셀 키 목록.
+  final Set<String> _expandedSetCellKeys = <String>{};
+
+  /// 라이트 테마 여부 — 정답 카드는 테마에 맞춰 밝은/어두운 팔레트를 쓴다.
+  /// (v11 투명 렌더 + 앱 틴트 방식이 전 과제 기본으로 확정됨)
+  bool get _lightCards => Theme.of(context).brightness == Brightness.light;
+
+  /// 카드 콘텐츠(정답 텍스트·객관식 번호·파트 라벨)의 잉크 색.
+  Color get _cardInk => _lightCards ? const Color(0xFF1C2A33) : _rsText;
+
+  /// v11 알파 글리프 렌더에 입힐 틴트 색. 틴트 대상이 아니면 null.
+  /// (예전 불투명 v11 자산은 재렌더 전까지 원본 그대로 표시)
+  Color? _renderTintColor(LearningProblemAnswerRender render) {
+    if (render.styleVersion != kUnifiedAnswerRenderStyleVersionV11) return null;
+    if (!render.transparent) return null;
+    return _cardInk;
+  }
+
+  bool _isAcceptedAnswerRenderStyle(String styleVersion) {
+    final style = styleVersion.trim();
+    return style == kUnifiedAnswerRenderStyleVersion ||
+        style == kUnifiedAnswerRenderStyleVersionV11;
+  }
+
   String _boundSessionId = '';
   RightSideSheetTestGradingSession? _boundSessionRef;
   bool _gradingEditLocked = false;
@@ -3336,6 +3442,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         _baselineStates = <String, String>{};
         _correctionStates = <String, String>{};
         _correctionAttemptNumbers = <String, int>{};
+        _expandedSetCellKeys.clear();
         _gradingEditLocked = false;
         _wrongOnly = false;
         _answerRenders = <String, LearningProblemAnswerRender>{};
@@ -3377,6 +3484,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _baselineStates = baselineStates;
       _correctionStates = correctionStates;
       _correctionAttemptNumbers = correctionAttemptNumbers;
+      _expandedSetCellKeys.clear();
       _gradingEditLocked = session.gradingLocked;
       _wrongOnly = session.wrongOnlyDefault && baselineStates.isNotEmpty;
       _answerRenders = <String, LearningProblemAnswerRender>{};
@@ -3448,6 +3556,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final cellKeysBySourceLookup = <String, List<String>>{};
     final expectedAssetKeys = <String>{};
     final missingSourceKeys = <String>{};
+    // 세트형 정답(파트 렌더가 있어야 하는) source id — 파트가 아직 없으면
+    // 프리로드 서비스가 짧은 backoff 후 재조회하도록 알려준다.
+    final partExpectedByLookup = <String, Set<String>>{};
     for (final rawPage in session.gradingPages) {
       final rawCells = rawPage['cells'];
       if (rawCells is! List) continue;
@@ -3489,6 +3600,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           cellKeysBySourceLookup
               .putIfAbsent('$lookupKey\n$answerSourceId', () => <String>[])
               .add(key);
+          if (_splitSetAnswerParts(answer).length >= 2) {
+            partExpectedByLookup
+                .putIfAbsent(lookupKey, () => <String>{})
+                .add(answerSourceId);
+          }
         } else {
           missingSourceKeys.add(key);
         }
@@ -3513,13 +3629,25 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           sourceKind: sourceKind,
           answerKind: answerKind,
           sourceIds: entry.value,
+          // v11(uniform-line, 투명+틴트)이 기본. 아직 재렌더 전이면 v10 폴백.
+          styleVersion: kUnifiedAnswerRenderStyleVersionV11,
+          fallbackStyleVersions: const <String>[
+            kUnifiedAnswerRenderStyleVersion,
+          ],
+          partExpectedSourceIds:
+              partExpectedByLookup[entry.key] ?? const <String>{},
         );
         for (final renderEntry in rendersBySourceId.entries) {
-          final cellKeys =
-              cellKeysBySourceLookup['${entry.key}\n${renderEntry.key}'] ??
-                  const <String>[];
+          // 파트 렌더 키는 'sourceId#(1)' 형태 — 셀 키에도 같은 접미사를 붙인다.
+          final renderKey = renderEntry.key;
+          final hashIdx = renderKey.indexOf('#');
+          final sourceId =
+              hashIdx < 0 ? renderKey : renderKey.substring(0, hashIdx);
+          final partSuffix = hashIdx < 0 ? '' : renderKey.substring(hashIdx);
+          final cellKeys = cellKeysBySourceLookup['${entry.key}\n$sourceId'] ??
+              const <String>[];
           for (final cellKey in cellKeys) {
-            storedRendersByKey[cellKey] = renderEntry.value;
+            storedRendersByKey['$cellKey$partSuffix'] = renderEntry.value;
           }
         }
       }
@@ -3574,7 +3702,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final render = _answerRenders[key];
     if (render != null && render.hasImage) {
       final style = render.styleVersion.trim();
-      if (style == kUnifiedAnswerRenderStyleVersion) {
+      if (_isAcceptedAnswerRenderStyle(style)) {
         return 'xelatex_asset';
       }
       return 'missing_xelatex_asset';
@@ -3988,13 +4116,38 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return state == 'wrong' || state == 'unsolved';
   }
 
+  /// '틀린것만 보기'를 쓸 수 있는지. 재채점(베이스라인) 세션이 아니어도
+  /// 현재 채점 상태에 오답/미풀이가 있으면 켤 수 있다 (교재출처 채점 포함).
+  bool get _wrongOnlyAvailable {
+    if (_baselineStates.isNotEmpty) return true;
+    return _gradingStates.values.any((raw) {
+      final state = _normalizeState(raw);
+      return state == 'wrong' || state == 'unsolved';
+    });
+  }
+
+  /// '틀린것만 보기'가 켜졌을 때 이 셀을 숨겨야 하는지.
+  /// - 베이스라인(첫 채점 결과)이 있으면 기존 규칙: 첫 채점에서 틀렸거나
+  ///   미풀이였던 문항만 남기고, 이미 수정 완료된 문항은 숨긴다.
+  /// - 없으면(교재출처 등) 현재 상태가 오답/미풀이인 문항만 남긴다.
+  bool _hideCellForWrongOnly(String key) {
+    if (_baselineStates.isNotEmpty) {
+      return !_isBaselineRetryKey(key) || _isCorrectedRetryKey(key);
+    }
+    final state = _normalizeState(_gradingStates[key]);
+    return state != 'wrong' && state != 'unsolved';
+  }
+
   bool _isCorrectedRetryKey(String key) {
     return _correctionStates[key] == 'corrected' && _isBaselineRetryKey(key);
   }
 
   bool get _answerListReadOnly => widget.session?.onAction == null;
 
-  Future<void> _toggleCellState(String key) async {
+  Future<void> _toggleCellState(
+    String key, {
+    List<String> partLabels = const <String>[],
+  }) async {
     if (_answerListReadOnly) return;
     if (_gradingEditLocked && _isBaselineRetryKey(key)) {
       setState(() {
@@ -4005,6 +4158,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           _gradingStates[key] = 'correct';
           _correctionStates[key] = 'corrected';
         }
+        _applyStateToParts(key, partLabels);
       });
       _emitStateChanged();
       return;
@@ -4017,6 +4171,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       final current = _normalizeState(_gradingStates[key]);
       final next = _nextState(current);
       _gradingStates[key] = next;
+      _applyStateToParts(key, partLabels);
       if (_isBaselineRetryKey(key)) {
         if (next == 'correct') {
           _correctionStates[key] = 'corrected';
@@ -4024,6 +4179,84 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           _correctionStates.remove(key);
         }
       }
+    });
+    _emitStateChanged();
+  }
+
+  // ------------------------------------------------------- 세트형 파트 채점
+
+  /// 파트 상태 키 — 셀 키 뒤에 '#(1)'을 붙인다. 저장 시 part_states로 분리.
+  String _partStateKey(String cellKey, String partLabel) =>
+      '$cellKey#$partLabel';
+
+  /// 파트 상태 — 기록이 없으면 셀 상태를 상속한다.
+  String _partState(String cellKey, String partLabel) {
+    final raw = _gradingStates[_partStateKey(cellKey, partLabel)];
+    if (raw == null || raw.trim().isEmpty) {
+      return _normalizeState(_gradingStates[cellKey]);
+    }
+    return _normalizeState(raw);
+  }
+
+  /// 셀 전체 토글 시 모든 파트를 셀 상태로 맞춘다.
+  void _applyStateToParts(String cellKey, List<String> partLabels) {
+    if (partLabels.isEmpty) return;
+    final state = _normalizeState(_gradingStates[cellKey]);
+    for (final label in partLabels) {
+      _gradingStates[_partStateKey(cellKey, label)] = state;
+    }
+  }
+
+  /// 파트 상태에서 셀 상태를 유도한다 —
+  /// 하나라도 오답이면 오답, 오답 없이 미풀이가 있으면 미풀이, 아니면 정답.
+  void _syncSetCellStateFromParts(String cellKey, List<String> partLabels) {
+    var anyWrong = false;
+    var anyUnsolved = false;
+    for (final label in partLabels) {
+      final state = _partState(cellKey, label);
+      if (state == 'wrong') anyWrong = true;
+      if (state == 'unsolved') anyUnsolved = true;
+    }
+    final derived = anyWrong
+        ? 'wrong'
+        : anyUnsolved
+            ? 'unsolved'
+            : 'correct';
+    _gradingStates[cellKey] = derived;
+    if (_isBaselineRetryKey(cellKey)) {
+      if (derived == 'correct') {
+        _correctionStates[cellKey] = 'corrected';
+      } else {
+        _correctionStates.remove(cellKey);
+      }
+    }
+  }
+
+  Future<void> _togglePartState(
+    String cellKey,
+    String partLabel,
+    List<String> partLabels,
+  ) async {
+    if (_answerListReadOnly) return;
+    if (_gradingEditLocked) {
+      // 저장된 결과가 잠긴 상태에서는 셀 단위 수정 흐름으로 위임한다.
+      await _toggleCellState(cellKey, partLabels: partLabels);
+      return;
+    }
+    setState(() {
+      // 기록이 없는 파트는 셀 상태를 상속하고 있으므로, 토글 전에 현재
+      // 상태를 명시적으로 고정해 둔다. 그러지 않으면 셀 상태가 바뀔 때
+      // 나머지 파트가 함께 뒤집힌다(한 파트 오답 → 전체 오답 버그).
+      for (final label in partLabels) {
+        final k = _partStateKey(cellKey, label);
+        final raw = _gradingStates[k];
+        if (raw == null || raw.trim().isEmpty) {
+          _gradingStates[k] = _partState(cellKey, label);
+        }
+      }
+      final key = _partStateKey(cellKey, partLabel);
+      _gradingStates[key] = _nextState(_normalizeState(_gradingStates[key]));
+      _syncSetCellStateFromParts(cellKey, partLabels);
     });
     _emitStateChanged();
   }
@@ -4606,8 +4839,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (rawCell is! Map) continue;
         final key = '${rawCell['key'] ?? ''}'.trim();
         if (key.isEmpty) continue;
-        if (_wrongOnly &&
-            (!_isBaselineRetryKey(key) || _isCorrectedRetryKey(key))) {
+        if (_wrongOnly && _hideCellForWrongOnly(key)) {
           continue;
         }
         final questionIndex = (rawCell['questionIndex'] is int)
@@ -4681,6 +4913,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             questionIndex:
                 questionIndex <= 0 ? (parsedCells.length + 1) : questionIndex,
             questionLabel: questionLabel,
+            questionCategory:
+                '${rawCell['questionCategory'] ?? rawCell['question_category'] ?? ''}'
+                    .trim(),
             answer: answer,
             answerMode: answerMode,
             answerImageUrl: answerImageUrl,
@@ -4919,6 +5154,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   Widget _buildSearchHeader() {
     final fabStyle = _rightSheetFabColors(context);
+    // 닫기 버튼: 오른쪽으로 12 이동, 아이콘 10% 확대.
+    const closeButtonLeftShift = 12.0;
+    const closeButtonSlotWidth = 40.0;
+    const closeButtonToFieldGap = 4.0;
+    const closeIconSize = 24.0 * 1.1;
+    // 최근 과제 칩은 검색바와 같은 왼쪽 선상으로 맞춘다.
+    const recentChipsLeft =
+        closeButtonLeftShift + closeButtonSlotWidth + closeButtonToFieldGap;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -4926,8 +5169,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            const SizedBox(width: closeButtonLeftShift),
             SizedBox(
-              width: 40,
+              width: closeButtonSlotWidth,
               height: _searchFieldHeight,
               child: IconButton(
                 tooltip: '닫기',
@@ -4935,11 +5179,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 padding: EdgeInsets.zero,
                 visualDensity: VisualDensity.compact,
                 constraints: const BoxConstraints(),
-                icon: const Icon(Icons.chevron_right, size: 24),
+                icon: const Icon(Icons.chevron_right, size: closeIconSize),
                 color: fabStyle.subText,
               ),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: closeButtonToFieldGap),
             Expanded(
               child: Container(
                 key: _searchHeaderFieldKey,
@@ -5051,52 +5295,55 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         ),
         if (_recentSearches.isNotEmpty) ...[
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (int i = 0; i < _recentSearches.length; i++)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: fabStyle.panel,
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: fabStyle.border),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      InkWell(
-                        onTap: () =>
-                            unawaited(_openRecentSearch(_recentSearches[i])),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 320),
-                          child: Text(
-                            _recentSearchChipLabel(_recentSearches[i]),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: fabStyle.text,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w800,
+          Padding(
+            padding: const EdgeInsets.only(left: recentChipsLeft),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (int i = 0; i < _recentSearches.length; i++)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: fabStyle.panel,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: fabStyle.border),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        InkWell(
+                          onTap: () =>
+                              unawaited(_openRecentSearch(_recentSearches[i])),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 320),
+                            child: Text(
+                              _recentSearchChipLabel(_recentSearches[i]),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: fabStyle.text,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      InkWell(
-                        onTap: () => unawaited(_removeRecentAt(i)),
-                        child: Icon(
-                          Icons.close_rounded,
-                          size: 16,
-                          color: fabStyle.subText,
+                        const SizedBox(width: 6),
+                        InkWell(
+                          onTap: () => unawaited(_removeRecentAt(i)),
+                          child: Icon(
+                            Icons.close_rounded,
+                            size: 16,
+                            color: fabStyle.subText,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ],
       ],
@@ -5401,50 +5648,55 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ),
-            if (_baselineStates.isNotEmpty) ...[
-              const SizedBox(width: 10),
-              InkWell(
-                borderRadius: BorderRadius.circular(9),
-                onTap: () {
-                  setState(() {
-                    _wrongOnly = !_wrongOnly;
-                  });
-                },
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: IgnorePointer(
-                          child: Checkbox(
-                            value: _wrongOnly,
-                            onChanged: (_) {},
-                            activeColor: _rsAccent,
-                            checkColor: Colors.white,
-                            side: BorderSide(color: fabStyle.subText),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
+            // 체크박스 등장/소멸로 헤더 높이가 바뀌지 않도록 자리를 항상 확보한다.
+            const SizedBox(width: 10),
+            Opacity(
+              opacity: (_wrongOnlyAvailable || _wrongOnly) ? 1 : 0,
+              child: IgnorePointer(
+                ignoring: !(_wrongOnlyAvailable || _wrongOnly),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(9),
+                  onTap: () {
+                    setState(() {
+                      _wrongOnly = !_wrongOnly;
+                    });
+                  },
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: IgnorePointer(
+                            child: Checkbox(
+                              value: _wrongOnly,
+                              onChanged: (_) {},
+                              activeColor: _rsAccent,
+                              checkColor: Colors.white,
+                              side: BorderSide(color: fabStyle.subText),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '틀린것만 보기',
-                        style: TextStyle(
-                          color: fabStyle.subText,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 12.5,
+                        const SizedBox(width: 6),
+                        Text(
+                          '틀린것만 보기',
+                          style: TextStyle(
+                            color: fabStyle.subText,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12.5,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ],
+            ),
           ],
         ),
       ],
@@ -6145,25 +6397,55 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     Color text,
     String label,
   }) _resolveAnswerRowStyle(String state) {
+    // 공용 카드리스트 배경색(라이트 F1F1F1 / 다크 121212) 기반 팔레트.
+    // 정답 렌더는 투명 알파 글리프 + 앱 틴트라 배경색과 무관하게 얹힌다.
+    final background = FabTabBarTokens.previewAcademyInfoPanelFor(
+      Theme.of(context).brightness,
+    );
+    if (_lightCards) {
+      switch (_normalizeState(state)) {
+        case 'wrong':
+          return (
+            border: const Color(0xFFE54848),
+            background: background,
+            text: const Color(0xFF8F1F2B),
+            label: '오답',
+          );
+        case 'unsolved':
+          return (
+            border: const Color(0xFF9AAAB3),
+            background: background,
+            text: const Color(0xFF5A6B74),
+            label: '미풀이',
+          );
+        default:
+          return (
+            border: const Color(0xFFD9E0E4),
+            background: background,
+            text: const Color(0xFF1C2A33),
+            label: '정답',
+          );
+      }
+    }
     switch (_normalizeState(state)) {
       case 'wrong':
         return (
           border: const Color(0xFFE54848),
-          background: const Color(0xFF151C21),
+          background: background,
           text: const Color(0xFFFFD7DE),
           label: '오답',
         );
       case 'unsolved':
         return (
           border: const Color(0xFF4F626B),
-          background: const Color(0xFF151C21),
+          background: background,
           text: const Color(0xFFA9BAC4),
           label: '미풀이',
         );
       default:
         return (
           border: const Color(0xFF223131),
-          background: const Color(0xFF151C21),
+          background: background,
           text: const Color(0xFFEAF2F7),
           label: '정답',
         );
@@ -6265,7 +6547,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           .where((ch) => _circledObjectiveNumber(ch) != null)
           .toList(growable: false);
       return Padding(
-        padding: const EdgeInsets.only(left: 16),
+        padding: const EdgeInsets.only(left: _rsAnswerContentLeftPad),
         child: Align(
           alignment: Alignment.centerLeft,
           child: Wrap(
@@ -6280,8 +6562,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                       ? circledAnswers[i]
                       : '${circledAnswers[i]},',
                   textAlign: TextAlign.left,
-                  style: const TextStyle(
-                    color: _rsText,
+                  style: TextStyle(
+                    color: _cardInk,
                     fontFamily: 'ChosunNm',
                     fontWeight: FontWeight.w400,
                     fontSize: 39.5,
@@ -6294,14 +6576,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       );
     }
     return Padding(
-      padding: const EdgeInsets.only(left: 16),
+      padding: const EdgeInsets.only(left: _rsAnswerContentLeftPad),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Text(
           answer,
           textAlign: TextAlign.left,
-          style: const TextStyle(
-            color: _rsText,
+          style: TextStyle(
+            color: _cardInk,
             fontWeight: FontWeight.w900,
             fontSize: 33.75,
             height: 1.15,
@@ -6326,25 +6608,52 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return naturalHeight;
   }
 
+  /// 세트형 정답 파트 분리 — 서버 파서(_split_set_answer_parts)와 동일 규칙.
+  ///
+  /// (1)부터 1씩 증가하는 마커만 인정하고, 내용이 비는 마커 후보는 내용으로
+  /// 간주해 건너뛴다. 그래서 "(2)번 답이 (1)" 같은 내용 속 번호를 마커로
+  /// 오인하지 않는다. 파싱이 애매하면 빈 목록(세트형 아님)을 반환한다.
   List<({String label, String value})> _splitSetAnswerParts(String raw) {
     final text = raw.trim();
     if (text.isEmpty) return const [];
-    final matches = RegExp(r'(?<![\d.])[(（]\s*(\d{1,2})\s*[)）]')
-        .allMatches(text)
-        .toList(growable: false);
-    if (matches.length < 2) return const [];
-    return [
-      for (var i = 0; i < matches.length; i += 1)
-        (
-          label: '(${matches[i].group(1) ?? (i + 1).toString()})',
-          value: text
-              .substring(
-                matches[i].end,
-                i + 1 < matches.length ? matches[i + 1].start : text.length,
-              )
-              .trim(),
-        ),
-    ].where((part) => part.value.isNotEmpty).toList(growable: false);
+    final markerRe = RegExp(r'^[(（]\s*(\d{1,2})\s*[)）]');
+    final parts = <({String label, String value})>[];
+    var i = 0;
+    var expected = 1;
+    var contentStart = -1;
+    while (i < text.length) {
+      final m = markerRe.firstMatch(text.substring(i));
+      if (m != null && int.parse(m.group(1)!) == expected) {
+        final prev = i == 0 ? ' ' : text[i - 1];
+        if (RegExp(r'\s').hasMatch(prev)) {
+          if (expected == 1) {
+            if (text.substring(0, i).trim().isEmpty) {
+              contentStart = i + m.group(0)!.length;
+              expected = 2;
+              i += m.group(0)!.length;
+              continue;
+            }
+          } else {
+            final value = text.substring(contentStart, i).trim();
+            if (value.isNotEmpty) {
+              parts.add((label: '(${expected - 1})', value: value));
+              contentStart = i + m.group(0)!.length;
+              expected += 1;
+              i += m.group(0)!.length;
+              continue;
+            }
+          }
+        }
+      }
+      i += 1;
+    }
+    if (expected < 3) return const [];
+    final last = text.substring(contentStart).trim();
+    if (last.isEmpty) return const [];
+    parts.add((label: '(${expected - 1})', value: last));
+    // 개념원리 '확인 체크'류는 (1)~(10)까지 있어 상한 12 (SQL/Edge와 동일).
+    if (parts.length > 12) return const [];
+    return parts;
   }
 
   int _estimatedInlineAnswerLineCount(_RightSheetGradingCellVm cell) {
@@ -6392,12 +6701,17 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return math.max(_answerSlotHeight, height);
   }
 
+  /// 객관식·세트형(접힘) 카드가 주관식 1줄 카드와 같은 높이가 되도록 하는
+  /// 공통 슬롯 높이 (v11 한 줄 렌더 높이 기준).
+  double get _compactAnswerSlotHeight =>
+      _answerV11OneLineHeight + _answerImageTightPadding * 2;
+
   double _answerSlotHeightForCell(_RightSheetGradingCellVm cell) {
     if (_isObjectiveAnswer(
       answer: cell.answer,
       answerMode: cell.answerMode,
     )) {
-      return _answerSlotHeight;
+      return _compactAnswerSlotHeight;
     }
     if (_isRawAnswerImageCell(cell)) {
       final rawHeight = (cell.answerImageHeight ?? 0).toDouble();
@@ -6414,11 +6728,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
     final render = _answerRenders[cell.key];
     if (render != null && render.hasImage) {
-      if (render.styleVersion.trim() != kUnifiedAnswerRenderStyleVersion) {
+      if (!_isAcceptedAnswerRenderStyle(render.styleVersion)) {
         return _answerSlotHeight;
       }
-      final rowHeight = render.rowHeightDp;
       final displayHeight = render.displayHeightDp;
+      // v11(uniform-line)은 이미지 자체가 줄 단위로 높이가 통일되어 있으므로
+      // 세트형 하위 카드와 같은 규칙(자연 높이 + 최소 여백)으로 타이트하게 잡는다.
+      if (render.styleVersion == kUnifiedAnswerRenderStyleVersionV11 &&
+          displayHeight != null &&
+          displayHeight.isFinite &&
+          displayHeight > 0) {
+        return math.max(32.0, displayHeight + _answerImageTightPadding * 2);
+      }
+      final rowHeight = render.rowHeightDp;
       final minimumAssetDrivenHeight =
           displayHeight != null && displayHeight.isFinite && displayHeight > 0
               ? displayHeight + _answerImageVerticalPadding
@@ -6453,6 +6775,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     required Widget Function() fallbackBuilder,
     bool alignLeft = true,
     double leftPadding = 0,
+    Color? tintColor,
   }) {
     final aspect = rawWidth > 0 && rawHeight > 0 ? rawWidth / rawHeight : 3.0;
     final maxWidth =
@@ -6478,6 +6801,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       fit: BoxFit.contain,
       alignment: imageAlignment,
       filterQuality: FilterQuality.high,
+      // 알파 글리프 PNG 는 테마 잉크 색으로 틴트해 그린다.
+      color: tintColor,
+      colorBlendMode: tintColor != null ? BlendMode.srcIn : null,
       errorBuilder: (_, __, ___) => fallbackBuilder(),
     );
     final content = keepReadableWithHorizontalScroll
@@ -6487,16 +6813,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           )
         : image;
 
+    // v11(uniform-line)은 세트형 하위 카드와 같은 타이트 여백을 쓴다.
+    final isV11 = styleVersion == kUnifiedAnswerRenderStyleVersionV11;
+    final topPad = isV11 ? _answerImageTightPadding : _answerImageTopPadding;
+    final bottomPad =
+        isV11 ? _answerImageTightPadding : _answerImageBottomPadding;
     final safeSlotHeight =
-        math.max(slotHeight, displayHeight + _answerImageVerticalPadding);
+        math.max(slotHeight, displayHeight + topPad + bottomPad);
     return SizedBox(
       height: safeSlotHeight,
       child: Padding(
         padding: EdgeInsets.fromLTRB(
           leftPadding,
-          _answerImageTopPadding,
+          topPad,
           0,
-          _answerImageBottomPadding,
+          bottomPad,
         ),
         child: Align(
           alignment: imageAlignment,
@@ -6562,7 +6893,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       );
     }
     if (render != null && render.hasImage) {
-      if (render.styleVersion.trim() != kUnifiedAnswerRenderStyleVersion) {
+      if (!_isAcceptedAnswerRenderStyle(render.styleVersion)) {
         return _buildAnswerFallback(cell);
       }
       return LayoutBuilder(
@@ -6579,7 +6910,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           slotHeight: slotHeight,
           constraints: constraints,
           fallbackBuilder: () => _buildAnswerFallback(cell),
-          leftPadding: 16,
+          leftPadding: _rsAnswerContentLeftPad,
+          tintColor: _renderTintColor(render),
         ),
       );
     }
@@ -6614,8 +6946,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                       child: Text(
                         setParts[i].label,
                         textAlign: TextAlign.right,
-                        style: const TextStyle(
-                          color: _rsText,
+                        style: TextStyle(
+                          color: _cardInk,
                           fontFamily: 'ChosunNm',
                           fontWeight: FontWeight.w700,
                           fontSize: 20,
@@ -6634,8 +6966,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         inlineMathScale: 0.88,
                         fractionInlineMathScale: 1.0,
-                        style: const TextStyle(
-                          color: _rsText,
+                        style: TextStyle(
+                          color: _cardInk,
                           fontFamily: 'ChosunNm',
                           fontWeight: FontWeight.w700,
                           fontSize: 23,
@@ -6664,8 +6996,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           crossAxisAlignment: CrossAxisAlignment.start,
           inlineMathScale: 0.9,
           fractionInlineMathScale: 1.02,
-          style: const TextStyle(
-            color: _rsText,
+          style: TextStyle(
+            color: _cardInk,
             fontFamily: 'ChosunNm',
             fontWeight: FontWeight.w700,
             fontSize: 25,
@@ -6683,12 +7015,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final state = _normalizeState(_gradingStates[cell.key]);
     final colors = _resolveAnswerRowStyle(state);
     final questionLabel = cell.displayQuestionLabel;
-    final answerSlotHeight = _answerSlotHeightForCell(cell);
     final baselineState = _baselineStates[cell.key] ?? '';
     final correctedRetry = _isCorrectedRetryKey(cell.key);
     final correctionAttemptNumber = _correctionAttemptNumbers[cell.key] ?? 0;
-    return _RightSheetAnswerListRow(
+    final setParts = _setPartsOf(cell);
+    final isSetCell = setParts.length >= 2;
+    // 세트형 접힘 카드는 정답을 렌더하지 않고 파트별 정오 칩만 보여주므로
+    // 주관식 1줄 카드와 같은 슬롯 높이를 쓴다.
+    final answerSlotHeight =
+        isSetCell ? _compactAnswerSlotHeight : _answerSlotHeightForCell(cell);
+    final setExpanded = isSetCell && _expandedSetCellKeys.contains(cell.key);
+    final mainRow = _RightSheetAnswerListRow(
       questionLabel: questionLabel,
+      questionCategory: cell.questionCategory,
       editLocked: _gradingEditLocked,
       state: state,
       baselineState: baselineState,
@@ -6703,9 +7042,251 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           _answerPdfOpening || _openingSolutionCellKey.isNotEmpty,
       onOpenSolution: () => _openCellSolution(cell, pageNumber: pageNumber),
       onReportIssue: () => unawaited(_openQuestionIssueReportDialog(cell)),
-      onToggleState: () => unawaited(_toggleCellState(cell.key)),
+      // 세트형 셀은 탭 = 파트 카드 펼침/접힘. 정오 표시는 파트 카드에서만 하고
+      // 셀 상태는 파트 상태에서 자동 유도된다(하나라도 X면 오답).
+      onToggleState: isSetCell
+          ? () => setState(() {
+                if (!_expandedSetCellKeys.remove(cell.key)) {
+                  _expandedSetCellKeys.add(cell.key);
+                }
+              })
+          : () => unawaited(_toggleCellState(cell.key)),
       onShowSourceInfo: () => unawaited(_openQuestionSourceInfoDialog(cell)),
-      answerChild: _buildAnswerImageOrFallback(cell),
+      answerChild: isSetCell
+          ? _buildSetSummaryContent(cell, setParts)
+          : _buildAnswerImageOrFallback(cell),
+      setPartCount: isSetCell ? setParts.length : 0,
+      setExpanded: setExpanded,
+    );
+    if (!isSetCell) return mainRow;
+    final partLabels = [for (final part in setParts) part.label];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        mainRow,
+        if (setExpanded)
+          for (final part in setParts)
+            Padding(
+              // 본 정답 카드와 같은 왼쪽·같은 너비. 내용물 들여쓰기는 카드 내부에서.
+              padding: const EdgeInsets.only(left: _rsSetPartCardLeft, top: 6),
+              child: _buildSetPartCard(cell, part, partLabels),
+            ),
+      ],
+    );
+  }
+
+  /// 세트형 셀의 파트 목록 ((1), (2), … 라벨 + 각 파트 정답 텍스트).
+  /// 세트형이 아니면 빈 목록.
+  List<({String label, String value})> _setPartsOf(
+    _RightSheetGradingCellVm cell,
+  ) {
+    if (_isObjectiveAnswer(answer: cell.answer, answerMode: cell.answerMode)) {
+      return const [];
+    }
+    return _splitSetAnswerParts(cell.answer.trim());
+  }
+
+  /// 세트형 접힘 카드 콘텐츠 — 정답은 렌더하지 않고 파트별 정오 상태 칩만
+  /// 표시한다. (정답 확인·수기 채점은 카드를 펼쳐 파트 카드에서 수행)
+  Widget _buildSetSummaryContent(
+    _RightSheetGradingCellVm cell,
+    List<({String label, String value})> setParts,
+  ) {
+    return SizedBox(
+      height: _compactAnswerSlotHeight,
+      child: Padding(
+        padding: const EdgeInsets.only(left: _rsAnswerContentLeftPad),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              for (final part in setParts)
+                _setPartStatusChip(cell, part.label),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _setPartStatusChip(_RightSheetGradingCellVm cell, String partLabel) {
+    final state = _partState(cell.key, partLabel);
+    final color = switch (state) {
+      'wrong' => const Color(0xFFE54848),
+      'unsolved' => const Color(0xFF4F626B),
+      _ => _rsAccent,
+    };
+    // 정오는 색상만으로 표시. OX 기호는 생략하고 괄호 번호만 얇게.
+    return Text(
+      partLabel,
+      style: TextStyle(
+        color: color,
+        fontSize: _rsAnswerQuestionNumberSize,
+        fontWeight: FontWeight.w400,
+        height: 1.0,
+      ),
+    );
+  }
+
+  /// 파트 정답 콘텐츠 — v11 파일럿 파트별 렌더 이미지가 있으면 이미지를,
+  /// 없으면 기존 LaTeX 텍스트 렌더러로 폴백한다.
+  Widget _buildSetPartAnswerContent(
+    _RightSheetGradingCellVm cell,
+    ({String label, String value}) part,
+  ) {
+    Widget textFallback() {
+      return LatexTextRenderer(
+        _normalizeAnswerForOverflowDisplay(part.value),
+        textAlign: TextAlign.left,
+        overflow: TextOverflow.visible,
+        softWrap: true,
+        enableDisplayMath: false,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        inlineMathScale: 0.9,
+        fractionInlineMathScale: 1.02,
+        style: TextStyle(
+          color: _cardInk,
+          fontFamily: 'ChosunNm',
+          fontWeight: FontWeight.w700,
+          fontSize: 21,
+          height: 1.15,
+        ),
+      );
+    }
+
+    final render = _answerRenders['${cell.key}#${part.label}'];
+    if (render == null ||
+        !render.hasImage ||
+        !_isAcceptedAnswerRenderStyle(render.styleVersion)) {
+      return textFallback();
+    }
+    final pixelRatio = render.pixelRatio <= 0
+        ? _answerRenderDefaultPixelRatio
+        : render.pixelRatio;
+    final displayHeight = render.displayHeightDp != null &&
+            render.displayHeightDp!.isFinite &&
+            render.displayHeightDp! > 0
+        ? render.displayHeightDp!
+        : render.height / pixelRatio;
+    final displayWidth = render.displayWidthDp != null &&
+            render.displayWidthDp!.isFinite &&
+            render.displayWidthDp! > 0
+        ? render.displayWidthDp!
+        : render.width / pixelRatio;
+    // 이미지 폭이 카드 폭보다 크면 본 카드와 동일하게 가로 스크롤로 원래
+    // 크기를 유지한다. (축소되면 일반형과 글자 크기가 달라 보인다)
+    final tintColor = _renderTintColor(render);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final image = Image.network(
+          render.url,
+          width: displayWidth,
+          height: displayHeight,
+          fit: BoxFit.contain,
+          alignment: Alignment.centerLeft,
+          filterQuality: FilterQuality.high,
+          color: tintColor,
+          colorBlendMode: tintColor != null ? BlendMode.srcIn : null,
+          errorBuilder: (_, __, ___) => textFallback(),
+        );
+        final maxWidth =
+            constraints.maxWidth.isFinite ? constraints.maxWidth : 220.0;
+        final content = displayWidth > maxWidth
+            ? SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: image,
+              )
+            : image;
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: content,
+        );
+      },
+    );
+  }
+
+  /// 세트형 파트 카드 — 본 카드를 탭하면 아래로 펼쳐지고, 각 카드를 탭하면
+  /// 그 파트만 정답→오답→미풀이 순환한다.
+  Widget _buildSetPartCard(
+    _RightSheetGradingCellVm cell,
+    ({String label, String value}) part,
+    List<String> partLabels,
+  ) {
+    final state = _partState(cell.key, part.label);
+    final colors = _resolveAnswerRowStyle(state);
+    final statusColor = switch (state) {
+      'wrong' => const Color(0xFFE54848),
+      'unsolved' => const Color(0xFF4F626B),
+      _ => _rsAccent,
+    };
+    final shape = RoundedRectangleBorder(
+      // 본 카드와 동일한 r=14 (아이패드 정답 리스트 기준).
+      borderRadius: BorderRadius.circular(14),
+      side: BorderSide(color: colors.border, width: 2),
+    );
+    return Material(
+      color: colors.background,
+      surfaceTintColor: Colors.transparent,
+      shape: shape,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        customBorder: shape,
+        onTap: _answerListReadOnly
+            ? null
+            : () =>
+                unawaited(_togglePartState(cell.key, part.label, partLabels)),
+        splashFactory: NoSplash.splashFactory,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        hoverColor: Colors.transparent,
+        focusColor: Colors.transparent,
+        child: Padding(
+          // 본 카드와 동일: 카드 패딩 13.7 + 콘텐츠 들여쓰기 16.
+          padding: const EdgeInsets.fromLTRB(
+            13.7 + _rsAnswerContentLeftPad,
+            11,
+            13.7,
+            11,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 44,
+                child: Text(
+                  part.label,
+                  style: TextStyle(
+                    color: _cardInk,
+                    fontFamily: 'ChosunNm',
+                    fontWeight: FontWeight.w900,
+                    fontSize: _rsAnswerQuestionNumberSize,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Opacity(
+                  opacity: state == 'unsolved' ? 0.42 : 1.0,
+                  child: _buildSetPartAnswerContent(cell, part),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                colors.label,
+                style: TextStyle(
+                  color: statusColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -6867,8 +7448,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Text(
-                      _wrongOnly && _baselineStates.isNotEmpty
-                          ? '첫 채점에서 틀렸거나 미풀이였던 문항이 없습니다.'
+                      _wrongOnly
+                          ? (_baselineStates.isNotEmpty
+                              ? '첫 채점에서 틀렸거나 미풀이였던 문항이 없습니다.'
+                              : '오답/미풀이로 표시된 문항이 없습니다.')
                           : '검색 결과가 없습니다.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(

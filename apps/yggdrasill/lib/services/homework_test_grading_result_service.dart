@@ -212,6 +212,7 @@ class HomeworkTestGradingResultService {
               'correction_state': row.correctionState,
             if (row.correctionAttemptNumber != null)
               'correction_attempt_number': row.correctionAttemptNumber,
+            if (row.partStates.isNotEmpty) 'part_states': row.partStates,
             'point_value': row.pointValue,
             'earned_point': row.earnedPoint,
             'reserved_elapsed_ms': null,
@@ -246,7 +247,8 @@ class HomeworkTestGradingResultService {
                 ..remove('baseline_attempt_id')
                 ..remove('baseline_state')
                 ..remove('correction_state')
-                ..remove('correction_attempt_number'),
+                ..remove('correction_attempt_number')
+                ..remove('part_states'),
             )
             .toList(growable: false);
         try {
@@ -716,6 +718,16 @@ class HomeworkTestGradingResultService {
         final pointValue =
             (rawPoint.isFinite && rawPoint >= 0) ? rawPoint : 1.0;
         final state = states[key] ?? HomeworkAnswerCellState.correct;
+        // 세트형 파트 상태 — '<cellKey>#(1)' 서브 키를 part_states로 분리 기록.
+        // 점수·통계는 문항 단위 state만 사용한다.
+        final partStates = <String, String>{};
+        final partPrefix = '$key#';
+        states.forEach((stateKey, partState) {
+          if (!stateKey.startsWith(partPrefix)) return;
+          final label = stateKey.substring(partPrefix.length).trim();
+          if (label.isEmpty) return;
+          partStates[label] = _encodeState(partState);
+        });
         final earnedPoint =
             state == HomeworkAnswerCellState.correct ? pointValue : 0.0;
         scoreTotal += pointValue;
@@ -753,6 +765,7 @@ class HomeworkTestGradingResultService {
             baselineState: baselineStateRaw,
             correctionState: correctionState,
             correctionAttemptNumber: correctionAttemptNumber,
+            partStates: partStates,
             pointValue: pointValue,
             earnedPoint: earnedPoint,
           ),
@@ -796,7 +809,7 @@ class HomeworkTestGradingResultService {
       return await supa
           .from('homework_test_grading_attempt_items')
           .select(
-              'question_key,question_uid,state,correction_state,correction_attempt_number')
+              'question_key,question_uid,state,correction_state,correction_attempt_number,part_states')
           .eq('academy_id', academyId)
           .eq('attempt_id', attemptId)
           .order('page_number', ascending: true)
@@ -886,6 +899,7 @@ class HomeworkTestGradingResultService {
 
     final correctionState = '${row['correction_state'] ?? ''}'.trim();
     final correctionAttemptNumber = _intOf(row['correction_attempt_number']);
+    final rawPartStates = row['part_states'];
     for (final oneKey in keys) {
       states[oneKey] = state;
       if (correctionState.isNotEmpty) {
@@ -893,6 +907,14 @@ class HomeworkTestGradingResultService {
         if (correctionAttemptNumber > 0) {
           correctionAttemptNumbers[oneKey] = correctionAttemptNumber;
         }
+      }
+      // 세트형 파트 상태 복원 — '<cellKey>#(1)' 서브 키로 되살린다.
+      if (rawPartStates is Map) {
+        rawPartStates.forEach((label, partState) {
+          final partLabel = '$label'.trim();
+          if (partLabel.isEmpty) return;
+          states['$oneKey#$partLabel'] = _decodeState('$partState');
+        });
       }
     }
   }
@@ -981,7 +1003,8 @@ class HomeworkTestGradingResultService {
         (msg.contains('baseline_attempt_id') ||
             msg.contains('baseline_state') ||
             msg.contains('correction_state') ||
-            msg.contains('correction_attempt_number')) &&
+            msg.contains('correction_attempt_number') ||
+            msg.contains('part_states')) &&
         (msg.contains('schema cache') ||
             msg.contains('could not find') ||
             msg.contains('does not exist') ||
@@ -1033,6 +1056,9 @@ class _ComputedAttemptRow {
   final String baselineState;
   final String correctionState;
   final int? correctionAttemptNumber;
+
+  /// 세트형 파트 상태 — {'(1)': 'correct', '(2)': 'wrong'}.
+  final Map<String, String> partStates;
   final double pointValue;
   final double earnedPoint;
 
@@ -1047,6 +1073,7 @@ class _ComputedAttemptRow {
     required this.baselineState,
     required this.correctionState,
     required this.correctionAttemptNumber,
+    this.partStates = const <String, String>{},
     required this.pointValue,
     required this.earnedPoint,
   });

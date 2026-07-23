@@ -54,6 +54,65 @@ export function gradingMode(kind: string, text: string | null): 'auto' | 'self' 
 }
 
 // ---------------------------------------------------------------------------
+// 세트형 정답 파트 분리 (SQL _split_set_answer_parts 미러 — 규칙 변경 시 함께)
+// ---------------------------------------------------------------------------
+// 규칙:
+//   * 마커는 (1)부터 1씩 증가하는 것만 인정 (다음 기대 번호만 탐색)
+//     → "(2)번 답이 (1)"처럼 내용에 등장하는 번호는 마커로 오인하지 않음
+//   * 마커는 문자열 시작 또는 공백 뒤에서만 인정
+//   * 파트 내용이 비면 그 마커 후보는 내용으로 간주하고 건너뜀
+//   * 파트 2개 미만, 마지막 내용 공백, 8파트 초과 → null (세트형 아님/파싱 포기)
+export interface SetAnswerPart {
+  key: string; // '(1)'
+  text: string;
+}
+
+export function splitSetAnswerParts(
+  raw: string | null,
+): SetAnswerPart[] | null {
+  const t = (raw ?? '').trim();
+  if (!t) return null;
+  const markerRe = /^[(（]\s*(\d{1,2})\s*[)）]/;
+  const parts: SetAnswerPart[] = [];
+  let i = 0;
+  let expected = 1;
+  let contentStart = -1;
+  while (i < t.length) {
+    const m = markerRe.exec(t.slice(i));
+    if (m !== null && Number(m[1]) === expected) {
+      const prev = i === 0 ? ' ' : t[i - 1];
+      if (/\s/.test(prev)) {
+        if (expected === 1) {
+          if (t.slice(0, i).trim() === '') {
+            contentStart = i + m[0].length;
+            expected = 2;
+            i += m[0].length;
+            continue;
+          }
+        } else {
+          const partText = t.slice(contentStart, i).trim();
+          if (partText !== '') {
+            parts.push({ key: `(${expected - 1})`, text: partText });
+            contentStart = i + m[0].length;
+            expected += 1;
+            i += m[0].length;
+            continue;
+          }
+        }
+      }
+    }
+    i += 1;
+  }
+  if (expected < 3) return null;
+  const last = t.slice(contentStart).trim();
+  if (last === '') return null;
+  parts.push({ key: `(${expected - 1})`, text: last });
+  // 개념원리 '확인 체크'류는 (1)~(10)까지 있어 상한을 12로 둔다 (SQL과 동일).
+  if (parts.length > 12) return null;
+  return parts;
+}
+
+// ---------------------------------------------------------------------------
 // 정규화: LaTeX → 선형 표기
 // ---------------------------------------------------------------------------
 

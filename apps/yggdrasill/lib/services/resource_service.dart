@@ -670,11 +670,14 @@ class ResourceService {
           final migrationStatus =
               (r['migration_status'] as String?)?.trim() ?? '';
           if (grade.isEmpty) continue;
-          if (url.isNotEmpty) {
-            result[grade] = url;
-          } else if (storageKey.isNotEmpty &&
-              (migrationStatus == 'dual' || migrationStatus == 'migrated')) {
+          // dual/migrated: storage를 우선. Dropbox url이 남아 있어도
+          // 숙제 인쇄 등이 죽은 legacy URL로 가서 실패하지 않게 한다.
+          final useStorage = storageKey.isNotEmpty &&
+              (migrationStatus == 'dual' || migrationStatus == 'migrated');
+          if (useStorage) {
             result[grade] = 'storage://textbook/$storageKey';
+          } else if (url.isNotEmpty) {
+            result[grade] = url;
           }
         }
         return result;
@@ -793,33 +796,86 @@ class ResourceService {
   }
 
   Future<List<Map<String, dynamic>>> loadFlowTextbookLinks(
-      String flowId) async {
-    if (flowId.trim().isEmpty) return <Map<String, dynamic>>[];
+    String flowId,
+  ) =>
+      loadFlowTextbookLinksForFlows(<String>[flowId]);
+
+  /// 여러 플로우의 연결 교재를 한 번에 조회한다.
+  ///
+  /// 기존 플로우별 호출은 학원 전체 메타데이터와 마이그레이션 상태를
+  /// 플로우 수만큼 반복 조회했다. 이 메서드는 연결 행을 먼저 일괄 조회한 뒤
+  /// 실제로 연결된 교재의 메타데이터만 한 번 확인한다.
+  Future<List<Map<String, dynamic>>> loadFlowTextbookLinksForFlows(
+    Iterable<String> flowIds,
+  ) async {
+    final safeFlowIds = flowIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (safeFlowIds.isEmpty) return <Map<String, dynamic>>[];
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final validMetadataKeys = await _loadTextbookMetadataKeysWithUnits(
-        supa: supa,
-        academyId: academyId,
-      );
-      final migrationStatuses = await _loadTextbookBodyMigrationStatuses(
-        supa: supa,
-        academyId: academyId,
-      );
+
       try {
         final rows = await supa
             .from('flow_textbook_links')
             .select(
-                'book_id,grade_label,order_index,resource_files(name,category)')
-            .match({'academy_id': academyId, 'flow_id': flowId}).order(
-                'order_index');
+              'flow_id,book_id,grade_label,order_index,'
+              'resource_files(name,category)',
+            )
+            .eq('academy_id', academyId)
+            .inFilter('flow_id', safeFlowIds)
+            .order('order_index');
+        final rawRows = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+        final linkedBookIds = rawRows
+            .map((row) => (row['book_id'] as String?)?.trim() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .toList(growable: false);
+        final metadataFuture = linkedBookIds.isEmpty
+            ? Future<List<dynamic>>.value(const <dynamic>[])
+            : supa
+                .from('textbook_metadata')
+                .select('book_id,grade_label')
+                .eq('academy_id', academyId)
+                .inFilter('book_id', linkedBookIds)
+                .not('payload->units->0', 'is', null);
+        final migrationFuture = linkedBookIds.isEmpty
+            ? Future<List<dynamic>>.value(const <dynamic>[])
+            : supa
+                .from('resource_file_links')
+                .select('file_id,grade,migration_status')
+                .eq('academy_id', academyId)
+                .inFilter('file_id', linkedBookIds);
+        final results = await Future.wait<dynamic>([
+          metadataFuture,
+          migrationFuture,
+        ]);
+        final validMetadataKeys = <String>{
+          for (final raw in results[0] as List<dynamic>)
+            if (raw is Map &&
+                '${raw['book_id'] ?? ''}'.trim().isNotEmpty &&
+                '${raw['grade_label'] ?? ''}'.trim().isNotEmpty)
+              '${raw['book_id']}'.trim() + '|' + '${raw['grade_label']}'.trim(),
+        };
+        final migrationStatuses = <String, String>{
+          for (final raw in results[1] as List<dynamic>)
+            if (raw is Map &&
+                '${raw['file_id'] ?? ''}'.trim().isNotEmpty &&
+                '${raw['grade'] ?? ''}'.trim().isNotEmpty &&
+                '${raw['migration_status'] ?? ''}'.trim().isNotEmpty)
+              '${raw['file_id']}'.trim() + '|' + '${raw['grade']}'.trim():
+                  '${raw['migration_status']}'.trim(),
+        };
         final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
-        for (final row
-            in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        for (final row in rawRows) {
+          final flowId = (row['flow_id'] as String?)?.trim() ?? '';
           final bookId = (row['book_id'] as String?) ?? '';
           final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
-          if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+          if (flowId.isEmpty || bookId.isEmpty || gradeLabel.isEmpty) continue;
           if (!validMetadataKeys.contains('$bookId|$gradeLabel')) continue;
           final info = row['resource_files'];
           final file = info is Map
@@ -832,6 +888,7 @@ class ResourceService {
             continue;
           }
           out.add({
+            'flow_id': flowId,
             'book_id': bookId,
             'grade_label': gradeLabel,
             'order_index': _asInt(row['order_index']) ?? 0,
@@ -845,9 +902,19 @@ class ResourceService {
       } catch (_) {
         final rows = await supa
             .from('flow_textbook_links')
-            .select('book_id,grade_label,order_index')
-            .match({'academy_id': academyId, 'flow_id': flowId}).order(
-                'order_index');
+            .select('flow_id,book_id,grade_label,order_index')
+            .eq('academy_id', academyId)
+            .inFilter('flow_id', safeFlowIds)
+            .order('order_index');
+        final rawRows = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+        final validMetadataKeys = await _loadTextbookMetadataKeysWithUnits(
+          supa: supa,
+          academyId: academyId,
+        );
+        final migrationStatuses = await _loadTextbookBodyMigrationStatuses(
+          supa: supa,
+          academyId: academyId,
+        );
         final textbookFiles = await loadResourceFilesForCategory('textbook');
         final Map<String, String> nameById = <String, String>{
           for (final row in textbookFiles)
@@ -855,13 +922,14 @@ class ResourceService {
               (row['id'] as String): ((row['name'] as String?)?.trim() ?? ''),
         };
         final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
-        for (final row
-            in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        for (final row in rawRows) {
+          final flowId = (row['flow_id'] as String?)?.trim() ?? '';
           final bookId = (row['book_id'] as String?) ?? '';
           final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
-          if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+          if (flowId.isEmpty || bookId.isEmpty || gradeLabel.isEmpty) continue;
           if (!validMetadataKeys.contains('$bookId|$gradeLabel')) continue;
           out.add({
+            'flow_id': flowId,
             'book_id': bookId,
             'grade_label': gradeLabel,
             'order_index': _asInt(row['order_index']) ?? 0,
@@ -874,7 +942,7 @@ class ResourceService {
         return out;
       }
     } catch (e, st) {
-      print('[RES][flowTextbookLinks] load failed: $e\n$st');
+      print('[RES][flowTextbookLinksBatch] load failed: $e\n$st');
       return <Map<String, dynamic>>[];
     }
   }
@@ -1041,7 +1109,7 @@ class ResourceService {
               'raw_page, display_page, section, '
               'problem_number, label, is_set_header, set_from, set_to, '
               'content_group_kind, content_group_label, content_group_title, '
-              'content_group_order, pb_question_uid, '
+              'content_group_order, pb_question_uid, item_name, '
               'column_index, bbox_1k, item_region_1k',
             )
             .eq('academy_id', academyId)
