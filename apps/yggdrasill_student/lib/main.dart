@@ -18,6 +18,13 @@ Future<void> main() async {
   );
   await AppThemeController.load();
   TopGlassSnackBar.navigatorKey = rootNavigatorKey;
+  // 상태 아일랜드 바로 아래에 스낵바가 오도록 상단 여백을 맞춘다.
+  TopGlassSnackBar.topContentInsetBuilder = (context) {
+    return (kToolbarHeight / 2) +
+        StudentStatusIsland.centerOffsetY +
+        (StudentStatusIsland.height / 2) +
+        10;
+  };
 
   runApp(const StudentApp());
 }

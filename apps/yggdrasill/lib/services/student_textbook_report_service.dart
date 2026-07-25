@@ -6,6 +6,7 @@ import 'tenant_service.dart';
 const Map<String, String> kTextbookReportIssueLabels = {
   'question_error': '문제 오류',
   'answer_error': '정답 오류',
+  'answer_input_blocked': '정답 입력 불가',
   'render_error': '렌더/그림 오류',
   'other': '기타',
 };

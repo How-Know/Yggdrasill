@@ -5,9 +5,11 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../../services/problem_bank_service.dart';
 import '../../services/textbook_course_catalog.dart';
+import '../../services/textbook_unit_progress_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'problem_bank_models.dart';
 import 'widgets/figure_compare_dialog.dart';
@@ -69,13 +71,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     'question_typo': '문제 오타',
     'answer_typo': '정답 오타',
     'question_error': '문항 오류',
+    'answer_error': '정답 오류',
+    'answer_input_blocked': '정답 입력 불가',
     'missing_answer': '정답 없음',
+    'render_error': '렌더/그림 오류',
     'figure_mismatch': '그림 매칭 잘못됨',
     'figure_size_error': '그림 크기 잘못됨',
     'figure_error': '그림 오류',
     'solution_coordinate_error': '해설 좌표 오류',
     'solution_content_error': '해설/풀이 오류',
     'classification_error': '문항 범위/분류 오류',
+    'other': '기타',
   };
   static const List<String> _schoolLevelOptions = <String>[
     '',
@@ -141,6 +147,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   ];
 
   final ProblemBankService _service = ProblemBankService();
+  final TextbookUnitProgressService _textbookProgressService =
+      TextbookUnitProgressService();
   late final TabController _topTabController;
 
   Timer? _pollTimer;
@@ -171,6 +179,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
   final List<_PipelineLogEntry> _pipelineLogs = <_PipelineLogEntry>[];
   final Map<String, String> _questionPreviewUrls = <String, String>{};
+  final Map<String, Future<IssueQuestionView>> _issueQuestionViews =
+      <String, Future<IssueQuestionView>>{};
   final Map<String, String> _questionPreviewPdfUrls = <String, String>{};
   final Map<String, String> _questionPreviewStatus = <String, String>{};
   final Map<String, String> _questionPreviewErrors = <String, String>{};
@@ -214,7 +224,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _isLoadingIssues = false;
   List<_ClassificationDocumentResult> _classificationResults =
       <_ClassificationDocumentResult>[];
+  final Map<String, TextbookUnitProgress> _textbookProgressByFolder =
+      <String, TextbookUnitProgress>{};
+  final Set<String> _loadingTextbookProgressFolders = <String>{};
   List<ProblemBankIssueSummary> _issueSummaries = <ProblemBankIssueSummary>[];
+  List<Map<String, dynamic>> _unlinkedStudentReports = <Map<String, dynamic>>[];
   bool _isFigurePolling = false;
   String? _lastExtractStatus;
   bool _queuedLongWaitWarned = false;
@@ -350,8 +364,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _selectedSourceTypeCode == 'market_book' ||
       _selectedSourceTypeCode == 'lecture_book' ||
       _selectedSourceTypeCode == 'ebs_book';
-
-  String _labelOfCurriculumCode(String code) => _curriculumLabels[code] ?? code;
 
   String _labelOfSourceTypeCode(String code) => _sourceTypeLabels[code] ?? code;
 
@@ -2226,6 +2238,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               '${summary.latestExtractJob?.resultSummary['figureJobsQueued'] ?? 0}') ??
           0;
       setState(() {
+        _documents = <ProblemBankDocument>[
+          summary.document,
+          ..._documents.where((doc) => doc.id != summary.document.id),
+        ];
         _activeDocument = summary.document;
         _activeExtractJob = summary.latestExtractJob;
         _questions = questions;
@@ -4891,7 +4907,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   Widget _buildDocumentSelector() {
     final selectedId = _activeDocument?.id;
-    final hasItems = _documents.isNotEmpty;
+    final documentsById = <String, ProblemBankDocument>{
+      for (final document in _documents) document.id: document,
+    };
+    final dropdownDocuments = documentsById.values.toList(growable: false);
+    final selectedValue =
+        selectedId != null && documentsById.containsKey(selectedId)
+            ? selectedId
+            : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4910,7 +4933,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
-              value: hasItems ? selectedId : null,
+              value: selectedValue,
               dropdownColor: _panel,
               isExpanded: true,
               itemHeight: null,
@@ -4924,7 +4947,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
-              selectedItemBuilder: (context) => _documents
+              selectedItemBuilder: (context) => dropdownDocuments
                   .map(
                     (d) => Align(
                       alignment: Alignment.centerLeft,
@@ -4940,7 +4963,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ),
                   )
                   .toList(growable: false),
-              items: _documents
+              items: dropdownDocuments
                   .map(
                     (d) => DropdownMenuItem<String>(
                       value: d.id,
@@ -4950,7 +4973,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   .toList(),
               onChanged: (value) async {
                 if (value == null) return;
-                final doc = _documents.firstWhere((d) => d.id == value);
+                final doc = documentsById[value];
+                if (doc == null) return;
                 setState(() {
                   _activeDocument = doc;
                   _questions = <ProblemBankQuestion>[];
@@ -10270,7 +10294,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               final idx = _questions.indexWhere((item) => item.id == q.id);
               if (idx < 0) return;
               final current = _questions[idx];
-              final already = current.meta['objective_choices_in_figure'] == true;
+              final already =
+                  current.meta['objective_choices_in_figure'] == true;
               if (already == choicesInFigureDraft) return;
               final updatedMeta = Map<String, dynamic>.from(current.meta);
               if (choicesInFigureDraft) {
@@ -10391,7 +10416,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                                   height: 24,
                                   child: Switch(
                                     value: choicesInFigureDraft,
-                                    activeColor: _accent,
+                                    activeThumbColor: _accent,
                                     materialTapTargetSize:
                                         MaterialTapTargetSize.shrinkWrap,
                                     onChanged: (v) {
@@ -14526,11 +14551,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               .toList(growable: false);
         }
       }
+      final totalQuestionCounts = await _service.countQuestionsByDocumentIds(
+        academyId: academyId,
+        documentIds: filteredDocs.map((doc) => doc.id),
+      );
       final results = filteredDocs
           .map(
             (doc) => _ClassificationDocumentResult(
               document: doc,
               matchedQuestionCount: countByDocumentId[doc.id] ?? -1,
+              totalQuestionCount: totalQuestionCounts[doc.id] ?? 0,
             ),
           )
           .toList(growable: false);
@@ -14538,6 +14568,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       setState(() {
         _classificationResults = results;
       });
+      unawaited(_loadTextbookFolderProgress(results));
     } catch (e) {
       _showSnack('분류 검색 실패: $e', error: true);
     } finally {
@@ -14577,6 +14608,68 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return candidates.firstWhere((name) => name.isNotEmpty, orElse: () => '');
   }
 
+  Map<String, dynamic> _documentTextbookScope(ProblemBankDocument doc) {
+    for (final raw in <dynamic>[
+      doc.meta['textbook_scope'],
+      doc.classificationDetail['textbook_scope'],
+      doc.meta['source_classification'] is Map
+          ? (doc.meta['source_classification'] as Map)['textbook']
+          : null,
+    ]) {
+      if (raw is Map) {
+        final scope = raw.map((k, dynamic v) => MapEntry('$k', v));
+        if ('${scope['book_id'] ?? ''}'.trim().isNotEmpty) return scope;
+      }
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _textbookFolderKey(ProblemBankDocument doc) {
+    final scope = _documentTextbookScope(doc);
+    final bookId = '${scope['book_id'] ?? ''}'.trim();
+    final grade = '${scope['grade_label'] ?? doc.gradeLabel}'.trim();
+    final fallback = _documentBookName(doc);
+    return 'textbook|${bookId.isEmpty ? fallback : bookId}|$grade';
+  }
+
+  Future<void> _loadTextbookFolderProgress(
+    List<_ClassificationDocumentResult> results,
+  ) async {
+    final representatives = <String, ProblemBankDocument>{};
+    for (final item in results) {
+      final doc = item.document;
+      if (doc.sourceTypeCode != 'market_book') continue;
+      final scope = _documentTextbookScope(doc);
+      if ('${scope['book_id'] ?? ''}'.trim().isEmpty) continue;
+      representatives.putIfAbsent(_textbookFolderKey(doc), () => doc);
+    }
+    if (!mounted || representatives.isEmpty) return;
+    setState(() {
+      _loadingTextbookProgressFolders.addAll(representatives.keys);
+    });
+    await Future.wait(representatives.entries.map((entry) async {
+      final doc = entry.value;
+      final scope = _documentTextbookScope(doc);
+      try {
+        final progress = await _textbookProgressService.load(
+          academyId: doc.academyId,
+          bookId: '${scope['book_id']}',
+          gradeLabel: '${scope['grade_label'] ?? doc.gradeLabel}'.trim(),
+        );
+        if (!mounted) return;
+        setState(() {
+          _textbookProgressByFolder[entry.key] = progress;
+          _loadingTextbookProgressFolders.remove(entry.key);
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _loadingTextbookProgressFolders.remove(entry.key);
+        });
+      }
+    }));
+  }
+
   List<String> _classificationBookNameOptions() {
     final names = <String>{
       for (final doc in _documents)
@@ -14614,9 +14707,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         status: 'open',
         issueType: _issueTypeFilter,
       );
+      final unlinked = await _service.listUnlinkedStudentTextbookReports(
+        academyId: academyId,
+      );
       if (!mounted) return;
       setState(() {
         _issueSummaries = summaries;
+        _unlinkedStudentReports = unlinked;
+        // 서명 URL은 유효기간이 있으므로 목록을 새로 받을 때 렌더도 다시 해석한다.
+        _issueQuestionViews.clear();
       });
     } catch (e) {
       _showSnack('오류 리포트 조회 실패: $e', error: true);
@@ -14627,33 +14726,39 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
-  Future<void> _openIssueQuestion(ProblemBankIssueSummary summary) async {
+  /// 오류 탭에서 신고 문항을 그 자리에서 수정한다.
+  ///
+  /// 업로드 탭으로 이동하지 않고 검수 다이얼로그를 바로 띄운다. 저장은
+  /// 문항 ID 기준이라 해당 문서를 로드하지 않아도 된다.
+  Future<void> _editIssueQuestion(ProblemBankIssueSummary summary) async {
     final question = summary.question;
-    ProblemBankDocument? doc;
-    for (final candidate in _documents) {
-      if (candidate.id == question.documentId) {
-        doc = candidate;
-        break;
-      }
-    }
-    if (doc == null) {
-      await _refreshDocuments();
-      if (!mounted) return;
-      for (final candidate in _documents) {
-        if (candidate.id == question.documentId) {
-          doc = candidate;
-          break;
-        }
-      }
-    }
-    if (doc == null) {
-      _showSnack('신고 문항의 문서를 찾지 못했습니다.', error: true);
+    await _openReviewDialog(question);
+    if (!mounted) return;
+    // 본문이 바뀌었으면 렌더도 다시 받아야 한다.
+    _invalidateIssueQuestionView(question.id);
+  }
+
+  /// 신고 문항이 속한 문서 전체를 업로드 탭에서 연다 (맥락 확인용).
+  Future<void> _openIssueQuestion(ProblemBankIssueSummary summary) async {
+    final documentId = summary.question.documentId.trim();
+    if (documentId.isEmpty) {
+      _showSnack('이 신고 문항에는 연결된 문서가 없습니다.', error: true);
       return;
     }
-    setState(() {
-      _activeDocument = doc;
-    });
-    await _loadDocumentContext(doc.id);
+    // 최근 문서 목록(listRecentDocuments)에 없는 오래된 문서도 열 수 있어야 하므로
+    // 목록 조회에 기대지 않고 문서 ID로 직접 컨텍스트를 로드한다.
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    final exists = await _service.loadDocumentSummary(
+      academyId: academyId,
+      documentId: documentId,
+    );
+    if (!mounted) return;
+    if (exists == null) {
+      _showSnack('신고 문항의 문서를 찾지 못했습니다. (id=$documentId)', error: true);
+      return;
+    }
+    await _loadDocumentContext(documentId);
     if (!mounted) return;
     _topTabController.animateTo(0);
   }
@@ -15069,6 +15174,270 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
+  Widget _buildGroupedClassificationResults() {
+    final textbookGroups = <String, List<_ClassificationDocumentResult>>{};
+    final schoolYearGroups =
+        <int, Map<String, List<_ClassificationDocumentResult>>>{};
+    final otherGroups = <String, List<_ClassificationDocumentResult>>{};
+    for (final item in _classificationResults) {
+      final doc = item.document;
+      if (doc.sourceTypeCode == 'market_book') {
+        textbookGroups.putIfAbsent(_textbookFolderKey(doc), () => []).add(item);
+      } else if (doc.sourceTypeCode == 'school_past') {
+        final year = doc.examYear ?? 0;
+        final school =
+            doc.schoolName.trim().isEmpty ? '학교 미지정' : doc.schoolName.trim();
+        schoolYearGroups
+            .putIfAbsent(
+                year, () => <String, List<_ClassificationDocumentResult>>{})
+            .putIfAbsent(school, () => [])
+            .add(item);
+      } else {
+        otherGroups
+            .putIfAbsent(_labelOfSourceTypeCode(doc.sourceTypeCode), () => [])
+            .add(item);
+      }
+    }
+    final textbookKeys = textbookGroups.keys.toList()..sort();
+    final years = schoolYearGroups.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+    final otherKeys = otherGroups.keys.toList()..sort();
+
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ListView(
+        children: [
+          for (final key in textbookKeys)
+            _buildResultFolder(
+              key: key,
+              icon: Icons.menu_book_outlined,
+              title: _textbookFolderTitle(textbookGroups[key]!.first.document),
+              subtitle: _textbookFolderProgressText(
+                key,
+                textbookGroups[key]!,
+              ),
+              items: textbookGroups[key]!,
+            ),
+          for (final year in years)
+            _buildSchoolYearFolder(year, schoolYearGroups[year]!),
+          for (final key in otherKeys)
+            _buildResultFolder(
+              key: 'other|$key',
+              icon: Icons.folder_outlined,
+              title: key,
+              subtitle: _folderUploadText(otherGroups[key]!),
+              items: otherGroups[key]!,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSchoolYearFolder(
+    int year,
+    Map<String, List<_ClassificationDocumentResult>> schools,
+  ) {
+    final schoolNames = schools.keys.toList()..sort();
+    final allItems = schools.values.expand((items) => items).toList();
+    return Card(
+      color: _field,
+      margin: const EdgeInsets.only(bottom: 7),
+      child: ExpansionTile(
+        key: PageStorageKey('school-year|$year'),
+        initiallyExpanded: true,
+        leading: const Icon(Icons.calendar_month_outlined, color: _accent),
+        iconColor: _textSub,
+        collapsedIconColor: _textSub,
+        title: Text(
+          year == 0 ? '연도 미지정' : '$year년',
+          style: const TextStyle(
+            color: _text,
+            fontSize: 12.8,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        subtitle: Text(
+          '${schools.length}개 학교 · ${_folderUploadText(allItems)}',
+          style: const TextStyle(color: _textSub, fontSize: 10.8),
+        ),
+        children: [
+          for (final school in schoolNames)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 7),
+              child: _buildResultFolder(
+                key: 'school|$year|$school',
+                icon: Icons.school_outlined,
+                title: school,
+                subtitle: _folderUploadText(schools[school]!),
+                items: schools[school]!,
+                nested: true,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultFolder({
+    required String key,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required List<_ClassificationDocumentResult> items,
+    bool nested = false,
+  }) {
+    return Card(
+      color: nested ? _panel : _field,
+      margin: nested ? EdgeInsets.zero : const EdgeInsets.only(bottom: 7),
+      child: ExpansionTile(
+        key: PageStorageKey(key),
+        initiallyExpanded: true,
+        dense: true,
+        leading: Icon(icon, size: 18, color: _accent),
+        iconColor: _textSub,
+        collapsedIconColor: _textSub,
+        title: Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: _text,
+            fontSize: 12.4,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: const TextStyle(color: _textSub, fontSize: 10.5),
+        ),
+        children: [
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+              child: _buildClassificationDocumentTile(item),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClassificationDocumentTile(
+    _ClassificationDocumentResult item,
+  ) {
+    final doc = item.document;
+    final isActive = _activeDocument?.id == doc.id;
+    final isDraftStatus = _isDraftDocumentStatus(doc.status);
+    final uploaded = doc.status.trim().toLowerCase() == 'ready'
+        ? item.totalQuestionCount
+        : 0;
+    final subParts = <String>[
+      if (doc.gradeLabel.trim().isNotEmpty) doc.gradeLabel.trim(),
+      if (doc.semesterLabel.trim().isNotEmpty) doc.semesterLabel.trim(),
+      if (doc.examTermLabel.trim().isNotEmpty) doc.examTermLabel.trim(),
+    ];
+    return InkWell(
+      onTap: () => unawaited(_openDocumentFromClassification(doc)),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isActive ? _accent.withValues(alpha: 0.15) : _panel,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isActive ? _accent : _border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    doc.sourceFilename,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _text,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _labelOfDocumentStatus(doc.status),
+                  style: TextStyle(
+                    color: isDraftStatus
+                        ? const Color(0xFFEAB968)
+                        : const Color(0xFF76D7AE),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            if (subParts.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                subParts.join(' · '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _textSub, fontSize: 10.5),
+              ),
+            ],
+            const SizedBox(height: 4),
+            Text(
+              'DB 업로드 $uploaded/${item.totalQuestionCount}문항'
+              '${item.matchedQuestionCount >= 0 ? ' · 검색 매칭 ${item.matchedQuestionCount}' : ''}',
+              style: const TextStyle(
+                color: _textSub,
+                fontSize: 10.7,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _textbookFolderTitle(ProblemBankDocument doc) {
+    final book = _documentBookName(doc);
+    final scope = _documentTextbookScope(doc);
+    final grade = '${scope['grade_label'] ?? doc.gradeLabel}'.trim();
+    return <String>[if (book.isNotEmpty) book, if (grade.isNotEmpty) grade]
+        .join(' · ');
+  }
+
+  String _textbookFolderProgressText(
+    String key,
+    List<_ClassificationDocumentResult> items,
+  ) {
+    if (_loadingTextbookProgressFolders.contains(key)) {
+      return '소단원 진행률 확인 중 · ${_folderUploadText(items)}';
+    }
+    final progress = _textbookProgressByFolder[key];
+    final unitText = progress == null || progress.total == 0
+        ? '소단원 정보 없음'
+        : '소단원 ${progress.completed}/${progress.total} 추출';
+    return '$unitText · ${_folderUploadText(items)}';
+  }
+
+  String _folderUploadText(List<_ClassificationDocumentResult> items) {
+    final total = items.fold<int>(
+      0,
+      (sum, item) => sum + item.totalQuestionCount,
+    );
+    final uploaded = items.fold<int>(
+      0,
+      (sum, item) =>
+          sum +
+          (item.document.status.trim().toLowerCase() == 'ready'
+              ? item.totalQuestionCount
+              : 0),
+    );
+    return '${items.length}개 문서 · DB $uploaded/$total문항';
+  }
+
   Widget _buildClassificationResultsPanel() {
     return Expanded(
       child: Container(
@@ -15127,120 +15496,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         style: TextStyle(color: _textSub, fontSize: 12),
                       ),
                     )
-                  : ListView.separated(
-                      itemCount: _classificationResults.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 6),
-                      itemBuilder: (context, index) {
-                        final item = _classificationResults[index];
-                        final doc = item.document;
-                        final isActive = _activeDocument?.id == doc.id;
-                        final statusLabel = _labelOfDocumentStatus(doc.status);
-                        final isDraftStatus =
-                            _isDraftDocumentStatus(doc.status);
-                        final scoreText = item.matchedQuestionCount >= 0
-                            ? '매칭 ${item.matchedQuestionCount}문항'
-                            : '문서 기준';
-                        final yearText =
-                            doc.examYear == null ? '' : '${doc.examYear}';
-                        final subParts = <String>[
-                          if (yearText.isNotEmpty) yearText,
-                          if (doc.schoolName.trim().isNotEmpty)
-                            doc.schoolName.trim(),
-                          if (doc.gradeLabel.trim().isNotEmpty)
-                            '${doc.gradeLabel.trim()}학년',
-                        ];
-                        return InkWell(
-                          onTap: () =>
-                              unawaited(_openDocumentFromClassification(doc)),
-                          borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: isActive
-                                  ? _accent.withValues(alpha: 0.15)
-                                  : _field,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: isActive ? _accent : _border,
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        doc.sourceFilename,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: _text,
-                                          fontSize: 12.4,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isDraftStatus
-                                            ? const Color(0xFF7A5B2E)
-                                            : const Color(0xFF2C8C66),
-                                        borderRadius:
-                                            BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        statusLabel,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 10.2,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${_labelOfCurriculumCode(doc.curriculumCode)} · ${_labelOfSourceTypeCode(doc.sourceTypeCode)}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: _textSub,
-                                    fontSize: 11.2,
-                                  ),
-                                ),
-                                if (subParts.isNotEmpty) ...[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    subParts.join(' · '),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: _textSub,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 4),
-                                Text(
-                                  scoreText,
-                                  style: const TextStyle(
-                                    color: _textSub,
-                                    fontSize: 10.8,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+                  : _buildGroupedClassificationResults(),
             ),
           ],
         ),
@@ -15432,10 +15688,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  /// 오류 탭 렌더는 게이트웨이 호출을 동반하므로 문항 단위로 캐시한다.
+  /// (카드가 리빌드될 때마다 재요청하면 목록이 계속 깜빡인다.)
+  Future<IssueQuestionView> _issueQuestionViewFuture(ProblemBankQuestion q) {
+    return _issueQuestionViews.putIfAbsent(
+      q.id.trim(),
+      () => _service.resolveIssueQuestionView(
+        academyId: _academyId ?? '',
+        questionId: q.id,
+        questionUid: q.questionUid,
+        documentId: q.documentId,
+      ),
+    );
+  }
+
+  void _invalidateIssueQuestionView(String questionId) {
+    if (!mounted) return;
+    setState(() => _issueQuestionViews.remove(questionId.trim()));
+  }
+
   Widget _buildIssueSummaryCard(ProblemBankIssueSummary summary) {
     final q = summary.question;
     final issueLabels = summary.issueTypes.map(_issueTypeLabel).join(', ');
     final latestNote = summary.latestNote;
+    final location = summary.primaryLocationLabel;
+    final reporter = summary.primaryReporterName;
+    final fromStudent = summary.hasStudentTextbookReport;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -15473,6 +15751,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   ),
                 ),
               ),
+              if (fromStudent) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: _accent),
+                  ),
+                  child: const Text(
+                    '학생 교재',
+                    style: TextStyle(
+                      color: _accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
               const Spacer(),
               Text(
                 _formatIssueTime(summary.latestReportAt),
@@ -15480,6 +15778,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
             ],
           ),
+          if (location.isNotEmpty || reporter.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              [
+                if (reporter.isNotEmpty) '신고자 $reporter',
+                if (location.isNotEmpty) location,
+              ].join(' · '),
+              style: const TextStyle(
+                color: _textSub,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             issueLabels.isEmpty ? '-' : issueLabels,
@@ -15489,12 +15801,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            q.renderedStem,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: _text, fontSize: 13, height: 1.35),
+          const SizedBox(height: 10),
+          Container(
+            height: 300,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _border),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _IssueQuestionRender(
+              key: ValueKey<String>('issue-render|${q.id}'),
+              future: _issueQuestionViewFuture(q),
+              onRetry: () => _invalidateIssueQuestionView(q.id),
+              compact: true,
+            ),
           ),
           if (latestNote.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -15509,10 +15831,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           const SizedBox(height: 12),
           Row(
             children: [
+              FilledButton.icon(
+                onPressed: () => unawaited(_editIssueQuestion(summary)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF2A3A3A),
+                  foregroundColor: _text,
+                ),
+                icon: const Icon(Icons.edit_note, size: 18),
+                label: const Text('문항 수정'),
+              ),
+              const SizedBox(width: 8),
               OutlinedButton.icon(
+                onPressed: () => unawaited(_showIssueDetailDialog(summary)),
+                icon: const Icon(Icons.fact_check_outlined, size: 16),
+                label: const Text('신고 상세'),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: '문서 전체 열기',
                 onPressed: () => unawaited(_openIssueQuestion(summary)),
-                icon: const Icon(Icons.open_in_new, size: 16),
-                label: const Text('문항 열기'),
+                icon: const Icon(Icons.open_in_new, size: 16, color: _textSub),
               ),
               const Spacer(),
               TextButton(
@@ -15539,6 +15877,211 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  Future<void> _showIssueDetailDialog(ProblemBankIssueSummary summary) async {
+    if (!mounted) return;
+    final q = summary.question;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: _panel,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            '${q.questionNumber}번 신고 상세',
+            style: const TextStyle(
+              color: _text,
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            ),
+          ),
+          content: SizedBox(
+            width: 640,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    '문항 보기',
+                    style: TextStyle(
+                      color: _textSub,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    height: 460,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _border),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: _IssueQuestionRender(
+                      future: _issueQuestionViewFuture(q),
+                      onRetry: () {
+                        _invalidateIssueQuestionView(q.id);
+                        Navigator.of(ctx).pop();
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: EdgeInsets.zero,
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    iconColor: _textSub,
+                    collapsedIconColor: _textSub,
+                    title: const Text(
+                      '문항 본문 (텍스트)',
+                      style: TextStyle(
+                        color: _textSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: _field,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _border),
+                        ),
+                        child: SelectableText(
+                          q.renderedStem.trim().isEmpty
+                              ? '(본문 없음)'
+                              : q.renderedStem,
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 13.5,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '신고 내역',
+                    style: TextStyle(
+                      color: _textSub,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final report in summary.reports) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _field,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: report.isStudentTextbook
+                              ? _accent
+                              : const Color(0xFFE3B341),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                report.isStudentTextbook ? '학생 교재' : '학습앱',
+                                style: TextStyle(
+                                  color: report.isStudentTextbook
+                                      ? _accent
+                                      : const Color(0xFFE3B341),
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                _formatIssueTime(report.createdAt),
+                                style: const TextStyle(
+                                  color: _textSub,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '신고자: ${report.reporterName}',
+                            style: const TextStyle(
+                              color: _text,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (report.locationLabel.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '위치: ${report.locationLabel}',
+                              style: const TextStyle(
+                                color: _text,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 6),
+                          Text(
+                            '원인: ${report.issueTypes.map(_issueTypeLabel).join(', ')}',
+                            style: const TextStyle(
+                              color: Color(0xFFFFDFA6),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          if (report.note.trim().isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              '메모: ${report.note.trim()}',
+                              style: const TextStyle(
+                                color: _textSub,
+                                fontSize: 12.5,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('닫기'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                unawaited(_editIssueQuestion(summary));
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: _accent,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('문항 수정'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildIssueTabBody() {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -15562,7 +16105,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 Row(
                   children: [
                     Text(
-                      '미해결 오류 ${_issueSummaries.length}문항',
+                      '미해결 오류 ${_issueSummaries.length}문항'
+                      '${_unlinkedStudentReports.isEmpty ? '' : ' · 미연결 교재 ${_unlinkedStudentReports.length}건'}',
                       style: const TextStyle(
                         color: _textSub,
                         fontSize: 13,
@@ -15583,19 +16127,39 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 ),
                 const SizedBox(height: 12),
                 Expanded(
-                  child: _issueSummaries.isEmpty
+                  child: (_issueSummaries.isEmpty &&
+                          _unlinkedStudentReports.isEmpty)
                       ? const Center(
                           child: Text(
                             '미해결 오류 리포트가 없습니다.',
                             style: TextStyle(color: _textSub),
                           ),
                         )
-                      : ListView.separated(
-                          itemCount: _issueSummaries.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 10),
-                          itemBuilder: (context, index) =>
-                              _buildIssueSummaryCard(_issueSummaries[index]),
+                      : ListView(
+                          children: [
+                            for (var i = 0;
+                                i < _issueSummaries.length;
+                                i++) ...[
+                              if (i > 0) const SizedBox(height: 10),
+                              _buildIssueSummaryCard(_issueSummaries[i]),
+                            ],
+                            if (_unlinkedStudentReports.isNotEmpty) ...[
+                              const SizedBox(height: 18),
+                              const Text(
+                                '문제은행 미연결 교재 신고',
+                                style: TextStyle(
+                                  color: _textSub,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              for (final report in _unlinkedStudentReports) ...[
+                                _buildUnlinkedStudentReportCard(report),
+                                const SizedBox(height: 10),
+                              ],
+                            ],
+                          ],
                         ),
                 ),
               ],
@@ -15603,6 +16167,95 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildUnlinkedStudentReportCard(Map<String, dynamic> report) {
+    final types = (report['issue_types'] as List<dynamic>? ?? const [])
+        .map((e) => _issueTypeLabel('$e'))
+        .join(', ');
+    final note = '${report['note'] ?? ''}'.trim();
+    final createdAt = DateTime.tryParse('${report['created_at'] ?? ''}');
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _accent.withValues(alpha: 0.7)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '학생 교재 · 미연결',
+                style: TextStyle(
+                  color: _accent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                _formatIssueTime(createdAt),
+                style: const TextStyle(color: _textSub, fontSize: 11.5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '신고자 ${report['reporter_name'] ?? '학생'} · ${report['location_label'] ?? ''}',
+            style: const TextStyle(
+              color: _text,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            types.isEmpty ? '-' : types,
+            style: const TextStyle(
+              color: Color(0xFFFFDFA6),
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          if (note.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '메모: $note',
+              style:
+                  const TextStyle(color: _textSub, fontSize: 12, height: 1.35),
+            ),
+          ],
+          const SizedBox(height: 8),
+          const Text(
+            '문제은행 문항과 연결되지 않아 여기서는 바로 수정할 수 없어요. 학습앱 「문항 신고」에서 본문 확인·판정하세요.',
+            style: TextStyle(color: _textSub, fontSize: 11.5, height: 1.35),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () async {
+                final academyId = _academyId;
+                if (academyId == null) return;
+                try {
+                  await _service.dismissUnlinkedStudentTextbookReport(
+                    academyId: academyId,
+                    reportId: '${report['id']}',
+                  );
+                  await _loadIssueSummaries();
+                  _showSnack('미연결 교재 신고를 무시 처리했습니다.');
+                } catch (e) {
+                  _showSnack('무시 처리 실패: $e', error: true);
+                }
+              },
+              child: const Text('무시'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -15741,10 +16394,12 @@ class _ClassificationDocumentResult {
   const _ClassificationDocumentResult({
     required this.document,
     required this.matchedQuestionCount,
+    required this.totalQuestionCount,
   });
 
   final ProblemBankDocument document;
   final int matchedQuestionCount;
+  final int totalQuestionCount;
 }
 
 class _PipelineLogEntry {
@@ -15956,6 +16611,224 @@ class _UploadDropZone extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 신고 문항을 시각적으로 확인하기 위한 렌더 뷰.
+///
+/// 학생이 실제로 받는 단일 문항 PDF를 우선 표시하고, 없으면 문제은행
+/// 미리보기 렌더로 폴백한다. 어떤 산출물인지 배지로 알려 준다.
+///
+/// [future]는 부모가 문항 단위로 캐시해서 넘긴다. 목록에서 카드가 다시
+/// 빌드될 때마다 게이트웨이 렌더를 재요청하지 않기 위함이다.
+class _IssueQuestionRender extends StatelessWidget {
+  const _IssueQuestionRender({
+    super.key,
+    required this.future,
+    required this.onRetry,
+    this.compact = false,
+  });
+
+  final Future<IssueQuestionView> future;
+  final VoidCallback onRetry;
+
+  /// 목록 카드용 — 배지를 줄이고 확대 조작을 끈다.
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<IssueQuestionView>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2.2),
+            ),
+          );
+        }
+        final view = snapshot.data;
+        if (snapshot.hasError || view == null) {
+          return _message('문항 렌더를 불러오지 못했습니다.');
+        }
+        if (view.isPdf) {
+          return _withBadge(
+            view,
+            _ReportRenderedPdfPage(
+              key: ValueKey<String>('pdf|${view.pdfUrl}'),
+              uri: Uri.parse(view.pdfUrl),
+            ),
+          );
+        }
+        if (view.isImage) {
+          final image = Image.network(
+            view.imageUrl,
+            fit: BoxFit.contain,
+            alignment: Alignment.topCenter,
+            errorBuilder: (_, __, ___) => _message('미리보기 이미지를 표시할 수 없습니다.'),
+          );
+          return _withBadge(
+            view,
+            compact
+                ? image
+                : InteractiveViewer(minScale: 1, maxScale: 6, child: image),
+          );
+        }
+        if (view.kind == IssueQuestionViewKind.pending) {
+          return _message('렌더를 생성하는 중입니다. 잠시 후 다시 시도해 주세요.');
+        }
+        return _message(
+          view.error.isEmpty
+              ? '이 문항의 렌더를 찾지 못했습니다.'
+              : '이 문항의 렌더를 찾지 못했습니다. (${view.error})',
+        );
+      },
+    );
+  }
+
+  Widget _withBadge(IssueQuestionView view, Widget child) {
+    return Stack(
+      children: [
+        Positioned.fill(child: child),
+        Positioned(
+          top: 6,
+          left: 8,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              child: Text(
+                view.sourceLabel,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: compact ? 10 : 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _message(String text) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              text,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.black54,
+                fontSize: compact ? 12 : 13,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          TextButton(onPressed: onRetry, child: const Text('다시 시도')),
+        ],
+      ),
+    );
+  }
+}
+
+/// 워커가 렌더한 단일 문항 PDF의 정적 표시 — 학생 앱과 동일한 보기.
+class _ReportRenderedPdfPage extends StatefulWidget {
+  const _ReportRenderedPdfPage({super.key, required this.uri});
+
+  final Uri uri;
+
+  @override
+  State<_ReportRenderedPdfPage> createState() => _ReportRenderedPdfPageState();
+}
+
+class _ReportRenderedPdfPageState extends State<_ReportRenderedPdfPage> {
+  PdfDocument? _document;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final document = await PdfDocument.openUri(widget.uri);
+      if (!mounted) {
+        await document.dispose();
+        return;
+      }
+      setState(() => _document = document);
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
+  @override
+  void dispose() {
+    final document = _document;
+    if (document != null) unawaited(document.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return const Center(
+        child: Text(
+          '문항 PDF를 표시할 수 없습니다.',
+          style: TextStyle(color: Colors.black54),
+        ),
+      );
+    }
+    final document = _document;
+    if (document == null || document.pages.isEmpty) {
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2.4),
+        ),
+      );
+    }
+    final page = document.pages.first;
+    const inset = 10.0;
+    return Padding(
+      padding: const EdgeInsets.all(inset),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final aspect = page.height / page.width;
+          var width = constraints.maxWidth;
+          var height = width * aspect;
+          if (height > constraints.maxHeight) {
+            height = constraints.maxHeight;
+            width = height / aspect;
+          }
+          return Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: PdfPageView(
+                document: document,
+                pageNumber: 1,
+                decoration: const BoxDecoration(color: Colors.white),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

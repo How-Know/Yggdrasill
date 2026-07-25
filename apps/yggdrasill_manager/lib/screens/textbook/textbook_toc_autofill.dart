@@ -22,7 +22,6 @@ const Set<String> kWonriCategoryLabels = <String>{
   '확인 체크',
   '확인체크',
   '연습문제',
-  '특강',
   'STEP1',
   'STEP2',
   '실력 UP',

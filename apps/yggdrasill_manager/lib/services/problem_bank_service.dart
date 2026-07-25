@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -260,9 +261,12 @@ class ProblemBankService {
       'display_page_from': displayPageFrom,
       'display_page_to': displayPageTo,
     };
-    final existingRun = await _client
+    // 같은 키에 행이 둘 이상 남아 있는 교재가 있어 단일 행을 기대하면 조회가
+    // 실패하고, 그러면 "이미 추출했는지" 판단 자체를 못 해 추출이 조용히
+    // 시작되지 않는다. 가장 최근 행 하나만 본다.
+    final existingRuns = await _client
         .from('textbook_pb_extract_runs')
-        .select('pb_document_id, extract_job_id, status')
+        .select('pb_document_id, extract_job_id, status, updated_at')
         .eq('academy_id', academyId)
         .eq('book_id', bookId)
         .eq('grade_label', gradeLabel)
@@ -270,7 +274,9 @@ class ProblemBankService {
         .eq('mid_order', midOrder)
         .eq('sub_key', subKey)
         .eq('sub_index', subIndex)
-        .maybeSingle();
+        .order('updated_at', ascending: false)
+        .limit(1);
+    final existingRun = (existingRuns as List).whereType<Map>().firstOrNull;
     final existingDocId = '${existingRun?['pb_document_id'] ?? ''}'.trim();
     final existingJobId = '${existingRun?['extract_job_id'] ?? ''}'.trim();
     final existingStatus = '${existingRun?['status'] ?? ''}'.trim();
@@ -1358,6 +1364,48 @@ class ProblemBankService {
         .toList(growable: false);
   }
 
+  /// 문서별 실제 저장 문항 수를 배치로 집계한다.
+  ///
+  /// PostgREST 응답 기본 상한(1000행)을 넘는 교재도 정확히 세기 위해
+  /// 문서 ID를 나누고 각 묶음을 끝까지 페이지네이션한다.
+  Future<Map<String, int>> countQuestionsByDocumentIds({
+    required String academyId,
+    required Iterable<String> documentIds,
+  }) async {
+    final ids = documentIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final counts = <String, int>{for (final id in ids) id: 0};
+    const idChunkSize = 80;
+    const rowPageSize = 1000;
+    for (var start = 0; start < ids.length; start += idChunkSize) {
+      final end = math.min(start + idChunkSize, ids.length);
+      final chunk = ids.sublist(start, end);
+      var offset = 0;
+      while (true) {
+        final rows = await _client
+            .from('pb_questions')
+            .select('document_id')
+            .eq('academy_id', academyId)
+            .inFilter('document_id', chunk)
+            .range(offset, offset + rowPageSize - 1);
+        final page = (rows as List<dynamic>)
+            .whereType<Map>()
+            .map((row) => '${row['document_id'] ?? ''}'.trim())
+            .where((id) => id.isNotEmpty)
+            .toList(growable: false);
+        for (final id in page) {
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+        if (page.length < rowPageSize) break;
+        offset += rowPageSize;
+      }
+    }
+    return counts;
+  }
+
   List<String> _documentBookNameCandidates(ProblemBankDocument doc) {
     final candidates = <String>[
       doc.materialName.trim(),
@@ -1371,11 +1419,11 @@ class ProblemBankService {
     return candidates.where((name) => name.isNotEmpty).toSet().toList();
   }
 
-  /// 학습앱의 `listReadyDocuments`와 동일 규칙으로 문서를 조회한다.
+  /// 매니저 문서 목록에서 선택할 수 있는 확정본과 추출 완료 작업본을 조회한다.
   ///
-  /// 필터: academy + curriculum + source_type(학습앱 UI 매핑) + status=ready +
-  /// 레벨(`초/중/고`)과 세부 과정(`전체` 포함) 매칭 + `meta.saved_settings*` 제외.
-  Future<List<ProblemBankDocument>> listSyncedReadyDocuments({
+  /// 학습앱에는 `ready`만 노출하지만, 매니저에서는 업로드 전 검토·작업본도
+  /// 다시 열어 편집하고 업로드할 수 있어야 한다.
+  Future<List<ProblemBankDocument>> listSearchableDocuments({
     required String academyId,
     required String curriculumCode,
     required String schoolLevel,
@@ -1394,7 +1442,12 @@ class ProblemBankService {
         .eq('academy_id', aid)
         .eq('curriculum_code', curriculumCode)
         .inFilter('source_type_code', dbCodes)
-        .eq('status', 'ready')
+        .inFilter('status', const <String>[
+          'ready',
+          'draft_ready',
+          'draft_review_required',
+          'review_required',
+        ])
         .order('updated_at', ascending: false)
         .limit(safeLimit);
 
@@ -2235,6 +2288,236 @@ class ProblemBankService {
         })
         .eq('academy_id', academyId.trim())
         .eq('question_id', questionId.trim())
+        .eq('status', 'open');
+  }
+
+  /// 문제은행 문항과 아직 연결되지 않은 open 학생 교재 신고.
+  Future<List<Map<String, dynamic>>> listUnlinkedStudentTextbookReports({
+    required String academyId,
+    int limit = 200,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    if (safeAcademyId.isEmpty) return const [];
+    final rows = await _client
+        .from('student_textbook_problem_reports')
+        .select(
+          'id, issue_types, note, created_at, grade_label, book_id, crop_id, '
+          'students(name), resource_files(name), '
+          'textbook_problem_crops(problem_number, raw_page, display_page, pb_question_uid)',
+        )
+        .eq('academy_id', safeAcademyId)
+        .eq('status', 'open')
+        .order('created_at', ascending: false)
+        .limit(limit.clamp(1, 500));
+    final mirrored = await _client
+        .from('pb_question_issue_reports')
+        .select('student_textbook_report_id')
+        .eq('academy_id', safeAcademyId)
+        .eq('source', 'student_textbook')
+        .not('student_textbook_report_id', 'is', null);
+    final mirroredIds = <String>{
+      for (final row in (mirrored as List<dynamic>))
+        if (row is Map && row['student_textbook_report_id'] != null)
+          '${row['student_textbook_report_id']}',
+    };
+    final out = <Map<String, dynamic>>[];
+    for (final row in (rows as List<dynamic>)) {
+      if (row is! Map) continue;
+      final map = Map<String, dynamic>.from(row);
+      final id = '${map['id'] ?? ''}';
+      if (id.isEmpty || mirroredIds.contains(id)) continue;
+      final student = map['students'] is Map
+          ? Map<String, dynamic>.from(map['students'] as Map)
+          : const <String, dynamic>{};
+      final book = map['resource_files'] is Map
+          ? Map<String, dynamic>.from(map['resource_files'] as Map)
+          : const <String, dynamic>{};
+      final crop = map['textbook_problem_crops'] is Map
+          ? Map<String, dynamic>.from(map['textbook_problem_crops'] as Map)
+          : const <String, dynamic>{};
+      final page = crop['display_page'] ?? crop['raw_page'];
+      final number = '${crop['problem_number'] ?? ''}'.trim();
+      final bookName = '${book['name'] ?? '교재'}'.trim();
+      out.add({
+        'id': id,
+        'reporter_name': '${student['name'] ?? '학생'}'.trim(),
+        'location_label': [
+          bookName,
+          if (page != null) 'p.$page',
+          if (number.isNotEmpty) '$number번',
+        ].join(' · '),
+        'issue_types': (map['issue_types'] as List<dynamic>?)
+                ?.map((e) => '$e')
+                .toList(growable: false) ??
+            const <String>[],
+        'note': '${map['note'] ?? ''}',
+        'created_at': map['created_at'],
+      });
+    }
+    return out;
+  }
+
+  // 학생 앱 문항 보기와 동일한 렌더 규칙 (student_textbook_problem_view Edge와 동일).
+  static const String _studentRenderProfile = 'student-single-v1';
+  static const String _studentRendererVersion =
+      'pb_render_v4_slotmeasure_01:student-single-v4';
+  static const int _studentSignedUrlSeconds = 600;
+
+  /// 오류 탭에서 신고 문항을 시각적으로 확인하기 위한 렌더를 해석한다.
+  ///
+  /// 소스는 항상 pb_question 하나이며, 우선순위는
+  /// ① question_render_assets(학생 앱이 그대로 표시하는 단일 문항 PDF)
+  /// ② 게이트웨이 미리보기 PDF ③ 게이트웨이 미리보기 이미지.
+  ///
+  /// ①은 학생 렌더 산출물이 crop 단위로 캐시되어 있어 crop을 조인 키로만
+  /// 사용한다(원본 교재 PDF를 영역으로 잘라내는 방식은 쓰지 않는다).
+  Future<IssueQuestionView> resolveIssueQuestionView({
+    required String academyId,
+    required String questionId,
+    String questionUid = '',
+    String documentId = '',
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safeQuestionId = questionId.trim();
+    if (safeAcademyId.isEmpty || safeQuestionId.isEmpty) {
+      return const IssueQuestionView.none(error: 'missing_question');
+    }
+
+    final studentPdf = await _resolveStudentRenderedPdf(
+      academyId: safeAcademyId,
+      questionId: safeQuestionId,
+      questionUid: questionUid.trim(),
+    );
+    if (studentPdf.isNotEmpty) {
+      return IssueQuestionView(
+        kind: IssueQuestionViewKind.studentPdf,
+        pdfUrl: studentPdf,
+      );
+    }
+
+    if (!hasGateway) {
+      return const IssueQuestionView.none(error: 'no_render_asset');
+    }
+
+    final artifacts = await fetchQuestionPdfPreviewArtifacts(
+      academyId: safeAcademyId,
+      questionIds: <String>[safeQuestionId],
+      documentId: documentId.trim(),
+    );
+    final artifact = artifacts[safeQuestionId];
+    if (artifact != null) {
+      if (artifact.pdfUrl.isNotEmpty) {
+        return IssueQuestionView(
+          kind: IssueQuestionViewKind.previewPdf,
+          pdfUrl: artifact.pdfUrl,
+        );
+      }
+      if (artifact.thumbnailUrl.isNotEmpty) {
+        return IssueQuestionView(
+          kind: IssueQuestionViewKind.previewImage,
+          imageUrl: artifact.thumbnailUrl,
+        );
+      }
+      if (artifact.isPending) {
+        return const IssueQuestionView(kind: IssueQuestionViewKind.pending);
+      }
+    }
+
+    final previews = await fetchQuestionPreviews(
+      academyId: safeAcademyId,
+      questionIds: <String>[safeQuestionId],
+    );
+    final imageUrl = (previews[safeQuestionId] ?? '').trim();
+    if (imageUrl.isNotEmpty) {
+      return IssueQuestionView(
+        kind: IssueQuestionViewKind.previewImage,
+        imageUrl: imageUrl,
+      );
+    }
+
+    return IssueQuestionView.none(
+      error: artifact?.error.isNotEmpty == true
+          ? artifact!.error
+          : 'no_render_asset',
+    );
+  }
+
+  /// 학생 앱이 표시하는 단일 문항 PDF의 서명 URL. 없으면 빈 문자열.
+  Future<String> _resolveStudentRenderedPdf({
+    required String academyId,
+    required String questionId,
+    required String questionUid,
+  }) async {
+    final cropIds = <String>{};
+    try {
+      final links = await _client
+          .from('textbook_crop_question_links')
+          .select('crop_id')
+          .eq('pb_question_id', questionId);
+      for (final row in (links as List<dynamic>)) {
+        final id = '${(row as Map)['crop_id'] ?? ''}'.trim();
+        if (id.isNotEmpty) cropIds.add(id);
+      }
+    } catch (_) {
+      // uid 경로로 계속
+    }
+    if (questionUid.isNotEmpty) {
+      try {
+        final crops = await _client
+            .from('textbook_problem_crops')
+            .select('id')
+            .eq('academy_id', academyId)
+            .eq('pb_question_uid', questionUid);
+        for (final row in (crops as List<dynamic>)) {
+          final id = '${(row as Map)['id'] ?? ''}'.trim();
+          if (id.isNotEmpty) cropIds.add(id);
+        }
+      } catch (_) {
+        // 아래에서 빈 결과 처리
+      }
+    }
+    if (cropIds.isEmpty) return '';
+
+    try {
+      final asset = await _client
+          .from('question_render_assets')
+          .select('storage_bucket, storage_path')
+          .eq('academy_id', academyId)
+          .inFilter('crop_id', cropIds.toList(growable: false))
+          .eq('render_profile', _studentRenderProfile)
+          .eq('renderer_version', _studentRendererVersion)
+          .eq('render_error', '')
+          .not('rendered_at', 'is', null)
+          .order('rendered_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (asset == null) return '';
+      final bucket = '${asset['storage_bucket']}';
+      final path = '${asset['storage_path']}';
+      if (bucket.isEmpty || path.isEmpty) return '';
+      return await _client.storage
+          .from(bucket)
+          .createSignedUrl(path, _studentSignedUrlSeconds);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> dismissUnlinkedStudentTextbookReport({
+    required String academyId,
+    required String reportId,
+  }) async {
+    await _client
+        .from('student_textbook_problem_reports')
+        .update({
+          'status': 'rejected',
+          'resolution': 'waive',
+          'resolution_note': '매니저 오류 탭에서 무시 처리(미연결 신고)',
+          'resolved_by': _client.auth.currentUser?.id,
+          'resolved_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId.trim())
+        .eq('id', reportId.trim())
         .eq('status', 'open');
   }
 

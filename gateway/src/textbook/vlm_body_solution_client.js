@@ -6,7 +6,10 @@
 // 본문에 "풀이" 단락이 인쇄돼 있고 그 안의 굵은 값이 정답이다.
 // 한 번의 호출로 정답(answer_text)과 해설 좌표(content_region)를 함께 얻는다.
 
-import { parseTextbookVlmJson } from './vlm_json_parse.js';
+import {
+  joinGeminiTextParts,
+  parseTextbookVlmJson,
+} from './vlm_json_parse.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
@@ -174,10 +177,7 @@ export async function extractBodySolutionsOnPage({
       );
     }
     const candidate = (payload?.candidates || [])[0];
-    const modelText = (candidate?.content?.parts || [])
-      .map((p) => p?.text || '')
-      .join('\n')
-      .trim();
+    const modelText = joinGeminiTextParts(candidate?.content?.parts);
     // LaTeX 백슬래시가 많은 풀이에서 Gemini JSON 이 그대로 파싱되지 않는
     // 사례가 잦다(예: \sqrt, \frac 연속). 교재 공통 복구 파서를 사용한다.
     const parsedJson = parseTextbookVlmJson(modelText);

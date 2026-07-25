@@ -1008,6 +1008,37 @@ class ResourceService {
     }
   }
 
+  Future<List<Map<String, dynamic>>> loadTextbookSpecialUnits({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final rows = await Supabase.instance.client
+          .from('textbook_units')
+          .select(
+            'unit_key,name,display_start_page,display_end_page,order_index',
+          )
+          .match({
+        'academy_id': academyId,
+        'book_id': bookId.trim(),
+        'grade_label': gradeLabel.trim(),
+        'unit_level': 'small',
+      }).like('unit_key', '%/SPECIAL:E%');
+      return [
+        for (final row in rows) Map<String, dynamic>.from(row),
+      ];
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[RES][textbookSpecialUnits] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   /// Loads the VLM-detected problem regions for [bookId] / [gradeLabel]
   /// from `textbook_problem_crops`. We project only the columns the
   /// student app needs (coordinates + identification), deliberately

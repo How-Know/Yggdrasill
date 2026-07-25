@@ -24,6 +24,8 @@ class HomeworkGroup {
     required this.timeLimitMinutes,
     required this.waitTitle,
     required this.children,
+    this.bookId = '',
+    this.gradeLabel = '',
     this.isTest = false,
     this.isNaesin = false,
     this.pendingComplete = false,
@@ -46,10 +48,61 @@ class HomeworkGroup {
   final int? timeLimitMinutes;
   final String waitTitle;
   final List<HomeworkChild> children;
+  final String bookId;
+  final String gradeLabel;
   bool isTest;
   bool isNaesin;
   bool pendingComplete;
   final bool isHomeworkOnly;
+
+  /// 출력물/프린트 출처 — 표지 대신 흰 배경.
+  bool get isPrintSource {
+    final t = type.trim();
+    return t == '출력물' || t == '프린트';
+  }
+
+  /// content의 `교재:` 줄, 없으면 type 라벨.
+  String get sourceLabel {
+    final fromContent = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)')
+        .firstMatch(content)
+        ?.group(1)
+        ?.trim();
+    if (fromContent != null && fromContent.isNotEmpty) return fromContent;
+    final t = type.trim();
+    if (t.isNotEmpty) return t;
+    return '';
+  }
+
+  /// content의 `과정:` 줄, 없으면 grade_label.
+  String get courseLabel {
+    final fromContent = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)')
+        .firstMatch(content)
+        ?.group(1)
+        ?.trim();
+    if (fromContent != null && fromContent.isNotEmpty) return fromContent;
+    return gradeLabel.trim();
+  }
+
+  /// 1행: 교재명(출처), 과정명
+  String get primaryMetaLine {
+    final source = sourceLabel;
+    final course = courseLabel;
+    if (source.isEmpty && course.isEmpty) return '-';
+    if (source.isEmpty) return course;
+    if (course.isEmpty) return source;
+    return '$source, $course';
+  }
+
+  /// 3행: 페이지 · 문항수 (예: `p.10-12 · 12문항`)
+  String get pageCountLine {
+    final page = pageSummary.trim();
+    final pagePart = page.isEmpty ? '' : 'p.$page';
+    final countPart = totalCount > 0 ? '$totalCount문항' : '';
+    if (pagePart.isEmpty && countPart.isEmpty) return '';
+    if (pagePart.isEmpty) return countPart;
+    if (countPart.isEmpty) return pagePart;
+    return '$pagePart · $countPart';
+  }
 
   /// 목록을 불러온 시각. 수행 중 경과시간 표시에 사용.
   final DateTime fetchedAt = DateTime.now();
@@ -92,6 +145,8 @@ class HomeworkGroup {
       timeLimitMinutes: (row['time_limit_minutes'] as num?)?.toInt(),
       waitTitle: (row['m5_wait_title'] as String?) ?? '',
       children: children,
+      bookId: (row['book_id'] as String?)?.trim() ?? '',
+      gradeLabel: (row['grade_label'] as String?)?.trim() ?? '',
       isHomeworkOnly: homeworkOnly,
     );
   }
@@ -387,6 +442,17 @@ class StudentApi {
       startMinute: (row['start_minute'] as num?)?.toInt(),
       duration: (row['duration'] as num?)?.toInt(),
     );
+  }
+
+  /// Realtime 필터용 본인 academy/student.
+  Future<({String academyId, String studentId})?> identity() async {
+    final rows = await _client.rpc('student_app_identity') as List<dynamic>;
+    if (rows.isEmpty) return null;
+    final row = rows.first as Map<String, dynamic>;
+    final academyId = (row['academy_id'] as String?)?.trim() ?? '';
+    final studentId = (row['student_id'] as String?)?.trim() ?? '';
+    if (academyId.isEmpty || studentId.isEmpty) return null;
+    return (academyId: academyId, studentId: studentId);
   }
 
   /// 과제 그룹 목록 (메인 + 하원숙제 + 플래그 병합).

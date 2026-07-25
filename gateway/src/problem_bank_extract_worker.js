@@ -5,6 +5,7 @@ import hePkg from 'he';
 import { createClient } from '@supabase/supabase-js';
 import { randomUUID } from 'node:crypto';
 import { generateQuestionPreviews } from './problem_bank_preview_service.js';
+import { joinGeminiTextParts } from './problem_bank/extract_engines/vlm/client.js';
 import { runVlmExtraction } from './problem_bank/extract_engines/vlm/runner.js';
 
 const htmlDecode = hePkg.decode;
@@ -2926,11 +2927,9 @@ async function callGeminiQuestionExtractor({ sourceText, examProfileHint }) {
   }
 
   const payload = await res.json();
-  const modelText = (payload?.candidates || [])
-    .flatMap((c) => c?.content?.parts || [])
-    .map((p) => p?.text || '')
-    .join('\n')
-    .trim();
+  const modelText = joinGeminiTextParts(
+    (payload?.candidates || []).flatMap((c) => c?.content?.parts || []),
+  );
   const parsed = parseJsonLoose(modelText);
   if (!parsed) {
     throw new Error('gemini_invalid_json');
@@ -3052,11 +3051,9 @@ async function callGeminiObjectiveGenerator({
   }
 
   const payload = await res.json();
-  const modelText = (payload?.candidates || [])
-    .flatMap((c) => c?.content?.parts || [])
-    .map((p) => p?.text || '')
-    .join('\n')
-    .trim();
+  const modelText = joinGeminiTextParts(
+    (payload?.candidates || []).flatMap((c) => c?.content?.parts || []),
+  );
   const parsed = parseJsonLoose(modelText);
   if (!parsed) {
     throw new Error('gemini_objective_invalid_json');

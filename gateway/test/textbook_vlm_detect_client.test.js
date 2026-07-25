@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeDetectResult } from '../src/textbook/vlm_detect_client.js';
+import {
+  normalizeDetectResult,
+  shouldTreatWonriPageAsConcept,
+} from '../src/textbook/vlm_detect_client.js';
 import {
   buildDetectProblemsPrompt,
   buildRpmSetHeaderPrompt,
@@ -42,6 +45,24 @@ test('wonri page classifier separates concept, drill, and type pages', () => {
   assert.match(prompt, /"type_example" — 왼쪽에 "필수 NN" 배지와 유형명/);
   assert.match(prompt, /하단에 "확인 체크" 문항이 최소 1개/);
   assert.match(prompt, /"개념원리 이해"가 보이면 다른 요소와 무관하게 "concept"/);
+  assert.match(prompt, /"확인하기"는 학습 내용을 확인하는 개념 예제명/);
+  assert.match(prompt, /"확인하기"를 "확인 체크"의 표기 변형으로 해석하는 것은 절대 금지/);
+});
+
+test('wonri 확인하기 concept example is never treated as 확인 체크', () => {
+  const detectPrompt = buildDetectProblemsPrompt({
+    rawPage: 109,
+    displayPage: 109,
+    pageOffset: 0,
+    series: 'wonri',
+    sectionHint: 'concept_drill',
+  });
+  assert.match(detectPrompt, /개념 예제 제목 "확인하기"/);
+  assert.match(detectPrompt, /"확인하기"라는 예제 제목은 모양이 비슷해도 확인 체크가 아니며/);
+  assert.equal(shouldTreatWonriPageAsConcept('other', '확인하기'), true);
+  assert.equal(shouldTreatWonriPageAsConcept('concept', ''), true);
+  assert.equal(shouldTreatWonriPageAsConcept('type_example', '확인 체크'), false);
+  assert.equal(shouldTreatWonriPageAsConcept('other', '확인체크'), false);
 });
 
 test('normalizeDetectResult accepts single-wrapped bbox arrays', () => {

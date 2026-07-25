@@ -265,23 +265,47 @@ class TextbookExplorerService {
   static final TextbookExplorerService instance = TextbookExplorerService._();
 
   final LearningProblemBankService _pbService = LearningProblemBankService();
+  final Map<String, TbExData> _dataCache = <String, TbExData>{};
+  final Map<String, dynamic> _payloadCache = <String, dynamic>{};
+  final Map<String, List<TbExItem>> _flatItemsCache = <String, List<TbExItem>>{};
+  final Map<String, Map<String, _ConceptRange>> _specialRangeCache =
+      <String, Map<String, _ConceptRange>>{};
 
-  Future<TbExData> load({
+  // v4: 서버의 정규화 특강 페이지 범위를 함께 반영.
+  String _cacheKey(String bookId, String gradeLabel) =>
+      'v4|${bookId.trim()}|${gradeLabel.trim()}';
+
+  /// 단원트리 표시용 최소 로드(메타+크롭 병렬). PB 보강은 [enrich]에서.
+  Future<TbExData> loadCore({
     required String bookId,
     required String gradeLabel,
   }) async {
     final safeBookId = bookId.trim();
     final safeGrade = gradeLabel.trim();
     if (safeBookId.isEmpty) return TbExData.empty;
+    final key = _cacheKey(safeBookId, safeGrade);
+    final cached = _dataCache[key];
+    if (cached != null) return cached;
 
-    final payloadRow = await DataManager.instance.loadTextbookMetadataPayload(
-      bookId: safeBookId,
-      gradeLabel: safeGrade,
-    );
-    final cropRows = await DataManager.instance.loadTextbookProblemRegions(
-      bookId: safeBookId,
-      gradeLabel: safeGrade.isEmpty ? null : safeGrade,
-    );
+    final results = await Future.wait<Object?>([
+      DataManager.instance.loadTextbookMetadataPayload(
+        bookId: safeBookId,
+        gradeLabel: safeGrade,
+      ),
+      DataManager.instance.loadTextbookProblemRegions(
+        bookId: safeBookId,
+        gradeLabel: safeGrade.isEmpty ? null : safeGrade,
+      ),
+      DataManager.instance.loadTextbookSpecialUnits(
+        bookId: safeBookId,
+        gradeLabel: safeGrade,
+      ),
+    ]);
+    final payloadRow = results[0] as Map<String, dynamic>?;
+    final cropRows = (results[1] as List<Map<String, dynamic>>?) ??
+        const <Map<String, dynamic>>[];
+    final specialRows = (results[2] as List<Map<String, dynamic>>?) ??
+        const <Map<String, dynamic>>[];
     final payload = payloadRow?['payload'];
     final payloadMap =
         payload is Map ? _asMap(payload) : const <String, dynamic>{};
@@ -295,6 +319,36 @@ class TextbookExplorerService {
       if (item == null) continue;
       items.add(item);
       order += 1;
+    }
+
+    final specialRanges = _specialRangesFromRows(specialRows);
+    final data = _assembleData(
+      payload: payload,
+      items: items,
+      specialRanges: specialRanges,
+    );
+    _payloadCache[key] = payload;
+    _flatItemsCache[key] = items;
+    _specialRangeCache[key] = specialRanges;
+    _dataCache[key] = data;
+    return data;
+  }
+
+  /// PB 링크·응답유형 보강. 실패해도 core 트리는 유지.
+  Future<TbExData> enrich({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final safeBookId = bookId.trim();
+    final safeGrade = gradeLabel.trim();
+    if (safeBookId.isEmpty) return TbExData.empty;
+    final key = _cacheKey(safeBookId, safeGrade);
+    final baseItems = _flatItemsCache[key];
+    final payload = _payloadCache[key];
+    final specialRanges =
+        _specialRangeCache[key] ?? const <String, _ConceptRange>{};
+    if (baseItems == null) {
+      return loadCore(bookId: safeBookId, gradeLabel: safeGrade);
     }
 
     final resolvedQuestionUidByCropId = <String, String>{};
@@ -336,7 +390,7 @@ class TextbookExplorerService {
       // 직접 연결된 pb_question_uid가 있으면 기존 경로로 계속 동작한다.
     }
 
-    final linkedItems = items.map((item) {
+    final linkedItems = baseItems.map((item) {
       if (item.questionUid.trim().isNotEmpty) return item;
       final byCrop = resolvedQuestionUidByCropId[item.cropId];
       final byLocation = resolvedQuestionUidByLocation[
@@ -346,7 +400,6 @@ class TextbookExplorerService {
       return resolved.isEmpty ? item : item.copyWith(questionUid: resolved);
     }).toList(growable: false);
 
-    // 응답 유형(객/주/서)은 pb_questions 에서 보강한다.
     final uids = linkedItems
         .where((e) => e.hasUid)
         .map((e) => e.questionUid)
@@ -378,18 +431,41 @@ class TextbookExplorerService {
         )
         .toList(growable: false);
 
-    final units = _buildUnits(payloadRow?['payload'], resolvedItems);
+    final data = _assembleData(
+      payload: payload,
+      items: resolvedItems,
+      specialRanges: specialRanges,
+    );
+    _flatItemsCache[key] = resolvedItems;
+    _dataCache[key] = data;
+    return data;
+  }
+
+  /// 전체 로드(코어+보강). 자원 화면 등 기존 호출부 호환.
+  Future<TbExData> load({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    await loadCore(bookId: bookId, gradeLabel: gradeLabel);
+    return enrich(bookId: bookId, gradeLabel: gradeLabel);
+  }
+
+  TbExData _assembleData({
+    required dynamic payload,
+    required List<TbExItem> items,
+    Map<String, _ConceptRange> specialRanges =
+        const <String, _ConceptRange>{},
+  }) {
+    final units = _buildUnits(payload, items, specialRanges: specialRanges);
     final itemsByPage = <int, List<TbExItem>>{};
-    for (final item in resolvedItems) {
+    for (final item in items) {
       if (item.rawPage <= 0) continue;
       itemsByPage.putIfAbsent(item.rawPage, () => <TbExItem>[]).add(item);
     }
-
-    final totalPages =
-        _computeTotalPages(payloadRow?['payload'], resolvedItems);
+    final totalPages = _computeTotalPages(payload, items);
     final numberedUids = <String>{};
     var unnumberedNoUid = 0;
-    for (final item in resolvedItems) {
+    for (final item in items) {
       if (item.isSetHeader) continue;
       if (item.problemNumber.trim().isEmpty) continue;
       if (item.hasUid) {
@@ -398,13 +474,11 @@ class TextbookExplorerService {
         unnumberedNoUid += 1;
       }
     }
-    final totalQuestions = numberedUids.length + unnumberedNoUid;
-
     return TbExData(
       units: units,
       itemsByPage: itemsByPage,
       totalPages: totalPages,
-      totalQuestions: totalQuestions,
+      totalQuestions: numberedUids.length + unnumberedNoUid,
     );
   }
 
@@ -480,7 +554,12 @@ class TextbookExplorerService {
     }
   }
 
-  List<TbExBigUnit> _buildUnits(dynamic payload, List<TbExItem> items) {
+  List<TbExBigUnit> _buildUnits(
+    dynamic payload,
+    List<TbExItem> items, {
+    Map<String, _ConceptRange> specialRanges =
+        const <String, _ConceptRange>{},
+  }) {
     final itemsByKey = <String, List<TbExItem>>{};
     final itemsByMid = <String, List<TbExItem>>{};
     for (final item in items) {
@@ -506,6 +585,8 @@ class TextbookExplorerService {
             // 개념서: 문항을 sub_key 가 아니라 소단원(sub_units) 페이지 범위로
             // 매핑한다. 한 소단원에 개념원리 익히기/필수유형/확인 체크/연습문제
             // 문항이 페이지 기준으로 모인다.
+            // 특강(E)은 payload sub_units 에 없고 소단원 1 앞에 붙는 경우가
+            // 많아(예: 확통 순열과 조합 특강 → 중복순열) 별도 가상 소단원으로 복원한다.
             final midKey = '${big.order}|${mid.order}';
             final midItems = itemsByMid[midKey] ?? const <TbExItem>[];
             final buckets =
@@ -513,10 +594,29 @@ class TextbookExplorerService {
             final ranges = mid.smalls
                 .map((s) => _ConceptRange(s.startPage, s.endPage))
                 .toList(growable: false);
+            final specialMetaIndex = mid.smalls.indexWhere(
+              (small) =>
+                  small.subKey.trim().toUpperCase() == 'E' ||
+                  small.name.trim().contains('특강'),
+            );
+            final specialItems = <TbExItem>[];
+            final unassigned = <TbExItem>[];
             for (final it in midItems) {
+              if (_isSpecialLectureItem(it)) {
+                if (specialMetaIndex >= 0) {
+                  buckets[specialMetaIndex].add(it);
+                } else {
+                  specialItems.add(it);
+                }
+                continue;
+              }
               final page = it.displayPage ?? it.rawPage;
               final idx = _conceptBucketForPage(ranges, page);
-              if (idx != null) buckets[idx].add(it);
+              if (idx != null) {
+                buckets[idx].add(it);
+              } else {
+                unassigned.add(it);
+              }
             }
             for (var si = 0; si < mid.smalls.length; si += 1) {
               final small = mid.smalls[si];
@@ -532,6 +632,20 @@ class TextbookExplorerService {
                   includeMetadataPages: true,
                 ),
               );
+            }
+            if (specialMetaIndex < 0) {
+              final specialUnit = _buildSpecialLectureSmall(
+                bigOrder: big.order,
+                midOrder: mid.order,
+                mid: mid,
+                specialItems: specialItems,
+                unassignedItems: unassigned,
+                normalizedRange: specialRanges[midKey],
+              );
+              if (specialUnit != null) {
+                smalls.add(specialUnit);
+                smalls.sort(_compareSmallsByPage);
+              }
             }
             // 이 중단원의 모든 sub_key 문항을 소비 처리(leftover 방지).
             for (final entry in itemsByKey.keys) {
@@ -701,6 +815,113 @@ class TextbookExplorerService {
     return null;
   }
 
+  bool _isSpecialLectureItem(TbExItem item) {
+    if (item.subKey.trim().toUpperCase() == 'E') return true;
+    final blob = [
+      item.section,
+      item.typeGroupKind,
+      item.typeGroupLabel,
+      item.typeGroupTitle,
+      item.difficultyLabel,
+    ].join(' ').toLowerCase();
+    return blob.contains('특강') || blob.contains('special_lecture');
+  }
+
+  /// sub_units 밖에 있는 특강(E) 문항·페이지를 가상 소단원으로 복원.
+  TbExSmallUnit? _buildSpecialLectureSmall({
+    required int bigOrder,
+    required int midOrder,
+    required _UnitMetaMid mid,
+    required List<TbExItem> specialItems,
+    required List<TbExItem> unassignedItems,
+    _ConceptRange? normalizedRange,
+  }) {
+    final items = <TbExItem>[...specialItems, ...unassignedItems]
+      ..sort(_compareItems);
+    final subUnitPages = <int>{};
+    var firstSubStart = 1 << 30;
+    for (final small in mid.smalls) {
+      subUnitPages.addAll(small.pageNumbers);
+      final start = small.startPage;
+      if (start != null && start > 0 && start < firstSubStart) {
+        firstSubStart = start;
+      }
+    }
+    final prefacePages = <int>{};
+    if (firstSubStart < (1 << 30)) {
+      for (final page in mid.categoryCoveredPages) {
+        if (page > 0 && page < firstSubStart) prefacePages.add(page);
+      }
+    } else {
+      // sub_units 페이지가 없으면 카테고리 페이지 − (없음) 범위 전체를 후보로.
+      prefacePages.addAll(mid.categoryCoveredPages.difference(subUnitPages));
+    }
+    final metadataPages = <int>{...prefacePages};
+    final normalizedStart = normalizedRange?.start;
+    final normalizedEnd = normalizedRange?.end ?? normalizedStart;
+    if (normalizedStart != null &&
+        normalizedEnd != null &&
+        normalizedStart > 0 &&
+        normalizedEnd >= normalizedStart) {
+      for (var page = normalizedStart; page <= normalizedEnd; page += 1) {
+        metadataPages.add(page);
+      }
+    }
+    for (final it in items) {
+      final page = it.displayPage ?? it.rawPage;
+      if (page > 0) metadataPages.add(page);
+    }
+    if (items.isEmpty && metadataPages.isEmpty) return null;
+
+    // 소단원 1보다 앞에 오도록 order 를 최소값보다 작게.
+    var minOrder = 0;
+    for (final small in mid.smalls) {
+      if (small.order < minOrder) minOrder = small.order;
+    }
+    return _buildSmall(
+      '$bigOrder|$midOrder|E',
+      '특강',
+      minOrder - 1,
+      items,
+      metadataPageNumbers: metadataPages,
+      includeMetadataPages: true,
+    );
+  }
+
+  Map<String, _ConceptRange> _specialRangesFromRows(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final out = <String, _ConceptRange>{};
+    final pattern = RegExp(r'^B:(\d+)/M:(\d+)/SPECIAL:E');
+    for (final row in rows) {
+      final match = pattern.firstMatch('${row['unit_key'] ?? ''}');
+      if (match == null) continue;
+      final bigOrder = int.tryParse(match.group(1) ?? '');
+      final midOrder = int.tryParse(match.group(2) ?? '');
+      final start = _toInt(row['display_start_page']);
+      if (bigOrder == null || midOrder == null || start == null) continue;
+      out['$bigOrder|$midOrder'] =
+          _ConceptRange(start, _toInt(row['display_end_page']) ?? start);
+    }
+    return out;
+  }
+
+  int _compareSmallsByPage(TbExSmallUnit a, TbExSmallUnit b) {
+    int earliest(TbExSmallUnit s) {
+      if (s.pages.isNotEmpty) {
+        return s.pages.first.displayPage ?? s.pages.first.rawPage;
+      }
+      if (s.metadataPageNumbers.isNotEmpty) {
+        return s.metadataPageNumbers.reduce((x, y) => x < y ? x : y);
+      }
+      return s.order;
+    }
+
+    final byPage = earliest(a).compareTo(earliest(b));
+    if (byPage != 0) return byPage;
+    return a.order.compareTo(b.order);
+  }
+
   int _compareItems(TbExItem a, TbExItem b) {
     final an = int.tryParse(a.problemNumber);
     final bn = int.tryParse(b.problemNumber);
@@ -746,12 +967,24 @@ class TextbookExplorerService {
               ),
             );
           }
+          // A~D 카테고리 페이지 범위(특강 등 sub_units 밖 preface 복원용).
+          final categoryCoveredPages = <int>{};
+          if (isConcept) {
+            final categorySmalls = midMap['smalls'];
+            if (categorySmalls is List) {
+              for (final rawSmall in categorySmalls) {
+                categoryCoveredPages
+                    .addAll(_metadataPagesForSmall(_asMap(rawSmall)));
+              }
+            }
+          }
           mids.add(
             _UnitMetaMid(
               order: midOrder,
               name: midName.isEmpty ? '중단원 ${midOrder + 1}' : midName,
               smalls: smalls,
               isConcept: isConcept,
+              categoryCoveredPages: categoryCoveredPages,
             ),
           );
         }
@@ -864,6 +1097,7 @@ class _UnitMetaMid {
     required this.name,
     required this.smalls,
     this.isConcept = false,
+    this.categoryCoveredPages = const <int>{},
   });
   final int order;
   final String name;
@@ -872,6 +1106,9 @@ class _UnitMetaMid {
   /// 개념서(개념원리)면 true. 이 경우 소단원은 sub_units 이고 문항은
   /// sub_key 가 아니라 페이지 범위로 소단원에 매핑한다.
   final bool isConcept;
+
+  /// 개념서 A~D 카테고리 smalls 의 페이지 합집합. 특강 preface 복원에 사용.
+  final Set<int> categoryCoveredPages;
 }
 
 class _UnitMetaSmall {

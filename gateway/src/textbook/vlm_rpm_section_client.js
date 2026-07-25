@@ -3,7 +3,10 @@
 // 문항 좌표/본문은 추출하지 않고 페이지별 파트와 정확한 상단 헤더 가시성만
 // 반환한다. 목차에서 얻은 중단원 시작/끝 범위를 A/B/C 입력칸으로 나눌 때 쓴다.
 
-import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
+import {
+  joinGeminiTextParts,
+  repairLatexBackslashes,
+} from '../problem_bank/extract_engines/vlm/client.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
@@ -244,11 +247,8 @@ export async function classifyRpmSectionPages({
     } catch (_) {
       throw new Error(`vlm_rpm_section_non_json_response: ${textBody.slice(0, 500)}`);
     }
-    const candidate = (payload?.candidates || [])[0];
-    const modelText = (candidate?.content?.parts || [])
-      .map((part) => part?.text || '')
-      .join('\n')
-      .trim();
+      const candidate = (payload?.candidates || [])[0];
+      const modelText = joinGeminiTextParts(candidate?.content?.parts);
     const parsedJson = parseRpmSectionModelJson(modelText);
     if (!parsedJson) {
       throw new Error(

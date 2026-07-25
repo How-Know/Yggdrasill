@@ -132,8 +132,16 @@ async function claimJobs(client) {
     .limit(BATCH_SIZE * 3);
   if (error) throw new Error(`job_poll_failed:${error.message}`);
 
+  // 학생이 보고 있는 문항(priority 0/1)이 있으면 예열(priority>=2)과
+  // 같은 배치에 섞지 않아, 인터랙티브 렌더가 워커 슬롯을 독점하게 한다.
+  const queued = data || [];
+  const hasInteractive = queued.some((job) => Number(job.priority ?? 100) <= 1);
+  const candidates = hasInteractive
+    ? queued.filter((job) => Number(job.priority ?? 100) <= 1)
+    : queued;
+
   const claimed = [];
-  for (const candidate of data || []) {
+  for (const candidate of candidates) {
     if (claimed.length >= BATCH_SIZE) break;
     const { data: rows, error: claimError } = await client
       .from('question_render_jobs')
@@ -371,7 +379,10 @@ async function processJob(client, job) {
           pb_question_id: question.id,
           render_profile: renderProfile,
           content_hash: contentHash,
-          renderer_version: rendered.rendererVersion,
+          // 캐시 키를 만들 때 쓴 버전과 반드시 같아야 한다. 렌더러가 보고한
+          // 값을 그대로 쓰면 둘이 어긋나는 순간 자산이 조회 대상에서
+          // 사라진다(읽는 쪽은 이 컬럼으로 정확히 일치 조회한다).
+          renderer_version: SINGLE_QUESTION_RENDERER_VERSION,
           cache_key: cacheKey,
           storage_bucket: STORAGE_BUCKET,
           storage_path: storagePath,
@@ -417,19 +428,26 @@ async function processBatch(client = supabase) {
   await reclaimStaleJobs(client);
   const jobs = await claimJobs(client);
   const summary = { claimed: jobs.length, completed: 0, failed: 0 };
-  for (const job of jobs) {
-    try {
-      await processJob(client, job);
-      summary.completed += 1;
-    } catch (error) {
-      summary.failed += 1;
-      console.error(
-        '[question-render-worker] job_failed',
-        job.id,
-        String(error?.message || error),
-      );
-      await failJob(client, job, error);
-    }
+  // XeLaTeX 단일문항은 프로세스 단위로 독립이므로 배치를 병렬 처리한다.
+  const results = await Promise.allSettled(
+    jobs.map(async (job) => {
+      try {
+        await processJob(client, job);
+        return { ok: true, job };
+      } catch (error) {
+        console.error(
+          '[question-render-worker] job_failed',
+          job.id,
+          String(error?.message || error),
+        );
+        await failJob(client, job, error);
+        return { ok: false, job, error };
+      }
+    }),
+  );
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value.ok) summary.completed += 1;
+    else summary.failed += 1;
   }
   return summary;
 }

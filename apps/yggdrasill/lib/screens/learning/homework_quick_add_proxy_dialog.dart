@@ -105,7 +105,10 @@ class HomeworkQuickAddProxyDialogState
   bool _detailsPanelExpanded = false;
   final List<_DraftGroupItem> _draftGroupItems = <_DraftGroupItem>[];
   int _draftGroupItemSeq = 0;
-  int _groupTitleAiRequestId = 0;
+
+  /// 사용자가 그룹 제목을 직접 수정하면 true. 이후 자동 갱신이 덮어쓰지 않는다.
+  bool _groupTitleManuallyEdited = false;
+  bool _suppressGroupTitleListener = false;
 
   /// 오른쪽 페이지 패널에 표시할 중단원 (`big:i|mid:j`).
   String? _activeMidKey;
@@ -283,6 +286,10 @@ class HomeworkQuickAddProxyDialogState
     _groupTitle = ImeAwareTextEditingController(
       text: initialGroupTitle.isEmpty ? '그룹 과제' : initialGroupTitle,
     );
+    if (initialGroupTitle.isNotEmpty && !_isChildAddMode) {
+      _groupTitleManuallyEdited = true;
+    }
+    _groupTitle.addListener(_onGroupTitleEdited);
     final initial = widget.initialFlowId;
     if (initial != null && widget.flows.any((f) => f.id == initial)) {
       _flowId = initial;
@@ -312,6 +319,7 @@ class HomeworkQuickAddProxyDialogState
     _count.dispose();
     _timeLimitMinutes.dispose();
     _memo.dispose();
+    _groupTitle.removeListener(_onGroupTitleEdited);
     _groupTitle.dispose();
     _rangeRightScrollController.dispose();
     _leftTreeScrollController.dispose();
@@ -1031,8 +1039,8 @@ class HomeworkQuickAddProxyDialogState
         usedPages: _draftUsedPages(),
       );
     });
-    if (!_isChildAddMode) {
-      _setControllerText(_groupTitle, groupTitle);
+    if (!_isChildAddMode && !_groupTitleManuallyEdited) {
+      _setGroupTitleText(groupTitle);
     }
   }
 
@@ -1289,41 +1297,31 @@ class HomeworkQuickAddProxyDialogState
       _refreshRangeAutoDraft();
       return;
     }
+    if (linked.isMigrated) {
+      await _loadMigratedBookFast(linked);
+      return;
+    }
+    _disposeMigratedExplorer();
     setState(() => _loadingMetadata = true);
     try {
-      final row = await DataManager.instance.loadTextbookMetadataPayload(
-        bookId: linked.bookId,
-        gradeLabel: linked.gradeLabel,
-      );
-      if (!mounted) return;
+      final results = await Future.wait<Object?>([
+        DataManager.instance.loadTextbookMetadataPayload(
+          bookId: linked.bookId,
+          gradeLabel: linked.gradeLabel,
+        ),
+        DataManager.instance.loadTextbookProblemRegions(
+          bookId: linked.bookId,
+          gradeLabel: linked.gradeLabel,
+        ),
+      ]);
+      if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+      final row = results[0] as Map<String, dynamic>?;
+      final problemRows = (results[1] as List<Map<String, dynamic>>?) ??
+          const <Map<String, dynamic>>[];
       final parsed = _parseSelectionUnits(row?['payload']);
-      final problemRows = await DataManager.instance.loadTextbookProblemRegions(
-        bookId: linked.bookId,
-        gradeLabel: linked.gradeLabel,
-      );
       final problemRegions = _parseTextbookProblemRegions(problemRows);
       _applyProblemRegionCountsToUnits(parsed, problemRegions);
-      try {
-        await HomeworkStore.instance.loadAll();
-      } catch (_) {}
-      final issuedSummaryBySmallKey = _issuedSmallSummaryByBook(
-        bookId: linked.bookId,
-        gradeLabel: linked.gradeLabel,
-        units: parsed,
-      );
-      final pageCompletionsBySmallKey = _issuedPageCompletionCountsByBook(
-        bookId: linked.bookId,
-        gradeLabel: linked.gradeLabel,
-        units: parsed,
-      );
-      final acknowledgedSmallKeys =
-          await _loadAcknowledgedSmallKeysForLinkedBook(linked);
-      _applyIssuedLockedState(
-        parsed,
-        issuedSummaryBySmallKey,
-        acknowledgedSmallKeys,
-        pageCompletionsBySmallKey,
-      );
+      // 트리를 먼저 그린 뒤 출제 잠금 상태는 백그라운드 보강.
       _applyDraftBlockedStateToUnits(
         parsed,
         usedPages: _draftUsedPages(),
@@ -1336,13 +1334,10 @@ class HomeworkQuickAddProxyDialogState
         _activeTypeSmallKey = null;
         _pendingScrollSmallExpandKey = null;
         _expandedLeftMidSmallsKey = null;
+        _loadingMetadata = false;
       });
-      if (linked.isMigrated) {
-        await _loadMigratedExplorer(linked);
-      } else {
-        _disposeMigratedExplorer();
-      }
       _refreshRangeAutoDraft();
+      unawaited(_applyIssuedStateForLinkedBook(linked, parsed));
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -1354,49 +1349,475 @@ class HomeworkQuickAddProxyDialogState
         _activeTypeSmallKey = null;
         _pendingScrollSmallExpandKey = null;
         _expandedLeftMidSmallsKey = null;
+        _loadingMetadata = false;
       });
       _refreshRangeAutoDraft();
-    } finally {
-      if (mounted) {
-        setState(() => _loadingMetadata = false);
-      }
     }
   }
 
-  Future<void> _loadMigratedExplorer(_LinkedTextbook linked) async {
-    if (_migratedExplorerBookKey == linked.key && _migratedExplorer != null) {
+  /// 마이그레이션 교재: explorer를 즉시 띄우고, 중복 metadata/crops·숙제 전체로드로
+  /// 트리를 막지 않는다.
+  Future<void> _loadMigratedBookFast(_LinkedTextbook linked) async {
+    if (!mounted) return;
+
+    final reuseExplorer =
+        _migratedExplorerBookKey == linked.key && _migratedExplorer != null;
+    TextbookExplorerController? controller = _migratedExplorer;
+    if (!reuseExplorer) {
+      _disposeMigratedExplorer();
+      String academyId = '';
+      try {
+        academyId = await TenantService.instance.getActiveAcademyId() ?? '';
+      } catch (_) {}
+      if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+      controller = TextbookExplorerController(
+        academyId: academyId,
+        bookId: linked.bookId,
+        gradeLabel: linked.gradeLabel,
+        bookTitle: linked.bookName,
+        categoryLabel: '교재',
+        homeworkSelectionMode: true,
+        autoSelectAllQuestionsOnRangeChange: true,
+      );
+      controller.addListener(_syncMigratedExplorerSelection);
+      setState(() {
+        _loadingMetadata = false;
+        _migratedExplorer = controller;
+        _migratedExplorerBookKey = linked.key;
+        _units = const <_BigUnitSelectionNode>[];
+        _rangePickerMode = 'type';
+        _selectedProblemRegionIds.clear();
+        _activeMidKey = null;
+        _activeTypeSmallKey = null;
+        _pendingScrollSmallExpandKey = null;
+        _expandedLeftMidSmallsKey = null;
+      });
+    } else {
+      setState(() {
+        _loadingMetadata = false;
+        _rangePickerMode = 'type';
+      });
+    }
+
+    unawaited(() async {
+      try {
+        await HomeworkStore.instance.loadAll();
+      } catch (_) {}
+    }());
+
+    // 코어(메타+크롭) 완료 시 트리 표시. enrich는 controller 내부 백그라운드.
+    // crops는 explorer loadCore가 이미 가져오므로 별도 regions fetch는 하지 않는다.
+    if (controller != null &&
+        (controller.loading || controller.data.units.isEmpty)) {
+      await controller.load();
+    }
+    if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+    _rebuildProblemRegionsFromExplorer();
+    _syncMigratedExplorerSelection();
+    await _applyMigratedHomeworkIssueStats();
+    _refreshRangeAutoDraft();
+  }
+
+  /// 마이그레이션 교재 explorer 단원 트리에 내준/완료 횟수를 반영한다.
+  Future<void> _applyMigratedHomeworkIssueStats() async {
+    try {
+      await HomeworkStore.instance.loadAll();
+    } catch (_) {}
+    if (!mounted) return;
+    _syncMigratedHomeworkIssueStatsFromStore();
+  }
+
+  void _syncMigratedHomeworkIssueStatsFromStore() {
+    final controller = _migratedExplorer;
+    final linked = _selectedLinkedBook;
+    if (controller == null || linked == null || !linked.isMigrated) return;
+    if (controller.data.units.isEmpty) {
+      controller.setHomeworkIssueStats();
       return;
     }
-    _disposeMigratedExplorer();
-    String academyId = '';
+
+    // cropId → 트리 위치. 문항 단위로 센 뒤 페이지/소/중/대로 올린다.
+    final cropToPageKey = <String, String>{};
+    final cropToSmallKey = <String, String>{};
+    final cropToMidKey = <String, String>{};
+    final cropToBigKey = <String, String>{};
+    final pageKeysByDisplay = <int, Set<String>>{};
+    final smallToMid = <String, String>{};
+    final smallToBig = <String, String>{};
+
+    for (final big in controller.data.units) {
+      final bigKey = TextbookExplorerController.unitBigKey(big);
+      for (final mid in big.mids) {
+        final midKey = TextbookExplorerController.unitMidKey(big, mid);
+        for (final small in mid.smalls) {
+          smallToMid[small.key] = midKey;
+          smallToBig[small.key] = bigKey;
+          for (final page in small.pages) {
+            final display = page.displayPage ?? page.rawPage;
+            final pageKey = '${small.key}#${page.rawPage}';
+            pageKeysByDisplay
+                .putIfAbsent(display, () => <String>{})
+                .add(pageKey);
+          }
+          for (final item in small.items) {
+            final cropId = item.cropId.trim();
+            if (cropId.isEmpty) continue;
+            final pageKey = '${small.key}#${item.rawPage}';
+            cropToPageKey[cropId] = pageKey;
+            cropToSmallKey[cropId] = small.key;
+            cropToMidKey[cropId] = midKey;
+            cropToBigKey[cropId] = bigKey;
+          }
+        }
+      }
+    }
+
+    final cropAssigned = <String, int>{};
+    final cropCompleted = <String, int>{};
+    // problemCrops 없는 구데이터/폴백: 그룹당 1회로 페이지를 센다.
+    final fallbackPageAssigned = <String, int>{};
+    final fallbackPageCompleted = <String, int>{};
+
+    void bump(Map<String, int> map, String key) {
+      map[key] = (map[key] ?? 0) + 1;
+    }
+
+    final items = HomeworkStore.instance.items(widget.studentId);
+    for (final hw in items) {
+      final hwBookId = (hw.bookId ?? '').trim();
+      final hwGrade = (hw.gradeLabel ?? '').trim();
+      if (hwBookId != linked.bookId || hwGrade != linked.gradeLabel) continue;
+      final completed = _isCompletedForIssuedLock(hw);
+      final cropIds = _cropIdsFromHomework(hw);
+      if (cropIds.isNotEmpty) {
+        for (final cropId in cropIds) {
+          bump(cropAssigned, cropId);
+          if (completed) bump(cropCompleted, cropId);
+        }
+        continue;
+      }
+
+      final pagesHw = _displayPagesFromHomework(hw);
+      if (pagesHw.isEmpty) continue;
+      final eventKey =
+          (HomeworkStore.instance.groupIdOfItem(hw.id) ?? hw.id).trim();
+      if (eventKey.isEmpty) continue;
+      final touchedPageKeys = <String>{};
+      for (final display in pagesHw) {
+        final keys = pageKeysByDisplay[display];
+        if (keys == null) continue;
+        touchedPageKeys.addAll(keys);
+      }
+      // 그룹 내 소과제들이 같은 페이지를 중복으로 세지 않도록 event당 1회.
+      // (폴백 경로에서는 eventKey를 키 접미사로 쓰지 않고, 아래에서 set로 합친다)
+      for (final pageKey in touchedPageKeys) {
+        final stampKey = '$pageKey@$eventKey';
+        if (fallbackPageAssigned.containsKey(stampKey)) continue;
+        fallbackPageAssigned[stampKey] = 1;
+        if (completed) fallbackPageCompleted[stampKey] = 1;
+      }
+    }
+
+    int maxOf(Iterable<int> values) {
+      var m = 0;
+      for (final v in values) {
+        if (v > m) m = v;
+      }
+      return m;
+    }
+
+    final pageAssigned = <String, int>{};
+    final pageCompleted = <String, int>{};
+    final cropsByPage = <String, List<String>>{};
+    for (final e in cropToPageKey.entries) {
+      cropsByPage.putIfAbsent(e.value, () => <String>[]).add(e.key);
+    }
+    for (final e in cropsByPage.entries) {
+      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
+      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
+      if (a > 0) pageAssigned[e.key] = a;
+      if (c > 0) pageCompleted[e.key] = c;
+    }
+    // 폴백 스탬프 → 페이지별 합산
+    for (final e in fallbackPageAssigned.entries) {
+      final pageKey = e.key.split('@').first;
+      pageAssigned[pageKey] = (pageAssigned[pageKey] ?? 0) + e.value;
+    }
+    for (final e in fallbackPageCompleted.entries) {
+      final pageKey = e.key.split('@').first;
+      pageCompleted[pageKey] = (pageCompleted[pageKey] ?? 0) + e.value;
+    }
+
+    final cropsBySmall = <String, List<String>>{};
+    for (final e in cropToSmallKey.entries) {
+      cropsBySmall.putIfAbsent(e.value, () => <String>[]).add(e.key);
+    }
+    final smallAssigned = <String, int>{};
+    final smallCompleted = <String, int>{};
+    for (final e in cropsBySmall.entries) {
+      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
+      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
+      if (a > 0) smallAssigned[e.key] = a;
+      if (c > 0) smallCompleted[e.key] = c;
+    }
+    // 폴백: 페이지 max를 소단원으로
+    for (final pageEntry in pageAssigned.entries) {
+      final smallKey = pageEntry.key.split('#').first;
+      if (cropsBySmall.containsKey(smallKey)) continue;
+      final a = pageEntry.value;
+      final c = pageCompleted[pageEntry.key] ?? 0;
+      if (a > (smallAssigned[smallKey] ?? 0)) smallAssigned[smallKey] = a;
+      if (c > (smallCompleted[smallKey] ?? 0)) smallCompleted[smallKey] = c;
+    }
+
+    final midAssigned = <String, int>{};
+    final midCompleted = <String, int>{};
+    final bigAssigned = <String, int>{};
+    final bigCompleted = <String, int>{};
+    final cropsByMid = <String, List<String>>{};
+    final cropsByBig = <String, List<String>>{};
+    for (final e in cropToMidKey.entries) {
+      cropsByMid.putIfAbsent(e.value, () => <String>[]).add(e.key);
+    }
+    for (final e in cropToBigKey.entries) {
+      cropsByBig.putIfAbsent(e.value, () => <String>[]).add(e.key);
+    }
+    for (final e in cropsByMid.entries) {
+      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
+      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
+      if (a > 0) midAssigned[e.key] = a;
+      if (c > 0) midCompleted[e.key] = c;
+    }
+    for (final e in cropsByBig.entries) {
+      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
+      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
+      if (a > 0) bigAssigned[e.key] = a;
+      if (c > 0) bigCompleted[e.key] = c;
+    }
+    // 문항 매핑이 없는 폴백 소단원만 중/대로 올린다.
+    for (final e in smallAssigned.entries) {
+      if (cropsBySmall.containsKey(e.key)) continue;
+      final midKey = smallToMid[e.key];
+      final bigKey = smallToBig[e.key];
+      if (midKey != null && e.value > (midAssigned[midKey] ?? 0)) {
+        midAssigned[midKey] = e.value;
+      }
+      if (bigKey != null && e.value > (bigAssigned[bigKey] ?? 0)) {
+        bigAssigned[bigKey] = e.value;
+      }
+    }
+    for (final e in smallCompleted.entries) {
+      if (cropsBySmall.containsKey(e.key)) continue;
+      final midKey = smallToMid[e.key];
+      final bigKey = smallToBig[e.key];
+      if (midKey != null && e.value > (midCompleted[midKey] ?? 0)) {
+        midCompleted[midKey] = e.value;
+      }
+      if (bigKey != null && e.value > (bigCompleted[bigKey] ?? 0)) {
+        bigCompleted[bigKey] = e.value;
+      }
+    }
+
+    controller.setHomeworkIssueStats(
+      pageAssigned: pageAssigned,
+      pageCompleted: pageCompleted,
+      smallAssigned: smallAssigned,
+      smallCompleted: smallCompleted,
+      midAssigned: midAssigned,
+      midCompleted: midCompleted,
+      bigAssigned: bigAssigned,
+      bigCompleted: bigCompleted,
+    );
+  }
+
+  Set<String> _cropIdsFromHomework(HomeworkItem hw) {
+    final out = <String>{};
+    final mappings = hw.unitMappings;
+    if (mappings == null || mappings.isEmpty) return out;
+    for (final raw in mappings) {
+      final crops = raw['problemCrops'] ?? raw['problem_crops'];
+      if (crops is! List) continue;
+      for (final crop in crops) {
+        if (crop is! Map) continue;
+        final id = '${crop['cropId'] ?? crop['crop_id'] ?? ''}'.trim();
+        if (id.isNotEmpty) out.add(id);
+      }
+    }
+    return out;
+  }
+
+  /// 과제 page 텍스트·unitMappings에서 표시 쪽 번호를 수집한다.
+  Set<int> _displayPagesFromHomework(HomeworkItem hw) {
+    final fromText = _pagesFromRawPageText(hw.page ?? '');
+    if (fromText.isNotEmpty) return fromText;
+
+    final pages = <int>{};
+    final mappings = hw.unitMappings;
+    if (mappings == null || mappings.isEmpty) return pages;
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      final pageCounts = m['pageCounts'] ?? m['page_counts'];
+      if (pageCounts is Map) {
+        for (final key in pageCounts.keys) {
+          final page = _toInt(key);
+          if (page != null && page > 0) pages.add(page);
+        }
+      }
+      _addPageRange(
+        pages,
+        _toInt(m['startPage'] ?? m['start_page']),
+        _toInt(m['endPage'] ?? m['end_page']),
+      );
+      final crops = m['problemCrops'] ?? m['problem_crops'];
+      if (crops is! List) continue;
+      for (final crop in crops) {
+        if (crop is! Map) continue;
+        final page = _toInt(
+          crop['displayPage'] ??
+              crop['display_page'] ??
+              crop['rawPage'] ??
+              crop['raw_page'],
+        );
+        if (page != null && page > 0) pages.add(page);
+      }
+    }
+    return pages;
+  }
+
+  void _rebuildProblemRegionsFromExplorer() {
+    final controller = _migratedExplorer;
+    if (controller == null || controller.loading) return;
+    final next = _problemRegionsFromExplorer(controller);
+    _problemRegions = next;
+  }
+
+  List<_TextbookProblemRegion> _problemRegionsFromExplorer(
+    TextbookExplorerController controller,
+  ) {
+    final out = <_TextbookProblemRegion>[];
+    List<int>? to1k(
+      double? xmin,
+      double? ymin,
+      double? xmax,
+      double? ymax,
+    ) {
+      if (xmin == null || ymin == null || xmax == null || ymax == null) {
+        return null;
+      }
+      if (!(xmax > xmin && ymax > ymin)) return null;
+      return <int>[
+        (ymin * 1000).round().clamp(0, 1000),
+        (xmin * 1000).round().clamp(0, 1000),
+        (ymax * 1000).round().clamp(0, 1000),
+        (xmax * 1000).round().clamp(0, 1000),
+      ];
+    }
+
+    for (final big in controller.data.units) {
+      for (final mid in big.mids) {
+        for (final small in mid.smalls) {
+          for (final item in small.items) {
+            if (item.cropId.trim().isEmpty) continue;
+            out.add(
+              _TextbookProblemRegion(
+                id: item.cropId,
+                bigOrder: item.bigOrder,
+                midOrder: item.midOrder,
+                subKey: item.subKey,
+                bigName: big.name,
+                midName: mid.name,
+                smallName: small.name,
+                rawPage: item.rawPage > 0 ? item.rawPage : null,
+                displayPage: item.displayPage ?? item.rawPage,
+                problemNumber: item.problemNumber,
+                label: item.difficultyLabel,
+                section: item.section,
+                isSetHeader: item.isSetHeader,
+                pbQuestionUid: item.questionUid,
+                typeKind: item.typeGroupKind,
+                typeLabel: item.typeGroupLabel,
+                typeTitle: item.typeGroupTitle,
+                typeOrder: null,
+                bbox1k: to1k(
+                  item.numberXmin,
+                  item.numberYmin,
+                  item.numberXmax,
+                  item.numberYmax,
+                ),
+                itemRegion1k: to1k(
+                  item.xmin,
+                  item.ymin,
+                  item.xmax,
+                  item.ymax,
+                ),
+              ),
+            );
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  Future<void> _applyIssuedStateForLinkedBook(
+    _LinkedTextbook linked,
+    List<_BigUnitSelectionNode> units,
+  ) async {
     try {
-      academyId = await TenantService.instance.getActiveAcademyId() ?? '';
+      await HomeworkStore.instance.loadAll();
     } catch (_) {}
     if (!mounted || _selectedLinkedBook?.key != linked.key) return;
-    final controller = TextbookExplorerController(
-      academyId: academyId,
+    final issuedSummaryBySmallKey = _issuedSmallSummaryByBook(
       bookId: linked.bookId,
       gradeLabel: linked.gradeLabel,
-      bookTitle: linked.bookName,
-      categoryLabel: '교재',
-      homeworkSelectionMode: true,
-      autoSelectAllQuestionsOnRangeChange: true,
+      units: units,
     );
-    controller.addListener(_syncMigratedExplorerSelection);
-    setState(() {
-      _migratedExplorer = controller;
-      _migratedExplorerBookKey = linked.key;
-      _rangePickerMode = 'type';
-      _selectedProblemRegionIds.clear();
-    });
-    await controller.load();
+    final pageCounts = _issuedPageCountsByBook(
+      bookId: linked.bookId,
+      gradeLabel: linked.gradeLabel,
+      units: units,
+    );
+    final acknowledgedSmallKeys =
+        await _loadAcknowledgedSmallKeysForLinkedBook(linked);
+    if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+    _applyIssuedLockedState(
+      units,
+      issuedSummaryBySmallKey,
+      acknowledgedSmallKeys,
+      pageCounts.completed,
+      pageCounts.assigned,
+    );
+    _applyDraftBlockedStateToUnits(
+      units,
+      usedPages: _draftUsedPages(),
+    );
+    if (mounted) setState(() {});
   }
 
   void _syncMigratedExplorerSelection() {
     final controller = _migratedExplorer;
     if (!mounted || controller == null) return;
+    var regionsTouched = false;
+    // enrich로 uid가 채워져도 draft 매핑이 따라가도록 explorer 기준으로 재구성.
+    if (!controller.loading && controller.data.units.isNotEmpty) {
+      final prevCount = _problemRegions.length;
+      final prevUid = _problemRegions.isEmpty
+          ? ''
+          : _problemRegions.first.pbQuestionUid;
+      _rebuildProblemRegionsFromExplorer();
+      regionsTouched = prevCount != _problemRegions.length ||
+          prevUid !=
+              (_problemRegions.isEmpty
+                  ? ''
+                  : _problemRegions.first.pbQuestionUid);
+    }
     final next = <String>{};
     for (final item in controller.selectedItems) {
+      final cropId = item.cropId.trim();
+      if (cropId.isNotEmpty) {
+        next.add(cropId);
+        continue;
+      }
       for (final region in _problemRegions) {
         final itemUid = item.questionUid.trim();
         final regionUid = region.pbQuestionUid.trim();
@@ -1414,17 +1835,20 @@ class HomeworkQuickAddProxyDialogState
         }
       }
     }
-    if (next.length == _selectedProblemRegionIds.length &&
-        next.every(_selectedProblemRegionIds.contains)) {
-      return;
-    }
+    final selectionChanged = next.length != _selectedProblemRegionIds.length ||
+        !next.every(_selectedProblemRegionIds.contains);
+    // enrich로 페이지/소단원이 늘어나도 내준·완료 배지가 따라가도록 재집계.
+    _syncMigratedHomeworkIssueStatsFromStore();
+    if (!selectionChanged && !regionsTouched) return;
     setState(() {
       _rangePickerMode = 'type';
-      _selectedProblemRegionIds
-        ..clear()
-        ..addAll(next);
+      if (selectionChanged) {
+        _selectedProblemRegionIds
+          ..clear()
+          ..addAll(next);
+      }
     });
-    _refreshRangeAutoDraft();
+    if (selectionChanged) _refreshRangeAutoDraft();
   }
 
   List<_BigUnitSelectionNode> _parseSelectionUnits(dynamic payload) {
@@ -1548,6 +1972,7 @@ class HomeworkQuickAddProxyDialogState
           subKey: subKey,
           bigName: '${row['big_name'] ?? ''}'.trim(),
           midName: '${row['mid_name'] ?? ''}'.trim(),
+          smallName: '${row['small_name'] ?? row['sub_name'] ?? ''}'.trim(),
           rawPage: rawPage,
           displayPage: displayPage,
           problemNumber: problemNumber,
@@ -1943,261 +2368,138 @@ class HomeworkQuickAddProxyDialogState
     _refreshRangeAutoDraft();
   }
 
-  String _normalizeConceptLabel(String raw) {
-    var text = raw.trim();
-    if (text.isEmpty) return '';
-    text = text.replaceAll(RegExp(r'\s+'), ' ');
-    // 제목 앞쪽의 번호/기호 프리픽스(예: 1.1.(7), [3], 2-)를 제거한다.
-    text = text.replaceAll(RegExp(r'^[\d\.\-\(\)\[\]\s]+'), '');
-    text = text.replaceAll(RegExp(r'^(대단원|중단원|소단원)\s*'), '');
-    text = text.replaceAll(RegExp(r'\s*(대단원|중단원|소단원)$'), '');
-    // \W 는 한글도 비단어로 취급될 수 있어 사용하지 않는다.
-    text = text.replaceAll(RegExp(r'^[,./|·:;~`_\\-]+'), '');
-    text = text.replaceAll(RegExp(r'[,./|·:;~`_\\-]+$'), '');
-    return text.trim();
-  }
-
-  bool _isGenericConceptLabel(String text) {
-    final normalized = text.replaceAll(RegExp(r'\s+'), '').trim();
-    if (normalized.isEmpty) return true;
-    return RegExp(
-      r'^(대단원|중단원|소단원|단원|개념|학습|요약|정리|확인문제|문제|문제풀이|복습|테스트|심화|기초)\d*$',
-    ).hasMatch(normalized);
-  }
-
-  List<String> _conceptKeywordsFromTitle(String title) {
-    var text = _normalizeConceptLabel(title);
-    if (text.isEmpty) return const <String>[];
-    text = text.replaceAll(RegExp(r'^[0-9.\-()\[\]\s]+'), '');
-    text = text.replaceAll('제곱인 수', '제곱수');
-    text = text.replaceAll('소인수 분해', '소인수분해');
-    const removePhrases = <String>[
-      '를 이용하여',
-      '을 이용하여',
-      '를 활용하여',
-      '을 활용하여',
-      '를 통해',
-      '을 통해',
-      '에 대하여',
-      '에 대해',
-      '에 대한',
-      '문제풀이',
-      '문제를',
-      '문제',
-      '문항',
-      '구하기',
-      '풀기',
-      '알아보기',
-      '이해하기',
-      '연습하기',
-      '확인하기',
-      '정리하기',
-      '학습하기',
-    ];
-    for (final phrase in removePhrases) {
-      text = text.replaceAll(phrase, ' ');
-    }
-    text = text.replaceAll(RegExp(r'\d+'), ' ');
-    text = text.replaceAll(RegExp(r'[()\[\]{}]'), ' ');
-    text = text
-        .replaceAllMapped(
-          RegExp(r'([가-힣]{1,})와([가-힣]{1,})'),
-          (m) => '${m[1]} ${m[2]}',
-        )
-        .replaceAllMapped(
-          RegExp(r'([가-힣]{1,})과([가-힣]{1,})'),
-          (m) => '${m[1]} ${m[2]}',
-        );
-    text = text.replaceAll(RegExp(r'[,/|·\-]+'), ' ');
-    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (text.isEmpty) return const <String>[];
-
-    const stopWords = <String>{
-      '개념',
-      '정리',
-      '학습',
-      '요약',
-      '문제',
-      '문항',
-      '확인',
-      '테스트',
-      '연습',
-      '복습',
-      '단원',
-      '수',
-      '하위',
-      '과제',
-      '제목',
-      '공통',
-      '수학',
-      '키워드',
-    };
-    final out = <String>[];
-    final seen = <String>{};
-    final tokens = text
-        .split(RegExp(r'\s+'))
-        .map((e) => _normalizeConceptLabel(e))
-        .map((e) => e.replaceAll(RegExp(r'^(와|과|및|또는)+'), ''))
-        .map((e) => e.replaceAll(RegExp(r'(와|과|및|또는)+$'), ''))
-        .map((e) => e.trim())
-        .where((e) => e.length >= 2)
-        .where((e) => !stopWords.contains(e))
-        .where((e) => !_isGenericConceptLabel(e));
-    for (final token in tokens) {
-      if (seen.add(token)) out.add(token);
-    }
-
-    // '소인수'가 있으면 중복 의미인 '인수'는 제외한다.
-    if (out.contains('소인수') || out.contains('소인수분해')) {
-      out.removeWhere((e) => e == '인수');
-    }
-    return out;
-  }
-
   String _truncateTitle(String text, int maxChars) {
     final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (normalized.length <= maxChars) return normalized;
     return normalized.substring(0, maxChars).trimRight();
   }
 
-  String _composeSummaryTitleFromConcepts(
-    List<String> conceptKeywords, {
-    int maxChars = 25,
-  }) {
-    final cleaned = <String>[];
-    final seen = <String>{};
-    for (final raw in conceptKeywords) {
-      final keyword = _normalizeConceptLabel(raw);
-      if (keyword.isEmpty || _isGenericConceptLabel(keyword)) continue;
-      if (seen.add(keyword)) cleaned.add(keyword);
-    }
-    if (cleaned.isEmpty) return '수학 개념';
-
-    final items = cleaned.take(4).toList(growable: false);
-    if (items.length == 1) {
-      return _truncateTitle(items.first, maxChars);
-    }
-    if (items.length == 2) {
-      final twoJoined = '${items[0]}와 ${items[1]}';
-      return _truncateTitle(twoJoined, maxChars);
-    }
-    String joined = items.first;
-    for (int i = 1; i < items.length; i++) {
-      final candidate = '$joined, ${items[i]}';
-      if (candidate.length > maxChars) break;
-      joined = candidate;
-    }
-    return _truncateTitle(joined, maxChars);
+  void _onGroupTitleEdited() {
+    if (_suppressGroupTitleListener || _isChildAddMode) return;
+    _groupTitleManuallyEdited = true;
   }
 
-  String _fallbackGroupTitle({
-    required List<String> conceptKeywords,
-    required List<String> itemTitles,
-  }) {
-    if (conceptKeywords.isNotEmpty) {
-      final compact = _composeSummaryTitleFromConcepts(
-        conceptKeywords,
-        maxChars: 25,
-      );
-      if (compact.isNotEmpty) return compact;
+  void _setGroupTitleText(String text) {
+    _suppressGroupTitleListener = true;
+    _setControllerText(_groupTitle, text);
+    _suppressGroupTitleListener = false;
+  }
+
+  bool _isWonriLinkedBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final name = book.bookName.trim();
+    if (name.contains('개념원리') || name.toLowerCase().contains('wonri')) {
+      return true;
     }
-    if (itemTitles.isNotEmpty) {
-      final mergedKeywords = <String>[];
-      for (final title in itemTitles) {
-        mergedKeywords.addAll(_conceptKeywordsFromTitle(title));
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        if (mid.isConcept) return true;
       }
-      final compact = _composeSummaryTitleFromConcepts(
-        mergedKeywords,
-        maxChars: 25,
-      );
-      if (compact.isNotEmpty) return compact;
     }
-    return '수학 개념';
-  }
-
-  String _sanitizeAiGroupTitle(String raw, {int maxChars = 25}) {
-    var text = raw.replaceAll('\n', ' ').replaceAll('\r', ' ').trim();
-    text = text.replaceAll(RegExp(r'^[-*•\d\.\)\]]+\s*'), '');
-    text = text.replaceAll(RegExp("^[\\\"'“”‘’`]+"), '');
-    text = text.replaceAll(RegExp("[\\\"'“”‘’`]+\$"), '');
-    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return _truncateTitle(text, maxChars);
-  }
-
-  bool _isGenericGroupTitle(String text) {
-    final normalized = text.replaceAll(RegExp(r'\s+'), '');
-    return normalized.isEmpty ||
-        normalized == '개념정리' ||
-        normalized == '수학개념' ||
-        normalized == '그룹과제';
-  }
-
-  Future<void> _generateGroupTitleByAi() async {
-    if (_isChildAddMode) {
-      final locked = (widget.lockedGroupTitle ?? '').trim();
-      if (locked.isNotEmpty) {
-        _setControllerText(_groupTitle, locked);
-      }
-      return;
-    }
-    if (_draftGroupItems.isEmpty) {
-      _setControllerText(_groupTitle, '그룹 과제');
-      return;
-    }
-    if (_hasNaesinDraftItems()) {
-      final firstNaesin = _draftGroupItems.firstWhere(
-        (item) => (item.linkedBookKey ?? '')
-            .trim()
-            .startsWith(_kNaesinDraftLinkPrefix),
-      );
-      final nextTitle = (firstNaesin.naesinGroupTitle ?? '').trim();
-      if (nextTitle.isNotEmpty) {
-        _setControllerText(_groupTitle, _truncateTitle(nextTitle, 25));
-      } else if (_groupTitle.text.trim().isEmpty) {
-        _setControllerText(_groupTitle, '내신 기출');
-      }
-      return;
-    }
-    final itemTitles = _draftGroupItems
-        .map((e) => e.title.trim())
-        .where((e) => e.isNotEmpty)
-        .toList(growable: false);
-    final conceptKeywords = <String>[];
-    final seenConcept = <String>{};
-    for (final item in _draftGroupItems) {
-      final candidates = _conceptKeywordsFromTitle(item.title);
-      for (final keyword in candidates) {
-        if (seenConcept.add(keyword)) {
-          conceptKeywords.add(keyword);
+    final controller = _migratedExplorer;
+    if (controller == null || controller.loading) return false;
+    for (final big in controller.data.units) {
+      for (final mid in big.mids) {
+        for (final small in mid.smalls) {
+          for (final item in small.items) {
+            if (item.isWonri) return true;
+          }
         }
       }
     }
-    final fallbackTitle = _fallbackGroupTitle(
-      conceptKeywords: conceptKeywords,
-      itemTitles: itemTitles,
-    );
-    final requestId = ++_groupTitleAiRequestId;
-    try {
-      final aiInput = StringBuffer()
-        ..writeln('하위 과제 제목들을 하나의 그룹 과제 제목으로 자연스럽게 요약해줘.')
-        ..writeln('- 최대 25자')
-        ..writeln('- 두 개 개념이면 "와" 사용')
-        ..writeln('- 세 개 이상 개념이면 ","로 연결')
-        ..writeln('- 불필요한 수식어는 제거하고 핵심 수학 개념 위주')
-        ..writeln('하위 과제 제목:')
-        ..writeln(itemTitles.map((e) => '- $e').join('\n'));
-      final aiSummary = await AiSummaryService.summarize(
-        aiInput.toString(),
-        maxChars: 25,
+    return false;
+  }
+
+  /// 초안 소과제들의 단원 매핑으로 그룹 제목을 결정한다.
+  /// 개념원리: 소단원 1개 → 소단원명, 같은 중단원 여러 소단원 → 중단원명,
+  /// 여러 중단원 → `그룹 과제`.
+  String _resolveGroupTitleFromDraftItems(List<_DraftGroupItem> items) {
+    if (items.isEmpty) return '그룹 과제';
+    if (_hasNaesinDraftItems()) {
+      final firstNaesin = items.firstWhere(
+        (item) => (item.linkedBookKey ?? '')
+            .trim()
+            .startsWith(_kNaesinDraftLinkPrefix),
+        orElse: () => items.first,
       );
-      if (!mounted || requestId != _groupTitleAiRequestId) return;
-      final aiTitle = _sanitizeAiGroupTitle(aiSummary, maxChars: 25);
-      final chosen = _isGenericGroupTitle(aiTitle) ? fallbackTitle : aiTitle;
-      _setControllerText(_groupTitle, _truncateTitle(chosen, 25));
-    } catch (_) {
-      if (!mounted || requestId != _groupTitleAiRequestId) return;
-      _setControllerText(_groupTitle, _truncateTitle(fallbackTitle, 25));
+      final naesinTitle = (firstNaesin.naesinGroupTitle ?? '').trim();
+      if (naesinTitle.isNotEmpty) return _truncateTitle(naesinTitle, 25);
+      return '내신 기출';
     }
+
+    final book = _selectedLinkedBook;
+    if (_isWonriLinkedBook(book)) {
+      final smallKeys = <String>{};
+      final midKeys = <String>{};
+      final smallNames = <String, String>{};
+      final midNames = <String, String>{};
+      for (final item in items) {
+        for (final raw in item.unitMappings) {
+          final m = Map<String, dynamic>.from(raw);
+          final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
+          final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
+          final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
+          final subKey = '${m['subKey'] ?? m['sub_key'] ?? ''}'.trim();
+          final midName = '${m['midName'] ?? m['mid_name'] ?? ''}'.trim();
+          final smallName =
+              '${m['smallName'] ?? m['small_name'] ?? ''}'.trim();
+          if (bigOrder == null || midOrder == null) continue;
+          final midKey = '$bigOrder|$midOrder';
+          midKeys.add(midKey);
+          if (midName.isNotEmpty) midNames[midKey] = midName;
+          final smallKey = subKey.isNotEmpty
+              ? '$bigOrder|$midOrder|$subKey'
+              : (smallOrder == null
+                  ? '$bigOrder|$midOrder|${smallName.isEmpty ? item.title : smallName}'
+                  : '$bigOrder|$midOrder|$smallOrder');
+          smallKeys.add(smallKey);
+          final resolvedSmall = smallName.isNotEmpty ? smallName : item.title.trim();
+          if (resolvedSmall.isNotEmpty) smallNames[smallKey] = resolvedSmall;
+        }
+      }
+      if (smallKeys.isEmpty) {
+        // 매핑이 없으면 제목 집합으로 폴백
+        final titles = items
+            .map((e) => e.title.trim())
+            .where((e) => e.isNotEmpty)
+            .toSet();
+        if (titles.length == 1) return _truncateTitle(titles.first, 25);
+        return '그룹 과제';
+      }
+      if (smallKeys.length == 1) {
+        final name = smallNames[smallKeys.first] ?? items.first.title.trim();
+        return name.isEmpty ? '그룹 과제' : _truncateTitle(name, 25);
+      }
+      if (midKeys.length == 1) {
+        final name = midNames[midKeys.first] ?? '';
+        return name.isEmpty ? '그룹 과제' : _truncateTitle(name, 25);
+      }
+      return '그룹 과제';
+    }
+
+    final titles = items
+        .map((e) => e.title.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (titles.length == 1) return _truncateTitle(titles.first, 25);
+    return '그룹 과제';
+  }
+
+  void _syncGroupTitleFromDrafts() {
+    if (_isChildAddMode) {
+      final locked = (widget.lockedGroupTitle ?? '').trim();
+      if (locked.isNotEmpty) {
+        _setGroupTitleText(locked);
+      }
+      return;
+    }
+    if (_groupTitleManuallyEdited) return;
+    if (_draftGroupItems.isEmpty) {
+      _setGroupTitleText('그룹 과제');
+      return;
+    }
+    _setGroupTitleText(_resolveGroupTitleFromDraftItems(_draftGroupItems));
   }
 
   bool _isCompletedForIssuedLock(HomeworkItem hw) {
@@ -2235,12 +2537,12 @@ class HomeworkQuickAddProxyDialogState
 
     final latestFinishedAtBySmallKey = <String, DateTime?>{};
     final completedCountBySmallKey = <String, int>{};
+    final assignedCountBySmallKey = <String, int>{};
     final items = HomeworkStore.instance.items(widget.studentId);
     for (final hw in items) {
       final hwBookId = (hw.bookId ?? '').trim();
       final hwGrade = (hw.gradeLabel ?? '').trim();
       if (hwBookId != bookId || hwGrade != gradeLabel) continue;
-      if (!_isCompletedForIssuedLock(hw)) continue;
 
       final finishedAt = hw.completedAt ??
           hw.confirmedAt ??
@@ -2248,6 +2550,7 @@ class HomeworkQuickAddProxyDialogState
           hw.updatedAt ??
           hw.createdAt;
       final touched = <String>{};
+      final isCompleted = _isCompletedForIssuedLock(hw);
 
       final mappings = hw.unitMappings;
       if (mappings != null && mappings.isNotEmpty) {
@@ -2262,7 +2565,7 @@ class HomeworkQuickAddProxyDialogState
         }
       }
 
-      final pages = _pagesFromRawPageText(hw.page ?? '');
+      final pages = _displayPagesFromHomework(hw);
       if (pages.isNotEmpty) {
         for (final entry in pagesBySmallKey.entries) {
           if (_hasPageOverlap(pages, entry.value)) {
@@ -2272,6 +2575,9 @@ class HomeworkQuickAddProxyDialogState
       }
 
       for (final key in touched) {
+        assignedCountBySmallKey[key] =
+            (assignedCountBySmallKey[key] ?? 0) + 1;
+        if (!isCompleted) continue;
         completedCountBySmallKey[key] =
             (completedCountBySmallKey[key] ?? 0) + 1;
         final prev = latestFinishedAtBySmallKey[key];
@@ -2282,6 +2588,7 @@ class HomeworkQuickAddProxyDialogState
     }
     final summary = <String, _IssuedSmallSummary>{};
     final keys = <String>{
+      ...assignedCountBySmallKey.keys,
       ...completedCountBySmallKey.keys,
       ...latestFinishedAtBySmallKey.keys,
     };
@@ -2289,25 +2596,34 @@ class HomeworkQuickAddProxyDialogState
       summary[key] = _IssuedSmallSummary(
         latestFinishedAt: latestFinishedAtBySmallKey[key],
         completedCount: completedCountBySmallKey[key] ?? 0,
+        assignedCount: assignedCountBySmallKey[key] ?? 0,
       );
     }
     return summary;
   }
 
-  /// 완료된 과제에 `page` 필드가 있을 때만, 소단원·쪽별 완료 횟수를 센다.
-  Map<String, Map<int, int>> _issuedPageCompletionCountsByBook({
+  /// 소단원·쪽별 내준/완료 횟수. 과제 page·unitMappings로 쪽을 판별한다.
+  ({
+    Map<String, Map<int, int>> assigned,
+    Map<String, Map<int, int>> completed,
+  }) _issuedPageCountsByBook({
     required String bookId,
     required String gradeLabel,
     required List<_BigUnitSelectionNode> units,
   }) {
+    final empty = (
+      assigned: <String, Map<int, int>>{},
+      completed: <String, Map<int, int>>{},
+    );
     if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
-      return <String, Map<int, int>>{};
+      return empty;
     }
     final pagesBySmallKey = _pagesBySmallKeyForIssuedScan(units);
-    if (pagesBySmallKey.isEmpty) return <String, Map<int, int>>{};
+    if (pagesBySmallKey.isEmpty) return empty;
 
-    final out = <String, Map<int, int>>{};
-    void bump(String smallKey, int page) {
+    final assigned = <String, Map<int, int>>{};
+    final completed = <String, Map<int, int>>{};
+    void bump(Map<String, Map<int, int>> out, String smallKey, int page) {
       final m = out.putIfAbsent(smallKey, () => <int, int>{});
       m[page] = (m[page] ?? 0) + 1;
     }
@@ -2317,7 +2633,6 @@ class HomeworkQuickAddProxyDialogState
       final hwBookId = (hw.bookId ?? '').trim();
       final hwGrade = (hw.gradeLabel ?? '').trim();
       if (hwBookId != bookId || hwGrade != gradeLabel) continue;
-      if (!_isCompletedForIssuedLock(hw)) continue;
 
       final touched = <String>{};
       final mappings = hw.unitMappings;
@@ -2334,7 +2649,7 @@ class HomeworkQuickAddProxyDialogState
         }
       }
 
-      final pagesHw = _pagesFromRawPageText(hw.page ?? '');
+      final pagesHw = _displayPagesFromHomework(hw);
       if (pagesHw.isNotEmpty) {
         for (final entry in pagesBySmallKey.entries) {
           if (_hasPageOverlap(pagesHw, entry.value)) {
@@ -2344,18 +2659,19 @@ class HomeworkQuickAddProxyDialogState
       }
 
       if (pagesHw.isEmpty) continue;
+      final isCompleted = _isCompletedForIssuedLock(hw);
 
       for (final key in touched) {
         final smallPages = pagesBySmallKey[key];
         if (smallPages == null) continue;
         for (final p in pagesHw) {
-          if (smallPages.contains(p)) {
-            bump(key, p);
-          }
+          if (!smallPages.contains(p)) continue;
+          bump(assigned, key, p);
+          if (isCompleted) bump(completed, key, p);
         }
       }
     }
-    return out;
+    return (assigned: assigned, completed: completed);
   }
 
   void _applyIssuedLockedState(
@@ -2363,6 +2679,7 @@ class HomeworkQuickAddProxyDialogState
     Map<String, _IssuedSmallSummary> issuedSummaryBySmallKey,
     Set<String> acknowledgedSmallKeys,
     Map<String, Map<int, int>> pageCompletionsBySmallKey,
+    Map<String, Map<int, int>> pageAssignedBySmallKey,
   ) {
     for (final big in units) {
       big.explicitSelected = false;
@@ -2378,9 +2695,14 @@ class HomeworkQuickAddProxyDialogState
           small.finishedAt = summary?.latestFinishedAt;
           small.completedCount =
               (summary?.completedCount ?? 0) + (acknowledged ? 1 : 0);
+          small.assignedCount =
+              (summary?.assignedCount ?? 0) + (acknowledged ? 1 : 0);
           small.pageCompletedCounts
             ..clear()
             ..addAll(pageCompletionsBySmallKey[key] ?? const {});
+          small.pageAssignedCounts
+            ..clear()
+            ..addAll(pageAssignedBySmallKey[key] ?? const {});
           small.selected = false;
           small.explicitSelected = false;
           small.selectedPages.clear();
@@ -2782,7 +3104,8 @@ class HomeworkQuickAddProxyDialogState
   }) {
     final q = small.pageCounts[pageNum] ?? 0;
     final done = small.pageCompletedCounts[pageNum] ?? 0;
-    if (q <= 0 && done <= 0) {
+    final assigned = small.pageAssignedCounts[pageNum] ?? 0;
+    if (q <= 0 && assigned <= 0) {
       return Text(
         '개념',
         style: TextStyle(
@@ -2807,8 +3130,8 @@ class HomeworkQuickAddProxyDialogState
       mainAxisSize: MainAxisSize.min,
       children: [
         if (q > 0) Text('$q문항', style: subStyle),
-        if (q > 0 && done > 0) const SizedBox(width: 8),
-        if (done > 0) Text('${done}회', style: doneStyle),
+        if (q > 0 && assigned > 0) const SizedBox(width: 8),
+        if (assigned > 0) Text('$done/$assigned', style: doneStyle),
       ],
     );
   }
@@ -3296,7 +3619,9 @@ class HomeworkQuickAddProxyDialogState
 
   String _smallRowStatusSuffix(_SmallUnitSelectionNode small) {
     if (small.draftBlocked) return '추가됨';
-    if (small.completedCount > 0) return '완료 ${small.completedCount}회';
+    if (small.assignedCount > 0 || small.completedCount > 0) {
+      return '${small.completedCount}/${math.max(small.assignedCount, small.completedCount)}';
+    }
     if (small.selectedPages.isNotEmpty) {
       var sum = 0;
       for (final p in small.selectedPages) {
@@ -3678,7 +4003,8 @@ class HomeworkQuickAddProxyDialogState
       }
     }
     final first = regions.first;
-    final smallName = (smallNode?.name ?? '').trim();
+    final smallName = (smallNode?.name ?? first.smallName).trim();
+    final midName = first.midName.trim();
     final title = smallName.isNotEmpty
         ? smallName
         : (groupLabels.length == 1
@@ -3686,7 +4012,7 @@ class HomeworkQuickAddProxyDialogState
             : '유형별 문항 ${regions.length}개');
     final pathSummary = [
       first.bigName,
-      first.midName,
+      midName,
       if (smallName.isNotEmpty) smallName,
     ].where((e) => e.trim().isNotEmpty).join(' > ');
     final mapping = <String, dynamic>{
@@ -3697,7 +4023,7 @@ class HomeworkQuickAddProxyDialogState
       if (smallNode != null) 'smallOrder': smallNode.orderIndex,
       'subKey': first.subKey,
       'bigName': first.bigName,
-      'midName': first.midName,
+      'midName': midName,
       'smallName': smallName,
       'pageCounts': Map<String, int>.fromEntries(
         byPage.entries.map((entry) => MapEntry('${entry.key}', entry.value)),
@@ -4222,7 +4548,7 @@ class HomeworkQuickAddProxyDialogState
     _resetRangeSelectionAfterAdd();
     _timeLimitMinutes.clear();
     _memo.clear();
-    unawaited(_generateGroupTitleByAi());
+    _syncGroupTitleFromDrafts();
   }
 
   void _addDraftGroupItemFromInput() {
@@ -4297,7 +4623,7 @@ class HomeworkQuickAddProxyDialogState
     }
     _timeLimitMinutes.clear();
     _memo.clear();
-    unawaited(_generateGroupTitleByAi());
+    _syncGroupTitleFromDrafts();
   }
 
   void _reorderDraftGroupItems(int oldIndex, int newIndex) {
@@ -4554,7 +4880,7 @@ class HomeworkQuickAddProxyDialogState
         );
       });
       _refreshRangeAutoDraft();
-      unawaited(_generateGroupTitleByAi());
+      _syncGroupTitleFromDrafts();
     } finally {
       titleController.dispose();
       pageController.dispose();
@@ -4758,7 +5084,7 @@ class HomeworkQuickAddProxyDialogState
                     );
                   });
                   _refreshRangeAutoDraft();
-                  unawaited(_generateGroupTitleByAi());
+                  _syncGroupTitleFromDrafts();
                 },
                 icon: const Icon(
                   Icons.delete_outline_rounded,
@@ -6062,8 +6388,11 @@ class HomeworkQuickAddProxyDialogState
                         Text(
                           doneText,
                           style: TextStyle(
-                            color:
-                                blocked ? const Color(0xFF6D7777) : kDlgTextSub,
+                            color: blocked
+                                ? const Color(0xFF6D7777)
+                                : (small.completedCount > 0
+                                    ? kDlgAccent
+                                    : kDlgTextSub),
                             fontWeight: FontWeight.w700,
                             fontSize: blocked ? 11.5 : 12,
                           ),
@@ -6093,16 +6422,7 @@ class HomeworkQuickAddProxyDialogState
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: kDlgBorder),
         ),
-        child: const Center(
-          child: SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
-            ),
-          ),
-        ),
+        child: const Center(child: YggLoadingIndicator(size: 18)),
       );
     }
     if (_units.isEmpty) {
@@ -6246,11 +6566,15 @@ class HomeworkQuickAddProxyDialogState
     }
     if (autoSubtasks.length > 1) {
       final fallbackGroupTitle = () {
+        if (_groupTitleManuallyEdited) {
+          final staged = _groupTitle.text.trim();
+          if (staged.isNotEmpty) return staged;
+        }
+        final resolved = _resolveGroupTitleFromDraftItems(autoSubtasks);
+        if (resolved.trim().isNotEmpty) return resolved;
         final staged = _groupTitle.text.trim();
         if (staged.isNotEmpty) return staged;
-        final merged = _buildMergedRangeTask(selectedBook);
-        final mergedTitle = (merged?.title ?? '').trim();
-        return mergedTitle.isEmpty ? '그룹 과제' : mergedTitle;
+        return '그룹 과제';
       }();
       final groupItems = autoSubtasks
           .map((e) => e.copyWith(splitParts: 1))
@@ -6965,14 +7289,7 @@ class HomeworkQuickAddProxyDialogState
             ),
           ),
           SizedBox(height: 8),
-          SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
-            ),
-          ),
+          YggLoadingIndicator(size: 18),
         ],
       );
     }
@@ -7205,16 +7522,7 @@ class HomeworkQuickAddProxyDialogState
   Widget _buildMigratedExplorerRangePanel() {
     final controller = _migratedExplorer;
     if (controller == null) {
-      return const Center(
-        child: SizedBox(
-          width: 22,
-          height: 22,
-          child: CircularProgressIndicator(
-            strokeWidth: 2.4,
-            valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
-          ),
-        ),
-      );
+      return const Center(child: YggLoadingIndicator());
     }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7248,14 +7556,7 @@ class HomeworkQuickAddProxyDialogState
     if (waitingSelectedBook) {
       return const Align(
         alignment: Alignment.topLeft,
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
-          ),
-        ),
+        child: YggLoadingIndicator(size: 18),
       );
     }
     if (selectedBook == null) {
@@ -7352,14 +7653,7 @@ class HomeworkQuickAddProxyDialogState
     if (waitingSelectedBook) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 8),
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
-          ),
-        ),
+        child: YggLoadingIndicator(size: 18),
       );
     }
     if (selectedBook == null) {
@@ -8076,10 +8370,12 @@ class _LinkedTextbook {
 class _IssuedSmallSummary {
   final DateTime? latestFinishedAt;
   final int completedCount;
+  final int assignedCount;
 
   const _IssuedSmallSummary({
     required this.latestFinishedAt,
     required this.completedCount,
+    this.assignedCount = 0,
   });
 }
 
@@ -8193,6 +8489,7 @@ class _TextbookProblemRegion {
   final String subKey;
   final String bigName;
   final String midName;
+  final String smallName;
   final int? rawPage;
   final int displayPage;
   final String problemNumber;
@@ -8214,6 +8511,7 @@ class _TextbookProblemRegion {
     required this.subKey,
     required this.bigName,
     required this.midName,
+    this.smallName = '',
     required this.rawPage,
     required this.displayPage,
     required this.problemNumber,
@@ -8311,12 +8609,16 @@ class _SmallUnitSelectionNode {
   /// 표시 쪽 번호별 완료 과제 횟수(과제 `page` 텍스트로 판별 가능할 때만).
   final Map<int, int> pageCompletedCounts = <int, int>{};
 
+  /// 표시 쪽 번호별 내준 과제 횟수.
+  final Map<int, int> pageAssignedCounts = <int, int>{};
+
   /// 체크박스 없이 펼친 페이지 칩에서 고른 쪽 번호(단원 전체가 아닐 때).
   final Set<int> selectedPages = <int>{};
   bool locked;
   bool draftBlocked;
   DateTime? finishedAt;
   int completedCount;
+  int assignedCount;
   bool selected = false;
   bool explicitSelected = false;
 
@@ -8331,6 +8633,7 @@ class _SmallUnitSelectionNode {
     this.draftBlocked = false,
     this.finishedAt,
     this.completedCount = 0,
+    this.assignedCount = 0,
   });
 
   String get label {

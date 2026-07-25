@@ -2,7 +2,10 @@
 // `vlm_detect_client.js` 와 뼈대는 같지만, 프롬프트와 결과 정규화 규칙이 다르다.
 
 import { buildDetectSolutionRefsPrompt } from './vlm_solution_refs_prompt.js';
-import { parseTextbookVlmJson } from './vlm_json_parse.js';
+import {
+  joinGeminiTextParts,
+  parseTextbookVlmJson,
+} from './vlm_json_parse.js';
 
 const SOLREF_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const SOLREF_DEFAULT_MAX_RETRIES = 3;
@@ -124,10 +127,7 @@ export async function detectSolutionRefsOnPage({
       );
     }
     const candidate = (payload?.candidates || [])[0];
-    const modelText = (candidate?.content?.parts || [])
-      .map((p) => p?.text || '')
-      .join('\n')
-      .trim();
+    const modelText = joinGeminiTextParts(candidate?.content?.parts);
     const parsedJson = parseTextbookVlmJson(modelText);
     if (!parsedJson) {
       throw new Error(

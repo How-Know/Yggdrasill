@@ -1,6 +1,6 @@
 ---
 description: Guidance for textbook problem snapshots and future analytics
-globs: apps/yggdrasill/lib/**,supabase/migrations/**,gateway/src/**,docs/**
+globs: apps/yggdrasill/lib/**,apps/yggdrasill_student/lib/**,supabase/migrations/**,gateway/src/**,docs/**
 alwaysApply: false
 ---
 
@@ -8,6 +8,10 @@ alwaysApply: false
 
 When working on migrated textbook homework, problem-level grading, iPad solving
 logs, or analytics, first read `docs/architecture/problem-analytics.md`.
+
+For the solving-log layer itself (exposure/attempt events, test sessions,
+reliability scoring), read `docs/architecture/learning-records.md` — see the
+`learning-records` rule.
 
 Before implementing broad analytics changes, offer the user 2-3 choices based on
 the current code and data shape. The user may change direction over time.

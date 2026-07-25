@@ -17,6 +17,10 @@ class TopGlassSnackBar {
   /// 루트 오버레이 해석에 사용할 navigator key (앱에서 1회 주입).
   static GlobalKey<NavigatorState>? navigatorKey;
 
+  /// 상단 safe area 외에 추가로 비울 여백(예: 상태 아일랜드 아래).
+  /// null이면 기본 `_topOffset`만 사용한다.
+  static double Function(BuildContext context)? topContentInsetBuilder;
+
   static OverlayEntry? _hostEntry;
   static _TransientSnackRequest? _transient;
 
@@ -125,6 +129,8 @@ class _TopGlassSnackBarStack extends StatelessWidget {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final topInset = media.padding.top;
+    final extraTop =
+        TopGlassSnackBar.topContentInsetBuilder?.call(context) ?? _topOffset;
     const horizontalMargin = _horizontalMargin + _outerHorizontalInset;
     final maxWidth =
         (media.size.width - horizontalMargin * 2).clamp(0.0, 520.0);
@@ -132,7 +138,7 @@ class _TopGlassSnackBarStack extends StatelessWidget {
     if (transient == null) return const SizedBox.shrink();
 
     return Positioned(
-      top: topInset + _topOffset,
+      top: topInset + extraTop,
       left: horizontalMargin,
       right: horizontalMargin,
       child: Material(

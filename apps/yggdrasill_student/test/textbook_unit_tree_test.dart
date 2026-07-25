@@ -112,6 +112,55 @@ void main() {
         7,
       );
     });
+
+    test('정규화 특강은 E 키로 첫 소단원 앞에 표시한다', () {
+      final tree = TextbookUnitTree.fromJson(const {
+        'schema_version': 2,
+        'units': [
+          {
+            'order_index': 0,
+            'name': '경우의 수',
+            'mids': [
+              {
+                'order_index': 0,
+                'name': '순열과 조합',
+                'smalls': [
+                  {
+                    'order_index': 0,
+                    'unit_key': 'B:0/M:0/SPECIAL:E',
+                    'name': '특강',
+                    'pages': [
+                      {
+                        'raw_page': 10,
+                        'display_page': 8,
+                        'total': 2,
+                      },
+                    ],
+                  },
+                  {
+                    'order_index': 1,
+                    'unit_key': 'B:0/M:0/U:0',
+                    'name': '중복순열',
+                    'pages': [
+                      {
+                        'raw_page': 12,
+                        'display_page': 10,
+                        'total': 4,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      final smalls = tree.bigUnits.single.mids.single.smalls;
+      expect(smalls.map((small) => small.name), ['특강', '중복순열']);
+      expect(smalls.first.subKey, 'E');
+      expect(smalls.first.pages.single.displayPage, 8);
+    });
   });
 
   test('PageProblem은 선택적 분류 메타데이터를 하위 호환으로 파싱한다', () {

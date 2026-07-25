@@ -16,6 +16,7 @@ import 'screens/trait_survey/trait_survey_screen.dart';
 import 'screens/textbook/textbook_screen.dart';
 import 'screens/management/management_screen.dart';
 import 'widgets/app_navigation_bar.dart';
+import 'widgets/textbook_background_extract_panel.dart';
 
 void main() {
   // Zone 외부 비동기 에러(unawaited future, platform channel 등)까지 모두 잡기 위해
@@ -219,32 +220,37 @@ class _MainScreenState extends State<MainScreen> {
     final int safeIndex = _normalizeIndex(_selectedIndex);
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
-      body: Row(
+      body: Stack(
         children: [
-          // 좌측 네비게이션 바
-          AppNavigationBar(
-            selectedIndex: safeIndex,
-            onDestinationSelected: (index) {
-              setState(() {
-                _selectedIndex = _normalizeIndex(index);
-              });
-            },
-            onLogout: () async {
-              await AuthService.signOut();
-            },
-          ),
+          Row(
+            children: [
+              // 좌측 네비게이션 바
+              AppNavigationBar(
+                selectedIndex: safeIndex,
+                onDestinationSelected: (index) {
+                  setState(() {
+                    _selectedIndex = _normalizeIndex(index);
+                  });
+                },
+                onLogout: () async {
+                  await AuthService.signOut();
+                },
+              ),
 
-          // 메인 콘텐츠
-          Expanded(
-            child: Column(
-              children: [
-                // 콘텐츠 영역
-                Expanded(
-                  child: _screens[safeIndex],
+              // 메인 콘텐츠
+              Expanded(
+                child: Column(
+                  children: [
+                    // 콘텐츠 영역
+                    Expanded(
+                      child: _screens[safeIndex],
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+          const TextbookBackgroundExtractPanel(),
         ],
       ),
     );

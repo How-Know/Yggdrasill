@@ -1,0 +1,42 @@
+---
+description: Learning records (exposure/attempt logs, tests, reliability scoring) design contract
+globs: supabase/migrations/**,apps/yggdrasill_student/lib/**,apps/yggdrasill/lib/services/**,apps/yggdrasill/lib/screens/learning/**,docs/architecture/**
+alwaysApply: false
+---
+
+# Learning Records
+
+When touching problem exposure logs, solving attempts, test/exam sessions,
+solve-time measurement, reliability scoring, or the recommendation engine,
+**read `docs/architecture/learning-records.md` first.** It records decisions made
+on 2026-07-25 that are not obvious from the schema alone.
+
+Current state: schema, write RPCs, and analytics views exist on the server.
+**Nothing writes to them yet — the iPad student app is the trigger.**
+
+## Non-negotiables
+
+1. Event tables are append-only. A retry is a new `learning_attempts` row with a
+   higher `attempt_no`, never an UPDATE of the previous result.
+2. Never let the client compute `attempt_no`, `exposure_seq`, or
+   `reliability_score`. Server triggers own those columns.
+3. Never collapse the reliability axes (`supervision`, `answer_access`,
+   `scored_by`, `timing_source`, `platform`, `location_kind`, `material_kind`,
+   `time_limit`) into a single enum. They move independently.
+4. Never hardcode a reliability score. Change
+   `learning_reliability_weights` + version, then call
+   `learning_reliability_recompute()`.
+5. Log every problem that was shown via `learning_log_exposures`, even if it was
+   never attempted. Otherwise "shown vs attempted" is unrecoverable.
+6. Keep `duration_source` honest: `measured` only for real per-item timing,
+   `derived_from_range` for range-split estimates.
+7. Never treat `FREEPLAY` (self-paced) data as ability evidence — self-selection
+   bias. Volume metrics only.
+
+## Before adding a new test type
+
+Check whether the `blueprint` ratios of an existing template (especially
+`DAILY30`: new / retention / prerequisite / anchor) can absorb it. Student load
+is already high; prefer composition changes over new sessions.
+
+For broad changes in this area, offer the user 2-3 concrete options first.

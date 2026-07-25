@@ -12,7 +12,10 @@ import {
   VLM_DETECT_LABELS,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
-import { parseTextbookVlmJson } from './vlm_json_parse.js';
+import {
+  joinGeminiTextParts,
+  parseTextbookVlmJson,
+} from './vlm_json_parse.js';
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
@@ -149,10 +152,7 @@ export async function detectProblemsOnPage({
       );
     }
     const candidate = (payload?.candidates || [])[0];
-    const modelText = (candidate?.content?.parts || [])
-      .map((p) => p?.text || '')
-      .join('\n')
-      .trim();
+    const modelText = joinGeminiTextParts(candidate?.content?.parts);
     let parsedJson = parseTextbookVlmJson(modelText);
     if (!parsedJson) {
       // 개념 페이지 폴백: 모델이 정상 종료했는데도 개념 설명 페이지에서 JSON을
@@ -218,6 +218,16 @@ export function classifyWonriPage(options) {
       displayPage: options?.displayPage,
     }),
   });
+}
+
+export function shouldTreatWonriPageAsConcept(pageClass, visibleHeader) {
+  const normalizedClass = String(pageClass || '').trim().toLowerCase();
+  if (normalizedClass === 'concept') return true;
+  const compactHeader = String(visibleHeader || '').replace(/\s+/g, '');
+  return (
+    compactHeader.includes('확인하기') &&
+    !compactHeader.includes('확인체크')
+  );
 }
 
 function compactErrMsg(err) {

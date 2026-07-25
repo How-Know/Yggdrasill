@@ -57,6 +57,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.seriesKey = '',
     this.embedded = false,
     this.onBack,
+    this.onMinimize,
     this.onStageChanged,
   });
 
@@ -82,6 +83,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final String seriesKey;
   final bool embedded;
   final VoidCallback? onBack;
+  final VoidCallback? onMinimize;
   final VoidCallback? onStageChanged;
 
   static Future<void> show(
@@ -290,8 +292,25 @@ class _TextbookAuthoringStageDialogState
   bool _savingSolRefs = false;
   bool _loadingPbRuns = false;
   final Map<String, String> _pbRunStatusByKey = <String, String>{};
-  final Map<String, String> _pbRunDocumentByKey = <String, String>{};
+  final Map<String, List<String>> _pbRunDocumentsByKey =
+      <String, List<String>>{};
   final Map<String, String> _pbRunErrorByKey = <String, String>{};
+  String _pbRunLoadError = '';
+
+  bool get _canMinimizeAfterStageSave {
+    if (widget.onMinimize == null ||
+        _loadingCrops ||
+        _runningAnswerVlm ||
+        _runningSolRefVlm ||
+        _savingAnswers ||
+        _savingSolRefs) {
+      return false;
+    }
+    final targets = _crops.where((crop) => !crop.isSetHeader).toList();
+    if (targets.isEmpty) return false;
+    return targets.every((crop) => _answersByCropId.containsKey(crop.id)) &&
+        targets.every((crop) => _solRefsByCropId.containsKey(crop.id));
+  }
 
   @override
   void initState() {
@@ -1563,9 +1582,8 @@ class _TextbookAuthoringStageDialogState
                 problemNumber: c.problemNumber,
                 kind: it.answerKind,
                 answerText: it.answerText,
-                answerLatex2d: it.answerLatex2d.isEmpty
-                    ? it.answerText
-                    : it.answerLatex2d,
+                answerLatex2d:
+                    it.answerLatex2d.isEmpty ? it.answerText : it.answerLatex2d,
                 source: 'vlm',
                 rawPage: page,
                 dirty: true,
@@ -1735,6 +1753,8 @@ class _TextbookAuthoringStageDialogState
     final scopeTitle = widget.batchScopes.isEmpty
         ? '$bigPart / $midPart (${widget.subKey})'
         : '선택 ${widget.batchScopes.length}개 소단원';
+    final minimizeAction =
+        _canMinimizeAfterStageSave ? widget.onMinimize : null;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -1768,6 +1788,19 @@ class _TextbookAuthoringStageDialogState
             ),
           ),
           const SizedBox(width: 8),
+          IconButton(
+            tooltip: minimizeAction == null
+                ? '정답·해설 저장이 끝나면 최소화할 수 있습니다'
+                : '본문 추출 진행 상황을 우측 하단으로 최소화',
+            onPressed: minimizeAction,
+            icon: Icon(
+              Icons.minimize,
+              color: minimizeAction == null
+                  ? _kTextSub.withValues(alpha: 0.35)
+                  : _kTextSub,
+              size: 18,
+            ),
+          ),
           IconButton(
             tooltip: '닫기',
             onPressed: () => Navigator.of(context).maybePop(),
@@ -2642,8 +2675,7 @@ class _TextbookAuthoringStageDialogState
     required int pageCount,
   }) {
     final rangedScopes = _activeScopes.where((scope) {
-      final start =
-          answer ? scope.answerStartPage : scope.solutionStartPage;
+      final start = answer ? scope.answerStartPage : scope.solutionStartPage;
       return start != null && start > 0;
     }).toList();
     final starts = <int>[
@@ -2682,15 +2714,21 @@ class _TextbookAuthoringStageDialogState
     return true;
   }
 
+  int get _pbRunDocumentCount => <String>{
+        for (final ids in _pbRunDocumentsByKey.values)
+          ...ids.where((id) => id.trim().isNotEmpty),
+      }.length;
+
   String get _pbRunStatusText {
+    if (_pbRunLoadError.isNotEmpty) return '상태 조회 실패: $_pbRunLoadError';
     if (_pbRunStatusByKey.isEmpty) return '본문 추출 상태 확인 전';
     final counts = <String, int>{};
     for (final status in _pbRunStatusByKey.values) {
-      counts[status] = (counts[status] ?? 0) + 1;
+      counts[status.isEmpty ? '런 없음' : status] =
+          (counts[status.isEmpty ? '런 없음' : status] ?? 0) + 1;
     }
     final base = counts.entries.map((e) => '${e.key} ${e.value}').join(' · ');
-    final docs =
-        _pbRunDocumentByKey.values.where((id) => id.trim().isNotEmpty).length;
+    final docs = _pbRunDocumentCount;
     final failed = _pbRunErrorByKey.values
         .where((msg) => msg.trim().isNotEmpty)
         .take(1)
@@ -2700,16 +2738,42 @@ class _TextbookAuthoringStageDialogState
     return '$base$docText$errorText';
   }
 
+  /// 낮을수록 "덜 끝난" 상태. 한 카테고리에 소단원별 런이 여러 개면 가장 덜
+  /// 끝난 것을 그 카테고리의 상태로 삼는다.
+  static int _pbRunStatusRank(String status) {
+    switch (status.trim().toLowerCase()) {
+      case '':
+        return 0;
+      case 'queued':
+        return 1;
+      case 'extracting':
+        return 2;
+      case 'failed':
+        return 3;
+      case 'cancelled':
+        return 4;
+      case 'review_required':
+        return 5;
+      case 'completed':
+        return 6;
+      default:
+        return 0;
+    }
+  }
+
   Future<void> _refreshPbRunStatuses() async {
     if (_loadingPbRuns) return;
     if (!mounted) return;
     setState(() => _loadingPbRuns = true);
     try {
       final next = <String, String>{};
-      final nextDocs = <String, String>{};
+      final nextDocs = <String, List<String>>{};
       final nextErrors = <String, String>{};
       for (final scope in _activeScopes) {
-        final row = await _supa
+        // 개념원리는 한 카테고리에 소단원 수만큼 런이 있다. 단일 행을 기대하면
+        // 행이 둘 이상인 순간 조회가 실패하고, 상태가 빈 채로 남아 완료 버튼이
+        // 영구히 막힌다. 여러 행을 받아 가장 덜 끝난 상태로 합친다.
+        final rows = await _supa
             .from('textbook_pb_extract_runs')
             .select('status, pb_document_id, extract_job_id, error_message')
             .eq('academy_id', widget.academyId)
@@ -2717,27 +2781,43 @@ class _TextbookAuthoringStageDialogState
             .eq('grade_label', widget.gradeLabel)
             .eq('big_order', scope.bigOrder)
             .eq('mid_order', scope.midOrder)
-            .eq('sub_key', scope.subKey)
-            .maybeSingle();
+            .eq('sub_key', scope.subKey);
         final key = _scopeKey(scope);
-        next[key] = '${row?['status'] ?? ''}'.trim();
-        nextDocs[key] = '${row?['pb_document_id'] ?? ''}'.trim();
-        nextErrors[key] = '${row?['error_message'] ?? ''}'.trim();
+        String? status;
+        final documentIds = <String>[];
+        var error = '';
+        for (final raw in (rows as List).whereType<Map>()) {
+          final rowStatus = '${raw['status'] ?? ''}'.trim();
+          if (status == null ||
+              _pbRunStatusRank(rowStatus) < _pbRunStatusRank(status)) {
+            status = rowStatus;
+          }
+          final documentId = '${raw['pb_document_id'] ?? ''}'.trim();
+          if (documentId.isNotEmpty) documentIds.add(documentId);
+          final rowError = '${raw['error_message'] ?? ''}'.trim();
+          if (error.isEmpty && rowError.isNotEmpty) error = rowError;
+        }
+        next[key] = status ?? '';
+        nextDocs[key] = documentIds;
+        nextErrors[key] = error;
       }
       if (!mounted) return;
       setState(() {
+        _pbRunLoadError = '';
         _pbRunStatusByKey
           ..clear()
           ..addAll(next);
-        _pbRunDocumentByKey
+        _pbRunDocumentsByKey
           ..clear()
           ..addAll(nextDocs);
         _pbRunErrorByKey
           ..clear()
           ..addAll(nextErrors);
       });
-    } catch (_) {
-      // 신규 마이그레이션 전 환경에서는 완료 버튼을 막지 않는다.
+    } catch (e) {
+      // 조회가 깨졌다는 사실 자체를 숨기면 안 된다. 예전에는 조용히 삼켜서
+      // 상태가 '확인 전'으로 멈춘 채 원인을 알 수 없었다.
+      if (mounted) setState(() => _pbRunLoadError = '$e');
     } finally {
       if (mounted) setState(() => _loadingPbRuns = false);
     }
@@ -2918,10 +2998,7 @@ class _TextbookAuthoringStageDialogState
       return;
     }
     if (!mounted) return;
-    final docs = _pbRunDocumentByKey.values
-        .where((id) => id.trim().isNotEmpty)
-        .toSet()
-        .length;
+    final docs = _pbRunDocumentCount;
     if (docs > 0) {
       final syncText = synced > 0 ? ' · 정답 $synced개 반영' : '';
       _toast('문제은행 PDF-only 문서 $docs개 상태 확인 완료$syncText');

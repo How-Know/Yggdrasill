@@ -10,6 +10,7 @@
 import {
   closeTruncatedJson,
   extractBalancedJsonObject,
+  joinGeminiTextParts,
   repairLatexBackslashes,
 } from '../problem_bank/extract_engines/vlm/client.js';
 
@@ -239,11 +240,8 @@ export async function parseTocPages({
     } catch (_) {
       throw new Error(`vlm_toc_non_json_response: ${String(textBody).slice(0, 500)}`);
     }
-    const candidate = (payload?.candidates || [])[0];
-    const modelText = (candidate?.content?.parts || [])
-      .map((p) => p?.text || '')
-      .join('\n')
-      .trim();
+      const candidate = (payload?.candidates || [])[0];
+      const modelText = joinGeminiTextParts(candidate?.content?.parts);
     const parsedJson = parseTocModelJson(modelText);
     if (!parsedJson) {
       throw new Error(

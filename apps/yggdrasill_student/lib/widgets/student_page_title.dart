@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/homework_session.dart';
+import '../services/student_shell_chrome.dart';
 import 'student_account_button.dart';
 import 'student_bottom_nav_bar.dart';
 import 'student_status_island.dart';
@@ -85,69 +87,97 @@ class StudentCollapsingTitlePage extends StatefulWidget {
 
   static const double fadeDistance = 56;
 
+  /// 이 이상 스크롤하면 하단 크롬을 1줄로 축소.
+  static const double chromeCollapsePixels = 40;
+
+  /// 축소 상태에서 이 이하로 돌아와야 다시 펼침 (히스테리시스로 경계 떨림 방지).
+  static const double chromeExpandPixels = 14;
+
   @override
   State<StudentCollapsingTitlePage> createState() =>
       _StudentCollapsingTitlePageState();
 }
 
-class _StudentCollapsingTitlePageState extends State<StudentCollapsingTitlePage> {
+class _StudentCollapsingTitlePageState
+    extends State<StudentCollapsingTitlePage> {
   double _opacity = 1;
 
-  void _updateOpacity(double pixels) {
+  void _updateFromScroll(double pixels) {
     final next =
         (1 - pixels / StudentCollapsingTitlePage.fadeDistance).clamp(0.0, 1.0);
     if ((next - _opacity).abs() > 0.01) {
       setState(() => _opacity = next);
+    }
+    final chrome = StudentShellChrome.instance;
+    if (chrome.scrollCollapsed) {
+      if (pixels <= StudentCollapsingTitlePage.chromeExpandPixels) {
+        chrome.setScrollCollapsed(false);
+      }
+    } else if (pixels >= StudentCollapsingTitlePage.chromeCollapsePixels) {
+      chrome.setScrollCollapsed(true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final topInset = StudentPageTitle.extentOf(context);
-    final bottomInset = StudentBottomNavTokens.contentBottomPadding(context);
-    var body = widget.bodyBuilder(context, topInset, bottomInset);
-    if (widget.onRefresh != null) {
-      body = RefreshIndicator(
-        onRefresh: widget.onRefresh!,
-        edgeOffset: topInset,
-        child: body,
-      );
-    }
 
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification.metrics.axis != Axis.vertical) return false;
-        if (notification is ScrollUpdateNotification ||
-            notification is ScrollEndNotification ||
-            notification is OverscrollNotification) {
-          _updateOpacity(notification.metrics.pixels);
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        HomeworkSession.instance,
+        StudentShellChrome.instance,
+      ]),
+      builder: (context, _) {
+        final bottomInset = StudentBottomNavTokens.contentBottomPadding(
+          context,
+          includeNowPlaying: HomeworkSession.instance.hasActive,
+          compactChrome: StudentShellChrome.instance.oneLineChrome,
+        );
+        var body = widget.bodyBuilder(context, topInset, bottomInset);
+        if (widget.onRefresh != null) {
+          body = RefreshIndicator(
+            onRefresh: widget.onRefresh!,
+            edgeOffset: topInset,
+            child: body,
+          );
         }
-        return false;
-      },
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          body,
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              ignoring: _opacity < 0.05,
-              child: Opacity(
-                opacity: _opacity,
-                child: Transform.translate(
-                  offset: Offset(0, -(1 - _opacity) * 12),
-                  child: StudentPageTitle(
-                    title: widget.title,
-                    actions: widget.actions,
+
+        return NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            if (notification.metrics.axis != Axis.vertical) return false;
+            if (notification is ScrollUpdateNotification ||
+                notification is ScrollEndNotification ||
+                notification is OverscrollNotification) {
+              _updateFromScroll(notification.metrics.pixels);
+            }
+            return false;
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              body,
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  ignoring: _opacity < 0.05,
+                  child: Opacity(
+                    opacity: _opacity,
+                    child: Transform.translate(
+                      offset: Offset(0, -(1 - _opacity) * 12),
+                      child: StudentPageTitle(
+                        title: widget.title,
+                        actions: widget.actions,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

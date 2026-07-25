@@ -2469,8 +2469,8 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
       if (line === BOX_PARAGRAPH_BREAK) {
         contentParts.push('\\par\\vspace{0.45em}');
         activeLabelTex = '';
-        continue;
-      }
+      continue;
+    }
       if (SYMBOL_LABEL_LINE_RE.test(line)) {
         activeLabelTex = decoSectionLabelTex(line);
         contentParts.push(
@@ -3745,7 +3745,7 @@ function buildPreamble({
       lines.push('\\renewcommand{\\headrulewidth}{0pt}');
       lines.push('\\fancyfoot{}');
     } else {
-      lines.push('\\pagestyle{empty}');
+    lines.push('\\pagestyle{empty}');
     }
   } else if (isMock && subjectTitle) {
     // 모의고사형 레이아웃: 상단 rule / 세로 단구분선 / 하단 페이지박스를
@@ -4765,7 +4765,7 @@ function renderOneQuestion(question, {
   }
   function renderInlineTextFigureLatex(i) {
     const p = figurePaths[i];
-    if (!p) return '';
+      if (!p) return '';
     const normalized = String(p).replace(/\\/g, '/');
     const layout = layoutForIndex(i) || {};
     const heightRaw = Number.isFinite(layout.heightEm) ? Number(layout.heightEm) : 1.6;
@@ -7820,55 +7820,55 @@ export function buildDocumentTexSource(questions, options = {}) {
       const pageQuestions = simplePages[pageIdx];
       if (pageIdx > 0) parts.push('\\newpage\n');
 
-      if (columns >= 2) {
-        parts.push(`\\begin{multicols}{${columns}}\n`);
-      }
+    if (columns >= 2) {
+      parts.push(`\\begin{multicols}{${columns}}\n`);
+    }
 
       for (let i = 0; i < pageQuestions.length; i++) {
-        if (i > 0) {
-          if (forcePagePerQuestion) {
-            parts.push('\\newpage\n');
-          } else {
-            parts.push('\\vspace{10pt}\n');
-          }
+      if (i > 0) {
+        if (forcePagePerQuestion) {
+          parts.push('\\newpage\n');
+        } else {
+          parts.push('\\vspace{10pt}\n');
         }
+      }
 
         const q = pageQuestions[i];
-        let sectionLabel = null;
+      let sectionLabel = null;
         const qMode = q?.mode
           || q?.questionMode
           || q?.export_mode
           || q?.exportMode
           || 'objective';
 
-        if (isMock) {
-          if (qMode !== lastMode) {
-            if (qMode === 'objective') sectionLabel = '5지선다형';
-            else if (qMode === 'essay') sectionLabel = '서술형';
-            else sectionLabel = '단답형';
-            lastMode = qMode;
-          }
+      if (isMock) {
+        if (qMode !== lastMode) {
+          if (qMode === 'objective') sectionLabel = '5지선다형';
+          else if (qMode === 'essay') sectionLabel = '서술형';
+          else sectionLabel = '단답형';
+          lastMode = qMode;
         }
+      }
 
-        parts.push(
-          renderOneQuestion(q, {
-            sectionLabel,
-            showQuestionNumber: !hideQuestionNumber,
+      parts.push(
+        renderOneQuestion(q, {
+          sectionLabel,
+          showQuestionNumber: !hideQuestionNumber,
             questionNumberPlacement,
             questionNumberFormat,
-            mode: qMode,
+          mode: qMode,
             stemSizePt: effectiveStemSizePt,
             aboveNumberFontPtOverride: assignmentAboveNumberFontPt,
             includeQuestionScore,
             questionScoreByQuestionId,
             layoutColumns: columns,
-          }),
-        );
-        parts.push('\n');
-      }
+        }),
+      );
+      parts.push('\n');
+    }
 
-      if (columns >= 2) {
-        parts.push('\\end{multicols}\n');
+    if (columns >= 2) {
+      parts.push('\\end{multicols}\n');
       }
     }
   }

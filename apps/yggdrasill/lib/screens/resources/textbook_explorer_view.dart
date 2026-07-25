@@ -11,6 +11,7 @@ import '../../services/textbook_explorer_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/dialog_tokens.dart';
 import '../../widgets/shared_dropdown_dialog.dart';
 import '../../widgets/shared_folder_tree.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
@@ -67,6 +68,19 @@ class TextbookExplorerController extends ChangeNotifier {
   /// 체크된 페이지 키 '${smallKey}#${rawPage}'.
   final Set<String> checkedPageKeys = <String>{};
 
+  /// 과제 추가 다이얼로그용: 문항 집계를 올린 내준/완료 횟수.
+  /// 페이지 키는 '${smallKey}#${rawPage}'.
+  final Map<String, int> pageAssignedCounts = <String, int>{};
+  final Map<String, int> pageCompletedCounts = <String, int>{};
+
+  /// 소·중·대단원 키별 내준/완료 횟수.
+  final Map<String, int> smallAssignedCounts = <String, int>{};
+  final Map<String, int> smallCompletedCounts = <String, int>{};
+  final Map<String, int> midAssignedCounts = <String, int>{};
+  final Map<String, int> midCompletedCounts = <String, int>{};
+  final Map<String, int> bigAssignedCounts = <String, int>{};
+  final Map<String, int> bigCompletedCounts = <String, int>{};
+
   /// 하이라이트(선택)된 문항 selKey. 카드/PDF 크롭 탭으로 토글.
   final Set<String> selectedKeys = <String>{};
 
@@ -118,37 +132,144 @@ class TextbookExplorerController extends ChangeNotifier {
     pdfHoverSelKey.value = selKey;
   }
 
+  void _applyLoadedData(TbExData loaded) {
+    data = loaded;
+    _itemBySelKey.clear();
+    for (final big in loaded.units) {
+      for (final mid in big.mids) {
+        for (final small in mid.smalls) {
+          for (final item in small.items) {
+            _itemBySelKey[item.selKey] = item;
+          }
+        }
+      }
+    }
+  }
+
+  /// 과제 추가 다이얼로그에서 내준/완료 횟수를 트리에 반영한다.
+  void setHomeworkIssueStats({
+    Map<String, int> pageAssigned = const <String, int>{},
+    Map<String, int> pageCompleted = const <String, int>{},
+    Map<String, int> smallAssigned = const <String, int>{},
+    Map<String, int> smallCompleted = const <String, int>{},
+    Map<String, int> midAssigned = const <String, int>{},
+    Map<String, int> midCompleted = const <String, int>{},
+    Map<String, int> bigAssigned = const <String, int>{},
+    Map<String, int> bigCompleted = const <String, int>{},
+  }) {
+    bool same(Map<String, int> a, Map<String, int> b) {
+      if (a.length != b.length) return false;
+      for (final e in a.entries) {
+        if (b[e.key] != e.value) return false;
+      }
+      return true;
+    }
+
+    if (same(pageAssignedCounts, pageAssigned) &&
+        same(pageCompletedCounts, pageCompleted) &&
+        same(smallAssignedCounts, smallAssigned) &&
+        same(smallCompletedCounts, smallCompleted) &&
+        same(midAssignedCounts, midAssigned) &&
+        same(midCompletedCounts, midCompleted) &&
+        same(bigAssignedCounts, bigAssigned) &&
+        same(bigCompletedCounts, bigCompleted)) {
+      return;
+    }
+    pageAssignedCounts
+      ..clear()
+      ..addAll(pageAssigned);
+    pageCompletedCounts
+      ..clear()
+      ..addAll(pageCompleted);
+    smallAssignedCounts
+      ..clear()
+      ..addAll(smallAssigned);
+    smallCompletedCounts
+      ..clear()
+      ..addAll(smallCompleted);
+    midAssignedCounts
+      ..clear()
+      ..addAll(midAssigned);
+    midCompletedCounts
+      ..clear()
+      ..addAll(midCompleted);
+    bigAssignedCounts
+      ..clear()
+      ..addAll(bigAssigned);
+    bigCompletedCounts
+      ..clear()
+      ..addAll(bigCompleted);
+    if (!_disposed) notifyListeners();
+  }
+
+  int pageAssignedCount(String smallKey, int rawPage) =>
+      pageAssignedCounts['$smallKey#$rawPage'] ?? 0;
+
+  int pageCompletedCount(String smallKey, int rawPage) =>
+      pageCompletedCounts['$smallKey#$rawPage'] ?? 0;
+
+  int smallAssignedCount(String smallKey) =>
+      smallAssignedCounts[smallKey] ?? 0;
+
+  int smallCompletedCount(String smallKey) =>
+      smallCompletedCounts[smallKey] ?? 0;
+
+  int midAssignedCount(String midKey) => midAssignedCounts[midKey] ?? 0;
+
+  int midCompletedCount(String midKey) => midCompletedCounts[midKey] ?? 0;
+
+  int bigAssignedCount(String bigKey) => bigAssignedCounts[bigKey] ?? 0;
+
+  int bigCompletedCount(String bigKey) => bigCompletedCounts[bigKey] ?? 0;
+
+  static String unitBigKey(TbExBigUnit big) => 'big:${big.order}:${big.name}';
+
+  static String unitMidKey(TbExBigUnit big, TbExMidUnit mid) =>
+      '${unitBigKey(big)}/mid:${mid.order}:${mid.name}';
+
   Future<void> load() async {
     loading = true;
     error = null;
     notifyListeners();
     try {
-      final loaded = await TextbookExplorerService.instance.load(
+      // 단원트리는 metadata+crops만으로 즉시 표시. PB 보강은 백그라운드.
+      final core = await TextbookExplorerService.instance.loadCore(
         bookId: bookId,
         gradeLabel: gradeLabel,
       );
       if (_disposed) return;
-      data = loaded;
-      _itemBySelKey.clear();
-      for (final big in loaded.units) {
-        for (final mid in big.mids) {
-          for (final small in mid.smalls) {
-            for (final item in small.items) {
-              _itemBySelKey[item.selKey] = item;
-            }
-          }
-        }
-      }
+      _applyLoadedData(core);
       loading = false;
-      if (!loaded.hasQuestions) {
+      if (!core.hasQuestions) {
         error = '이 교재에는 연결된 문항 정보가 없어 단원/문항 탐색을 지원하지 않습니다.';
       }
+      if (!_disposed) notifyListeners();
+      unawaited(_enrichInBackground());
     } catch (e) {
       if (_disposed) return;
       loading = false;
       error = '교재 데이터를 불러오지 못했습니다.\n$e';
+      if (!_disposed) notifyListeners();
     }
-    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _enrichInBackground() async {
+    try {
+      final enriched = await TextbookExplorerService.instance.enrich(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
+      if (_disposed) return;
+      _applyLoadedData(enriched);
+      if (!enriched.hasQuestions) {
+        error = '이 교재에는 연결된 문항 정보가 없어 단원/문항 탐색을 지원하지 않습니다.';
+      } else {
+        error = null;
+      }
+      notifyListeners();
+    } catch (_) {
+      // 보강 실패해도 코어 트리는 유지.
+    }
   }
 
   // PdfViewerController(pdfrx)는 별도 dispose가 필요 없다.
@@ -998,22 +1119,26 @@ class TextbookExplorerController extends ChangeNotifier {
 
 // ============================================================ LEFT PANEL
 class _NodeTag {
-  const _NodeTag.big()
+  const _NodeTag.big(this.unitKey)
       : kind = 'big',
         small = null,
         page = null;
-  const _NodeTag.mid()
+  const _NodeTag.mid(this.unitKey)
       : kind = 'mid',
         small = null,
         page = null;
   const _NodeTag.small(this.small)
       : kind = 'small',
-        page = null;
-  const _NodeTag.page(this.small, this.page) : kind = 'page';
+        page = null,
+        unitKey = null;
+  const _NodeTag.page(this.small, this.page)
+      : kind = 'page',
+        unitKey = null;
 
   final String kind;
   final TbExSmallUnit? small;
   final TbExPage? page;
+  final String? unitKey;
 }
 
 /// 좌측 단원 트리 패널 — 자원 화면 폴더 트리 자리에 그려진다.
@@ -1099,10 +1224,10 @@ class TextbookExplorerTreePanel extends StatelessWidget {
   List<SharedFolderTreeNode> _buildNodes() {
     final out = <SharedFolderTreeNode>[];
     for (final big in controller.data.units) {
-      final bigId = 'big:${big.order}:${big.name}';
+      final bigId = TextbookExplorerController.unitBigKey(big);
       final midNodes = <SharedFolderTreeNode>[];
       for (final mid in big.mids) {
-        final midId = '$bigId/mid:${mid.order}:${mid.name}';
+        final midId = TextbookExplorerController.unitMidKey(big, mid);
         final smallNodes = <SharedFolderTreeNode>[];
         for (final small in mid.smalls) {
           final pageNodes = <SharedFolderTreeNode>[
@@ -1132,7 +1257,7 @@ class TextbookExplorerTreePanel extends StatelessWidget {
             id: midId,
             label: mid.name,
             icon: Icons.folder_outlined,
-            data: const _NodeTag.mid(),
+            data: _NodeTag.mid(midId),
             children: smallNodes,
           ),
         );
@@ -1142,7 +1267,7 @@ class TextbookExplorerTreePanel extends StatelessWidget {
           id: bigId,
           label: big.name,
           rowStyle: SharedFolderTreeRowStyle.section,
-          data: const _NodeTag.big(),
+          data: _NodeTag.big(bigId),
           children: midNodes,
         ),
       );
@@ -1165,6 +1290,26 @@ class TextbookExplorerTreePanel extends StatelessWidget {
   ) {
     final tag = node.data;
     if (tag is! _NodeTag) return row;
+    if (tag.kind == 'big' && (tag.unitKey ?? '').isNotEmpty) {
+      return _buildUnitFolderTreeRow(
+        context,
+        style,
+        node,
+        depth,
+        assigned: controller.bigAssignedCount(tag.unitKey!),
+        completed: controller.bigCompletedCount(tag.unitKey!),
+      );
+    }
+    if (tag.kind == 'mid' && (tag.unitKey ?? '').isNotEmpty) {
+      return _buildUnitFolderTreeRow(
+        context,
+        style,
+        node,
+        depth,
+        assigned: controller.midAssignedCount(tag.unitKey!),
+        completed: controller.midCompletedCount(tag.unitKey!),
+      );
+    }
     if (tag.kind == 'small' && tag.small != null) {
       return _buildSmallTreeRow(context, style, node, depth, tag.small!);
     }
@@ -1178,6 +1323,100 @@ class TextbookExplorerTreePanel extends StatelessWidget {
       );
     }
     return row;
+  }
+
+  Widget _issueRatioBadge({
+    required PreviewAcademyPanelStyle style,
+    required int assigned,
+    required int completed,
+  }) {
+    if (!controller.homeworkSelectionMode || assigned <= 0) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Text(
+        '$completed/$assigned',
+        style: TextStyle(
+          color: completed > 0 ? const Color(0xFF33A373) : style.label,
+          fontWeight: FontWeight.w800,
+          fontSize: 11,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUnitFolderTreeRow(
+    BuildContext context,
+    PreviewAcademyPanelStyle style,
+    SharedFolderTreeNode node,
+    int depth, {
+    required int assigned,
+    required int completed,
+  }) {
+    final hasChildren = node.children.isNotEmpty;
+    final isExpanded = controller.expandedNodeIds.contains(node.id);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        _treeRowOuterPaddingLeft(depth),
+        0,
+        12,
+        sharedFolderTreeItemSpacing,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: hasChildren ? () => controller.toggleExpand(node.id) : null,
+          borderRadius: BorderRadius.circular(999),
+          hoverColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: sharedFolderTreeNavRowPaddingVertical,
+            ),
+            child: Row(
+              children: [
+                if (hasChildren)
+                  InkWell(
+                    onTap: () => controller.toggleExpand(node.id),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(
+                        isExpanded ? Icons.expand_more : Icons.chevron_right,
+                        size: 16,
+                        color: style.icon,
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox(width: sharedFolderTreeLeadingWidth),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    node.label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: style.title,
+                      fontWeight: FontWeight.w700,
+                      fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
+                ),
+                _issueRatioBadge(
+                  style: style,
+                  assigned: assigned,
+                  completed: completed,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   double _treeRowOuterPaddingLeft(int depth) {
@@ -1263,6 +1502,11 @@ class TextbookExplorerTreePanel extends StatelessWidget {
                     ),
                   ),
                 ),
+                _issueRatioBadge(
+                  style: style,
+                  assigned: controller.smallAssignedCount(small.key),
+                  completed: controller.smallCompletedCount(small.key),
+                ),
                 Text(
                   '${small.pages.length}쪽',
                   style: TextStyle(
@@ -1342,6 +1586,17 @@ class TextbookExplorerTreePanel extends StatelessWidget {
                           fontSize: FabTabBarTokens.fabBarLabelFontSize,
                           letterSpacing: -0.1,
                         ),
+                      ),
+                    ),
+                    _issueRatioBadge(
+                      style: style,
+                      assigned: controller.pageAssignedCount(
+                        small.key,
+                        page.rawPage,
+                      ),
+                      completed: controller.pageCompletedCount(
+                        small.key,
+                        page.rawPage,
                       ),
                     ),
                     Text(
@@ -1542,13 +1797,7 @@ class TextbookExplorerContent extends StatelessWidget {
 
   Widget _buildBody(BuildContext context, PreviewAcademyPanelStyle style) {
     if (controller.loading) {
-      return const Center(
-        child: SizedBox(
-          width: 22,
-          height: 22,
-          child: CircularProgressIndicator(strokeWidth: 2.4),
-        ),
-      );
+      return const Center(child: YggLoadingIndicator());
     }
     if (controller.error != null) {
       return Center(
@@ -1773,13 +2022,7 @@ class TextbookExplorerContent extends StatelessWidget {
 
   Widget _buildPdf(BuildContext context, PreviewAcademyPanelStyle style) {
     if (controller.pdfLoading) {
-      return const Center(
-        child: SizedBox(
-          width: 22,
-          height: 22,
-          child: CircularProgressIndicator(strokeWidth: 2.4),
-        ),
-      );
+      return const Center(child: YggLoadingIndicator());
     }
     if (controller.pdfError != null) {
       return Center(

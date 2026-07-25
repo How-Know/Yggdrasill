@@ -31,6 +31,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/textbook_book_registry.dart';
+import '../../services/textbook_background_extract_controller.dart';
 import '../../services/textbook_crop_uploader.dart';
 import '../../services/textbook_pdf_page_renderer.dart';
 import '../../services/textbook_pdf_service.dart';
@@ -119,6 +120,8 @@ class _TextbookUnitAuthoringDialogState
   String? _payloadError;
   String _seriesKey = kTextbookSeriesCatalog.first.key;
   final List<_BigUnitEdit> _bigUnits = <_BigUnitEdit>[];
+  Map<String, _SpecialUnitView> _specialUnitByMid =
+      const <String, _SpecialUnitView>{};
 
   bool _tocParsing = false;
   String? _tocStatus;
@@ -155,8 +158,10 @@ class _TextbookUnitAuthoringDialogState
     'special_lecture': '특강',
   };
 
-  /// 개념원리에서 sub_index(소단원 순번)로 분리 저장하는 슬롯.
-  /// B(필수유형)·E(특강)는 번호가 소단원마다 01부터 새로 시작한다.
+  /// 개념원리에서 crop 을 sub_index(소단원 순번)로 분리 저장하는 슬롯.
+  /// B(필수유형)·E(특강)는 번호가 소단원마다 01부터 새로 시작해 분리가 필수다.
+  /// (추출 런은 이와 별개로 전 카테고리를 소단원별로 나눈다 —
+  ///  `_startPdfOnlyExtractForFocus` 참고.)
   static const Set<String> _kWonriPerSubUnitKeys = {'B', 'E'};
 
   /// 개념원리 필수유형 본문 정답·풀이 추출 대기열.
@@ -322,6 +327,47 @@ class _TextbookUnitAuthoringDialogState
   String _batchStatus = '';
   bool _runProblemExtractionAfterStage1 = true;
 
+  bool get _backgroundWorkerAvailable {
+    return _pbExtractStatusBySub.values.any(
+      (status) => const <String>{
+        'queued',
+        'extracting',
+        'completed',
+        'review_required',
+        'failed',
+      }.contains(status.trim().toLowerCase()),
+    );
+  }
+
+  bool get _canMinimizeToBackground {
+    if (_batchRunning ||
+        _loadingStageStatuses ||
+        _subStates.values.any((state) => state.running || state.uploading)) {
+      return false;
+    }
+    final extractedScopes = _stageStatusBySub.values
+        .where((status) => status.bodyTotal > 0)
+        .toList();
+    if (extractedScopes.isEmpty ||
+        extractedScopes.any((status) => status.completedStages < 3)) {
+      return false;
+    }
+    return _embeddedStage == null && _backgroundWorkerAvailable;
+  }
+
+  void _minimizeToBackground() {
+    TextbookBackgroundExtractController.instance.minimize(
+      TextbookBackgroundExtractTask(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        bookName: widget.bookName,
+        gradeLabel: widget.gradeLabel,
+        linkId: widget.linkId,
+      ),
+    );
+    Navigator.of(context).pop();
+  }
+
   // Single-selection for the corner-handle editor. Null ⇒ no handles drawn.
   String? _selectedProblemKey;
 
@@ -353,6 +399,7 @@ class _TextbookUnitAuthoringDialogState
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
       );
+      final specialUnitByMid = await _loadSpecialUnitViews();
       final payload = row == null
           ? null
           : (row['payload'] is Map
@@ -425,6 +472,7 @@ class _TextbookUnitAuthoringDialogState
         _bigUnits
           ..clear()
           ..addAll(editable);
+        _specialUnitByMid = specialUnitByMid;
         _loadingPayload = false;
         _focus = null;
       });
@@ -438,6 +486,75 @@ class _TextbookUnitAuthoringDialogState
         _loadingPayload = false;
         _payloadError = '$e';
       });
+    }
+  }
+
+  Future<Map<String, _SpecialUnitView>> _loadSpecialUnitViews() async {
+    try {
+      final rows = await _supa
+          .from('textbook_units')
+          .select(
+            'unit_key,name,display_start_page,display_end_page,order_index',
+          )
+          .match(<String, Object>{
+        'academy_id': widget.academyId,
+        'book_id': widget.bookId,
+        'grade_label': widget.gradeLabel,
+        'unit_level': 'small',
+      }).like('unit_key', '%/SPECIAL:E:%');
+      final out = <String, _SpecialUnitView>{};
+      final pattern = RegExp(r'^B:(\d+)/M:(\d+)/SPECIAL:E(?:[:/]|$)');
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        final row = Map<String, dynamic>.from(raw);
+        final match = pattern.firstMatch('${row['unit_key'] ?? ''}');
+        if (match == null) continue;
+        final bigOrder = int.tryParse(match.group(1) ?? '');
+        final midOrder = int.tryParse(match.group(2) ?? '');
+        if (bigOrder == null || midOrder == null) continue;
+        final start = _asIntValue(row['display_start_page']);
+        final end = _asIntValue(row['display_end_page']) ?? start;
+        if (start == null) continue;
+        out['$bigOrder|$midOrder'] = _SpecialUnitView(
+          name: '${row['name'] ?? '특강'}'.trim().isEmpty
+              ? '특강'
+              : '${row['name']}'.trim(),
+          startPage: start,
+          endPage: end ?? start,
+        );
+      }
+      return out;
+    } catch (_) {
+      // 정규화 마이그레이션 전 환경에서는 기존 편집 트리를 유지한다.
+      return const <String, _SpecialUnitView>{};
+    }
+  }
+
+  int? _asIntValue(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value');
+  }
+
+  /// 낮을수록 "덜 끝난" 상태. 같은 sub_key 의 여러 소단원 런을 하나의 배지로
+  /// 합칠 때 가장 낮은 값을 남긴다.
+  static int _extractStatusRank(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'failed':
+      case 'cancelled':
+        return 0;
+      case 'idle':
+        return 1;
+      case 'queued':
+        return 2;
+      case 'extracting':
+        return 3;
+      case 'review_required':
+        return 4;
+      case 'completed':
+        return 5;
+      default:
+        return 1;
     }
   }
 
@@ -458,8 +575,15 @@ class _TextbookUnitAuthoringDialogState
             subKey: '${row['sub_key'] ?? ''}',
           );
           if (focus.bigIndex < 0 || focus.midIndex < 0) continue;
-          _pbExtractStatusBySub[_stateKeyFor(focus)] =
-              '${row['status'] ?? 'idle'}';
+          // 개념원리는 sub_key 하나에 소단원 수만큼 런이 있다. 마지막 행으로
+          // 덮어쓰면 아직 안 돌린 소단원이 '완료' 뒤에 숨는다. 가장 덜 끝난
+          // 상태를 배지로 올려 남은 작업이 항상 보이게 한다.
+          final key = _stateKeyFor(focus);
+          final next = '${row['status'] ?? 'idle'}';
+          final prev = _pbExtractStatusBySub[key];
+          if (prev == null || _extractStatusRank(next) < _extractStatusRank(prev)) {
+            _pbExtractStatusBySub[key] = next;
+          }
         }
       });
     } catch (_) {
@@ -1044,11 +1168,28 @@ class _TextbookUnitAuthoringDialogState
         seriesKey: _seriesKey,
         bigUnits: payload,
       );
+      if (_seriesKey == 'wonri') {
+        await _rebuildSpecialUnits();
+      }
       if (!mounted) return;
       _toast('단원 구조를 Supabase에 저장했어요.');
     } catch (e) {
       if (!mounted) return;
       _toast('저장 실패: $e', error: true);
+    }
+  }
+
+  /// 특강(E) 크롭에서 정규화 특강 소단원을 (재)생성해 학생/학습앱 트리에
+  /// 반영한다. 최초 마이그레이션과 달리 재추출 후에도 반복 호출 가능하다.
+  Future<void> _rebuildSpecialUnits() async {
+    if (_seriesKey != 'wonri') return;
+    try {
+      await _supa.rpc('textbook_rebuild_special_units', params: {
+        'p_book_id': widget.bookId,
+        'p_grade_label': widget.gradeLabel,
+      });
+    } catch (_) {
+      // 정규화 트리 동기화 실패가 오서링 흐름을 막지는 않는다.
     }
   }
 
@@ -1061,6 +1202,7 @@ class _TextbookUnitAuthoringDialogState
     int? exerciseStart;
     int? exerciseEnd;
     for (final row in mid.subUnitRows) {
+      if (row.nameCtrl.text.trim().contains('특강')) continue;
       final start = _positiveInt(row.startCtrl.text);
       final end = _positiveInt(row.endCtrl.text);
       if (row.isExercise) {
@@ -2206,10 +2348,6 @@ class _TextbookUnitAuthoringDialogState
     }
     final totalItems =
         itemsBySubKey.values.fold<int>(0, (sum, list) => sum + list.length);
-    if (totalItems == 0) {
-      _toast('저장할 문항 영역이 없습니다', error: true);
-      return;
-    }
 
     setState(() {
       state.uploading = true;
@@ -2220,6 +2358,7 @@ class _TextbookUnitAuthoringDialogState
     try {
       final allRows = <Map<String, dynamic>>[];
       var upserted = 0;
+      var deletedStale = 0;
       // 필수유형(B)·특강(E)은 소단원별로 분리 저장한다 (번호가 소단원마다
       // 새로 시작). 익히기(A)/확인체크(C)/연습문제(D)는 중단원 내 연속 번호라
       // sub_index=0.
@@ -2252,9 +2391,27 @@ class _TextbookUnitAuthoringDialogState
         upserted += result.upserted;
         allRows.addAll(result.rows);
       }
+      final analyzedRawPages =
+          pageRows.map((row) => row.rawPage).where((page) => page > 0);
+      for (final subKey in const ['A', 'B', 'C', 'D', 'E']) {
+        deletedStale += await _cropUploader.syncCropScope(
+          academyId: widget.academyId,
+          bookId: widget.bookId,
+          gradeLabel: widget.gradeLabel,
+          bigOrder: focus.bigIndex,
+          midOrder: focus.midIndex,
+          subKey: subKey,
+          subIndex: _kWonriPerSubUnitKeys.contains(subKey) ? wonriIndex : 0,
+          rawPages: analyzedRawPages,
+          keepProblemNumbers:
+              (itemsBySubKey[subKey] ?? const <TextbookCropUploadItem>[])
+                  .map((item) => item.problemNumber),
+        );
+      }
       if (!mounted) return;
       final skippedNote =
           skippedNoCategory > 0 ? ' · 카테고리 미상 $skippedNoCategory건 제외' : '';
+      final deletedNote = deletedStale > 0 ? ' · 기존 오인식 $deletedStale건 삭제' : '';
       setState(() {
         state.uploading = false;
         state.uploadResult = TextbookCropBatchResult(
@@ -2262,10 +2419,22 @@ class _TextbookUnitAuthoringDialogState
           bucket: 'textbook-crops',
           rows: allRows,
         );
-        state.phase = '영역 저장 완료 · $upserted/$totalItems건$skippedNote';
+        state.phase =
+            '영역 저장 완료 · $upserted/$totalItems건$skippedNote$deletedNote';
       });
-      _toast('${_subFocusLabel(focus)} 영역 $upserted건을 서버에 저장했습니다');
+      _toast(
+        '${_subFocusLabel(focus)} 영역 $upserted건 저장'
+        '${deletedStale > 0 ? ' · 오인식 $deletedStale건 삭제' : ''}',
+      );
       unawaited(_loadStageStatuses());
+
+      // 특강(E) 크롭이 새로 저장됐으면 정규화 특강 소단원을 재동기화한다.
+      final hasSpecial = allRows.any(
+        (r) => '${r['sub_key'] ?? ''}'.trim().toUpperCase() == 'E',
+      );
+      if (hasSpecial) {
+        unawaited(_rebuildSpecialUnits());
+      }
 
       // 필수유형(B)과 특강(E) 모두 본문 "풀이" 단락에서 정답·풀이를 뽑는다.
       final typeRows = allRows
@@ -2551,9 +2720,17 @@ class _TextbookUnitAuthoringDialogState
           '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
       }..removeWhere((k) => !['A', 'B', 'C', 'D', 'E'].contains(k));
       if (uploadedSubKeys.isEmpty) return;
-      // 필수유형(B)·특강(E)은 소단원별로 별도 추출 런/문서를 만든다 (번호가
-      // 소단원마다 새로 시작). 나머지 카테고리는 중단원 연속이라 sub_index=0.
       final wonriIndex = _wonriRowIndex(focus) ?? 0;
+      final rawPageFrom =
+          displayStart == null ? null : _rawPageForDisplayPage(displayStart);
+      final rawPageTo =
+          displayEnd == null ? null : _rawPageForDisplayPage(displayEnd);
+      // 개념원리는 익히기·확인체크·연습문제도 소단원마다 되풀이된다. 추출 런을
+      // sub_key 단위로만 잡으면 (big, mid, sub_key, 0) 행이 하나뿐이라, 첫
+      // 소단원을 돌린 뒤 나머지 소단원은 "이미 처리된 런"으로 걸러져 영구
+      // 누락된다. 페이지 범위가 있으면 전 카테고리를 소단원별 런으로 나눈다.
+      // (범위가 없으면 러너가 crop 을 sub_index 로 찾으므로 기존 동작 유지.)
+      final perSubUnitRun = rawPageFrom != null && rawPageTo != null;
       for (final subKey in uploadedSubKeys.toList()..sort()) {
         await _pbService.createTextbookPdfOnlyExtractRun(
           academyId: widget.academyId,
@@ -2563,17 +2740,16 @@ class _TextbookUnitAuthoringDialogState
           bigOrder: focus.bigIndex,
           midOrder: focus.midIndex,
           subKey: subKey,
-          subIndex: _kWonriPerSubUnitKeys.contains(subKey) ? wonriIndex : 0,
+          subIndex: perSubUnitRun || _kWonriPerSubUnitKeys.contains(subKey)
+              ? wonriIndex
+              : 0,
           seriesKey: _seriesKey,
           bigName: big.nameCtrl.text.trim(),
           midName: mid.nameCtrl.text.trim(),
           subName: _kWonriCategoryShortNames[_kWonriCategoryBySubKey[subKey]] ??
               subKey,
-          rawPageFrom: displayStart == null
-              ? null
-              : _rawPageForDisplayPage(displayStart),
-          rawPageTo:
-              displayEnd == null ? null : _rawPageForDisplayPage(displayEnd),
+          rawPageFrom: rawPageFrom,
+          rawPageTo: rawPageTo,
           displayPageFrom: displayStart,
           displayPageTo: displayEnd,
           bodyLinkId: widget.linkId,
@@ -3108,6 +3284,8 @@ class _TextbookUnitAuthoringDialogState
                     setState(() => _embeddedStage = null);
                     unawaited(_loadStageStatuses());
                   },
+                  onMinimize:
+                      _backgroundWorkerAvailable ? _minimizeToBackground : null,
                   onStageChanged: () => unawaited(_loadStageStatuses()),
                 ),
         ),
@@ -3199,6 +3377,13 @@ class _TextbookUnitAuthoringDialogState
                 side: const BorderSide(color: _kBorder),
               ),
             ),
+          ),
+          IconButton(
+            tooltip: _canMinimizeToBackground
+                ? '문제은행 본문 추출을 우측 하단에서 계속 확인합니다'
+                : '정답·해설 저장이 끝나고 본문 추출 작업이 시작되면 최소화할 수 있습니다',
+            onPressed: _canMinimizeToBackground ? _minimizeToBackground : null,
+            icon: const Icon(Icons.minimize, color: _kTextSub),
           ),
           IconButton(
             onPressed: () => Navigator.of(context).maybePop(),
@@ -3520,7 +3705,11 @@ class _TextbookUnitAuthoringDialogState
           ),
           const SizedBox(height: 6),
           if (_seriesKey == 'wonri') ...[
-            // 개념원리: 트리에는 책의 실제 소단원 행만 보인다.
+            // 특강(E)은 편집 payload 밖의 정규화 유닛이지만, 학습/학생앱과
+            // 동일한 물리 페이지 순서로 읽기 전용 표시한다.
+            if (_specialUnitByMid['$bigIndex|$midIndex'] case final special?)
+              _buildSpecialUnitRow(special),
+            // 개념원리: 트리에는 책의 실제 소단원 행을 이어서 보여준다.
             // 분석 단위도 소단원 행이다 — 행을 누르면 그 페이지 범위를
             // 단일 패스로 분석하고, 문항은 카테고리(A~D)별로 자동 분류된다.
             for (var s = 0; s < mid.subUnitRows.length; s += 1)
@@ -3546,6 +3735,61 @@ class _TextbookUnitAuthoringDialogState
           ] else ...[
             for (final sub in mid.subs) _buildSubRow(bigIndex, midIndex, sub),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpecialUnitRow(_SpecialUnitView special) {
+    final pageText = special.startPage == special.endPage
+        ? '${special.startPage}쪽'
+        : '${special.startPage}-${special.endPage}쪽';
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF211D16),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFF4A3C22)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF3A2C16),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Text(
+              '특강',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFFE6BE73),
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              special.name,
+              style: const TextStyle(
+                color: _kText,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Text(
+            pageText,
+            style: const TextStyle(
+              color: _kTextSub,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -5775,6 +6019,18 @@ class _PageAnalysisRow {
 }
 
 // ─────────── reused unit-edit models (tree editor) ───────────
+
+class _SpecialUnitView {
+  const _SpecialUnitView({
+    required this.name,
+    required this.startPage,
+    required this.endPage,
+  });
+
+  final String name;
+  final int startPage;
+  final int endPage;
+}
 
 class _BigUnitEdit {
   _BigUnitEdit({String? bigName}) {

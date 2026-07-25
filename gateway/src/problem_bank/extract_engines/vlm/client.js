@@ -65,6 +65,24 @@ export function recoverMangledLatexControls(value) {
   return value;
 }
 
+// Gemini 응답의 텍스트 조각을 하나로 잇는다.
+//
+// parts 는 한 텍스트 스트림을 쪼갠 연속된 조각이므로 구분자 없이 붙여야 한다.
+// 예전에는 '\n' 으로 이어 붙였는데, 조각 경계가 JSON 문자열 리터럴 안에
+// 떨어지면 문자열 안에 생 줄바꿈이 박혀 JSON 이 깨진다. 이건 어떤 복구
+// 단계로도 되살릴 수 없고(원문에 없던 문자가 들어간 것이므로), 같은 입력에서
+// 매번 재현된다. 파싱이 통과하는 경우에도 LaTeX 중간에 줄바꿈이 끼어
+// 내용이 조용히 망가진다.
+//
+// thought 조각(추론 요약)은 응답 본문이 아니므로 제외한다.
+export function joinGeminiTextParts(parts) {
+  return (parts || [])
+    .filter((part) => part && part.thought !== true)
+    .map((part) => part?.text || '')
+    .join('')
+    .trim();
+}
+
 // JSON 문자열 리터럴 안에서 "\X (X 가 허용 escape 아님)" 을 "\\X" 로 바꿔 파싱 가능하게 만든다.
 // 허용 escape: \" \\ \/ \b \f \n \r \t \uXXXX.
 // 문자열 리터럴 밖은 건드리지 않는다 ("스캔 상태머신" 이 필요함).
@@ -320,14 +338,13 @@ export async function callGeminiWithPdf({
     );
   }
   const candidate = (payload?.candidates || [])[0];
-  const modelText = (candidate?.content?.parts || [])
-    .map((p) => p?.text || '')
-    .join('\n')
-    .trim();
+  const modelText = joinGeminiTextParts(candidate?.content?.parts);
   let parsedJson = null;
+  let firstParseError = '';
   try {
     parsedJson = JSON.parse(modelText);
-  } catch (_) {
+  } catch (e) {
+    firstParseError = String(e?.message || e);
     // Gemini 가 LaTeX 백슬래시를 JSON 이스케이프 없이 내보내는 경우 한 번 더 복구.
     const repaired = repairLatexBackslashes(modelText);
     try {
@@ -362,11 +379,18 @@ export async function callGeminiWithPdf({
     }
   }
   if (!parsedJson) {
+    // 앞머리 180자만 남기면 어디서 깨졌는지 알 수 없다. 파서 오류가 알려주는
+    // 위치 주변을 함께 담아 다음 실패 때 원인을 바로 볼 수 있게 한다.
+    const at = Number(/position (\d+)/.exec(firstParseError)?.[1] ?? NaN);
+    const around = Number.isFinite(at)
+      ? ` around=${JSON.stringify(
+          modelText.slice(Math.max(0, at - 200), at + 200),
+        )}`
+      : '';
     throw new Error(
-      `vlm_gemini_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(
-        0,
-        180,
-      )}"`,
+      `vlm_gemini_parse_failed: finish=${candidate?.finishReason || '-'} ` +
+        `parts=${(candidate?.content?.parts || []).length} len=${modelText.length} ` +
+        `err=${firstParseError}${around} text_head="${modelText.slice(0, 180)}"`,
     );
   }
   // Gemini 가 "\\frac" 대신 "\frac" 로 단일 escape 를 내보내면 JSON.parse 가 "유효한"

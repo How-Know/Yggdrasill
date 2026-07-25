@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import 'dialog_tokens.dart';
 
 const double sharedFolderTreePanelWidthMin = 220;
 const double sharedFolderTreePanelWidthMax = 330;
@@ -218,7 +219,7 @@ class SharedFolderTreePanel extends StatelessWidget {
     Brightness brightness,
   ) {
     if (isLoading) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+      return const Center(child: YggLoadingIndicator());
     }
     if (nodes.isEmpty && trailingNodes.isEmpty) {
       return Center(

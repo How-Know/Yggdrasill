@@ -410,30 +410,15 @@ class _DaysSinceStartBadge extends StatelessWidget {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final days = math.max(1, today.difference(startDate).inDays + 1);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text(
-          '시작한 지',
-          style: TextStyle(
-            color: Colors.black,
-            fontSize: 15.6, // 13 × 1.2
-            fontWeight: FontWeight.w700,
-            height: 1.15,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          '$days일째',
-          style: const TextStyle(
-            color: Colors.black,
-            fontSize: 26.4, // 22 × 1.2
-            fontWeight: FontWeight.w800,
-            height: 1.05,
-            letterSpacing: -0.4,
-          ),
-        ),
-      ],
+    return Text(
+      '$days일째',
+      style: const TextStyle(
+        color: Colors.black,
+        fontSize: 26.4, // 22 × 1.2
+        fontWeight: FontWeight.w800,
+        height: 1.05,
+        letterSpacing: -0.4,
+      ),
     );
   }
 }

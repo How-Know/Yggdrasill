@@ -4,7 +4,7 @@ import { createAdminClient } from '../_shared/supabase.ts';
 const RENDER_PROFILE = 'student-single-v1';
 const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v4';
 const SIGNED_URL_SECONDS = 10 * 60;
-const DEFAULT_WARM_BATCH_MAX = 100;
+const DEFAULT_WARM_BATCH_MAX = 40;
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -332,23 +332,44 @@ async function handleView(
   const contentHash = await questionContentHash(question);
   const { data: assets, error: assetError } = await admin
     .from('question_render_assets')
-    .select('cache_key,storage_bucket,storage_path,page_count,rendered_at')
+    .select(
+      'cache_key,storage_bucket,storage_path,page_count,rendered_at,content_hash,renderer_version',
+    )
     .eq('academy_id', account.academy_id)
     .eq('crop_id', cropId)
     .eq('render_profile', RENDER_PROFILE)
-    .eq('renderer_version', RENDERER_VERSION)
-    .eq('content_hash', contentHash)
     .eq('render_error', '')
     .not('rendered_at', 'is', null)
     .order('rendered_at', { ascending: false })
-    .limit(1);
+    .limit(8);
   if (assetError) throw new Error(`asset_query_failed:${assetError.message}`);
-  const asset = assets?.[0];
+  const rows = assets ?? [];
+  const currentVersion = rows.filter(
+    (row) => String(row.renderer_version ?? '') === RENDERER_VERSION,
+  );
+  const exactAsset = currentVersion.find(
+    (row) => String(row.content_hash ?? '') === contentHash,
+  );
+  // stale-while-revalidate. 렌더러 버전을 올리면 기존 캐시가 한꺼번에 조회
+  // 대상에서 빠져 모든 학생이 동시에 로딩을 보게 된다. 그래서 완벽히 맞는
+  // 산출물이 없으면 (해시만 다르거나 구버전이라도) 있는 것을 즉시 보여주고
+  // 최신본은 뒤에서 다시 만든다.
+  const asset = exactAsset ?? currentVersion[0] ?? rows[0] ?? null;
+  const needsRefresh = Boolean(asset && !exactAsset);
   if (asset) {
     const { data: signed, error: signedError } = await admin.storage
       .from(asset.storage_bucket)
       .createSignedUrl(asset.storage_path, SIGNED_URL_SECONDS);
     if (!signedError && signed?.signedUrl) {
+      if (needsRefresh) {
+        await enqueueOne(
+          admin,
+          account.academy_id,
+          cropId,
+          1,
+          String(question.id ?? '') || undefined,
+        );
+      }
       return json({
         ok: true,
         status: 'ready',
@@ -364,15 +385,15 @@ async function handleView(
     }
   }
 
-  const queue = allowed
-    .filter((crop) => crop.id === cropId || Boolean(crop.pb_question_uid))
-    .map((crop) => ({
-      id: crop.id,
-      priority: crop.id === cropId ? 0 : 1,
-      pb_question_id:
-        crop.id === cropId ? String(question.id ?? '') || undefined : undefined,
-    }));
-  const inserted = await enqueueInChunks(admin, account.academy_id, queue);
+  // 선택 문항만 우선 큐잉한다. 이웃은 클라이언트가 선택 문항 ready 이후에
+  // 따로 prefetch 하므로, 콜드 교재에서 예열 적체를 더 키우지 않는다.
+  await enqueueOne(
+    admin,
+    account.academy_id,
+    cropId,
+    0,
+    String(question.id ?? '') || undefined,
+  );
   const bodyFallback = await signedBodyFallback(
     admin,
     account.academy_id,
@@ -383,12 +404,51 @@ async function handleView(
     status: 'queued',
     source: 'question_render',
     crop_id: cropId,
-    enqueued: inserted,
-    poll_after_ms: 1800,
+    enqueued: 1,
+    poll_after_ms: 1200,
     body_pdf_url: bodyFallback?.body_pdf_url,
     raw_page: current.raw_page,
     item_region_1k: current.item_region_1k,
     fallback: bodyFallback?.fallback,
+  }, 202);
+}
+
+async function handleWarmPage(
+  admin: AdminClient,
+  account: { academy_id: string; student_id: string },
+  links: Array<{ book_id: string; grade_label: string }>,
+  body: Record<string, unknown>,
+) {
+  const cropIds = Array.isArray(body.crop_ids)
+    ? [...new Set(body.crop_ids.map(String).filter(Boolean))].slice(0, 40)
+    : [];
+  if (cropIds.length === 0) {
+    return json({ ok: false, error: 'crop_ids_required' }, 400);
+  }
+  const selectedCropId = String(body.selected_crop_id ?? '').trim();
+  const { data: crops, error } = await admin
+    .from('textbook_problem_crops')
+    .select('id,book_id,grade_label,pb_question_uid,is_set_header')
+    .eq('academy_id', account.academy_id)
+    .in('id', cropIds);
+  if (error) throw new Error(`warm_page_crop_query_failed:${error.message}`);
+  const allowed = (crops ?? []).filter(
+    (crop) =>
+      !crop.is_set_header &&
+      Boolean(crop.pb_question_uid) &&
+      isActiveCrop(crop, links),
+  );
+  const queue = allowed.map((crop) => ({
+    id: crop.id,
+    priority: crop.id === selectedCropId ? 0 : 1,
+  }));
+  const inserted = await enqueueInChunks(admin, account.academy_id, queue);
+  return json({
+    ok: true,
+    status: 'queued',
+    requested: cropIds.length,
+    eligible: queue.length,
+    enqueued: inserted,
   }, 202);
 }
 
@@ -490,6 +550,9 @@ Deno.serve(async (req) => {
     const links = await activeTextbookLinks(admin, account);
     const action = String(body.action ?? 'view').trim().toLowerCase();
     if (action === 'view') return await handleView(admin, account, links, body);
+    if (action === 'warm_page') {
+      return await handleWarmPage(admin, account, links, body);
+    }
     if (action === 'warm') return await handleWarm(admin, account, links, body);
     return json({ ok: false, error: 'unsupported_action' }, 400);
   } catch (error) {

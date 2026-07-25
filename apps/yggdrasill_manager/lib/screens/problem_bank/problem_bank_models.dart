@@ -1342,6 +1342,10 @@ class ProblemBankIssueReport {
     this.reporterUserId = '',
     this.resolvedBy = '',
     this.resolvedAt,
+    this.source = 'learning_staff',
+    this.cropId = '',
+    this.studentTextbookReportId = '',
+    this.context = const <String, dynamic>{},
   });
 
   final String id;
@@ -1356,6 +1360,32 @@ class ProblemBankIssueReport {
   final String resolvedBy;
   final DateTime? resolvedAt;
   final DateTime createdAt;
+  final String source;
+  final String cropId;
+  final String studentTextbookReportId;
+  final Map<String, dynamic> context;
+
+  bool get isStudentTextbook => source == 'student_textbook';
+
+  String get reporterName {
+    final fromContext = '${context['reporter_name'] ?? ''}'.trim();
+    if (fromContext.isNotEmpty) return fromContext;
+    return isStudentTextbook ? '학생' : '학습앱';
+  }
+
+  String get locationLabel {
+    final fromContext = '${context['location_label'] ?? ''}'.trim();
+    if (fromContext.isNotEmpty) return fromContext;
+    final book = '${context['book_name'] ?? ''}'.trim();
+    final page = context['display_page'] ?? context['raw_page'];
+    final number = '${context['problem_number'] ?? ''}'.trim();
+    final parts = <String>[
+      if (book.isNotEmpty) book,
+      if (page != null) 'p.$page',
+      if (number.isNotEmpty) '$number번',
+    ];
+    return parts.join(' · ');
+  }
 
   factory ProblemBankIssueReport.fromMap(Map<String, dynamic> map) {
     return ProblemBankIssueReport(
@@ -1373,8 +1403,66 @@ class ProblemBankIssueReport {
       resolvedBy: '${map['resolved_by'] ?? ''}',
       resolvedAt: _dateTimeOrNull(map['resolved_at']),
       createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
+      source: '${map['source'] ?? 'learning_staff'}'.trim().isEmpty
+          ? 'learning_staff'
+          : '${map['source']}',
+      cropId: '${map['crop_id'] ?? ''}',
+      studentTextbookReportId: '${map['student_textbook_report_id'] ?? ''}',
+      context: _mapOrEmpty(map['context']),
     );
   }
+}
+
+/// 오류 탭에서 신고 문항을 시각적으로 보여주기 위한 렌더 해석 결과.
+///
+/// 모두 pb_question 하나를 소스로 하며, 학생이 실제로 받는 산출물을 우선한다.
+enum IssueQuestionViewKind {
+  /// question_render_assets — 학생 앱이 그대로 표시하는 단일 문항 PDF.
+  studentPdf,
+
+  /// 게이트웨이 미리보기 PDF (매니저 문항 탭과 동일한 XeLaTeX 렌더).
+  previewPdf,
+
+  /// 게이트웨이 미리보기 이미지.
+  previewImage,
+
+  /// 렌더 작업이 큐에 있음 — 잠시 후 재시도하면 나온다.
+  pending,
+
+  /// 표시할 렌더가 없음.
+  none,
+}
+
+class IssueQuestionView {
+  const IssueQuestionView({
+    required this.kind,
+    this.pdfUrl = '',
+    this.imageUrl = '',
+    this.error = '',
+  });
+
+  const IssueQuestionView.none({String error = ''})
+      : this(kind: IssueQuestionViewKind.none, error: error);
+
+  final IssueQuestionViewKind kind;
+  final String pdfUrl;
+  final String imageUrl;
+  final String error;
+
+  bool get isPdf =>
+      kind == IssueQuestionViewKind.studentPdf ||
+      kind == IssueQuestionViewKind.previewPdf;
+
+  bool get isImage => kind == IssueQuestionViewKind.previewImage;
+
+  /// 어떤 산출물을 보고 있는지 사용자에게 알리는 라벨.
+  String get sourceLabel => switch (kind) {
+        IssueQuestionViewKind.studentPdf => '학생 화면과 동일한 렌더',
+        IssueQuestionViewKind.previewPdf => '문제은행 미리보기 렌더',
+        IssueQuestionViewKind.previewImage => '문제은행 미리보기 이미지',
+        IssueQuestionViewKind.pending => '렌더 생성 중',
+        IssueQuestionViewKind.none => '렌더 없음',
+      };
 }
 
 class ProblemBankIssueSummary {
@@ -1406,6 +1494,25 @@ class ProblemBankIssueSummary {
     for (final report in reports) {
       final note = report.note.trim();
       if (note.isNotEmpty) return note;
+    }
+    return '';
+  }
+
+  bool get hasStudentTextbookReport =>
+      reports.any((report) => report.isStudentTextbook);
+
+  String get primaryReporterName {
+    for (final report in reports) {
+      final name = report.reporterName.trim();
+      if (name.isNotEmpty) return name;
+    }
+    return '';
+  }
+
+  String get primaryLocationLabel {
+    for (final report in reports) {
+      final location = report.locationLabel.trim();
+      if (location.isNotEmpty) return location;
     }
     return '';
   }
@@ -1469,7 +1576,8 @@ class ProblemBankExportPreset {
             .where((e) => e.isNotEmpty)
             .toList(growable: false)
         : const <String>[];
-    final countRaw = map['selected_question_count'] ?? map['selectedQuestionCount'];
+    final countRaw =
+        map['selected_question_count'] ?? map['selectedQuestionCount'];
     final selectedQuestionCount = countRaw is int
         ? countRaw
         : (countRaw is num
@@ -1484,8 +1592,7 @@ class ProblemBankExportPreset {
       displayName: '${map['display_name'] ?? map['displayName'] ?? ''}'.trim(),
       presetKind:
           '${map['preset_kind'] ?? map['presetKind'] ?? 'settings'}'.trim(),
-      storedPaperSize:
-          '${map['paper_size'] ?? map['paperSize'] ?? ''}'.trim(),
+      storedPaperSize: '${map['paper_size'] ?? map['paperSize'] ?? ''}'.trim(),
       renderConfig: renderConfig,
       selectedQuestionUids: selectedQuestionUids,
       selectedQuestionCount: selectedQuestionCount,

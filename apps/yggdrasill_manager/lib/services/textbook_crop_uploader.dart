@@ -247,6 +247,57 @@ class TextbookCropUploader {
     );
   }
 
+  Future<int> syncCropScope({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required int bigOrder,
+    required int midOrder,
+    required String subKey,
+    int subIndex = 0,
+    required Iterable<int> rawPages,
+    required Iterable<String> keepProblemNumbers,
+  }) async {
+    final pages = rawPages.where((page) => page > 0).toSet().toList()..sort();
+    if (pages.isEmpty) return 0;
+    final res = await _http.post(
+      _uri('/textbook/crops/sync-scope'),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{
+        'academy_id': academyId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'big_order': bigOrder,
+        'mid_order': midOrder,
+        'sub_key': subKey,
+        'sub_index': subIndex,
+        'raw_pages': pages,
+        'keep_problem_numbers': keepProblemNumbers
+            .map((number) => number.trim())
+            .where((number) => number.isNotEmpty)
+            .toSet()
+            .toList(),
+      }),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception(
+        'textbook_crops_sync_failed(${res.statusCode}): ${res.body}',
+      );
+    }
+    final decoded = jsonDecode(res.body);
+    final json = decoded is Map ? Map<String, dynamic>.from(decoded) : const {};
+    if (json['ok'] != true) {
+      throw Exception('textbook_crops_sync_error: ${json['error']}');
+    }
+    final protected = _asInt(json['protected']) ?? 0;
+    if (protected > 0) {
+      throw Exception(
+        'textbook_crops_sync_protected: 연결된 문제은행 문항 $protected건은 자동 삭제하지 않았습니다.',
+      );
+    }
+    return _asInt(json['deleted']) ?? 0;
+  }
+
   Map<String, dynamic> _itemToMap(
     TextbookCropUploadItem item, {
     required bool regionsOnly,

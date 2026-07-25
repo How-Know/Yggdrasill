@@ -62,6 +62,7 @@ import {
   detectRpmSetHeadersOnPage,
   classifyWonriPage,
   normalizeDetectResult,
+  shouldTreatWonriPageAsConcept,
 } from './textbook/vlm_detect_client.js';
 import {
   extractAnswersOnPage,
@@ -6545,11 +6546,22 @@ async function handleTextbookVlmDetectProblems(body, res) {
     const pageClass = String(
       classResult?.parsedJson?.page_class || '',
     ).trim().toLowerCase();
-    const classNote = `wonri_page_class=${pageClass || 'unknown'}`;
+    const visibleHeader = String(
+      classResult?.parsedJson?.visible_header || '',
+    ).trim();
+    const treatAsConcept = shouldTreatWonriPageAsConcept(
+      pageClass,
+      visibleHeader,
+    );
+    const classNote =
+      `wonri_page_class=${pageClass || 'unknown'}` +
+      (treatAsConcept && pageClass !== 'concept'
+        ? '; wonri_concept_header=확인하기'
+        : '');
     normalized.notes = normalized.notes
       ? `${normalized.notes}; ${classNote}`
       : classNote;
-    if (pageClass === 'concept') {
+    if (treatAsConcept) {
       normalized.page_kind = 'concept_page';
       normalized.items = [];
       normalized.concept_drill_header_visible = false;
@@ -7291,6 +7303,89 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   });
 }
 
+async function handleTextbookCropsSyncScope(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const bigOrder = Number.parseInt(String(body?.big_order ?? ''), 10);
+  const midOrder = Number.parseInt(String(body?.mid_order ?? ''), 10);
+  const subKey = String(body?.sub_key || '').trim().toUpperCase();
+  const subIndexParsed = Number.parseInt(String(body?.sub_index ?? ''), 10);
+  const subIndex = Number.isFinite(subIndexParsed) && subIndexParsed > 0
+    ? subIndexParsed
+    : 0;
+  const rawPages = [...new Set(
+    (Array.isArray(body?.raw_pages) ? body.raw_pages : [])
+      .map((value) => Number.parseInt(String(value), 10))
+      .filter((value) => Number.isFinite(value) && value > 0),
+  )];
+  const keepNumbers = new Set(
+    (Array.isArray(body?.keep_problem_numbers)
+      ? body.keep_problem_numbers
+      : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean),
+  );
+  if (
+    !academyId ||
+    !bookId ||
+    !gradeLabel ||
+    !Number.isFinite(bigOrder) ||
+    !Number.isFinite(midOrder) ||
+    !['A', 'B', 'C', 'D', 'E'].includes(subKey) ||
+    rawPages.length === 0 ||
+    rawPages.length > 120
+  ) {
+    sendJson(res, 400, { ok: false, error: 'invalid_crop_sync_scope' });
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await supa
+    .from('textbook_problem_crops')
+    .select('id,problem_number,pb_question_uid')
+    .eq('academy_id', academyId)
+    .eq('book_id', bookId)
+    .eq('grade_label', gradeLabel)
+    .eq('big_order', bigOrder)
+    .eq('mid_order', midOrder)
+    .eq('sub_key', subKey)
+    .eq('sub_index', subIndex)
+    .in('raw_page', rawPages);
+  if (fetchError) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `crop_sync_fetch_failed: ${fetchError.message || fetchError}`,
+    });
+    return;
+  }
+  const stale = (existing || []).filter(
+    (row) => !keepNumbers.has(String(row?.problem_number || '').trim()),
+  );
+  const deletable = stale.filter(
+    (row) => !String(row?.pb_question_uid || '').trim(),
+  );
+  const protectedRows = stale.length - deletable.length;
+  if (deletable.length > 0) {
+    const { error: deleteError } = await supa
+      .from('textbook_problem_crops')
+      .delete()
+      .eq('academy_id', academyId)
+      .in('id', deletable.map((row) => row.id));
+    if (deleteError) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `crop_sync_delete_failed: ${deleteError.message || deleteError}`,
+      });
+      return;
+    }
+  }
+  sendJson(res, 200, {
+    ok: true,
+    deleted: deletable.length,
+    protected: protectedRows,
+  });
+}
+
 async function handleTextbookVlmExtractAnswers(body, res) {
   const apiKey =
     (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
@@ -7697,7 +7792,10 @@ async function syncTextbookAnswersToProblemBankScope({
   scope,
 }) {
   const scopeSubIndex = Number.isFinite(scope.sub_index) ? scope.sub_index : 0;
-  const { data: run, error: runErr } = await supa
+  // 런 행은 문서 위치를 알려주는 보조 정보로만 쓴다. 같은 키의 런이 덮어써지며
+  // 문서와의 연결이 끊긴 경우가 많아(개념원리 문서의 1/3), 런만 믿으면 그
+  // 문서들의 문항은 영구히 정답이 비어 있게 된다.
+  const { data: runs, error: runErr } = await supa
     .from('textbook_pb_extract_runs')
     .select('pb_document_id,status')
     .eq('academy_id', academyId)
@@ -7706,13 +7804,16 @@ async function syncTextbookAnswersToProblemBankScope({
     .eq('big_order', scope.big_order)
     .eq('mid_order', scope.mid_order)
     .eq('sub_key', scope.sub_key)
-    .eq('sub_index', scopeSubIndex)
-    .maybeSingle();
+    .eq('sub_index', scopeSubIndex);
   if (runErr) throw new Error(`sync_pb_run_fetch_failed: ${runErr.message || runErr}`);
-  const documentId = String(run?.pb_document_id || '').trim();
-  if (!documentId) {
-    return { updated: 0, skipped: 'missing_pb_document' };
-  }
+  const runRows = Array.isArray(runs) ? runs : [];
+  const documentIds = [
+    ...new Set(
+      runRows
+        .map((row) => String(row?.pb_document_id || '').trim())
+        .filter(Boolean),
+    ),
+  ];
 
   const { data: crops, error: cropErr } = await supa
     .from('textbook_problem_crops')
@@ -7748,33 +7849,84 @@ async function syncTextbookAnswersToProblemBankScope({
   }
   if (answerByCropId.size === 0) return { updated: 0, skipped: 'missing_answers' };
 
+  // crop → 문항 정규 링크로 정확히 짝지운다. 문항 번호로 맞추면 번호가
+  // 소단원마다 01부터 새로 시작하는 카테고리(필수유형·특강)에서 다른 소단원의
+  // 정답이 들어갈 수 있고, 문서를 특정하지 못하면 아예 건너뛰게 된다.
+  const answerByQuestionId = new Map();
+  const linkedCropIds = new Set();
+  for (const cropChunk of chunkArray(cropIds, 100)) {
+    const { data: links, error: linkErr } = await supa
+      .from('textbook_crop_question_links')
+      .select('crop_id,pb_question_id')
+      .eq('academy_id', academyId)
+      .in('crop_id', cropChunk);
+    if (linkErr) throw new Error(`sync_pb_links_fetch_failed: ${linkErr.message || linkErr}`);
+    for (const link of links || []) {
+      const cropId = String(link?.crop_id || '').trim();
+      const questionId = String(link?.pb_question_id || '').trim();
+      const answer = answerByCropId.get(cropId);
+      if (!cropId || !questionId || !answer) continue;
+      answerByQuestionId.set(questionId, answer);
+      linkedCropIds.add(cropId);
+    }
+  }
+
+  // 링크가 없는 옛 데이터는 기존 방식(문서 안에서 번호 매칭)으로 보완한다.
   const answerByNumber = new Map();
   for (const crop of cropRows) {
     if (crop?.is_set_header === true) continue;
+    const cropId = String(crop?.id || '').trim();
+    if (linkedCropIds.has(cropId)) continue;
     const key = textbookProblemNumberKey(crop?.problem_number);
-    const answer = answerByCropId.get(String(crop?.id || '').trim());
+    const answer = answerByCropId.get(cropId);
     if (key && answer) answerByNumber.set(key, answer);
   }
 
-  const { data: questions, error: questionErr } = await supa
-    .from('pb_questions')
-    .select(
-      'id,question_number,question_type,objective_choices,objective_answer_key,' +
-        'subjective_answer,allow_objective,allow_subjective,meta',
-    )
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId);
-  if (questionErr) {
-    throw new Error(`sync_pb_questions_fetch_failed: ${questionErr.message || questionErr}`);
+  const questionRows = [];
+  for (const idChunk of chunkArray([...answerByQuestionId.keys()], 100)) {
+    const { data, error: linkedErr } = await supa
+      .from('pb_questions')
+      .select(
+        'id,question_number,question_type,objective_choices,objective_answer_key,' +
+          'subjective_answer,allow_objective,allow_subjective,meta',
+      )
+      .eq('academy_id', academyId)
+      .in('id', idChunk);
+    if (linkedErr) {
+      throw new Error(`sync_pb_questions_fetch_failed: ${linkedErr.message || linkedErr}`);
+    }
+    questionRows.push(...(data || []));
+  }
+  if (answerByNumber.size > 0 && documentIds.length > 0) {
+    const { data, error: questionErr } = await supa
+      .from('pb_questions')
+      .select(
+        'id,question_number,question_type,objective_choices,objective_answer_key,' +
+          'subjective_answer,allow_objective,allow_subjective,meta',
+      )
+      .eq('academy_id', academyId)
+      .in('document_id', documentIds);
+    if (questionErr) {
+      throw new Error(`sync_pb_questions_fetch_failed: ${questionErr.message || questionErr}`);
+    }
+    questionRows.push(...(data || []));
+  }
+  if (questionRows.length === 0) {
+    return { updated: 0, skipped: 'missing_pb_questions', documentIds };
   }
 
   let updated = 0;
   const updatedQuestionIds = [];
-  for (const question of questions || []) {
-    const key = textbookProblemNumberKey(question?.question_number);
-    const answer = key ? answerByNumber.get(key) : null;
+  const seenQuestionIds = new Set();
+  for (const question of questionRows) {
     const questionId = String(question?.id || '').trim();
-    if (!answer || !questionId) continue;
+    if (!questionId || seenQuestionIds.has(questionId)) continue;
+    const numberKey = textbookProblemNumberKey(question?.question_number);
+    const answer =
+      answerByQuestionId.get(questionId) ??
+      (numberKey ? answerByNumber.get(numberKey) : null);
+    if (!answer) continue;
+    seenQuestionIds.add(questionId);
     const patch = buildPbAnswerPatchFromSidecar(question, answer);
     const { error: updateErr } = await supa
       .from('pb_questions')
@@ -7790,9 +7942,42 @@ async function syncTextbookAnswersToProblemBankScope({
   return {
     updated,
     updatedQuestionIds,
-    documentId,
-    status: String(run?.status || '').trim(),
+    documentId: documentIds[0],
+    documentIds,
+    linkedMatches: answerByQuestionId.size,
+    status: leastFinishedTextbookRunStatus(runRows),
   };
+}
+
+/// 소단원별 런 여러 개를 하나의 상태로 합칠 때, 가장 덜 끝난 것을 남긴다.
+/// 아직 대기 중인 소단원이 '완료' 뒤에 숨지 않게 하는 것이 목적이다.
+function leastFinishedTextbookRunStatus(rows) {
+  const rank = (status) => {
+    switch (String(status || '').trim().toLowerCase()) {
+      case '':
+        return 0;
+      case 'queued':
+        return 1;
+      case 'extracting':
+        return 2;
+      case 'failed':
+        return 3;
+      case 'cancelled':
+        return 4;
+      case 'review_required':
+        return 5;
+      case 'completed':
+        return 6;
+      default:
+        return 0;
+    }
+  };
+  let best = null;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const status = String(row?.status || '').trim();
+    if (best === null || rank(status) < rank(best)) best = status;
+  }
+  return best ?? '';
 }
 
 async function handleTextbookAnswersBatchUpsert(body, res) {
@@ -9127,6 +9312,11 @@ async function handler(req, res) {
     if (method === 'POST' && url.pathname === '/textbook/crops/batch-upsert') {
       const body = await readJson(req);
       await handleTextbookCropsBatchUpsert(body, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/textbook/crops/sync-scope') {
+      const body = await readJson(req);
+      await handleTextbookCropsSyncScope(body, res);
       return;
     }
 

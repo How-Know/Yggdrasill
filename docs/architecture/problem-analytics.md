@@ -37,14 +37,28 @@ where possible, to the original problem identity (`crop_id` or
 - Keep fallback compatibility for old homework that lacks problem snapshots.
 - Preserve assignment-time snapshots even if source crops are reprocessed later.
 
-## Likely Future Tables
+## Solving Log Layer (implemented 2026-07-25)
 
-- `student_problem_attempts`: one row per student/problem attempt or final solve
-  session.
-- `student_problem_events`: optional append-only timeline for answer changes,
-  hints, pauses, and corrections.
-- `problem_stats_by_level`: per-problem aggregates by level bucket.
-- `problem_pair_stats`: constrained pair aggregates for recommendations.
+The solving-log layer that this note anticipated now exists under different
+names. See [`learning-records.md`](./learning-records.md) for the full design.
+
+- `learning_sessions`: one row per solving occasion; carries the reliability
+  facts (supervision, answer access, scoring party, timing precision).
+- `learning_exposures`: one row per problem shown, including why it was shown
+  and whether it was actually attempted. Links to `homework_item_problems`.
+- `learning_attempts`: one row per attempt, with assist level, confidence,
+  duration (measured vs derived), and a student-level snapshot.
+- `learning_range_timings`: paper-based range timings for later per-item
+  back-solving.
+- Aggregates are exposed as views (`learning_item_stats`,
+  `learning_student_item_stats`, `learning_student_unit_stats`,
+  `learning_session_summary`) rather than tables for now.
+
+Nothing writes to these tables yet. The iPad student app is the trigger.
+
+Still unbuilt: per-level aggregate tables and problem-pair stats for
+recommendations. Add them as summary tables or batch jobs, not as on-demand
+scans of the raw logs.
 
 ## Decision Points For Future AI
 

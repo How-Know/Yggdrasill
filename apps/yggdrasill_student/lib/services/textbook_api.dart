@@ -204,36 +204,30 @@ class TextbookApi {
     return StudentTextbookProblemView.fromJson(data);
   }
 
-  /// 활성 교재의 문항 PDF 렌더 큐를 비동기로 예열한다.
-  Future<void> warmProblemViews({
-    required String bookId,
-    required String gradeLabel,
+  /// 현재 페이지 문항들을 우선 렌더 큐에 넣는다 (선택 문항=0, 나머지=1).
+  Future<void> warmPageProblemViews({
+    required List<String> cropIds,
+    String? selectedCropId,
   }) async {
-    var offset = 0;
-    for (var page = 0; page < 20; page++) {
-      final response = await _client.functions.invoke(
-        'student_textbook_problem_view',
-        body: {
-          'action': 'warm',
-          'book_id': bookId,
-          'grade_label': gradeLabel,
-          'offset': offset,
-        },
+    if (cropIds.isEmpty) return;
+    final response = await _client.functions.invoke(
+      'student_textbook_problem_view',
+      body: {
+        'action': 'warm_page',
+        'crop_ids': cropIds.take(40).toList(growable: false),
+        if (selectedCropId != null && selectedCropId.isNotEmpty)
+          'selected_crop_id': selectedCropId,
+      },
+    );
+    final rawData = response.data;
+    final data = rawData is Map
+        ? Map<String, dynamic>.from(rawData)
+        : const <String, dynamic>{};
+    if (data['ok'] != true) {
+      throw StudentTextbookProblemViewException(
+        code: '${data['error'] ?? 'warm_page_failed'}',
+        detail: '${data['detail'] ?? ''}',
       );
-      final rawData = response.data;
-      final data = rawData is Map
-          ? Map<String, dynamic>.from(rawData)
-          : const <String, dynamic>{};
-      if (data['ok'] != true) {
-        throw StudentTextbookProblemViewException(
-          code: '${data['error'] ?? 'warm_failed'}',
-          detail: '${data['detail'] ?? ''}',
-        );
-      }
-      if (data['has_more'] != true) return;
-      final nextOffset = (data['next_offset'] as num?)?.toInt();
-      if (nextOffset == null || nextOffset <= offset) return;
-      offset = nextOffset;
     }
   }
 
@@ -703,8 +697,11 @@ class TextbookUnitTree {
           final small = _map(rawSmalls[smallIndex]);
           if (small.isEmpty) continue;
           final subKey = _text(
-                small['sub_key'] ?? small['key'] ?? small['unit_key'],
+                small['sub_key'] ??
+                    small['legacy_sub_key'] ??
+                    small['key'],
               ) ??
+              _normalizedSubKey(_text(small['unit_key'])) ??
               '${smallIndex + 1}';
           final pages = <TbPageStat>[];
           for (final rawPage in _list(small['pages'])) {
@@ -762,6 +759,14 @@ class TextbookUnitTree {
         root['category_catalog'] ?? json['category_catalog'],
       ),
     );
+  }
+
+  static String? _normalizedSubKey(String? unitKey) {
+    if (unitKey == null) return null;
+    if (unitKey.contains('/SPECIAL:E')) return 'E';
+    final unitMatch = RegExp(r'/U:(\d+)$').firstMatch(unitKey);
+    if (unitMatch != null) return 'U${unitMatch.group(1)}';
+    return unitKey;
   }
 
   static TextbookUnitTree _fromLegacy(Map<String, dynamic> json) {

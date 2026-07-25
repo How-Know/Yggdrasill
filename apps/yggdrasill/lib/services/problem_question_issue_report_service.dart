@@ -13,6 +13,7 @@ const List<ProblemQuestionIssueType> kProblemQuestionIssueTypes =
   ProblemQuestionIssueType('answer_typo', '정답 오타'),
   ProblemQuestionIssueType('question_error', '문항 오류'),
   ProblemQuestionIssueType('missing_answer', '정답 없음'),
+  ProblemQuestionIssueType('answer_input_blocked', '정답 입력 불가'),
   ProblemQuestionIssueType('figure_mismatch', '그림 매칭 잘못됨'),
   ProblemQuestionIssueType('figure_size_error', '그림 크기 잘못됨'),
   ProblemQuestionIssueType('figure_error', '그림 오류'),
@@ -57,6 +58,7 @@ class ProblemQuestionIssueReportService {
       'issue_types': safeTypes,
       'note': note.trim(),
       'status': 'open',
+      'source': 'learning_staff',
     });
   }
 }

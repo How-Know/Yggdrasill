@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
+import '../services/homework_session.dart';
 import '../services/student_api.dart';
+import '../services/textbook_api.dart';
 import '../widgets/student_page_title.dart';
 
 /// 과제 그룹 목록 + 상세(수행/제출) 화면.
@@ -22,52 +25,140 @@ class HomeworkScreen extends StatefulWidget {
 
 class _HomeworkScreenState extends State<HomeworkScreen> {
   List<HomeworkGroup>? _groups;
+  /// bookId|gradeLabel → cover_ref (활성 교재 목록에서 해석).
+  Map<String, String> _coverByBookKey = const {};
   String? _error;
   bool _busy = false;
   String? _selectedGroupId;
   Timer? _ticker;
-  Timer? _poller;
+  /// 확인(phase 4) 진입 스낵바용 — 이전 phase 스냅샷.
+  final Map<String, int> _phaseByGroupId = {};
 
   @override
   void initState() {
     super.initState();
-    _refresh();
-    // 수행 중 경과시간 갱신용 1초 틱 + 30초 주기 목록 폴링.
+    HomeworkSession.instance.addListener(_onSessionChanged);
+    // 목록은 HomeworkSession Realtime/폴백이 밀고, 여기선 초기 스냅샷 + 수동 새로고침.
+    final cached = HomeworkSession.instance.lastGroups;
+    if (cached != null) {
+      _applyGroups(
+        cached,
+        covers: HomeworkSession.instance.lastCovers,
+      );
+    } else {
+      _refresh();
+    }
+    // 수행 중 경과시간 갱신용 1초 틱.
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && (_groups?.any((g) => g.running) ?? false)) {
         setState(() {});
       }
     });
-    _poller = Timer.periodic(const Duration(seconds: 30), (_) => _refresh());
   }
 
   @override
   void dispose() {
+    HomeworkSession.instance.removeListener(_onSessionChanged);
     _ticker?.cancel();
-    _poller?.cancel();
     super.dispose();
+  }
+
+  /// 미니바 pause/play가 세션 목록을 갱신하면 이 화면도 즉시 맞춘다.
+  void _onSessionChanged() {
+    final groups = HomeworkSession.instance.lastGroups;
+    if (!mounted || groups == null) return;
+    _applyGroups(
+      groups,
+      covers: HomeworkSession.instance.lastCovers,
+      notifyConfirmed: true,
+    );
+  }
+
+  void _applyGroups(
+    List<HomeworkGroup> groups, {
+    Map<String, String>? covers,
+    bool notifyConfirmed = false,
+  }) {
+    if (notifyConfirmed) {
+      _notifyNewlyConfirmed(groups);
+    } else {
+      for (final g in groups) {
+        _phaseByGroupId[g.groupId] = g.phase;
+      }
+    }
+    setState(() {
+      _groups = groups;
+      if (covers != null && covers.isNotEmpty) {
+        _coverByBookKey = covers;
+      }
+      _error = null;
+      if (_selectedGroupId == null && groups.isNotEmpty) {
+        _selectedGroupId = groups.first.groupId;
+      }
+    });
+  }
+
+  void _notifyNewlyConfirmed(List<HomeworkGroup> groups) {
+    final hadSnapshot = _phaseByGroupId.isNotEmpty;
+    final newly = <HomeworkGroup>[];
+    for (final g in groups) {
+      final prev = _phaseByGroupId[g.groupId];
+      if (hadSnapshot && prev != null && prev != 4 && g.phase == 4) {
+        newly.add(g);
+      }
+      _phaseByGroupId[g.groupId] = g.phase;
+    }
+    _phaseByGroupId.removeWhere(
+      (id, _) => !groups.any((g) => g.groupId == id),
+    );
+    if (!mounted || newly.isEmpty) return;
+    for (final g in newly) {
+      final title = g.title.isEmpty ? '과제' : g.title;
+      TopGlassSnackBar.show(
+        context,
+        message: '$title 확인이 끝났어요. 대기중이에요.',
+        icon: Icons.hourglass_top_rounded,
+      );
+    }
   }
 
   Future<void> _refresh() async {
     try {
-      final groups = await StudentApi.instance.listHomeworkGroups();
+      final groupsFuture = StudentApi.instance.listHomeworkGroups();
+      final booksFuture = TextbookApi.instance.listTextbooks().then(
+            (books) => books,
+            onError: (_, __) => const <StudentTextbook>[],
+          );
+      final groups = await groupsFuture;
+      final books = await booksFuture;
+      final covers = <String, String>{};
+      for (final book in books) {
+        final ref = book.coverRef.trim();
+        if (ref.isEmpty) continue;
+        covers['${book.bookId}|${book.gradeLabel}'] = ref;
+        covers.putIfAbsent(book.bookId, () => ref);
+      }
+      HomeworkSession.instance.syncFromGroups(groups, covers: covers);
       if (!mounted) return;
-      setState(() {
-        _groups = groups;
-        _error = null;
-        if (_selectedGroupId == null && groups.isNotEmpty) {
-          _selectedGroupId = groups.first.groupId;
-        }
-      });
+      _applyGroups(groups, covers: covers, notifyConfirmed: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '과제를 불러오지 못했어요.\n$e');
     }
   }
 
+  String? _coverRefFor(HomeworkGroup group) {
+    if (group.isPrintSource || group.bookId.isEmpty) return null;
+    return _coverByBookKey['${group.bookId}|${group.gradeLabel}'] ??
+        _coverByBookKey[group.bookId];
+  }
+
   Future<void> _transition(HomeworkGroup group, int fromPhase,
       {String? successMessage}) async {
     if (_busy) return;
+    if (fromPhase == 1) {
+      HomeworkSession.instance.preferGroup(group.groupId);
+    }
     setState(() => _busy = true);
     try {
       final result = await StudentApi.instance.groupTransition(
@@ -84,6 +175,36 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
           );
         }
       } else if (result['error'] == 'phase_mismatch') {
+        await _refresh();
+        if (!mounted) return;
+        if (fromPhase == 1) {
+          HomeworkGroup? latest;
+          for (final g in _groups ?? const <HomeworkGroup>[]) {
+            if (g.groupId == group.groupId) {
+              latest = g;
+              break;
+            }
+          }
+          if (latest != null &&
+              !latest.running &&
+              (latest.phase == 1 || latest.phase == 2)) {
+            final retry = await StudentApi.instance.groupTransition(
+              groupId: group.groupId,
+              fromPhase: 1,
+            );
+            if (!mounted) return;
+            if (retry['ok'] == true) {
+              if (successMessage != null) {
+                TopGlassSnackBar.show(
+                  context,
+                  message: successMessage,
+                  icon: Icons.check_circle_outline_rounded,
+                );
+              }
+              return;
+            }
+          }
+        }
         TopGlassSnackBar.show(
           context,
           message: '선생님이 방금 과제 상태를 바꿨어요. 목록을 새로고침해요.',
@@ -102,34 +223,6 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
           context,
           message: '통신에 실패했어요. 다시 시도해 주세요.',
           icon: Icons.wifi_off_rounded,
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-        await _refresh();
-      }
-    }
-  }
-
-  Future<void> _pauseAll() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await StudentApi.instance.pauseAll();
-      if (mounted) {
-        TopGlassSnackBar.show(
-          context,
-          message: '과제를 일시정지했어요.',
-          icon: Icons.pause_circle_outline_rounded,
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        TopGlassSnackBar.show(
-          context,
-          message: '일시정지에 실패했어요.',
-          icon: Icons.error_outline_rounded,
         );
       }
     } finally {
@@ -170,37 +263,61 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
 
   void _onGroupTap(HomeworkGroup group) {
     setState(() => _selectedGroupId = group.groupId);
+    HomeworkSession.instance.preferGroup(group.groupId);
+    if (_busy || group.isHomeworkOnly) return;
+
+    // 확인 완료(대기중) 탭 → 과제 찾아왔는지 묻고 대기로 전환.
+    if (group.phase == 4) {
+      unawaited(_confirmFoundHomework(group));
+      return;
+    }
+
+    // 대기·일시정지(수행 phase인데 타이머 정지) 탭 → 수행 시작.
+    // 미니바 pause 직후 목록이 아직 phase=2로 남아 있어도 재개되게 한다.
+    if (!group.running && (group.phase == 1 || group.phase == 2)) {
+      unawaited(
+        _transition(
+          group,
+          1,
+          successMessage: '${group.title} 시작!',
+        ),
+      );
+    }
   }
 
-  Future<void> _confirmPhase4(HomeworkGroup group) async {
+  Future<void> _confirmFoundHomework(HomeworkGroup group) async {
+    final title = group.title.isEmpty ? '과제' : group.title;
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(group.title),
-        content: const Text('확인이 끝난 과제예요. 대기 상태로 되돌릴까요?'),
+        title: Text(title),
+        content: const Text('과제를 찾아왔나요?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
+            child: const Text('아니요'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: YggGlassTokens.confirmActionColor,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('되돌리기'),
+            child: const Text('네'),
           ),
         ],
       ),
     );
     if (yes == true) {
-      await _transition(group, 4, successMessage: '대기로 되돌렸어요.');
+      await _transition(group, 4, successMessage: '대기로 전환했어요.');
     }
   }
 
   HomeworkGroup? _detailGroup(List<HomeworkGroup> groups) {
-    for (final group in groups) {
-      if (group.running) return group;
+    final runningId = HomeworkSession.instance.runningGroupId;
+    if (runningId != null) {
+      for (final group in groups) {
+        if (group.groupId == runningId) return group;
+      }
     }
     for (final group in groups) {
       if (group.groupId == _selectedGroupId) return group;
@@ -239,73 +356,45 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
           final detail = _detailGroup(groups);
           final detailWidth =
               ((constraints.maxWidth - 68) / 3).clamp(280.0, 380.0);
-          return Stack(
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: RefreshIndicator(
-                      onRefresh: _refresh,
-                      child: GridView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 14, 112),
-                        gridDelegate:
-                            const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 440,
-                          mainAxisExtent: 148,
-                          crossAxisSpacing: 14,
-                          mainAxisSpacing: 14,
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _refresh,
+                  child: GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 14, 112),
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 560,
+                      mainAxisExtent: 152,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 10,
+                    ),
+                    itemCount: groups.length,
+                        itemBuilder: (context, i) => ListenableBuilder(
+                          listenable: HomeworkSession.instance,
+                          builder: (context, _) => _GroupCard(
+                            group: groups[i],
+                            coverRef: _coverRefFor(groups[i]),
+                            showEqualizer: HomeworkSession.instance
+                                .isRunningGroup(groups[i].groupId),
+                            coverBadge: groups[i].phase == 4
+                                ? '대기중'
+                                : (groups[i].phase == 3 ? '제출됨' : null),
+                            onTap: () => _onGroupTap(groups[i]),
+                          ),
                         ),
-                        itemCount: groups.length,
-                        itemBuilder: (context, i) => _GroupCard(
-                          group: groups[i],
-                          selected: detail?.groupId == groups[i].groupId,
-                          onTap: () => _onGroupTap(groups[i]),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: detailWidth,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(0, 8, 20, 112),
-                      child: _HomeworkDetailPanel(
-                        group: detail!,
-                        onSubmit: detail.phase == 2
-                            ? () => _transition(
-                                  detail,
-                                  99,
-                                  successMessage: '과제를 제출했어요!',
-                                )
-                            : null,
-                        onReset: detail.phase == 4
-                            ? () => _confirmPhase4(detail)
-                            : null,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              if (!detail.isHomeworkOnly &&
-                  (detail.phase == 1 || detail.phase == 2))
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 24,
-                  child: Center(
-                    child: _HomeworkActionFab(
-                      busy: _busy,
-                      running: detail.phase == 2,
-                      onPressed: detail.phase == 2
-                          ? _pauseAll
-                          : () => _transition(
-                                detail,
-                                1,
-                                successMessage: '${detail.title} 시작!',
-                              ),
-                    ),
                   ),
                 ),
+              ),
+              SizedBox(
+                width: detailWidth,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 8, 20, 112),
+                  child: _HomeworkDetailPanel(group: detail!),
+                ),
+              ),
             ],
           );
         },
@@ -313,7 +402,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     }
 
     return StudentCollapsingTitlePage(
-      title: '홈',
+      title: '과제',
       onRefresh: _refresh,
       actions: [
         IconButton(
@@ -344,150 +433,83 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
 class _GroupCard extends StatelessWidget {
   const _GroupCard({
     required this.group,
-    required this.selected,
+    required this.coverRef,
+    required this.showEqualizer,
+    required this.coverBadge,
     required this.onTap,
   });
 
   final HomeworkGroup group;
-  final bool selected;
+  final String? coverRef;
+  final bool showEqualizer;
+  final String? coverBadge;
   final VoidCallback onTap;
 
-  static String _formatElapsed(int seconds) {
-    final h = seconds ~/ 3600;
-    final m = (seconds % 3600) ~/ 60;
-    final s = seconds % 60;
-    if (h > 0) return '$h:${'$m'.padLeft(2, '0')}:${'$s'.padLeft(2, '0')}';
-    return '$m:${'$s'.padLeft(2, '0')}';
-  }
-
-  (Color, String) _phaseBadge(BuildContext context) {
-    if (group.isHomeworkOnly) return (Colors.blueGrey, '숙제');
-    if (group.pendingComplete) return (Colors.teal, '완료 예정');
-    switch (group.phase) {
-      case 2:
-        return (YggGlassTokens.confirmActionColor, '수행 중');
-      case 3:
-        return (Colors.orangeAccent, '제출됨');
-      case 4:
-        return (Colors.lightBlueAccent, '확인');
-      default:
-        return (Colors.grey, '대기');
-    }
-  }
+  static const double _coverSize = 126.72; // 105.6 * 1.2
+  static const double _coverRadius = 18.48; // 15.4 * 1.2
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final dlg = YggDialogColors.of(context);
-    final (badgeColor, badgeLabel) = _phaseBadge(context);
-    final groupColor =
-        group.color != 0 ? Color(group.color | 0xFF000000) : dlg.border;
-    final emphasized = group.running || selected;
+    final title = group.title.isEmpty ? '(제목 없음)' : group.title;
+    final coverUri = Uri.tryParse(coverRef ?? '');
+    final hasNetworkCover = !group.isPrintSource &&
+        coverUri != null &&
+        (coverUri.scheme == 'http' || coverUri.scheme == 'https');
 
     return Material(
-      color: dlg.cardBg,
-      borderRadius: BorderRadius.circular(20),
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         onTap: onTap,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: emphasized
-                  ? YggGlassTokens.confirmActionColor
-                  : dlg.cardBorder,
-              width: emphasized ? 1.6 : 0.8,
-            ),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          child: Row(
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: groupColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      group.title.isEmpty ? '(제목 없음)' : group.title,
+              _HomeworkCoverThumb(
+                size: _coverSize,
+                radius: _coverRadius,
+                isPrint: group.isPrintSource,
+                coverRef: hasNetworkCover ? coverRef : null,
+                showEqualizer: showEqualizer,
+                badgeLabel: coverBadge,
+                bookLabel: group.sourceLabel,
+                courseLabel: group.courseLabel,
+              ),
+              const SizedBox(width: 17.6),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 17,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontSize: 22,
                         fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
                         color: dlg.text,
+                        height: 1.2,
                       ),
                     ),
-                  ),
-                  if (group.isTest)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 6),
-                      child: Icon(Icons.timer_outlined,
-                          size: 18, color: Colors.orangeAccent),
-                    ),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: badgeColor.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      badgeLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: badgeColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              if (group.pageSummary.isNotEmpty)
-                Text(
-                  group.pageSummary,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13.5, color: dlg.textSub),
-                ),
-              const Spacer(),
-              Row(
-                children: [
-                  Icon(Icons.checklist_rounded, size: 16, color: dlg.textSub),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${group.checkCount}/${group.totalCount}',
-                    style: TextStyle(fontSize: 13, color: dlg.textSub),
-                  ),
-                  const Spacer(),
-                  if (group.phase == 2) ...[
-                    Icon(
-                      group.running
-                          ? Icons.play_arrow_rounded
-                          : Icons.pause_rounded,
-                      size: 18,
-                      color: YggGlassTokens.confirmActionColor,
-                    ),
-                    const SizedBox(width: 2),
+                    const SizedBox(height: 10.6),
                     Text(
-                      _formatElapsed(group.liveCycleElapsed()),
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: YggGlassTokens.confirmActionColor,
-                        fontFeatures: [FontFeature.tabularFigures()],
+                      group.pageCountLine.isEmpty ? '-' : group.pageCountLine,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                        color: dlg.textSub,
+                        height: 1.2,
                       ),
                     ),
                   ],
-                ],
+                ),
               ),
             ],
           ),
@@ -497,17 +519,259 @@ class _GroupCard extends StatelessWidget {
   }
 }
 
-/// phase 2 상세 시트: 자식 과제 목록 + 일시정지/제출.
-class _HomeworkDetailPanel extends StatelessWidget {
-  const _HomeworkDetailPanel({
-    required this.group,
-    required this.onSubmit,
-    required this.onReset,
+/// 교재 표지 / 프린트(흰 배경) 썸네일 — 학습앱 채점 과제카드와 동일 규칙.
+class _HomeworkCoverThumb extends StatelessWidget {
+  const _HomeworkCoverThumb({
+    required this.size,
+    required this.radius,
+    required this.isPrint,
+    required this.coverRef,
+    this.showEqualizer = false,
+    this.badgeLabel,
+    this.bookLabel = '',
+    this.courseLabel = '',
   });
 
+  final double size;
+  final double radius;
+  final bool isPrint;
+  final String? coverRef;
+  final bool showEqualizer;
+  final String? badgeLabel;
+  final String bookLabel;
+  final String courseLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = isPrint ? Colors.white : const Color(0xFF2E7D32);
+    final hasBadge = badgeLabel != null && badgeLabel!.isNotEmpty;
+    final book = bookLabel.trim();
+    final course = courseLabel.trim();
+    final hasMeta = book.isNotEmpty || course.isNotEmpty;
+    Widget cover = coverRef == null
+        ? ColoredBox(
+            color: fallback,
+            child: isPrint
+                ? const SizedBox.expand()
+                : const Center(
+                    child: Icon(
+                      Icons.menu_book_rounded,
+                      color: Colors.white70,
+                      size: 30.8,
+                    ),
+                  ),
+          )
+        : Image.network(
+            coverRef!,
+            fit: BoxFit.cover,
+            width: size,
+            height: size,
+            errorBuilder: (_, __, ___) => ColoredBox(
+              color: fallback,
+              child: const Center(
+                child: Icon(
+                  Icons.menu_book_rounded,
+                  color: Colors.white70,
+                  size: 30.8,
+                ),
+              ),
+            ),
+          );
+
+    if (showEqualizer || hasBadge) {
+      cover = ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 2.2, sigmaY: 2.2),
+        child: cover,
+      );
+    }
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x1A000000),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              cover,
+              if (showEqualizer) ...[
+                const ColoredBox(color: Color(0x59000000)),
+                const Center(child: _CoverEqualizer()),
+              ] else if (hasBadge) ...[
+                const ColoredBox(color: Color(0x66000000)),
+                Center(
+                  child: Text(
+                    badgeLabel!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ] else if (hasMeta) ...[
+                // 하단 비네팅 — 여러 스톱으로 경계가 덜 보이게.
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x00000000),
+                        Color(0x00000000),
+                        Color(0x14000000),
+                        Color(0x2E000000),
+                        Color(0x52000000),
+                      ],
+                      stops: [0.0, 0.42, 0.62, 0.80, 1.0],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 10,
+                  right: 10,
+                  bottom: 10,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (book.isNotEmpty)
+                        Text(
+                          book,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            height: 1.05,
+                            letterSpacing: -0.35,
+                          ),
+                        ),
+                      if (book.isNotEmpty && course.isNotEmpty)
+                        const SizedBox(height: 4),
+                      if (course.isNotEmpty)
+                        Text(
+                          course,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFFD8D8DE),
+                            fontSize: 17,
+                            fontWeight: FontWeight.w500,
+                            height: 1.05,
+                            letterSpacing: -0.35,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 수행 중 표지 위 작은 이퀄라이저 바.
+class _CoverEqualizer extends StatefulWidget {
+  const _CoverEqualizer();
+
+  @override
+  State<_CoverEqualizer> createState() => _CoverEqualizerState();
+}
+
+class _CoverEqualizerState extends State<_CoverEqualizer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  static const _phases = <double>[0.0, 0.35, 0.7, 0.15, 0.55, 0.9, 0.25];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return SizedBox(
+          width: 36,
+          height: 28,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              for (var i = 0; i < _phases.length; i++) ...[
+                if (i > 0) const SizedBox(width: 2.2),
+                _EqualizerBar(
+                  progress: (_controller.value + _phases[i]) % 1.0,
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EqualizerBar extends StatelessWidget {
+  const _EqualizerBar({required this.progress});
+
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    // 가운데를 기준으로 위·아래로 대칭 확장.
+    final t = (progress < 0.5 ? progress : 1 - progress) * 2;
+    final height = 5.0 + t * 20.0;
+    return Align(
+      alignment: Alignment.center,
+      child: Container(
+        width: 2.8,
+        height: height,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(99),
+        ),
+      ),
+    );
+  }
+}
+
+/// 상세 시트: 자식 과제 목록.
+class _HomeworkDetailPanel extends StatelessWidget {
+  const _HomeworkDetailPanel({required this.group});
+
   final HomeworkGroup group;
-  final VoidCallback? onSubmit;
-  final VoidCallback? onReset;
 
   @override
   Widget build(BuildContext context) {
@@ -591,70 +855,7 @@ class _HomeworkDetailPanel extends StatelessWidget {
                     },
                   ),
           ),
-          if (onSubmit != null || onReset != null) ...[
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: onSubmit ?? onReset,
-              icon: Icon(onSubmit != null
-                  ? Icons.task_alt_rounded
-                  : Icons.replay_rounded),
-              label: Text(onSubmit != null ? '제출하기' : '대기로 되돌리기'),
-            ),
-          ],
         ],
-      ),
-    );
-  }
-}
-
-class _HomeworkActionFab extends StatelessWidget {
-  const _HomeworkActionFab({
-    required this.busy,
-    required this.running,
-    required this.onPressed,
-  });
-
-  final bool busy;
-  final bool running;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final background =
-        running ? const Color(0xFF6B7280) : YggGlassTokens.confirmActionColor;
-    return Material(
-      color: background,
-      borderRadius: BorderRadius.circular(28),
-      elevation: 8,
-      shadowColor: Colors.black26,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(28),
-        onTap: busy ? null : onPressed,
-        child: SizedBox(
-          height: 56,
-          width: 144,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (busy)
-                const YggLoadingIndicator(size: 19)
-              else
-                Icon(
-                  running ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                  color: Colors.white,
-                ),
-              const SizedBox(width: 8),
-              Text(
-                running ? '과제 중단' : '과제 수행',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

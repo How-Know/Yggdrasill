@@ -170,6 +170,20 @@ function normalizedTextbookSubIndex(textbookScope) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+// 추출 런은 본질적으로 "페이지 범위" 작업이다. 기대 문항 목록을 sub_index 로만
+// 좁히면, 개념원리처럼 한 중단원 안에서 소단원마다 같은 카테고리(확인 체크 등)가
+// 반복되는 교재에서 범위 밖 crop 까지 기대 목록에 섞여 들어온다. 그러면 잘라낸
+// PDF 에 없는 번호가 계속 미스로 남아 부분 추출인지 실패인지 구분되지 않는다.
+function applyTextbookCropScope(cropQuery, textbookScope, subIndex) {
+  const from = parsePositiveInt(textbookScope?.raw_page_from);
+  const to = parsePositiveInt(textbookScope?.raw_page_to);
+  if (from && to && to >= from) {
+    return cropQuery.gte('raw_page', from).lte('raw_page', to);
+  }
+  if (subIndex !== null) return cropQuery.eq('sub_index', subIndex);
+  return cropQuery;
+}
+
 function stripStructuralPreviewMarkers(lines) {
   return lines.filter((line) => {
     const s = compact(line);
@@ -425,6 +439,31 @@ function missingExpectedQuestionNumbers(questions, expectedNumbers) {
       .filter(Boolean),
   );
   return expected.filter((key) => !found.has(key));
+}
+
+function selectExpectedQuestions(questions, expectedNumbers) {
+  const rows = Array.isArray(questions) ? questions : [];
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((number) => compact(number)).filter(Boolean)
+    : [];
+  if (expected.length === 0) return rows;
+
+  const byNumber = new Map();
+  for (const question of rows) {
+    const key = problemNumberKey(question?.question_number);
+    if (!key || byNumber.has(key)) continue;
+    byNumber.set(key, question);
+  }
+  return expected
+    .map((number) => {
+      const question = byNumber.get(problemNumberKey(number));
+      if (!question) return null;
+      return {
+        ...(question || {}),
+        question_number: number,
+      };
+    })
+    .filter(Boolean);
 }
 
 function foundQuestionNumbers(questions) {
@@ -786,6 +825,27 @@ async function callGeminiChunkWithRetry({
           `vlm_missing_expected_questions:${missingExpected.join(',')};found=${found.slice(0, 24).join(',')};count=${found.length}`,
         );
       }
+      if (
+        Array.isArray(input.expectedQuestionNumbers) &&
+        input.expectedQuestionNumbers.length > 0
+      ) {
+        const beforeCount = chunkQuestions.length;
+        chunkQuestions = selectExpectedQuestions(
+          chunkQuestions,
+          input.expectedQuestionNumbers,
+        );
+        result.parsedJson.questions = chunkQuestions;
+        if (beforeCount !== chunkQuestions.length && typeof log === 'function') {
+          log('vlm_chunk_unexpected_questions_dropped', {
+            chunkIndex: input.chunkIndex,
+            totalChunks: input.totalChunks,
+            pageRange: input.pageRange,
+            beforeCount,
+            keptCount: chunkQuestions.length,
+            droppedCount: beforeCount - chunkQuestions.length,
+          });
+        }
+      }
       if (typeof log === 'function') {
         log('vlm_chunk_call_done', {
           chunkIndex: input.chunkIndex,
@@ -866,9 +926,7 @@ async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log
       .eq('big_order', bigOrder)
       .eq('mid_order', midOrder)
       .eq('sub_key', subKey);
-    if (subIndex !== null) {
-      cropQuery = cropQuery.eq('sub_index', subIndex);
-    }
+    cropQuery = applyTextbookCropScope(cropQuery, textbookScope, subIndex);
     const { data: crops, error: cropErr } = await cropQuery;
     if (cropErr || !Array.isArray(crops) || crops.length === 0) {
       if (typeof log === 'function') {
@@ -965,9 +1023,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
       .eq('big_order', bigOrder)
       .eq('mid_order', midOrder)
       .eq('sub_key', subKey);
-    if (subIndex !== null) {
-      cropQuery = cropQuery.eq('sub_index', subIndex);
-    }
+    cropQuery = applyTextbookCropScope(cropQuery, textbookScope, subIndex);
     const { data: crops, error } = await cropQuery;
     if (error || !Array.isArray(crops) || crops.length === 0) {
       if (typeof log === 'function') {
@@ -1448,21 +1504,34 @@ export async function runVlmExtraction({
       input,
     );
   }
+  if (textbookScope && cropPagesByNumber.size === 0) {
+    throw new Error('vlm_textbook_crop_scope_empty');
+  }
+  const extractionInputs = textbookScope
+    ? pdfInputs.inputs.filter(
+        (input) =>
+          Array.isArray(input.expectedQuestionNumbers) &&
+          input.expectedQuestionNumbers.length > 0,
+      )
+    : pdfInputs.inputs;
+  if (textbookScope && extractionInputs.length === 0) {
+    throw new Error('vlm_textbook_chunk_scope_empty');
+  }
 
   if (typeof log === 'function') {
     log('vlm_call_start', {
       jobId: job.id,
       documentId: job.document_id,
       originalPdfBytes: originalPdfBuffer.length,
-      pdfBytes: pdfInputs.inputs.reduce((acc, input) => acc + input.buffer.length, 0),
+      pdfBytes: extractionInputs.reduce((acc, input) => acc + input.buffer.length, 0),
       originalPageCount: pdfInputs.originalPageCount,
-      slicedPageCount: pdfInputs.inputs.reduce(
+      slicedPageCount: extractionInputs.reduce(
         (acc, input) => acc + Number(input.slicedPageCount || 0),
         0,
       ),
       pageRange: pdfInputs.fullPageRange,
-      chunked: pdfInputs.inputs.length > 1,
-      chunks: pdfInputs.inputs.map((input) => ({
+      chunked: extractionInputs.length > 1,
+      chunks: extractionInputs.map((input) => ({
         chunkIndex: input.chunkIndex,
         totalChunks: input.totalChunks,
         pageRange: input.pageRange,
@@ -1481,7 +1550,7 @@ export async function runVlmExtraction({
 
   const chunkResults = [];
   const vlmQuestions = [];
-  for (const input of pdfInputs.inputs) {
+  for (const input of extractionInputs) {
     const geminiResult = await callGeminiChunkWithRetry({
       input,
       model,
@@ -1635,20 +1704,23 @@ export async function runVlmExtraction({
       documentMeta: mergeVlmDocumentMeta(
         chunkResults,
         payloadQuestions.length,
-        pdfInputs.inputs.reduce((acc, input) => acc + Number(input.slicedPageCount || 0), 0),
+        extractionInputs.reduce(
+          (acc, input) => acc + Number(input.slicedPageCount || 0),
+          0,
+        ),
       ),
       pdfInput: {
         originalBytes: originalPdfBuffer.length,
-        sentBytes: pdfInputs.inputs.reduce((acc, input) => acc + input.buffer.length, 0),
+        sentBytes: extractionInputs.reduce((acc, input) => acc + input.buffer.length, 0),
         originalPageCount: pdfInputs.originalPageCount,
-        sentPageCount: pdfInputs.inputs.reduce(
+        sentPageCount: extractionInputs.reduce(
           (acc, input) => acc + Number(input.slicedPageCount || 0),
           0,
         ),
         pageRange: pdfInputs.fullPageRange,
-        chunked: pdfInputs.inputs.length > 1,
-        chunkCount: pdfInputs.inputs.length,
-        chunks: pdfInputs.inputs.map((input, idx) => ({
+        chunked: extractionInputs.length > 1,
+        chunkCount: extractionInputs.length,
+        chunks: extractionInputs.map((input, idx) => ({
           chunkIndex: input.chunkIndex,
           pageRange: input.pageRange,
           sentBytes: input.buffer.length,
@@ -1675,4 +1747,5 @@ export {
   fetchTextbookAnswerSidecars,
   fetchTextbookCropPages,
   normalizedTextbookSubIndex,
+  selectExpectedQuestions,
 };

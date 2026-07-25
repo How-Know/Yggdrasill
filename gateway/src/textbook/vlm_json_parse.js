@@ -6,9 +6,12 @@
 import {
   closeTruncatedJson,
   extractBalancedJsonObject,
+  joinGeminiTextParts,
   recoverMangledLatexControls,
   repairLatexBackslashes,
 } from '../problem_bank/extract_engines/vlm/client.js';
+
+export { joinGeminiTextParts };
 
 export function parseTextbookVlmJson(text) {
   const source = String(text || '').trim();

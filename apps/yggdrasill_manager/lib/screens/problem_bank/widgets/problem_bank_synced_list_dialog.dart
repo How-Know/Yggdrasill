@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../services/problem_bank_service.dart';
+import '../../../services/textbook_unit_progress_service.dart';
 import '../problem_bank_models.dart';
 
 /// 학습앱의 `범위 선택` + `추출 문서 트리`와 동일한 UX를 제공하는 매니저 전용 다이얼로그.
@@ -61,12 +62,32 @@ class _ProblemBankSyncedListDialogState
   static const List<String> _levelOptions = <String>['전체', '초', '중', '고'];
   static const List<String> _detailedCourseOptions = <String>[
     '전체',
-    '초1', '초2', '초3', '초4', '초5', '초6',
-    '중1', '중2', '중3',
-    '고1', '고2', '고3',
-    '공통수학1', '공통수학2',
-    '대수', '미적분1', '미적분2', '확률과 통계', '기하',
-    '수학(상)', '수학(하)', '수학1', '수학2', '미적분', '수학Ⅰ', '수학Ⅱ',
+    '초1',
+    '초2',
+    '초3',
+    '초4',
+    '초5',
+    '초6',
+    '중1',
+    '중2',
+    '중3',
+    '고1',
+    '고2',
+    '고3',
+    '공통수학1',
+    '공통수학2',
+    '대수',
+    '미적분1',
+    '미적분2',
+    '확률과 통계',
+    '기하',
+    '수학(상)',
+    '수학(하)',
+    '수학1',
+    '수학2',
+    '미적분',
+    '수학Ⅰ',
+    '수학Ⅱ',
   ];
   static const String _unspecifiedSchool = '학교 미지정';
 
@@ -82,6 +103,12 @@ class _ProblemBankSyncedListDialogState
   final Set<String> _deleting = <String>{};
   final Set<String> _expandedSchools = <String>{};
   final Set<String> _expandedYearBuckets = <String>{};
+  final Set<String> _expandedTextbooks = <String>{};
+  final Map<String, int> _questionCountByDocument = <String, int>{};
+  final Map<String, TextbookUnitProgress> _textbookProgress =
+      <String, TextbookUnitProgress>{};
+  final TextbookUnitProgressService _progressService =
+      TextbookUnitProgressService();
 
   @override
   void initState() {
@@ -118,7 +145,7 @@ class _ProblemBankSyncedListDialogState
       _errorMessage = null;
     });
     try {
-      final docs = await widget.service.listSyncedReadyDocuments(
+      final docs = await widget.service.listSearchableDocuments(
         academyId: widget.academyId,
         curriculumCode:
             normalizePbCurriculumCodeForSync(_selectedCurriculumCode),
@@ -126,23 +153,34 @@ class _ProblemBankSyncedListDialogState
         detailedCourse: _selectedDetailedCourse,
         sourceTypeCode: _selectedSourceTypeCode,
       );
+      final questionCounts = await widget.service.countQuestionsByDocumentIds(
+        academyId: widget.academyId,
+        documentIds: docs.map((doc) => doc.id),
+      );
       if (!mounted) return;
       setState(() {
         _documents = docs;
+        _questionCountByDocument
+          ..clear()
+          ..addAll(questionCounts);
         _isLoading = false;
         _expandedSchools.clear();
         _expandedYearBuckets.clear();
+        _expandedTextbooks.clear();
         final sel = widget.initialSelectedDocumentId?.trim();
         if (sel != null && sel.isNotEmpty) {
           for (final doc in docs) {
             if (doc.id != sel) continue;
+            final year = _yearLabel(doc);
             final school = _schoolLabel(doc);
-            _expandedSchools.add(school);
-            _expandedYearBuckets.add('$school|${_yearLabel(doc)}');
+            _expandedYearBuckets.add(year);
+            _expandedSchools.add('$year|$school');
+            _expandedTextbooks.add(_textbookKey(doc));
             break;
           }
         }
       });
+      unawaited(_loadTextbookProgress(docs));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -157,15 +195,97 @@ class _ProblemBankSyncedListDialogState
     final needle = _searchCtrl.text.trim().toLowerCase();
     if (needle.isEmpty) return _documents;
     return _documents.where((doc) {
-      final name = doc.sourceFilename.toLowerCase();
-      final school = doc.schoolName.toLowerCase();
-      final grade = doc.gradeLabel.toLowerCase();
-      final course = doc.courseLabel.toLowerCase();
-      return name.contains(needle) ||
-          school.contains(needle) ||
-          grade.contains(needle) ||
-          course.contains(needle);
+      final scope = _textbookScope(doc);
+      final terms = <String>[
+        doc.sourceFilename,
+        doc.sourcePdfFilename,
+        doc.schoolName,
+        doc.gradeLabel,
+        doc.courseLabel,
+        doc.materialName,
+        _textbookTitle(doc),
+        '${scope['book_name'] ?? ''}',
+        '${scope['big_name'] ?? ''}',
+        '${scope['mid_name'] ?? ''}',
+        '${scope['sub_name'] ?? ''}',
+        '${doc.meta['assignment_name'] ?? ''}',
+        '${doc.meta['task_name'] ?? ''}',
+      ];
+      return terms.any((term) => term.toLowerCase().contains(needle));
     }).toList(growable: false);
+  }
+
+  String _documentStatusLabel(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'ready':
+        return '업로드 완료';
+      case 'draft_ready':
+        return '업로드 대기';
+      case 'draft_review_required':
+      case 'review_required':
+        return '검수 필요';
+      default:
+        return '작업본';
+    }
+  }
+
+  Map<String, dynamic> _textbookScope(ProblemBankDocument doc) {
+    for (final raw in <dynamic>[
+      doc.meta['textbook_scope'],
+      doc.classificationDetail['textbook_scope'],
+      doc.meta['source_classification'] is Map
+          ? (doc.meta['source_classification'] as Map)['textbook']
+          : null,
+    ]) {
+      if (raw is Map) {
+        final scope = raw.map((k, dynamic v) => MapEntry('$k', v));
+        if ('${scope['book_id'] ?? ''}'.trim().isNotEmpty) return scope;
+      }
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _textbookKey(ProblemBankDocument doc) {
+    final scope = _textbookScope(doc);
+    final bookId = '${scope['book_id'] ?? ''}'.trim();
+    final bookName = '${scope['book_name'] ?? doc.materialName}'.trim();
+    final grade = '${scope['grade_label'] ?? doc.gradeLabel}'.trim();
+    return '${bookId.isEmpty ? bookName : bookId}|$grade';
+  }
+
+  String _textbookTitle(ProblemBankDocument doc) {
+    final scope = _textbookScope(doc);
+    final bookName = '${scope['book_name'] ?? doc.materialName}'.trim();
+    final grade = '${scope['grade_label'] ?? doc.gradeLabel}'.trim();
+    return <String>[
+      if (bookName.isNotEmpty) bookName,
+      if (grade.isNotEmpty) grade,
+    ].join(' · ');
+  }
+
+  Future<void> _loadTextbookProgress(List<ProblemBankDocument> docs) async {
+    final representatives = <String, ProblemBankDocument>{};
+    for (final doc in docs) {
+      if (doc.sourceTypeCode != 'market_book') continue;
+      final scope = _textbookScope(doc);
+      if ('${scope['book_id'] ?? ''}'.trim().isEmpty) continue;
+      representatives.putIfAbsent(_textbookKey(doc), () => doc);
+    }
+    await Future.wait(representatives.entries.map((entry) async {
+      final doc = entry.value;
+      final scope = _textbookScope(doc);
+      try {
+        final progress = await _progressService.load(
+          academyId: doc.academyId,
+          bookId: '${scope['book_id']}',
+          gradeLabel: '${scope['grade_label'] ?? doc.gradeLabel}'.trim(),
+        );
+        if (!mounted) return;
+        setState(() => _textbookProgress[entry.key] = progress);
+      } catch (_) {
+        // 문서 선택 자체는 진행률 조회 실패와 무관하게 계속 제공한다.
+      }
+    }));
   }
 
   Future<void> _handleDelete(ProblemBankDocument doc) async {
@@ -205,9 +325,8 @@ class _ProblemBankSyncedListDialogState
       if (!mounted) return;
       if (ok) {
         setState(() {
-          _documents = _documents
-              .where((d) => d.id != doc.id)
-              .toList(growable: false);
+          _documents =
+              _documents.where((d) => d.id != doc.id).toList(growable: false);
         });
       }
     } finally {
@@ -224,8 +343,7 @@ class _ProblemBankSyncedListDialogState
     final dialogHeight = size.height.clamp(520.0, 820.0);
     return Dialog(
       backgroundColor: _bg,
-      insetPadding:
-          const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: const BorderSide(color: _border),
@@ -323,8 +441,8 @@ class _ProblemBankSyncedListDialogState
                         .map(
                           (e) => DropdownMenuItem<String>(
                             value: e.key,
-                            child: Text(e.value,
-                                overflow: TextOverflow.ellipsis),
+                            child:
+                                Text(e.value, overflow: TextOverflow.ellipsis),
                           ),
                         )
                         .toList(growable: false),
@@ -365,10 +483,10 @@ class _ProblemBankSyncedListDialogState
                 SizedBox(
                   width: 180,
                   child: _dropdown<String>(
-                    value: _detailedCourseOptions
-                            .contains(_selectedDetailedCourse)
-                        ? _selectedDetailedCourse
-                        : '전체',
+                    value:
+                        _detailedCourseOptions.contains(_selectedDetailedCourse)
+                            ? _selectedDetailedCourse
+                            : '전체',
                     items: _detailedCourseOptions
                         .map(
                           (c) => DropdownMenuItem<String>(
@@ -404,8 +522,8 @@ class _ProblemBankSyncedListDialogState
                         .map(
                           (e) => DropdownMenuItem<String>(
                             value: e.key,
-                            child: Text(e.value,
-                                overflow: TextOverflow.ellipsis),
+                            child:
+                                Text(e.value, overflow: TextOverflow.ellipsis),
                           ),
                         )
                         .toList(growable: false),
@@ -437,7 +555,7 @@ class _ProblemBankSyncedListDialogState
         cursorColor: _accent,
         onChanged: (_) => setState(() {}),
         decoration: InputDecoration(
-          hintText: '파일명 / 학교 / 학년 / 과정 검색',
+          hintText: '파일명 / 교재명 / 과제명 / 학교 / 과정 검색',
           hintStyle: const TextStyle(color: _textSub),
           filled: true,
           fillColor: _field,
@@ -500,6 +618,9 @@ class _ProblemBankSyncedListDialogState
     if (_selectedSourceTypeCode == 'school_past') {
       return _buildSchoolPastTree(docs);
     }
+    if (_selectedSourceTypeCode == 'market_book') {
+      return _buildTextbookTree(docs);
+    }
     return _buildFlatList(docs);
   }
 
@@ -515,45 +636,45 @@ class _ProblemBankSyncedListDialogState
   Widget _buildSchoolPastTree(List<ProblemBankDocument> docs) {
     final grouped = <String, Map<String, List<ProblemBankDocument>>>{};
     for (final d in docs) {
-      final school = _schoolLabel(d);
       final year = _yearLabel(d);
-      grouped.putIfAbsent(school, () => {});
-      grouped[school]!.putIfAbsent(year, () => []);
-      grouped[school]![year]!.add(d);
+      final school = _schoolLabel(d);
+      grouped.putIfAbsent(year, () => {});
+      grouped[year]!.putIfAbsent(school, () => []);
+      grouped[year]![school]!.add(d);
     }
-    final schools = grouped.keys.toList()
+    final years = grouped.keys.toList()
       ..sort((a, b) {
-        if (a == _unspecifiedSchool && b != _unspecifiedSchool) return 1;
-        if (b == _unspecifiedSchool && a != _unspecifiedSchool) return -1;
-        return a.compareTo(b);
+        if (a == '미지정' && b != '미지정') return 1;
+        if (b == '미지정' && a != '미지정') return -1;
+        final ia = int.tryParse(a);
+        final ib = int.tryParse(b);
+        if (ia != null && ib != null) return ib.compareTo(ia);
+        return b.compareTo(a);
       });
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-      itemCount: schools.length,
-      itemBuilder: (_, si) {
-        final school = schools[si];
-        final byYear = grouped[school]!;
-        final years = byYear.keys.toList()
+      itemCount: years.length,
+      itemBuilder: (_, yi) {
+        final year = years[yi];
+        final bySchool = grouped[year]!;
+        final schools = bySchool.keys.toList()
           ..sort((a, b) {
-            if (a == '미지정' && b != '미지정') return 1;
-            if (b == '미지정' && a != '미지정') return -1;
-            final ia = int.tryParse(a);
-            final ib = int.tryParse(b);
-            if (ia != null && ib != null) return ib.compareTo(ia);
-            return b.compareTo(a);
+            if (a == _unspecifiedSchool && b != _unspecifiedSchool) return 1;
+            if (b == _unspecifiedSchool && a != _unspecifiedSchool) return -1;
+            return a.compareTo(b);
           });
-        final open = _expandedSchools.contains(school);
+        final open = _expandedYearBuckets.contains(year);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _sectionHeader(
-              title: school,
+              title: year == '미지정' ? '연도 미지정' : '$year년',
               expanded: open,
               onTap: () => setState(() {
                 if (open) {
-                  _expandedSchools.remove(school);
+                  _expandedYearBuckets.remove(year);
                 } else {
-                  _expandedSchools.add(school);
+                  _expandedYearBuckets.add(year);
                 }
               }),
             ),
@@ -563,8 +684,8 @@ class _ProblemBankSyncedListDialogState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    for (final y in years)
-                      _buildYearBucket(school, y, byYear[y]!),
+                    for (final school in schools)
+                      _buildSchoolBucket(year, school, bySchool[school]!),
                   ],
                 ),
               ),
@@ -575,25 +696,25 @@ class _ProblemBankSyncedListDialogState
     );
   }
 
-  Widget _buildYearBucket(
+  Widget _buildSchoolBucket(
+    String year,
     String school,
-    String yearLabel,
     List<ProblemBankDocument> docs,
   ) {
-    final key = '$school|$yearLabel';
-    final open = _expandedYearBuckets.contains(key);
+    final key = '$year|$school';
+    final open = _expandedSchools.contains(key);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _sectionHeader(
-          title: yearLabel == '미지정' ? '연도 미지정' : '$yearLabel년',
+          title: '$school · ${docs.length}개 문서',
           dense: true,
           expanded: open,
           onTap: () => setState(() {
             if (open) {
-              _expandedYearBuckets.remove(key);
+              _expandedSchools.remove(key);
             } else {
-              _expandedYearBuckets.add(key);
+              _expandedSchools.add(key);
             }
           }),
         ),
@@ -615,6 +736,64 @@ class _ProblemBankSyncedListDialogState
     );
   }
 
+  Widget _buildTextbookTree(List<ProblemBankDocument> docs) {
+    final grouped = <String, List<ProblemBankDocument>>{};
+    for (final doc in docs) {
+      grouped.putIfAbsent(_textbookKey(doc), () => []).add(doc);
+    }
+    final keys = grouped.keys.toList()
+      ..sort((a, b) => _textbookTitle(grouped[a]!.first)
+          .compareTo(_textbookTitle(grouped[b]!.first)));
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+      itemCount: keys.length,
+      itemBuilder: (_, index) {
+        final key = keys[index];
+        final items = grouped[key]!;
+        final progress = _textbookProgress[key];
+        final extracted = progress == null || progress.total == 0
+            ? '소단원 확인 중'
+            : '소단원 ${progress.completed}/${progress.total} 추출';
+        final questionTotal = items.fold<int>(
+          0,
+          (sum, doc) => sum + (_questionCountByDocument[doc.id] ?? 0),
+        );
+        final open = _expandedTextbooks.contains(key);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _sectionHeader(
+              title:
+                  '${_textbookTitle(items.first)} · $extracted · DB $questionTotal/$questionTotal문항',
+              expanded: open,
+              onTap: () => setState(() {
+                if (open) {
+                  _expandedTextbooks.remove(key);
+                } else {
+                  _expandedTextbooks.add(key);
+                }
+              }),
+            ),
+            if (open)
+              Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: Column(
+                  children: [
+                    for (final doc in items)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: _buildDocRow(doc),
+                      ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 4),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildDocRow(ProblemBankDocument doc) {
     final selected = widget.initialSelectedDocumentId == doc.id;
     final isDeleting = _deleting.contains(doc.id);
@@ -624,17 +803,12 @@ class _ProblemBankSyncedListDialogState
         borderRadius: BorderRadius.circular(10),
         onTap: isDeleting ? null : () => Navigator.of(context).pop(doc.id),
         child: Ink(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-            color: selected
-                ? const Color(0xFF173C36)
-                : Colors.transparent,
+            color: selected ? const Color(0xFF173C36) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: selected
-                  ? const Color(0xFF2B6B61)
-                  : Colors.transparent,
+              color: selected ? const Color(0xFF2B6B61) : Colors.transparent,
             ),
           ),
           child: Row(
@@ -658,13 +832,10 @@ class _ProblemBankSyncedListDialogState
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: selected
-                            ? const Color(0xFFD6ECEA)
-                            : _text,
+                        color: selected ? const Color(0xFFD6ECEA) : _text,
                         fontSize: 13,
-                        fontWeight: selected
-                            ? FontWeight.w800
-                            : FontWeight.w600,
+                        fontWeight:
+                            selected ? FontWeight.w800 : FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -676,6 +847,16 @@ class _ProblemBankSyncedListDialogState
                         color: _textSub,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${_documentStatusLabel(doc.status)} · '
+                      'DB 저장 ${_questionCountByDocument[doc.id] ?? 0}문항',
+                      style: const TextStyle(
+                        color: Color(0xFF76D7AE),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
