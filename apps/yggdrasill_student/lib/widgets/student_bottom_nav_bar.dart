@@ -8,7 +8,6 @@ abstract final class StudentBottomNavTokens {
   static const double height = 64;
   static const double nowPlayingHeight = 64;
   static const double nowPlayingGap = 10;
-  static const double bottomInset = 20;
   static const double horizontalInset = 24;
   static const double padding = 6;
   static const double tabWidth = 72;
@@ -49,6 +48,10 @@ abstract final class StudentBottomNavTokens {
     ),
   ];
 
+  /// 탭바 하단 오프셋 — 풀이 화면 FAB(`safeBottom/2 + 6`)과 같은 기준.
+  static double bottomInsetOf(BuildContext context) =>
+      MediaQuery.paddingOf(context).bottom / 2 + 6;
+
   /// 본문이 바에 가리지 않도록 확보할 하단 여백.
   /// [compactChrome]이면 탭·미니바·검색이 한 줄이라 nowPlaying 높이를 더하지 않는다.
   static double contentBottomPadding(
@@ -60,10 +63,7 @@ abstract final class StudentBottomNavTokens {
     final nowPlaying = (!compactChrome && includeNowPlaying)
         ? nowPlayingHeight + nowPlayingGap
         : 0.0;
-    return barH +
-        nowPlaying +
-        bottomInset +
-        MediaQuery.paddingOf(context).bottom;
+    return barH + nowPlaying + bottomInsetOf(context);
   }
 
   static double blurFor(Brightness brightness) =>

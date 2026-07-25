@@ -12,7 +12,8 @@ class StudentStatusIsland extends StatelessWidget {
 
   /// SafeArea + `kToolbarHeight` 중앙 대비 아일랜드 중점 하향 오프셋.
   /// 다른 AppBar 콘텐츠도 이 값으로 Y를 맞춘다.
-  static const double centerOffsetY = 10;
+  /// -4 = 타이틀 바(48)의 top이 상태바 바로 아래 0px에 오는 최소 여백.
+  static const double centerOffsetY = -4;
 
   @override
   Widget build(BuildContext context) {
@@ -91,9 +92,12 @@ class StudentStatusIslandToolbarSlot extends StatelessWidget {
   final Widget child;
   final bool ignorePointer;
 
-  /// AppBar preferredSize 높이 = 상태바 + 툴바.
+  /// AppBar preferredSize 높이 = 상태바 + 툴바 + 오프셋 보정.
+  /// centerOffsetY가 음수면 콘텐츠가 올라간 만큼 슬롯 아래 여백도 줄인다.
   static double preferredHeight(BuildContext context) =>
-      MediaQuery.paddingOf(context).top + kToolbarHeight;
+      MediaQuery.paddingOf(context).top +
+      kToolbarHeight +
+      StudentStatusIsland.centerOffsetY * 2;
 
   @override
   Widget build(BuildContext context) {
@@ -122,8 +126,7 @@ class StudentStatusIslandHost extends StatelessWidget {
     return StreamBuilder<AuthState>(
       stream: Supabase.instance.client.auth.onAuthStateChange,
       builder: (context, _) {
-        final loggedIn =
-            Supabase.instance.client.auth.currentSession != null;
+        final loggedIn = Supabase.instance.client.auth.currentSession != null;
         return Stack(
           fit: StackFit.expand,
           children: [

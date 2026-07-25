@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
@@ -121,8 +122,14 @@ class PencilInputPad extends StatefulWidget {
 }
 
 class PencilInputPadState extends State<PencilInputPad> {
+  /// 획이 끝난 뒤 이 시간 동안 새 입력이 없어야 인식을 시작한다.
+  /// 여러 획으로 된 글자(예: 4, 분수)를 쓰는 도중 잘려 인식되는 것을 막는다.
+  static const Duration recognitionDelay = Duration(seconds: 2);
+
   final List<List<Offset>> _strokes = <List<Offset>>[];
   final List<List<int>> _strokeTimes = <List<int>>[];
+  /// 포인트별 정규화 압력(0~1). 압력 정보가 없는 기기는 -1.
+  final List<List<double>> _strokePressures = <List<double>>[];
   int? _activePointer;
   /// 동시에 내려온 포인터 수. 2개 이상이면 필기를 막고(두 손가락 스와이프용)
   /// 진행 중 획을 취소한다.
@@ -136,6 +143,9 @@ class PencilInputPadState extends State<PencilInputPad> {
   bool _recognizing = false;
   Timer? _debounce;
   Size _canvasSize = Size.zero;
+
+  /// 마지막 인식 시점의 필기 스냅샷 — 신고(필기 인식 불량) 첨부용.
+  Map<String, dynamic>? _lastRecognitionSnapshot;
 
   @override
   void initState() {
@@ -184,20 +194,34 @@ class PencilInputPadState extends State<PencilInputPad> {
     super.dispose();
   }
 
-  void _startStroke(Offset position, int timestamp) {
+  /// 기기가 실제 압력을 주는 경우 0~1로 정규화, 아니면 -1(정보 없음).
+  double _normalizedPressure(PointerEvent event) {
+    final range = event.pressureMax - event.pressureMin;
+    if (range <= 0) return -1;
+    final value = (event.pressure - event.pressureMin) / range;
+    if (!value.isFinite) return -1;
+    return value.clamp(0.0, 1.0).toDouble();
+  }
+
+  void _startStroke(Offset position, int timestamp, double pressure) {
     _debounce?.cancel();
     setState(() {
       _strokes.add(<Offset>[position]);
       _strokeTimes.add(<int>[timestamp]);
+      _strokePressures.add(<double>[pressure]);
     });
   }
 
-  void _extendStroke(Offset position, int timestamp) {
+  void _extendStroke(Offset position, int timestamp, double pressure) {
     if (_strokes.isEmpty) return;
     final previous = _strokes.last.last;
     final previousTime = _strokeTimes.last.last;
+    final previousPressure = _strokePressures.last.last;
     final distance = (position - previous).distance;
-    final steps = (distance / 2.5).ceil().clamp(1, 48);
+    // 손떨림 수준의 미세 이동은 방향 노이즈만 만들므로 무시.
+    if (distance < 0.6) return;
+    // 1.8px 간격 보간 — 빠른 획도 끊김 없이 촘촘하게 채운다.
+    final steps = (distance / 1.8).ceil().clamp(1, 64);
     setState(() {
       for (var step = 1; step <= steps; step++) {
         final t = step / steps;
@@ -205,13 +229,18 @@ class PencilInputPadState extends State<PencilInputPad> {
         _strokeTimes.last.add(
           previousTime + ((timestamp - previousTime) * t).round(),
         );
+        _strokePressures.last.add(
+          (previousPressure < 0 || pressure < 0)
+              ? pressure
+              : previousPressure + (pressure - previousPressure) * t,
+        );
       }
     });
   }
 
   void _endStroke() {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 500), _recognize);
+    _debounce = Timer(recognitionDelay, _recognize);
   }
 
   /// 두 손가락 제스처가 시작되면 방금 시작한 획을 버린다.
@@ -222,6 +251,7 @@ class PencilInputPadState extends State<PencilInputPad> {
     setState(() {
       _strokes.removeLast();
       _strokeTimes.removeLast();
+      _strokePressures.removeLast();
     });
   }
 
@@ -256,6 +286,7 @@ class PencilInputPadState extends State<PencilInputPad> {
         ink,
         context,
       );
+      _lastRecognitionSnapshot = _buildSnapshot(candidates);
       if (!mounted || candidates.isEmpty) return;
       widget.onRecognized(candidates.first.trim());
     } catch (e, stack) {
@@ -273,6 +304,7 @@ class PencilInputPadState extends State<PencilInputPad> {
     setState(() {
       _strokes.clear();
       _strokeTimes.clear();
+      _strokePressures.clear();
     });
   }
 
@@ -281,6 +313,7 @@ class PencilInputPadState extends State<PencilInputPad> {
     setState(() {
       _strokes.removeLast();
       _strokeTimes.removeLast();
+      _strokePressures.removeLast();
     });
     _endStroke();
   }
@@ -291,6 +324,42 @@ class PencilInputPadState extends State<PencilInputPad> {
   }
 
   void clearStrokes() => _clear();
+
+  Map<String, dynamic> _buildSnapshot(List<String> candidates) {
+    return <String, dynamic>{
+      'canvas_width': _canvasSize.width,
+      'canvas_height': _canvasSize.height,
+      'model': _DigitalInkService.model,
+      'recognized_candidates': candidates,
+      'captured_at': DateTime.now().toUtc().toIso8601String(),
+      'strokes': <Map<String, dynamic>>[
+        for (var i = 0; i < _strokes.length; i++)
+          <String, dynamic>{
+            'x': [for (final p in _strokes[i]) _round2(p.dx)],
+            'y': [for (final p in _strokes[i]) _round2(p.dy)],
+            't': _strokeTimes[i],
+            'p': [for (final v in _strokePressures[i]) _round2(v)],
+          },
+      ],
+    };
+  }
+
+  static double _round2(double v) => (v * 100).roundToDouble() / 100;
+
+  /// 신고(필기 인식 불량) 첨부용 필기 데이터.
+  ///
+  /// 캔버스에 획이 남아 있으면 현재 획 기준, 지워졌으면 마지막 인식 시점의
+  /// 스냅샷을 돌려준다. 필기 이력이 전혀 없으면 null.
+  Map<String, dynamic>? get handwritingReportPayload {
+    if (_strokes.isNotEmpty) {
+      final snapshot = _buildSnapshot(
+        (_lastRecognitionSnapshot?['recognized_candidates'] as List<String>?) ??
+            const <String>[],
+      );
+      return snapshot;
+    }
+    return _lastRecognitionSnapshot;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -345,6 +414,7 @@ class PencilInputPadState extends State<PencilInputPad> {
                           _startStroke(
                             event.localPosition,
                             event.timeStamp.inMilliseconds,
+                            _normalizedPressure(event),
                           );
                         }
                       : null,
@@ -355,6 +425,7 @@ class PencilInputPadState extends State<PencilInputPad> {
                           _extendStroke(
                             event.localPosition,
                             event.timeStamp.inMilliseconds,
+                            _normalizedPressure(event),
                           );
                         }
                       : null,
@@ -395,6 +466,8 @@ class PencilInputPadState extends State<PencilInputPad> {
                       child: CustomPaint(
                         painter: _StrokePainter(
                           strokes: _strokes,
+                          times: _strokeTimes,
+                          pressures: _strokePressures,
                           color: isDark ? Colors.white : Colors.black87,
                         ),
                         size: Size.infinite,
@@ -482,43 +555,154 @@ class PencilInputPadState extends State<PencilInputPad> {
   }
 }
 
+/// 연필 느낌의 가변 두께 획 렌더러 — 리본 필 방식.
+///
+/// 노트앱들이 쓰는 방식과 동일하게, 획의 중심선을 이동평균으로 매끈하게
+/// 다듬고 포인트별 반지름(애플펜슬 압력 또는 획 속도 기반)으로 좌우
+/// 외곽선을 만든 뒤 **하나의 닫힌 면으로 채운다**. 세그먼트를 이어 붙이는
+/// 방식과 달리 두께가 변해도 마디·울퉁불퉁함이 생기지 않는다.
 class _StrokePainter extends CustomPainter {
-  const _StrokePainter({required this.strokes, required this.color});
+  const _StrokePainter({
+    required this.strokes,
+    required this.times,
+    required this.pressures,
+    required this.color,
+  });
 
   final List<List<Offset>> strokes;
+  final List<List<int>> times;
+  final List<List<double>> pressures;
   final Color color;
+
+  static const double _baseWidth = 3.0;
+  static const double _minWidth = 2.1;
+  static const double _maxWidth = 4.1;
+
+  double _targetWidth(
+    List<Offset> stroke,
+    List<int> time,
+    List<double> pressure,
+    int index,
+  ) {
+    final p = index < pressure.length ? pressure[index] : -1.0;
+    if (p >= 0) {
+      // 실제 압력: 살짝 눌러도 최소 두께는 유지.
+      return _baseWidth * (0.72 + 0.62 * p);
+    }
+    if (index == 0 || index >= time.length) return _baseWidth;
+    // 속도 폴백 (px/ms): 빠른 획일수록 가늘게.
+    final dt = (time[index] - time[index - 1]).abs().clamp(1, 1000);
+    final velocity = (stroke[index] - stroke[index - 1]).distance / dt;
+    final t = (velocity / 1.6).clamp(0.0, 1.0);
+    return _baseWidth * (1.18 - 0.5 * t);
+  }
+
+  /// 중심선 위치를 창 크기 5의 이동평균으로 다듬는다.
+  /// 시작·끝점은 그대로 두어 획 끝이 뭉개지지 않게 한다.
+  List<Offset> _smoothedCenters(List<Offset> stroke) {
+    final n = stroke.length;
+    if (n < 5) return stroke;
+    final out = List<Offset>.of(stroke, growable: false);
+    for (var i = 1; i < n - 1; i++) {
+      final lo = math.max(0, i - 2);
+      final hi = math.min(n - 1, i + 2);
+      var sum = Offset.zero;
+      for (var j = lo; j <= hi; j++) {
+        sum += stroke[j];
+      }
+      out[i] = sum / (hi - lo + 1).toDouble();
+    }
+    return out;
+  }
+
+  /// 포인트별 반지름 — 목표 두께를 구한 뒤 같은 이동평균으로 다듬는다.
+  List<double> _smoothedRadii(
+    List<Offset> stroke,
+    List<int> time,
+    List<double> pressure,
+  ) {
+    final n = stroke.length;
+    final raw = List<double>.generate(
+      n,
+      (i) => _targetWidth(stroke, time, pressure, i)
+          .clamp(_minWidth, _maxWidth)
+          .toDouble(),
+      growable: false,
+    );
+    final out = List<double>.filled(n, 0);
+    for (var i = 0; i < n; i++) {
+      final lo = math.max(0, i - 2);
+      final hi = math.min(n - 1, i + 2);
+      var sum = 0.0;
+      for (var j = lo; j <= hi; j++) {
+        sum += raw[j];
+      }
+      out[i] = sum / (hi - lo + 1) / 2; // 두께 → 반지름
+    }
+    return out;
+  }
+
+  /// 중심선 좌우로 반지름만큼 벌린 외곽선을 하나의 닫힌 Path로 만든다.
+  /// 양 끝은 원(cap)을 같은 Path에 합쳐 이음매 없이 채운다.
+  Path _ribbonPath(List<Offset> centers, List<double> radii) {
+    final n = centers.length;
+    final left = List<Offset>.filled(n, Offset.zero);
+    final right = List<Offset>.filled(n, Offset.zero);
+    var lastDir = const Offset(1, 0);
+    for (var i = 0; i < n; i++) {
+      final prev = centers[math.max(0, i - 1)];
+      final next = centers[math.min(n - 1, i + 1)];
+      var dir = next - prev;
+      final len = dir.distance;
+      dir = len < 1e-6 ? lastDir : dir / len;
+      lastDir = dir;
+      final normal = Offset(-dir.dy, dir.dx);
+      left[i] = centers[i] + normal * radii[i];
+      right[i] = centers[i] - normal * radii[i];
+    }
+
+    final path = Path()..moveTo(left[0].dx, left[0].dy);
+    for (var i = 1; i < n - 1; i++) {
+      final mid = (left[i] + left[i + 1]) / 2;
+      path.quadraticBezierTo(left[i].dx, left[i].dy, mid.dx, mid.dy);
+    }
+    path.lineTo(left[n - 1].dx, left[n - 1].dy);
+    path.lineTo(right[n - 1].dx, right[n - 1].dy);
+    for (var i = n - 2; i >= 1; i--) {
+      final mid = (right[i] + right[i - 1]) / 2;
+      path.quadraticBezierTo(right[i].dx, right[i].dy, mid.dx, mid.dy);
+    }
+    path.lineTo(right[0].dx, right[0].dy);
+    path.close();
+
+    // 양 끝 라운드 캡 — 같은 Path 안에서는 겹쳐도 균일하게 채워진다.
+    path.addOval(Rect.fromCircle(center: centers.first, radius: radii.first));
+    path.addOval(Rect.fromCircle(center: centers.last, radius: radii.last));
+    return path;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = color
-      ..strokeWidth = 2.8
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke
+      ..style = PaintingStyle.fill
       ..isAntiAlias = true;
 
-    for (final stroke in strokes) {
+    for (var s = 0; s < strokes.length; s++) {
+      final stroke = strokes[s];
+      final time = s < times.length ? times[s] : const <int>[];
+      final pressure = s < pressures.length ? pressures[s] : const <double>[];
+
       if (stroke.length < 2) {
         if (stroke.isNotEmpty) {
-          canvas.drawCircle(
-              stroke.first, 1.8, paint..style = PaintingStyle.fill);
-          paint.style = PaintingStyle.stroke;
+          canvas.drawCircle(stroke.first, _baseWidth * 0.62, paint);
         }
         continue;
       }
-      final path = Path()..moveTo(stroke.first.dx, stroke.first.dy);
-      for (var i = 1; i < stroke.length - 1; i++) {
-        final point = stroke[i];
-        final next = stroke[i + 1];
-        final midpoint = Offset(
-          (point.dx + next.dx) / 2,
-          (point.dy + next.dy) / 2,
-        );
-        path.quadraticBezierTo(point.dx, point.dy, midpoint.dx, midpoint.dy);
-      }
-      path.lineTo(stroke.last.dx, stroke.last.dy);
-      canvas.drawPath(path, paint);
+
+      final centers = _smoothedCenters(stroke);
+      final radii = _smoothedRadii(centers, time, pressure);
+      canvas.drawPath(_ribbonPath(centers, radii), paint);
     }
   }
 

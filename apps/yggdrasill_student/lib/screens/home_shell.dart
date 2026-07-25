@@ -108,8 +108,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
           Positioned(
             left: StudentBottomNavTokens.horizontalInset,
             right: StudentBottomNavTokens.horizontalInset,
-            bottom: StudentBottomNavTokens.bottomInset +
-                MediaQuery.paddingOf(context).bottom,
+            bottom: StudentBottomNavTokens.bottomInsetOf(context),
             // 미니바 유무와 무관하게 같은 크롬 — 탭바 하단 Y 고정.
             child: _AnimatedBottomChrome(
               oneLine: oneLineChrome,

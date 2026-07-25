@@ -315,16 +315,20 @@ class TextbookApi {
     );
   }
 
-  /// 문항 신고 — 접수 즉시 검토 중(보류) 상태가 된다.
+  /// 문항 신고.
   ///
-  /// 보류 문항은 선생님 판정 전까지 채점·통계에서 제외되고,
-  /// 풀지 않아도 페이지 완료 판정에 포함되지 않는다.
-  Future<void> reportProblem({
+  /// 보류 사유가 포함되면 접수 즉시 검토 중(보류) 상태가 되어 선생님 판정
+  /// 전까지 채점·통계에서 제외된다. 「필기 인식이 잘 안돼요」 단독 신고는
+  /// 문항을 보류하지 않고 [handwriting] 데이터만 수집한다.
+  ///
+  /// 반환 json: {held: 보류 여부, report_id, handwriting_sample_id, ...}
+  Future<Map<String, dynamic>> reportProblem({
     required String bookId,
     required String gradeLabel,
     required String cropId,
     required List<String> issueTypes,
     String note = '',
+    Map<String, dynamic>? handwriting,
   }) async {
     final result =
         await _client.rpc('student_report_textbook_problem', params: {
@@ -333,6 +337,7 @@ class TextbookApi {
       'p_crop_id': cropId,
       'p_issue_types': issueTypes,
       'p_note': note,
+      'p_handwriting': handwriting,
     });
     final data = result is Map
         ? Map<String, dynamic>.from(result)
@@ -340,6 +345,7 @@ class TextbookApi {
     if (data['ok'] != true) {
       throw Exception('report_failed: ${data['error']}');
     }
+    return data;
   }
 }
 

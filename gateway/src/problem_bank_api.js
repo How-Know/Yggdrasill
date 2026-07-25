@@ -84,6 +84,9 @@ import {
   extractBodySolutionsOnPage,
   normalizeBodySolutionsResult,
 } from './textbook/vlm_body_solution_client.js';
+import {
+  assessHandwritingSample,
+} from './textbook/handwriting_review_client.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -9035,6 +9038,76 @@ async function handleTextbookBookDelete(body, res) {
   });
 }
 
+// 매니저앱 필기 탭의 「AI 판단」 — 학생 필기 렌더 이미지를 Gemini 에 보내
+// 인식 실패 원인 분류(verdict) + 원인 설명(cause) + 개선 방향(improvement)을 받는다.
+async function handleHandwritingReview(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'gemini_api_key_missing',
+      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+    });
+    return;
+  }
+
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_mime_type: ${mimeType}`,
+      allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+    });
+    return;
+  }
+
+  const recognizedCandidates = Array.isArray(body?.recognized_candidates)
+    ? body.recognized_candidates.map((c) => String(c ?? '').trim()).filter(Boolean)
+    : [];
+
+  try {
+    const { assessment, model } = await assessHandwritingSample({
+      imageBase64,
+      mimeType,
+      recognizedText: String(body?.recognized_text || '').trim(),
+      recognizedCandidates,
+      expectedAnswer: String(body?.expected_answer || '').trim(),
+      expectedAnswerKind: String(body?.expected_answer_kind || '').trim(),
+      submittedAnswer: String(body?.submitted_answer || '').trim(),
+      note: String(body?.note || '').trim(),
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+    sendJson(res, 200, {
+      ok: true,
+      assessment: { ...assessment, model },
+    });
+  } catch (err) {
+    const message = compact(err?.message || err);
+    if (isTextbookVlmQuotaError(message)) {
+      sendJson(res, 429, {
+        ok: false,
+        error: 'vlm_daily_quota_exceeded',
+        message,
+      });
+      return;
+    }
+    console.warn('[handwriting-review] failed', message);
+    sendJson(res, 502, {
+      ok: false,
+      error: 'handwriting_review_failed',
+      message,
+    });
+  }
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -9387,6 +9460,13 @@ async function handler(req, res) {
     ) {
       const body = await readJson(req);
       await handleTextbookSolutionRefsBatchUpsert(body, res);
+      return;
+    }
+
+    // 매니저 필기 탭: 학생 필기 렌더 이미지 AI 판단.
+    if (method === 'POST' && url.pathname === '/handwriting/review') {
+      const body = await readJson(req);
+      await handleHandwritingReview(body, res);
       return;
     }
 

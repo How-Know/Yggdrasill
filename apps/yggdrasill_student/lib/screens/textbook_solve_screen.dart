@@ -1333,13 +1333,38 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     );
     if (input == null || !mounted) return;
 
+    // 「필기 인식이 잘 안돼요」 신고면 필기 원본 데이터를 함께 첨부한다.
+    // 필기 패드는 선택된 문항의 입력이므로 다른 문항 신고에는 붙이지 않는다.
+    Map<String, dynamic>? handwriting;
+    if (input.issueTypes.contains('handwriting_recognition') &&
+        problem.cropId == _selectedCropId) {
+      final payload = _pencilKey.currentState?.handwritingReportPayload;
+      if (payload != null) {
+        final answerKey = _answerKeyOf(
+          problem.cropId,
+          problem.hasParts ? _selectedPartKey : null,
+        );
+        final candidates =
+            (payload['recognized_candidates'] as List?) ?? const [];
+        handwriting = <String, dynamic>{
+          ...payload,
+          'recognized_text':
+              candidates.isEmpty ? '' : candidates.first.toString(),
+          'submitted_answer': _answers[answerKey] ?? '',
+          'input_mode': _inputMode.name,
+        };
+      }
+    }
+
+    final Map<String, dynamic> result;
     try {
-      await TextbookApi.instance.reportProblem(
+      result = await TextbookApi.instance.reportProblem(
         bookId: widget.book.bookId,
         gradeLabel: widget.book.gradeLabel,
         cropId: problem.cropId,
         issueTypes: input.issueTypes,
         note: input.note,
+        handwriting: handwriting,
       );
     } catch (_) {
       if (mounted) {
@@ -1352,6 +1377,16 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       return;
     }
     if (!mounted) return;
+
+    if (result['held'] != true) {
+      // 필기 단독 신고 — 문항은 보류되지 않는다.
+      TopGlassSnackBar.show(
+        context,
+        message: '필기 데이터를 보냈어요. 인식 개선에 사용할게요.',
+        icon: Icons.draw_rounded,
+      );
+      return;
+    }
     setState(() => _reportStatuses[problem.cropId] = 'open');
     TopGlassSnackBar.show(
       context,
@@ -4089,9 +4124,15 @@ class _ReportProblemDialogState extends State<_ReportProblemDialog> {
     ('question_error', '문제가 이상해요'),
     ('answer_error', '정답이 잘못된 것 같아요'),
     ('answer_input_blocked', '정답 입력이 안되요'),
+    ('handwriting_recognition', '필기 인식이 잘 안돼요'),
     ('render_error', '문항이 잘리거나 그림이 이상해요'),
     ('other', '기타'),
   ];
+
+  /// 필기 인식 신고만 단독 선택하면 문항은 보류되지 않는다.
+  bool get _handwritingOnly =>
+      _selectedTypes.length == 1 &&
+      _selectedTypes.contains('handwriting_recognition');
 
   final Set<String> _selectedTypes = <String>{};
   final TextEditingController _noteController = TextEditingController();
@@ -4127,7 +4168,9 @@ class _ReportProblemDialogState extends State<_ReportProblemDialog> {
               ),
               const SizedBox(height: 6),
               Text(
-                '접수하면 선생님이 확인할 때까지 이 문항은 채점에서 제외돼요.',
+                _handwritingOnly
+                    ? '방금 쓴 필기가 함께 전송돼 인식 개선에 사용돼요. 문항은 계속 풀 수 있어요.'
+                    : '접수하면 선생님이 확인할 때까지 이 문항은 채점에서 제외돼요.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.hintColor,
                 ),

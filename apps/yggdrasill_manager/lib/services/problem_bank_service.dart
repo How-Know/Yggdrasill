@@ -2521,6 +2521,74 @@ class ProblemBankService {
         .eq('status', 'open');
   }
 
+  /// 필기 탭: 학생 필기 샘플 목록 조회. [status]가 빈 문자열이면 전체 상태.
+  Future<List<Map<String, dynamic>>> listHandwritingSamples({
+    required String academyId,
+    String status = 'open',
+    int limit = 200,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    if (safeAcademyId.isEmpty) return const <Map<String, dynamic>>[];
+    final rows = await _client.rpc('staff_handwriting_samples', params: {
+      'p_academy_id': safeAcademyId,
+      'p_status': status.trim(),
+      'p_limit': limit.clamp(1, 500),
+    });
+    return (rows as List<dynamic>)
+        .whereType<Map>()
+        .map((row) => row.map((k, dynamic v) => MapEntry('$k', v)))
+        .toList(growable: false);
+  }
+
+  /// 필기 탭: 사용자+AI 판단 결과 저장 (상태 변경 + 개선 방향 메모 + AI 판단 원본).
+  Future<void> reviewHandwritingSample({
+    required String sampleId,
+    required String status,
+    String? reviewNote,
+    Map<String, dynamic>? aiAssessment,
+  }) async {
+    final result = await _client.rpc('staff_review_handwriting_sample', params: {
+      'p_sample_id': sampleId.trim(),
+      'p_status': status.trim(),
+      'p_review_note': reviewNote,
+      'p_ai_assessment': aiAssessment,
+    });
+    if (result is Map && result['ok'] != true) {
+      throw Exception('handwriting_review_save_failed: ${result['error']}');
+    }
+  }
+
+  /// 필기 탭: 필기 렌더 PNG 를 게이트웨이 AI 판단 엔드포인트에 보낸다.
+  /// 반환값은 {verdict, read_as, cause, improvement, model} 형태의 assessment.
+  Future<Map<String, dynamic>> assessHandwritingSample({
+    required String imageBase64,
+    String recognizedText = '',
+    List<String> recognizedCandidates = const <String>[],
+    String expectedAnswer = '',
+    String expectedAnswerKind = '',
+    String submittedAnswer = '',
+    String note = '',
+  }) async {
+    if (!hasGateway) {
+      throw Exception('gateway_not_configured');
+    }
+    final json = await _gatewayPost('/handwriting/review', body: {
+      'image_base64': imageBase64,
+      'mime_type': 'image/png',
+      'recognized_text': recognizedText,
+      'recognized_candidates': recognizedCandidates,
+      'expected_answer': expectedAnswer,
+      'expected_answer_kind': expectedAnswerKind,
+      'submitted_answer': submittedAnswer,
+      'note': note,
+    });
+    final assessment = json['assessment'];
+    if (assessment is! Map) {
+      throw Exception('handwriting_review_invalid_response');
+    }
+    return assessment.map((k, dynamic v) => MapEntry('$k', v));
+  }
+
   Future<void> updateDocumentMeta({
     required String documentId,
     required Map<String, dynamic> meta,
