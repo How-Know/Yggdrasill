@@ -13,6 +13,7 @@ import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
+import '../widgets/math_latex_view.dart';
 import '../widgets/pencil_input_pad.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_status_island.dart';
@@ -792,6 +793,35 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         );
       }
     }
+  }
+
+  /// 답지에 저장된 정답 확인 (보기 전용) — "답지와 표기는 조금 달라요"
+  /// 안내를 눌렀을 때. 이미 정답 처리된 문항이라 서버가 공개를 허용한다.
+  Future<void> _showServedAnswer(PageProblem problem) async {
+    RevealedAnswer revealed;
+    try {
+      revealed =
+          await TextbookApi.instance.revealAnswer(cropId: problem.cropId);
+    } catch (_) {
+      if (mounted) {
+        TopGlassSnackBar.show(
+          context,
+          message: '답지 정답을 불러오지 못했어요.',
+          icon: Icons.error_outline_rounded,
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => _SelfCheckDialog(
+        title: '${problem.problemNumber}번 답지 정답',
+        revealed: revealed,
+        myAnswer: _answers[problem.cropId],
+        viewOnly: true,
+      ),
+    );
   }
 
   /// 세트형 파트 자기 채점 — 해당 파트 정답만 공개하고 O/X를 기록한다.
@@ -2131,8 +2161,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
       child: SingleChildScrollView(
         controller: _questionScrollController,
+        // 하단 여백을 넉넉히 — 렌더된 문항 카드가 하단 FAB(정답 버튼)와
+        // 겹치지 않게 한다.
         padding:
-            EdgeInsets.fromLTRB(24, topInset + 12, 24, scrollUnderInset + 24),
+            EdgeInsets.fromLTRB(24, topInset + 12, 24, scrollUnderInset + 56),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -2252,6 +2284,48 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     'form_differs': '정답! 답지와 표기는 조금 달라요.',
   };
 
+  /// 채점 플래그 안내 한 줄. form_differs 는 눌러서 답지 정답을
+  /// 다이얼로그로 확인할 수 있다.
+  Widget _flagNote(
+    ThemeData theme,
+    String flag,
+    PageProblem problem, {
+    required Color color,
+    double iconSize = 15,
+  }) {
+    final note = _flagMessages[flag];
+    if (note == null) return const SizedBox.shrink();
+    final tappable = flag == 'form_differs';
+    final row = Row(
+      children: [
+        Icon(Icons.info_outline_rounded, size: iconSize, color: color),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            note,
+            style: theme.textTheme.bodySmall?.copyWith(color: color),
+          ),
+        ),
+        if (tappable)
+          Text(
+            '정답 확인하기',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w800,
+              decoration: TextDecoration.underline,
+              decorationColor: color,
+            ),
+          ),
+      ],
+    );
+    if (!tappable) return row;
+    return InkWell(
+      onTap: () => _showServedAnswer(problem),
+      borderRadius: BorderRadius.circular(6),
+      child: row,
+    );
+  }
+
   /// 개념원리만 문항분류(필수유형 등)를 난이도/유형코드와 같은 회색 글씨로 표시.
   bool get _showCategoryLabel => widget.book.series == 'wonri';
 
@@ -2292,10 +2366,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       borderColor = theme.dividerColor.withValues(alpha: 0.4);
     }
 
-    final flagNotes = graded && !held
+    final noteFlags = graded && !held
         ? (_flags[problem.cropId] ?? const <String>[])
-            .map((f) => _flagMessages[f])
-            .whereType<String>()
+            .where(_flagMessages.containsKey)
             .toList(growable: false)
         : const <String>[];
 
@@ -2363,29 +2436,40 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                             )
                           : problem.isObjective && showObjectiveButtons
                               ? _objectiveButtons(theme, problem)
-                              : Text(
-                                  problem.isObjective
-                                      ? (answer.isEmpty
-                                          ? '객관식'
-                                          : _objectiveAnswerText(answer))
-                                      : answer.isEmpty
-                                          ? (problem.isSelfCheck
+                              : !problem.isObjective && answer.isNotEmpty
+                                  // 주관식 답은 2D 조판 수식으로 보여준다.
+                                  ? Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: MathLatexView.linear(
+                                        answer,
+                                        fontSize: theme.textTheme.titleMedium
+                                                ?.fontSize ??
+                                            16,
+                                      ),
+                                    )
+                                  : Text(
+                                      problem.isObjective
+                                          ? (answer.isEmpty
+                                              ? '객관식'
+                                              : _objectiveAnswerText(answer))
+                                          : (problem.isSelfCheck
                                               ? '공책에 풀고 정답을 확인해 보세요'
-                                              : '답을 입력해 주세요')
-                                          : answer,
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    color:
-                                        answer.isEmpty ? theme.hintColor : null,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize:
-                                        problem.isObjective && answer.isNotEmpty
+                                              : '답을 입력해 주세요'),
+                                      style:
+                                          theme.textTheme.titleMedium?.copyWith(
+                                        color: answer.isEmpty
+                                            ? theme.hintColor
+                                            : null,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: problem.isObjective &&
+                                                answer.isNotEmpty
                                             ? (theme.textTheme.titleMedium
                                                         ?.fontSize ??
                                                     16) *
                                                 1.35
                                             : null,
-                                  ),
-                                ),
+                                      ),
+                                    ),
                     ),
                     const SizedBox(width: 12),
                     if (held) ...[
@@ -2477,23 +2561,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                     ],
                   ],
                 ),
-                for (final note in flagNotes)
+                for (final flag in noteFlags)
                   Padding(
                     padding: const EdgeInsets.only(left: 72, top: 6),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline_rounded,
-                            size: 15, color: cautionColor),
-                        const SizedBox(width: 5),
-                        Expanded(
-                          child: Text(
-                            note,
-                            style: theme.textTheme.bodySmall
-                                ?.copyWith(color: cautionColor),
-                          ),
-                        ),
-                      ],
-                    ),
+                    child: _flagNote(theme, flag, problem, color: cautionColor),
                   ),
               ],
             ),
@@ -2763,10 +2834,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     final partSelected =
         _selectedCropId == problem.cropId && _selectedPartKey == part.key;
 
-    final flagNotes = graded
+    final noteFlags = graded
         ? (_flags[k] ?? const <String>[])
-            .map((f) => _flagMessages[f])
-            .whereType<String>()
+            .where(_flagMessages.containsKey)
             .toList(growable: false)
         : const <String>[];
 
@@ -2804,21 +2874,27 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                     ),
                   ),
                   Expanded(
-                    child: Text(
-                      part.isSelfCheck
-                          ? (graded
-                              ? (result ? '맞았어요' : '틀렸어요 · 다시 확인해 보세요')
-                              : '공책에 풀고 정답을 확인해 보세요')
-                          : answer.isEmpty
-                              ? '답을 입력해 주세요'
-                              : answer,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: (part.isSelfCheck || answer.isEmpty)
-                            ? theme.hintColor
-                            : null,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    child: !part.isSelfCheck && answer.isNotEmpty
+                        // 파트 답도 2D 조판 수식으로 보여준다.
+                        ? Align(
+                            alignment: Alignment.centerLeft,
+                            child: MathLatexView.linear(
+                              answer,
+                              fontSize:
+                                  theme.textTheme.titleSmall?.fontSize ?? 14,
+                            ),
+                          )
+                        : Text(
+                            part.isSelfCheck
+                                ? (graded
+                                    ? (result ? '맞았어요' : '틀렸어요 · 다시 확인해 보세요')
+                                    : '공책에 풀고 정답을 확인해 보세요')
+                                : '답을 입력해 주세요',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: theme.hintColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                   ),
                   const SizedBox(width: 10),
                   if (part.isSelfCheck && result != true) ...[
@@ -2851,25 +2927,15 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                     Icon(Icons.edit_rounded, size: 16, color: theme.hintColor),
                 ],
               ),
-              for (final note in flagNotes)
+              for (final flag in noteFlags)
                 Padding(
                   padding: const EdgeInsets.only(left: 44, top: 5),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.info_outline_rounded,
-                        size: 14,
-                        color: cautionColor,
-                      ),
-                      const SizedBox(width: 5),
-                      Expanded(
-                        child: Text(
-                          note,
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: cautionColor),
-                        ),
-                      ),
-                    ],
+                  child: _flagNote(
+                    theme,
+                    flag,
+                    problem,
+                    color: cautionColor,
+                    iconSize: 14,
                   ),
                 ),
             ],
@@ -3121,16 +3187,37 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                           horizontal: 4,
                           vertical: 8,
                         ),
-                        child: Text(
-                          '${problem.problemNumber}번'
-                          '${partKey == null ? '' : ' $partKey'} 답  ·  '
-                          '${answer.isEmpty ? '입력 전' : answer}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontWeight: FontWeight.w800,
-                          ),
+                        child: Row(
+                          children: [
+                            Text(
+                              '${problem.problemNumber}번'
+                              '${partKey == null ? '' : ' $partKey'} 답  ·  ',
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            // 인식·입력된 답은 2D 조판 수식으로 보여준다.
+                            Flexible(
+                              child: answer.isEmpty
+                                  ? const Text(
+                                      '입력 전',
+                                      style: TextStyle(
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    )
+                                  : FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      alignment: Alignment.centerLeft,
+                                      child: MathLatexView.linear(
+                                        answer,
+                                        fontSize: 19,
+                                        color: Colors.black,
+                                      ),
+                                    ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -4383,16 +4470,19 @@ class _ReportProblemDialogState extends State<_ReportProblemDialog> {
 }
 
 /// 셀프 채점 다이얼로그 — 정답을 보여주고 학생이 O/X 선택.
+/// [viewOnly]면 채점 버튼 없이 정답 확인만 한다 (답지 표기 비교용).
 class _SelfCheckDialog extends StatelessWidget {
   const _SelfCheckDialog({
     required this.title,
     required this.revealed,
     this.myAnswer,
+    this.viewOnly = false,
   });
 
   final String title;
   final RevealedAnswer revealed;
   final String? myAnswer;
+  final bool viewOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -4403,6 +4493,7 @@ class _SelfCheckDialog extends StatelessWidget {
     final answerText = (revealed.answerText?.trim().isNotEmpty ?? false)
         ? revealed.answerText!.trim()
         : revealed.answerLatex2d?.trim() ?? '';
+    final latex2d = revealed.answerLatex2d?.trim() ?? '';
 
     return Dialog(
       backgroundColor: isDark ? const Color(0xFF1F2A2A) : Colors.white,
@@ -4453,71 +4544,113 @@ class _SelfCheckDialog extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.06)
-                        : Colors.black.withValues(alpha: 0.04),
+                    // 답지 이미지와 동일하게 항상 밝은 배경 + 검은 글씨 —
+                    // 종이 답지를 보는 느낌을 유지한다.
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0x1F000000)),
                   ),
-                  child: SelectableText(
-                    answerText.isEmpty ? '(등록된 정답 표기가 없어요)' : answerText,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600, height: 1.5),
-                  ),
+                  // 정답을 2D 조판 수식으로 보여준다. LaTeX 표기가 있으면
+                  // 그대로, 없으면 선형 표기를 변환해 그린다.
+                  child: latex2d.isNotEmpty
+                      ? MathLatexView(
+                          latex: latex2d,
+                          fontSize: 24,
+                          color: Colors.black87,
+                        )
+                      : answerText.isEmpty
+                          ? Text(
+                              '(등록된 정답 표기가 없어요)',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.w600,
+                                height: 1.5,
+                              ),
+                            )
+                          : MathLatexView.linear(
+                              answerText,
+                              fontSize: 24,
+                              color: Colors.black87,
+                            ),
                 ),
               if (myAnswer != null && myAnswer!.trim().isNotEmpty) ...[
                 const SizedBox(height: 10),
-                Text(
-                  '내가 쓴 답: ${myAnswer!.trim()}',
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: theme.hintColor),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      '내가 쓴 답:  ',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: theme.hintColor),
+                    ),
+                    Flexible(
+                      child: MathLatexView.linear(
+                        myAnswer!.trim(),
+                        fontSize: 17,
+                        color: theme.hintColor,
+                      ),
+                    ),
+                  ],
                 ),
               ],
               const SizedBox(height: 20),
-              Text(
-                '내 풀이와 비교해서 스스로 채점해 주세요.',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.hintColor),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.of(context).pop(false),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: wrongColor,
-                        side: BorderSide(
-                            color: wrongColor.withValues(alpha: 0.55)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      icon: const Icon(Icons.close_rounded),
-                      label: const Text('틀렸어요',
-                          style: TextStyle(fontWeight: FontWeight.w700)),
-                    ),
+              if (viewOnly)
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () => Navigator.of(context).pop(true),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: accent,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      icon: const Icon(Icons.circle_outlined),
-                      label: const Text('맞았어요',
-                          style: TextStyle(fontWeight: FontWeight.w700)),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text(
-                  '나중에 채점하기',
-                  style: TextStyle(color: theme.hintColor),
+                  child: const Text('확인',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                )
+              else ...[
+                Text(
+                  '내 풀이와 비교해서 스스로 채점해 주세요.',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.hintColor),
                 ),
-              ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: wrongColor,
+                          side: BorderSide(
+                              color: wrongColor.withValues(alpha: 0.55)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text('틀렸어요',
+                            style: TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accent,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        icon: const Icon(Icons.circle_outlined),
+                        label: const Text('맞았어요',
+                            style: TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(
+                    '나중에 채점하기',
+                    style: TextStyle(color: theme.hintColor),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

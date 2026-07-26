@@ -4299,36 +4299,69 @@ function pbAnswerTextForUnifiedRenderKind(questionRow, answerKindRaw) {
 }
 
 // 세트형 정답 파서 — grading.ts(splitSetAnswerParts) / SQL(_split_set_answer_parts)과
-// 동일 규칙: (1)부터 1씩 증가하는 순차 마커만 인정, 마커는 시작 또는 공백 뒤,
+// 동일 규칙: (1)부터 1씩 증가하는 순차 마커 또는 (가)부터 가나다순 마커만 인정
+// (첫 마커로 모드 결정), 마커는 시작 또는 공백 뒤,
 // 파트 내용이 비면 그 후보는 이전 파트의 내용으로 취급. 애매하면 null.
+const SET_PART_KOREAN_KEYS = [
+  '가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타',
+];
+
 function splitSetAnswerPartsForRender(raw) {
   const text = String(raw || '').trim();
   if (!text) return null;
-  const markerRe = /^[(（]\s*(\d{1,2})\s*[)）]/;
+  const numRe = /^[(（]\s*(\d{1,2})\s*[)）]/;
+  const korRe = /^[(（]\s*([가-힣])\s*[)）]/;
   const parts = [];
   let expected = 1;
   let contentStart = null;
   let i = 0;
+  let korean = false; // 첫 마커가 (가)면 한글 시퀀스 모드
+  const keyOf = (n) => (korean ? `(${SET_PART_KOREAN_KEYS[n - 1]})` : `(${n})`);
   while (i < text.length) {
     const head = text.slice(i);
-    const match = head.match(markerRe);
-    if (match && Number.parseInt(match[1], 10) === expected) {
+    let markerLen = 0;
+    if (expected === 1) {
+      const mn = head.match(numRe);
+      if (mn && Number.parseInt(mn[1], 10) === 1) {
+        markerLen = mn[0].length;
+        korean = false;
+      } else {
+        const mk = head.match(korRe);
+        if (mk && mk[1] === SET_PART_KOREAN_KEYS[0]) {
+          markerLen = mk[0].length;
+          korean = true;
+        }
+      }
+    } else if (korean) {
+      const mk = head.match(korRe);
+      if (mk
+          && expected <= SET_PART_KOREAN_KEYS.length
+          && mk[1] === SET_PART_KOREAN_KEYS[expected - 1]) {
+        markerLen = mk[0].length;
+      }
+    } else {
+      const mn = head.match(numRe);
+      if (mn && Number.parseInt(mn[1], 10) === expected) {
+        markerLen = mn[0].length;
+      }
+    }
+    if (markerLen > 0) {
       const prevCh = i === 0 ? ' ' : text[i - 1];
       if (/\s/.test(prevCh)) {
         if (expected === 1) {
           if (text.slice(0, i).trim() === '') {
-            contentStart = i + match[0].length;
+            contentStart = i + markerLen;
             expected = 2;
-            i += match[0].length;
+            i += markerLen;
             continue;
           }
         } else {
           const partText = text.slice(contentStart, i).trim();
           if (partText !== '') {
-            parts.push({ key: `(${expected - 1})`, text: partText });
-            contentStart = i + match[0].length;
+            parts.push({ key: keyOf(expected - 1), text: partText });
+            contentStart = i + markerLen;
             expected += 1;
-            i += match[0].length;
+            i += markerLen;
             continue;
           }
         }
@@ -4339,7 +4372,7 @@ function splitSetAnswerPartsForRender(raw) {
   if (expected < 3) return null;
   const last = text.slice(contentStart).trim();
   if (!last) return null;
-  parts.push({ key: `(${expected - 1})`, text: last });
+  parts.push({ key: keyOf(expected - 1), text: last });
   if (parts.length > UNIFIED_ANSWER_RENDER_MAX_SET_PARTS) return null;
   return parts;
 }

@@ -780,8 +780,21 @@ async function actionReveal(
   const answers = crop.textbook_problem_answers;
   if (!answers) return json({ ok: false, error: 'no_answer' }, 404);
 
+  // 이미 정답 처리된 문항은 공개해도 유출이 아니다 — 학생이 자기 답과
+  // 답지 표기(form_differs 등)를 비교할 수 있게 허용한다.
+  const { data: record } = await admin
+    .from('student_textbook_answer_records')
+    .select('is_correct')
+    .eq('student_id', student.studentId)
+    .eq('crop_id', cropId)
+    .maybeSingle();
+  const alreadyCorrect = record?.is_correct === true;
+
   // 자동 채점 문항의 정답 유출 방지 — self 모드만 공개
-  if (gradingMode(answers.answer_kind, answerTextOf(crop)) !== 'self') {
+  if (
+    !alreadyCorrect &&
+    gradingMode(answers.answer_kind, answerTextOf(crop)) !== 'self'
+  ) {
     return json({ ok: false, error: 'not_self_mode' }, 403);
   }
 
@@ -818,16 +831,20 @@ async function actionReveal(
     : null;
   const parts = setParts?.map((part) => {
     const mode = gradingMode('subjective', part.text);
+    // 이미 맞힌 문항은 자동 채점 파트의 정답도 공개한다.
+    const revealText = mode === 'self' || alreadyCorrect;
     return {
       key: part.key,
       mode,
-      text: mode === 'self' ? (normalizeMathLinear(part.text) || part.text) : null,
+      text: revealText ? (normalizeMathLinear(part.text) || part.text) : null,
     };
   }) ?? null;
 
   // 자동 채점 파트가 하나라도 있으면 전체 정답(텍스트/렌더)은 감춘다 —
   // 전체 정답에 자동 파트의 답이 포함되어 있기 때문.
-  const hasAutoPart = parts?.some((p) => p.mode === 'auto') ?? false;
+  // (이미 맞힌 문항은 예외 — 전부 공개해도 안전하다.)
+  const hasAutoPart = !alreadyCorrect &&
+    (parts?.some((p) => p.mode === 'auto') ?? false);
 
   return json({
     ok: true,

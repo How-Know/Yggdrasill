@@ -68,5 +68,12 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>STIXTwoMath-Regular.otf</string>
+		<string>STIXTwoText-Italic.otf</string>
+		<string>MyScriptInter-Regular.otf</string>
+		<string>MyScriptInter-Bold.otf</string>
+	</array>
 </dict>
 </plist>

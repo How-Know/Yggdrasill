@@ -6610,36 +6610,71 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   /// 세트형 정답 파트 분리 — 서버 파서(_split_set_answer_parts)와 동일 규칙.
   ///
-  /// (1)부터 1씩 증가하는 마커만 인정하고, 내용이 비는 마커 후보는 내용으로
-  /// 간주해 건너뛴다. 그래서 "(2)번 답이 (1)" 같은 내용 속 번호를 마커로
+  /// (1)부터 1씩 증가하는 마커, 또는 (가)부터 가나다순으로 증가하는 마커만
+  /// 인정하고(첫 마커로 모드 결정), 내용이 비는 마커 후보는 내용으로 간주해
+  /// 건너뛴다. 그래서 "(2)번 답이 (1)" 같은 내용 속 번호를 마커로
   /// 오인하지 않는다. 파싱이 애매하면 빈 목록(세트형 아님)을 반환한다.
+  static const List<String> _setPartKoreanKeys = [
+    '가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타',
+  ];
+
   List<({String label, String value})> _splitSetAnswerParts(String raw) {
     final text = raw.trim();
     if (text.isEmpty) return const [];
-    final markerRe = RegExp(r'^[(（]\s*(\d{1,2})\s*[)）]');
+    final numRe = RegExp(r'^[(（]\s*(\d{1,2})\s*[)）]');
+    final korRe = RegExp(r'^[(（]\s*([가-힣])\s*[)）]');
     final parts = <({String label, String value})>[];
     var i = 0;
     var expected = 1;
     var contentStart = -1;
+    var korean = false; // 첫 마커가 (가)면 한글 시퀀스 모드
+    String labelOf(int n) =>
+        korean ? '(${_setPartKoreanKeys[n - 1]})' : '($n)';
     while (i < text.length) {
-      final m = markerRe.firstMatch(text.substring(i));
-      if (m != null && int.parse(m.group(1)!) == expected) {
+      final head = text.substring(i);
+      var markerLen = 0;
+      if (expected == 1) {
+        final mn = numRe.firstMatch(head);
+        if (mn != null && int.parse(mn.group(1)!) == 1) {
+          markerLen = mn.group(0)!.length;
+          korean = false;
+        } else {
+          final mk = korRe.firstMatch(head);
+          if (mk != null && mk.group(1) == _setPartKoreanKeys[0]) {
+            markerLen = mk.group(0)!.length;
+            korean = true;
+          }
+        }
+      } else if (korean) {
+        final mk = korRe.firstMatch(head);
+        if (mk != null &&
+            expected <= _setPartKoreanKeys.length &&
+            mk.group(1) == _setPartKoreanKeys[expected - 1]) {
+          markerLen = mk.group(0)!.length;
+        }
+      } else {
+        final mn = numRe.firstMatch(head);
+        if (mn != null && int.parse(mn.group(1)!) == expected) {
+          markerLen = mn.group(0)!.length;
+        }
+      }
+      if (markerLen > 0) {
         final prev = i == 0 ? ' ' : text[i - 1];
         if (RegExp(r'\s').hasMatch(prev)) {
           if (expected == 1) {
             if (text.substring(0, i).trim().isEmpty) {
-              contentStart = i + m.group(0)!.length;
+              contentStart = i + markerLen;
               expected = 2;
-              i += m.group(0)!.length;
+              i += markerLen;
               continue;
             }
           } else {
             final value = text.substring(contentStart, i).trim();
             if (value.isNotEmpty) {
-              parts.add((label: '(${expected - 1})', value: value));
-              contentStart = i + m.group(0)!.length;
+              parts.add((label: labelOf(expected - 1), value: value));
+              contentStart = i + markerLen;
               expected += 1;
-              i += m.group(0)!.length;
+              i += markerLen;
               continue;
             }
           }
@@ -6650,7 +6685,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (expected < 3) return const [];
     final last = text.substring(contentStart).trim();
     if (last.isEmpty) return const [];
-    parts.add((label: '(${expected - 1})', value: last));
+    parts.add((label: labelOf(expected - 1), value: last));
     // 개념원리 '확인 체크'류는 (1)~(10)까지 있어 상한 12 (SQL/Edge와 동일).
     if (parts.length > 12) return const [];
     return parts;

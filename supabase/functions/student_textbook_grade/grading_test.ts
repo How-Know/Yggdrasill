@@ -7,6 +7,7 @@ import {
   gradingMode,
   normalizeMathLinear,
   parseQuantity,
+  splitSetAnswerParts,
 } from './grading.ts';
 
 let pass = 0;
@@ -168,6 +169,36 @@ eq(grade('subjective', '제2사분면', '제2사분면').correct, true, '한글:
 eq(grade('subjective', '제2사분면', '2사분면').equivAi, true, '한글: 불일치 → AI');
 eq(grade('subjective', '해는 없다.', '해가 없다').equivAi, true, '한글: 조사 차이 → AI');
 eq(grade('subjective', '유', '유').correct, true, '한글: 한 글자');
+
+// ---------------------------------------------------------------- 세트형 파트
+eq(
+  splitSetAnswerParts('(1) 시속 5 km (2) 12분'),
+  [
+    { key: '(1)', text: '시속 5 km' },
+    { key: '(2)', text: '12분' },
+  ],
+  '세트형: 숫자 마커',
+);
+eq(
+  splitSetAnswerParts('(가) 유한 (나) 무한 (다) 순환'),
+  [
+    { key: '(가)', text: '유한' },
+    { key: '(나)', text: '무한' },
+    { key: '(다)', text: '순환' },
+  ],
+  '세트형: 한글 마커',
+);
+eq(
+  splitSetAnswerParts('(가) 3 (나) (가)보다 큰 수'),
+  [
+    { key: '(가)', text: '3' },
+    { key: '(나)', text: '(가)보다 큰 수' },
+  ],
+  '세트형: 내용 속 (가) 마커 오인 방지',
+);
+eq(splitSetAnswerParts('(가) 5 (2) 3'), null, '세트형: 한글·숫자 혼합은 거부');
+eq(splitSetAnswerParts('(나) 1 (다) 2'), null, '세트형: (가)로 시작하지 않으면 거부');
+eq(splitSetAnswerParts('x=3'), null, '세트형: 일반 답');
 
 // ---------------------------------------------------------------- quantity
 eq(parseQuantity(normalizeMathLinear('240 m'))?.unit, 'm', 'qty: m');

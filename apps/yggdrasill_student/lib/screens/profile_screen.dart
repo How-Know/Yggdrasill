@@ -3,6 +3,8 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_api.dart';
 import '../widgets/student_page_title.dart';
+import 'handwriting_bench_screen.dart';
+import 'myscript_canvas_screen.dart';
 
 /// 내 정보 + 오늘 출결 + 테마/로그아웃.
 class ProfileScreen extends StatefulWidget {
@@ -314,6 +316,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       ),
                                     ),
                                   ],
+                                ),
+                              ),
+                            ),
+                            Divider(
+                              height: 1,
+                              indent: 24,
+                              endIndent: 24,
+                              color: dlg.divider,
+                            ),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton.icon(
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        const HandwritingBenchScreen(),
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: dlg.textSub,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 18),
+                                ),
+                                icon: const Icon(Icons.science_outlined),
+                                label: const Text(
+                                  '필기 인식 벤치마크 (개발용)',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                            ),
+                            Divider(
+                              height: 1,
+                              indent: 24,
+                              endIndent: 24,
+                              color: dlg.divider,
+                            ),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton.icon(
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        const MyScriptCanvasScreen(),
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: dlg.textSub,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 18),
+                                ),
+                                icon: const Icon(Icons.draw_outlined),
+                                label: const Text(
+                                  'MyScript 캔버스 비교 (개발용)',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
                                 ),
                               ),
                             ),

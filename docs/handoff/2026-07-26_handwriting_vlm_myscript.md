@@ -112,6 +112,44 @@ Windows 에서는 iOS 네이티브 빌드가 불가능해 이 부분만 남았�
    에 재생해 정확도를 비교하고, 결과에 따라 기본 엔진 교체 여부 결정.
 5. VLM 폴백이 이미 안전망이므로 MyScript 는 검증 후 천천히 도입해도 된다.
 
+### 진행 상황 (2026-07-26 맥 세션에서 구현 완료)
+
+PoC 스캐폴딩은 전부 끝났고, **MyScript 인증서만 넣으면 즉시 동작**한다.
+
+- **iOS 통합**: iink SDK 4.4.2 를 CocoaPods 로 추가 (4.5부터 SPM 전용이라
+  4.4 사용). 로컬 pod `apps/yggdrasill_student/ios/MyScriptMath/`:
+  - `Classes/MyScriptMathEngine.swift` — 오프스크린 배치 인식 래퍼.
+    Math Recognizer(`engine.createRecognizer(type: "Math")`)에 획을
+    pointer events 로 재생 → `result(mimeType: .laTeX)`.
+  - `Classes/MyCertificate.c` — **플레이스홀더(length 0)**. 런타임에 감지해
+    `certificate_missing` 상태로 우아하게 비활성화됨.
+  - `Resources/recognition-assets/` — math2 인식 리소스 (14MB, 커밋됨).
+  - iink 헤더가 `<iink/...>` 중첩 구조라 동적 프레임워크로는 빌드가 깨짐 →
+    Podfile pre_install 훅에서 두 pod 을 **정적 라이브러리**로 강제.
+- **채널**: `AppDelegate.swift` 에 `yggdrasill.student/myscript_math`
+  (isAvailable / recognize). Dart 쪽 `lib/services/myscript_math.dart`.
+- **변환**: `lib/services/latex_linear.dart` — LaTeX → 앱 선형 표기
+  (`\frac{2}{3}` → `(2)/(3)`, `x^{2}` → `x^2`, `\sqrt{}` → `√()`).
+  VLM 폴백과 동일 규칙. 테스트 `test/latex_linear_test.dart`.
+- **엔진 분기**: `pencil_input_pad.dart` `_recognize()` — MyScript 가용 시
+  1차 인식을 MyScript 가 맡고, 실패하면 기존 ML Kit → VLM 폴백 순서 그대로.
+  스냅샷에 `engine`(myscript|mlkit), `myscript_latex` 필드 추가 (기존 계약
+  필드는 그대로라 매니저 렌더·신고 파이프라인 무영향).
+- **벤치마크**: 학생앱 내 정보 → 「필기 인식 벤치마크 (개발용)」 화면.
+  내 신고 샘플(student_handwriting_samples, RLS로 본인 것 조회)을 불러와
+  같은 획을 ML Kit / MyScript / VLM 에 재생해 나란히 비교.
+- **검증**: 릴리즈 빌드 성공, iPad mini 설치·실행 확인, 학생앱 테스트
+  41건 통과. 인증서가 없는 현재 상태에서는 ML Kit 경로가 기존과 동일하게
+  동작한다.
+
+**남은 일 (사용자 작업 → 이후 아무 세션에서나 이어서)**
+1. [developer.myscript.com](https://developer.myscript.com) 가입 후
+   인증서 발급. 앱 등록 시 번들 ID `com.beleunu.yggdrasillStudent` 지정.
+2. 받은 `MyCertificate.c` 로
+   `apps/yggdrasill_student/ios/MyScriptMath/Classes/MyCertificate.c` 교체.
+3. 재빌드·설치 → 벤치마크 화면 상단 배너가 "사용 가능(ready)"으로 바뀜.
+4. 벤치마크로 신고 샘플 정확도 비교 → MyScript 기본 엔진 확정 여부 결정.
+
 ### 주의점
 - `PencilInputPad` 스냅샷 형식(`canvas_width/height`, `strokes[].x/y/t/p`)은
   신고·매니저 렌더·테스트 픽스처가 모두 공유하는 계약이다. 바꾸면

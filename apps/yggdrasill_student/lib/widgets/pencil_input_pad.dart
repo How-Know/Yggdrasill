@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_digital_ink_recognition/google_mlkit_digital_ink_recognition.dart'
     as mlkit;
 
 import '../services/handwriting_ink_png.dart';
+import '../services/latex_linear.dart';
+import '../services/myscript_math.dart';
 
 /// ML Kit 모델과 인식기를 앱 전체에서 한 번만 준비해 재사용한다.
 ///
@@ -97,6 +99,37 @@ class _DigitalInkService {
   }
 }
 
+/// 벤치마크·디버그용 — 저장된 필기 스냅샷의 획을 ML Kit 로 직접 인식한다.
+/// 스냅샷 payload 의 strokes({x:[],y:[],t:[]}) 형식을 그대로 받는다.
+Future<List<String>> debugRecognizeStrokesWithMlKit({
+  required List<Map<String, dynamic>> strokes,
+  required double canvasWidth,
+  required double canvasHeight,
+}) async {
+  final recognizer =
+      await _DigitalInkService.instance.prepare(onDownloading: () {});
+  final ink = mlkit.Ink();
+  for (final s in strokes) {
+    final xs = (s['x'] as List?) ?? const [];
+    final ys = (s['y'] as List?) ?? const [];
+    final ts = (s['t'] as List?) ?? const [];
+    final stroke = mlkit.Stroke();
+    final n = math.min(xs.length, ys.length);
+    for (var i = 0; i < n; i++) {
+      stroke.points.add(mlkit.StrokePoint(
+        x: (xs[i] as num).toDouble(),
+        y: (ys[i] as num).toDouble(),
+        t: i < ts.length ? (ts[i] as num).toInt() : 0,
+      ));
+    }
+    if (stroke.points.isNotEmpty) ink.strokes.add(stroke);
+  }
+  final context = mlkit.DigitalInkRecognitionContext(
+    writingArea: mlkit.WritingArea(width: canvasWidth, height: canvasHeight),
+  );
+  return _DigitalInkService.instance.recognize(recognizer, ink, context);
+}
+
 /// 애플펜슬(터치) 필기 → ML Kit 온디바이스 인식.
 ///
 /// 획이 멈추면 잠시 후 자동으로 인식해 [onRecognized]로 전달한다.
@@ -152,11 +185,21 @@ class PencilInputPadState extends State<PencilInputPad> {
   /// 포인트별 정규화 압력(0~1). 압력 정보가 없는 기기는 -1.
   final List<List<double>> _strokePressures = <List<double>>[];
   int? _activePointer;
-  /// 동시에 내려온 포인터 수. 2개 이상이면 필기를 막고(두 손가락 스와이프용)
-  /// 진행 중 획을 취소한다.
-  int _pointerCount = 0;
+  /// 현재 획을 그리는 포인터가 스타일러스(애플펜슬)인지.
+  bool _activeIsStylus = false;
+  /// 동시에 내려온 손가락(터치) 포인터 수. 스타일러스 세션이 아닐 때
+  /// 2개 이상이면 필기를 막고(두 손가락 스와이프용) 진행 중 획을 취소한다.
+  int _touchPointerCount = 0;
+
+  /// 앱 세션에서 스타일러스가 한 번이라도 감지되면 true (팜 리젝션).
+  /// 이후 손가락·손바닥 터치는 필기로 받지 않는다. 펜슬이 없는 기기는
+  /// 스타일러스가 감지되지 않으므로 손가락 필기가 그대로 동작한다.
+  static bool _stylusSeen = false;
 
   mlkit.DigitalInkRecognizer? _recognizer;
+  /// MyScript iink 수식 인식 사용 가능 여부 (인증서 있을 때만 true).
+  /// true 면 온디바이스 1차 인식을 ML Kit 대신 MyScript 가 맡는다.
+  bool _myscriptReady = false;
   bool _modelReady = false;
   bool _modelDownloading = false;
   String? _modelError;
@@ -187,6 +230,18 @@ class PencilInputPadState extends State<PencilInputPad> {
       _modelDownloading = false;
       _modelError = null;
     });
+    // MyScript(iink) 가용성 확인 — 인증서가 있으면 즉시 필기 가능 상태가 된다.
+    // ML Kit 준비(모델 다운로드 포함)는 그대로 병행한다 (폴백·벤치마크용).
+    unawaited(
+      MyScriptMath.instance.available().then((ok) {
+        if (!ok || !mounted) return;
+        setState(() {
+          _myscriptReady = true;
+          _modelReady = true;
+          _modelError = null;
+        });
+      }),
+    );
     try {
       final recognizer = await _DigitalInkService.instance.prepare(
         onDownloading: () {
@@ -204,9 +259,12 @@ class PencilInputPadState extends State<PencilInputPad> {
       if (!mounted) return;
       setState(() {
         _modelDownloading = false;
-        _modelError = e is TimeoutException
-            ? '필기 모델 다운로드가 지연되고 있어요.'
-            : '필기 모델을 준비하지 못했어요.';
+        // MyScript 가 준비됐으면 ML Kit 실패는 치명적이지 않다.
+        if (!_myscriptReady) {
+          _modelError = e is TimeoutException
+              ? '필기 모델 다운로드가 지연되고 있어요.'
+              : '필기 모델을 준비하지 못했어요.';
+        }
       });
     }
   }
@@ -280,37 +338,80 @@ class PencilInputPadState extends State<PencilInputPad> {
     });
   }
 
+  /// up/cancel 공통 처리 — 터치 카운트를 줄이고 진행 중 획을 마감한다.
+  void _handlePointerEnd(PointerEvent event) {
+    final isStylus = event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+    if (!isStylus) {
+      _touchPointerCount = (_touchPointerCount - 1).clamp(0, 10).toInt();
+    }
+    if (_activePointer != event.pointer) return;
+    _activePointer = null;
+    _endStroke();
+  }
+
+  /// MyScript 네이티브 브리지에 넘길 획 페이로드.
+  List<Map<String, dynamic>> _myscriptStrokesPayload() => <Map<String, dynamic>>[
+        for (var i = 0; i < _strokes.length; i++)
+          <String, dynamic>{
+            'x': <double>[for (final p in _strokes[i]) p.dx],
+            'y': <double>[for (final p in _strokes[i]) p.dy],
+            't': List<int>.of(_strokeTimes[i]),
+          },
+      ];
+
   Future<void> _recognize() async {
     final recognizer = _recognizer;
-    if (recognizer == null || _strokes.isEmpty || _recognizing) return;
+    if (_strokes.isEmpty || _recognizing) return;
+    if (recognizer == null && !_myscriptReady) return;
     setState(() {
       _recognizing = true;
       _recognitionError = null;
     });
     try {
-      final ink = mlkit.Ink();
-      for (var i = 0; i < _strokes.length; i++) {
-        final stroke = mlkit.Stroke();
-        for (var j = 0; j < _strokes[i].length; j++) {
-          stroke.points.add(mlkit.StrokePoint(
-            x: _strokes[i][j].dx,
-            y: _strokes[i][j].dy,
-            t: _strokeTimes[i][j],
-          ));
+      var candidates = const <String>[];
+      var engine = 'mlkit';
+      String? myscriptLatex;
+
+      // 1차: MyScript iink 수식 인식 (인증서가 있을 때만).
+      if (_myscriptReady) {
+        final latex =
+            await MyScriptMath.instance.recognizeLatex(_myscriptStrokesPayload());
+        final linear = latex == null ? '' : latexToLinear(latex);
+        if (linear.isNotEmpty) {
+          candidates = <String>[linear];
+          engine = 'myscript';
+          myscriptLatex = latex;
         }
-        ink.strokes.add(stroke);
       }
-      final context = mlkit.DigitalInkRecognitionContext(
-        writingArea: mlkit.WritingArea(
-          width: _canvasSize.width,
-          height: _canvasSize.height,
-        ),
-      );
-      final candidates = await _DigitalInkService.instance.recognize(
-        recognizer,
-        ink,
-        context,
-      );
+
+      // MyScript 미사용·실패 시 기존 ML Kit 경로.
+      if (candidates.isEmpty && recognizer != null) {
+        engine = 'mlkit';
+        final ink = mlkit.Ink();
+        for (var i = 0; i < _strokes.length; i++) {
+          final stroke = mlkit.Stroke();
+          for (var j = 0; j < _strokes[i].length; j++) {
+            stroke.points.add(mlkit.StrokePoint(
+              x: _strokes[i][j].dx,
+              y: _strokes[i][j].dy,
+              t: _strokeTimes[i][j],
+            ));
+          }
+          ink.strokes.add(stroke);
+        }
+        final context = mlkit.DigitalInkRecognitionContext(
+          writingArea: mlkit.WritingArea(
+            width: _canvasSize.width,
+            height: _canvasSize.height,
+          ),
+        );
+        candidates = await _DigitalInkService.instance.recognize(
+          recognizer,
+          ink,
+          context,
+        );
+      }
       String selected = '';
       var needFallback = candidates.isEmpty;
       if (candidates.isNotEmpty) {
@@ -339,6 +440,8 @@ class PencilInputPadState extends State<PencilInputPad> {
         candidates,
         recognizedText: selected,
         usedRemoteFallback: usedRemote,
+        engine: engine,
+        myscriptLatex: myscriptLatex,
       );
       if (!mounted || selected.isEmpty) return;
       widget.onRecognized(selected);
@@ -418,11 +521,15 @@ class PencilInputPadState extends State<PencilInputPad> {
     List<String> candidates, {
     String recognizedText = '',
     bool usedRemoteFallback = false,
+    String engine = 'mlkit',
+    String? myscriptLatex,
   }) {
     final snapshot = _buildSnapshot(
       candidates,
       recognizedText: recognizedText,
       usedRemoteFallback: usedRemoteFallback,
+      engine: engine,
+      myscriptLatex: myscriptLatex,
     );
     _lastRecognitionSnapshot = snapshot;
     _strokesDirty = false;
@@ -433,11 +540,16 @@ class PencilInputPadState extends State<PencilInputPad> {
     List<String> candidates, {
     String recognizedText = '',
     bool usedRemoteFallback = false,
+    String engine = 'mlkit',
+    String? myscriptLatex,
   }) {
     return <String, dynamic>{
       'canvas_width': _canvasSize.width,
       'canvas_height': _canvasSize.height,
-      'model': _DigitalInkService.model,
+      'engine': engine,
+      'model':
+          engine == 'myscript' ? 'myscript-math2' : _DigitalInkService.model,
+      if (myscriptLatex != null) 'myscript_latex': myscriptLatex,
       'recognized_candidates': candidates,
       'recognized_text': recognizedText,
       if (usedRemoteFallback) 'used_remote_fallback': true,
@@ -511,14 +623,38 @@ class PencilInputPadState extends State<PencilInputPad> {
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: _modelReady
                       ? (event) {
-                          _pointerCount += 1;
-                          // 두 손가락 이상: 필기 대신 상위 스와이프 제스처에 맡긴다.
-                          if (_pointerCount >= 2) {
+                          final isStylus =
+                              event.kind == PointerDeviceKind.stylus ||
+                                  event.kind ==
+                                      PointerDeviceKind.invertedStylus;
+                          if (isStylus) {
+                            _stylusSeen = true;
+                            // 손가락 획이 그려지던 중이면 버리고 펜슬로 전환.
+                            if (_activePointer != null && !_activeIsStylus) {
+                              _cancelActiveStroke();
+                            }
+                            if (_activePointer != null) return;
+                            _activePointer = event.pointer;
+                            _activeIsStylus = true;
+                            _startStroke(
+                              event.localPosition,
+                              event.timeStamp.inMilliseconds,
+                              _normalizedPressure(event),
+                            );
+                            return;
+                          }
+                          _touchPointerCount += 1;
+                          // 팜 리젝션: 펜슬을 쓰는 세션에서는 손가락·손바닥
+                          // 터치를 필기로 받지 않는다 (진행 중 획도 유지).
+                          if (_stylusSeen) return;
+                          // 두 손가락 이상: 필기 대신 상위 스와이프에 맡긴다.
+                          if (_touchPointerCount >= 2) {
                             _cancelActiveStroke();
                             return;
                           }
                           if (_activePointer != null) return;
                           _activePointer = event.pointer;
+                          _activeIsStylus = false;
                           _startStroke(
                             event.localPosition,
                             event.timeStamp.inMilliseconds,
@@ -528,8 +664,10 @@ class PencilInputPadState extends State<PencilInputPad> {
                       : null,
                   onPointerMove: _modelReady
                       ? (event) {
-                          if (_pointerCount >= 2) return;
                           if (_activePointer != event.pointer) return;
+                          if (!_activeIsStylus && _touchPointerCount >= 2) {
+                            return;
+                          }
                           _extendStroke(
                             event.localPosition,
                             event.timeStamp.inMilliseconds,
@@ -537,24 +675,8 @@ class PencilInputPadState extends State<PencilInputPad> {
                           );
                         }
                       : null,
-                  onPointerUp: _modelReady
-                      ? (event) {
-                          _pointerCount =
-                              (_pointerCount - 1).clamp(0, 10).toInt();
-                          if (_activePointer != event.pointer) return;
-                          _activePointer = null;
-                          if (_pointerCount == 0) _endStroke();
-                        }
-                      : null,
-                  onPointerCancel: _modelReady
-                      ? (event) {
-                          _pointerCount =
-                              (_pointerCount - 1).clamp(0, 10).toInt();
-                          if (_activePointer != event.pointer) return;
-                          _activePointer = null;
-                          if (_pointerCount == 0) _endStroke();
-                        }
-                      : null,
+                  onPointerUp: _modelReady ? _handlePointerEnd : null,
+                  onPointerCancel: _modelReady ? _handlePointerEnd : null,
                   child: Container(
                     decoration: BoxDecoration(
                       color: widget.embedded
@@ -782,10 +904,6 @@ class _StrokePainter extends CustomPainter {
     }
     path.lineTo(right[0].dx, right[0].dy);
     path.close();
-
-    // 양 끝 라운드 캡 — 같은 Path 안에서는 겹쳐도 균일하게 채워진다.
-    path.addOval(Rect.fromCircle(center: centers.first, radius: radii.first));
-    path.addOval(Rect.fromCircle(center: centers.last, radius: radii.last));
     return path;
   }
 
@@ -811,6 +929,10 @@ class _StrokePainter extends CustomPainter {
       final centers = _smoothedCenters(stroke);
       final radii = _smoothedRadii(centers, time, pressure);
       canvas.drawPath(_ribbonPath(centers, radii), paint);
+      // 양 끝 라운드 캡. 리본 Path 에 oval 을 합치면 winding 방향이 반대일 때
+      // nonZero 채우기가 상쇄되어 시작점에 흰 구멍이 생기므로 따로 그린다.
+      canvas.drawCircle(centers.first, radii.first, paint);
+      canvas.drawCircle(centers.last, radii.last, paint);
     }
   }
 
