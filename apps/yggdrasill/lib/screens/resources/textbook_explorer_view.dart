@@ -1164,6 +1164,7 @@ class TextbookExplorerTreePanel extends StatelessWidget {
                 : controller.bookTitle.trim(),
             subtitle: _subtitle(),
             reserveSubtitleSlot: true,
+            titleLeading: _buildTitleLeading(context, style),
             titleTrailing: _buildTitleTrailing(context, style),
             reserveTitleTrailingSlot: true,
             titleTrailingSlotFraction: 0.32,
@@ -1199,6 +1200,21 @@ class TextbookExplorerTreePanel extends StatelessWidget {
       '총 ${controller.data.totalQuestions}문항',
     ];
     return parts.join(' · ');
+  }
+
+  Widget? _buildTitleLeading(
+    BuildContext context,
+    PreviewAcademyPanelStyle style,
+  ) {
+    if (!controller.homeworkSelectionMode || controller.onClose == null) {
+      return null;
+    }
+    return _MiniIconButton(
+      icon: Icons.arrow_back_rounded,
+      tooltip: '교재 선택 취소',
+      color: style.icon,
+      onTap: () => controller.onClose?.call(),
+    );
   }
 
   Widget _buildTitleTrailing(

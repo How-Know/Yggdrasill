@@ -11,6 +11,7 @@ import '../../services/problem_bank_service.dart';
 import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_unit_progress_service.dart';
 import '../../widgets/latex_text_renderer.dart';
+import 'grading_equiv_tab.dart';
 import 'handwriting_review_tab.dart';
 import 'problem_bank_models.dart';
 import 'widgets/figure_compare_dialog.dart';
@@ -331,8 +332,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   @override
   void initState() {
     super.initState();
-    // 업로드 / 분류 / 오류 / 필기
-    _topTabController = TabController(length: 4, vsync: this);
+    // 업로드 / 분류 / 오류 / 필기 / 채점
+    _topTabController = TabController(length: 5, vsync: this);
     _topTabController.addListener(() {
       if (_topTabController.indexIsChanging) return;
       if (_topTabController.index == 1) {
@@ -16385,6 +16386,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       _buildIssueTabBody(),
                       // 필기 탭 본문은 handwriting_review_tab.dart 로 분리.
                       HandwritingReviewTab(
+                        academyId: _academyId ?? '',
+                        service: _service,
+                      ),
+                      // 채점 탭 본문은 grading_equiv_tab.dart 로 분리.
+                      GradingEquivTab(
                         academyId: _academyId ?? '',
                         service: _service,
                       ),

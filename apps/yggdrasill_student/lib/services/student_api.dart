@@ -154,6 +154,7 @@ class HomeworkGroup {
 
 class HomeworkChild {
   const HomeworkChild({
+    required this.itemId,
     required this.title,
     required this.page,
     required this.count,
@@ -161,6 +162,7 @@ class HomeworkChild {
     required this.phase,
   });
 
+  final String itemId;
   final String title;
   final String page;
   final String count;
@@ -169,11 +171,93 @@ class HomeworkChild {
 
   static HomeworkChild fromRow(Map<String, dynamic> row) {
     return HomeworkChild(
+      itemId: (row['item_id'] as String?)?.trim() ?? '',
       title: (row['title'] as String?) ?? '',
       page: (row['page'] as String?) ?? '',
       count: '${row['count'] ?? ''}',
       memo: (row['memo'] as String?) ?? '',
       phase: (row['phase'] as num?)?.toInt() ?? 1,
+    );
+  }
+}
+
+/// 과제로 배정된 개별 문항 (마이그레이션 교재 과제에만 존재).
+class HomeworkProblem {
+  const HomeworkProblem({
+    required this.problemId,
+    required this.itemId,
+    required this.itemTitle,
+    required this.cropId,
+    required this.bookId,
+    required this.gradeLabel,
+    required this.problemNumber,
+    required this.rawPage,
+    required this.displayPage,
+    required this.sourceStage,
+    required this.passed,
+    required this.attemptCount,
+  });
+
+  final String problemId;
+  final String itemId;
+  final String itemTitle;
+  final String cropId;
+  final String bookId;
+  final String gradeLabel;
+  final String problemNumber;
+  final int? rawPage;
+  final int? displayPage;
+  final String sourceStage;
+  final bool passed;
+  final int attemptCount;
+
+  static HomeworkProblem fromRow(Map<String, dynamic> row) {
+    return HomeworkProblem(
+      problemId: (row['homework_item_problem_id'] as String?) ?? '',
+      itemId: (row['homework_item_id'] as String?) ?? '',
+      itemTitle: (row['item_title'] as String?) ?? '',
+      cropId: (row['crop_id'] as String?) ?? '',
+      bookId: (row['book_id'] as String?) ?? '',
+      gradeLabel: (row['grade_label'] as String?) ?? '',
+      problemNumber: (row['problem_number'] as String?) ?? '',
+      rawPage: (row['raw_page'] as num?)?.toInt(),
+      displayPage: (row['display_page'] as num?)?.toInt(),
+      sourceStage: (row['source_stage'] as String?) ?? 'original',
+      passed: (row['passed'] as bool?) ?? false,
+      attemptCount: (row['attempt_count'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// 과제 그룹의 문항 통과 현황.
+class HomeworkMastery {
+  const HomeworkMastery({
+    required this.problemBased,
+    required this.total,
+    required this.passed,
+    required this.mastered,
+  });
+
+  final bool problemBased;
+  final int total;
+  final int passed;
+  final bool mastered;
+
+  int get remaining => (total - passed).clamp(0, total);
+
+  static const HomeworkMastery none = HomeworkMastery(
+    problemBased: false,
+    total: 0,
+    passed: 0,
+    mastered: false,
+  );
+
+  static HomeworkMastery fromMap(Map<String, dynamic> row) {
+    return HomeworkMastery(
+      problemBased: (row['problem_based'] as bool?) ?? false,
+      total: (row['total'] as num?)?.toInt() ?? 0,
+      passed: (row['passed'] as num?)?.toInt() ?? 0,
+      mastered: (row['mastered'] as bool?) ?? false,
     );
   }
 }
@@ -496,6 +580,39 @@ class StudentApi {
     }
     all.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
     return all;
+  }
+
+  /// 과제 그룹에 배정된 문항 목록. legacy 과제면 빈 목록.
+  Future<List<HomeworkProblem>> listHomeworkProblems(String groupId) async {
+    final rows = await _client.rpc(
+      'student_list_homework_problems_v1',
+      params: {'p_group_id': groupId},
+    ) as List<dynamic>;
+    return rows
+        .whereType<Map<String, dynamic>>()
+        .map(HomeworkProblem.fromRow)
+        .toList(growable: false);
+  }
+
+  /// 문항 통과 현황 요약.
+  Future<HomeworkMastery> homeworkMastery(String groupId) async {
+    final result = await _client.rpc(
+      'student_homework_group_mastery_v1',
+      params: {'p_group_id': groupId},
+    );
+    if (result is! Map<String, dynamic>) return HomeworkMastery.none;
+    return HomeworkMastery.fromMap(result);
+  }
+
+  /// 배정 문항을 전부 맞혔으면 과제를 통과 처리한다.
+  /// 조건을 못 채우면 서버가 아무것도 바꾸지 않고 사유만 돌려준다.
+  Future<Map<String, dynamic>> completeHomeworkIfMastered(
+      String groupId) async {
+    final result = await _client.rpc(
+      'student_complete_homework_group_if_mastered',
+      params: {'p_group_id': groupId},
+    );
+    return (result as Map<String, dynamic>?) ?? const {'ok': false};
   }
 
   Future<TodayAttendance> todayAttendance() async {

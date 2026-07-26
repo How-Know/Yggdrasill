@@ -197,7 +197,7 @@ class LearningProblemExportSettings {
       templateLabel: '\uACFC\uC81C\uD615',
       paperLabel: 'A4',
       questionModeLabel: '\uAE30\uBCF8',
-      layoutColumnLabel: '1\uB2E8',
+      layoutColumnLabel: '2\uB2E8',
       maxQuestionsPerPageLabel: '4',
       fontFamilyLabel: 'KoPubWorldBatangPro',
       fontSizeLabel: '\uAE30\uBCF8',

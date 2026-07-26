@@ -14,6 +14,9 @@
 //   self_mark { book_id, grade_label, crop_id, correct, answer? }
 //             세트형 파트 O/X: { crop_id, part_marks: [{key, correct}] }
 //
+// grade / self_mark 에 homework_group_id 를 함께 보내면 배정 문항으로 인식해
+// learning_exposures / learning_attempts 에도 기록한다 (마스터리 루프 판정 근거).
+//
 // 세트형 문항은 crop당 기록 하나를 유지하되 part_results에 파트별 결과를
 // 누적하고, is_correct는 서버가 "모든 파트 정답"으로 계산한다.
 //
@@ -24,6 +27,7 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { createAdminClient } from '../_shared/supabase.ts';
 import {
   compareAnswers,
+  type GradeOutcome,
   gradingMode,
   normalizeMathLinear,
   type SetAnswerPart,
@@ -239,6 +243,66 @@ async function judgeEquivalence(
 }
 
 // ---------------------------------------------------------------------------
+// 동치 판정 로그 — 매니저 「채점」탭 검토 + 자체 채점 AI 학습 데이터 축적
+// ---------------------------------------------------------------------------
+
+/// 동치 판정이 개입한 채점만 기록한다 (완전 일치·단순 오답은 제외).
+/// 같은 학생이 같은 답을 다시 제출하면 unique 제약으로 중복 기록되지 않는다.
+async function logEquivCase(
+  admin: Admin,
+  args: {
+    academyId: string;
+    studentId: string;
+    bookId: string;
+    gradeLabel: string;
+    cropId: string;
+    partKey: string;
+    expected: string;
+    submitted: string;
+    out: GradeOutcome;
+    flags: string[];
+    finalCorrect: boolean;
+    aiEquivalent: boolean | null;
+    aiUnitSpecified: boolean | null;
+  },
+) {
+  const involved = args.out.needsEquivAi || args.out.needsUnitAi ||
+    args.out.flags.includes('form_differs');
+  if (!involved) return;
+  const method = args.out.needsEquivAi
+    ? 'ai_equiv'
+    : args.out.needsUnitAi
+    ? 'ai_unit'
+    : 'deterministic';
+  try {
+    await admin.from('student_grading_equiv_logs').upsert(
+      {
+        academy_id: args.academyId,
+        student_id: args.studentId,
+        book_id: args.bookId,
+        grade_label: args.gradeLabel,
+        crop_id: args.cropId,
+        part_key: args.partKey,
+        expected_answer: args.expected,
+        submitted_answer: args.submitted,
+        method,
+        flags: args.flags,
+        deterministic_correct: args.out.correct,
+        ai_equivalent: args.aiEquivalent,
+        ai_unit_specified: args.aiUnitSpecified,
+        final_correct: args.finalCorrect,
+      },
+      {
+        onConflict: 'student_id,crop_id,part_key,submitted_answer',
+        ignoreDuplicates: true,
+      },
+    );
+  } catch (_) {
+    // 로그 실패가 채점을 막지 않는다.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 본인 확인
 // ---------------------------------------------------------------------------
 async function resolveStudent(req: Request, admin: Admin) {
@@ -275,6 +339,8 @@ async function upsertRecord(
     gradedBy: 'auto' | 'self';
     flags: string[];
     partResults?: PartResult[];
+    /** 과제 스코프로 풀고 있으면 전달. 마스터리 통과 판정의 근거가 된다. */
+    homeworkGroupId?: string | null;
   },
 ) {
   const { data: existing } = await admin
@@ -307,6 +373,42 @@ async function upsertRecord(
     row,
     { onConflict: 'student_id,crop_id' },
   );
+
+  await logHomeworkAttempt(admin, args);
+}
+
+// student_textbook_answer_records 는 (student_id, crop_id) 유일키라 과제·회차를
+// 구분하지 못한다. 마스터리 루프는 append-only 인 learning_attempts 를 근거로
+// 판정하므로, 과제 스코프 풀이면 시도를 따로 남긴다.
+async function logHomeworkAttempt(
+  admin: Admin,
+  args: {
+    studentId: string;
+    cropId: string;
+    answer: string | null;
+    correct: boolean;
+    gradedBy: 'auto' | 'self';
+    homeworkGroupId?: string | null;
+  },
+) {
+  const groupId = (args.homeworkGroupId ?? '').trim();
+  if (!groupId) return;
+  try {
+    await admin.rpc('learning_log_homework_attempt', {
+      p_student_id: args.studentId,
+      p_homework_group_id: groupId,
+      p_crop_id: args.cropId,
+      p_result: args.correct ? 'correct' : 'wrong',
+      p_scored_by: args.gradedBy,
+      p_answer_text: args.answer,
+      p_duration_ms: null,
+      // 도움 여부는 아직 관측 수단이 없다. 워치 연동 후에 채운다.
+      p_assist_level: args.gradedBy === 'auto' ? 'none' : 'unknown',
+      p_meta: {},
+    });
+  } catch (_) {
+    // 학습 기록 실패가 채점 자체를 막지는 않는다.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +539,9 @@ async function actionGrade(
 ) {
   const bookId = String(body.book_id ?? '');
   const gradeLabel = String(body.grade_label ?? '');
+  const homeworkGroupId = body.homework_group_id == null
+    ? null
+    : String(body.homework_group_id);
   const items = Array.isArray(body.items) ? body.items : [];
   if (!bookId || !gradeLabel || items.length === 0) {
     return json({ ok: false, error: 'invalid_request' }, 400);
@@ -496,31 +601,48 @@ async function actionGrade(
         const out = compareAnswers('subjective', partDef.text, partAnswer);
         let partCorrect = out.correct;
         let partFlags = [...out.flags];
+        let aiUnitSpecified: boolean | null = null;
+        let aiEquivalent: boolean | null = null;
         if (out.needsUnitAi) {
-          let specified: boolean | null = null;
           try {
-            specified = await judgeUnitSpecified(admin, crop);
+            aiUnitSpecified = await judgeUnitSpecified(admin, crop);
           } catch (_) {
-            specified = null;
+            aiUnitSpecified = null;
           }
-          if (specified !== false) partFlags.push('unit_caution');
+          if (aiUnitSpecified !== false) partFlags.push('unit_caution');
         }
         if (out.needsEquivAi) {
           try {
-            const eq = await judgeEquivalence(
+            aiEquivalent = await judgeEquivalence(
               admin,
               crop,
               partDef.text,
               partAnswer,
             );
-            if (eq === true) {
+            if (aiEquivalent === true) {
               partCorrect = true;
               partFlags = partFlags.filter((f) => f !== 'form_differs');
             }
           } catch (_) {
             // AI 실패 시 결정적 결과(오답) 유지
+            aiEquivalent = null;
           }
         }
+        await logEquivCase(admin, {
+          academyId: student.academyId,
+          studentId: student.studentId,
+          bookId,
+          gradeLabel,
+          cropId,
+          partKey: key,
+          expected: partDef.text,
+          submitted: partAnswer,
+          out,
+          flags: partFlags,
+          finalCorrect: partCorrect,
+          aiEquivalent,
+          aiUnitSpecified,
+        });
         updates.push({
           key,
           answer: partAnswer,
@@ -552,6 +674,7 @@ async function actionGrade(
         gradedBy: 'auto',
         flags: [],
         partResults: merged,
+        homeworkGroupId,
       });
       results.push({
         crop_id: cropId,
@@ -573,30 +696,48 @@ async function actionGrade(
     const out = compareAnswers(kind, correctAnswer, answer);
     let correct = out.correct;
     let flags = [...out.flags];
+    let aiUnitSpecified: boolean | null = null;
+    let aiEquivalent: boolean | null = null;
 
     if (out.needsUnitAi) {
       // 단위 환산 동치 — 발문이 단위를 지정했으면 '단위 주의'만 표시 (정답 유지)
-      let specified: boolean | null = null;
       try {
-        specified = await judgeUnitSpecified(admin, crop);
+        aiUnitSpecified = await judgeUnitSpecified(admin, crop);
       } catch (_) {
-        specified = null;
+        aiUnitSpecified = null;
       }
       // AI 실패/미설정 시에도 정답 + 주의 표시 (안전 기본값)
-      if (specified !== false) flags.push('unit_caution');
+      if (aiUnitSpecified !== false) flags.push('unit_caution');
     }
 
     if (out.needsEquivAi) {
       try {
-        const eq = await judgeEquivalence(admin, crop, correctAnswer, answer);
-        if (eq === true) {
+        aiEquivalent = await judgeEquivalence(admin, crop, correctAnswer, answer);
+        if (aiEquivalent === true) {
           correct = true;
           flags = flags.filter((f) => f !== 'form_differs');
         }
       } catch (_) {
         // AI 실패 시 결정적 결과(오답) 유지
+        aiEquivalent = null;
       }
     }
+
+    await logEquivCase(admin, {
+      academyId: student.academyId,
+      studentId: student.studentId,
+      bookId,
+      gradeLabel,
+      cropId,
+      partKey: '',
+      expected: correctAnswer,
+      submitted: answer,
+      out,
+      flags,
+      finalCorrect: correct,
+      aiEquivalent,
+      aiUnitSpecified,
+    });
 
     await upsertRecord(admin, {
       academyId: student.academyId,
@@ -608,6 +749,7 @@ async function actionGrade(
       correct,
       gradedBy: 'auto',
       flags,
+      homeworkGroupId,
     });
 
     if (correct) correctCount += 1;
@@ -707,6 +849,9 @@ async function actionSelfMark(
   const cropId = String(body.crop_id ?? '');
   const correct = body.correct === true;
   const answer = body.answer == null ? null : String(body.answer);
+  const homeworkGroupId = body.homework_group_id == null
+    ? null
+    : String(body.homework_group_id);
   if (!bookId || !gradeLabel || !cropId) {
     return json({ ok: false, error: 'invalid_request' }, 400);
   }
@@ -768,6 +913,7 @@ async function actionSelfMark(
       gradedBy: 'self',
       flags: [],
       partResults: merged,
+      homeworkGroupId,
     });
     return json({ ok: true, correct: overall, part_results: merged });
   }
@@ -782,6 +928,7 @@ async function actionSelfMark(
     correct,
     gradedBy: 'self',
     flags: [],
+    homeworkGroupId,
   });
 
   return json({ ok: true, correct });

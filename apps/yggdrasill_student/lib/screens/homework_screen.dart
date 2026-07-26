@@ -8,6 +8,7 @@ import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../widgets/student_page_title.dart';
+import 'textbook_solve_screen.dart';
 
 /// 과제 그룹 목록 + 상세(수행/제출) 화면.
 ///
@@ -767,15 +768,114 @@ class _EqualizerBar extends StatelessWidget {
   }
 }
 
-/// 상세 시트: 자식 과제 목록.
-class _HomeworkDetailPanel extends StatelessWidget {
+/// 상세 시트: 자식 과제 목록 + (마이그레이션 교재 과제면) 문항 풀기 진입.
+class _HomeworkDetailPanel extends StatefulWidget {
   const _HomeworkDetailPanel({required this.group});
 
   final HomeworkGroup group;
 
   @override
+  State<_HomeworkDetailPanel> createState() => _HomeworkDetailPanelState();
+}
+
+class _HomeworkDetailPanelState extends State<_HomeworkDetailPanel> {
+  HomeworkGroup get group => widget.group;
+
+  HomeworkMastery? _mastery;
+  bool _launching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadMastery());
+  }
+
+  Future<void> _loadMastery() async {
+    try {
+      final mastery =
+          await StudentApi.instance.homeworkMastery(group.groupId);
+      if (mounted) setState(() => _mastery = mastery);
+    } catch (_) {
+      if (mounted) setState(() => _mastery = HomeworkMastery.none);
+    }
+  }
+
+  /// 배정 문항만 풀도록 범위를 좁혀 풀이 화면을 연다.
+  Future<void> _openSolve() async {
+    if (_launching) return;
+    setState(() => _launching = true);
+    try {
+      final problems =
+          await StudentApi.instance.listHomeworkProblems(group.groupId);
+      if (!mounted) return;
+      if (problems.isEmpty) {
+        TopGlassSnackBar.show(
+          context,
+          message: '이 과제에는 풀 수 있는 문항 정보가 없어요.',
+          icon: Icons.info_outline_rounded,
+        );
+        return;
+      }
+
+      final bookId = problems.first.bookId;
+      final gradeLabel = problems.first.gradeLabel;
+      final books = await TextbookApi.instance.listTextbooks();
+      if (!mounted) return;
+      StudentTextbook? found;
+      for (final b in books) {
+        if (b.bookId == bookId && b.gradeLabel == gradeLabel) {
+          found = b;
+          break;
+        }
+      }
+      final book = found;
+      if (book == null) {
+        TopGlassSnackBar.show(
+          context,
+          message: '교재를 찾지 못했어요.',
+          icon: Icons.error_outline_rounded,
+        );
+        return;
+      }
+
+      // 이미 통과한 문항은 다시 내지 않는다 (오답만 재출제).
+      final pending = problems.where((p) => !p.passed).toList(growable: false);
+      final target = pending.isEmpty ? problems : pending;
+
+      final scope = HomeworkSolveScope(
+        groupId: group.groupId,
+        title: group.title,
+        cropIds: {for (final p in target) p.cropId},
+        rawPages: {
+          for (final p in target)
+            if (p.rawPage != null) p.rawPage!,
+        },
+      );
+
+      await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => TextbookSolveScreen(book: book, homework: scope),
+        ),
+      );
+      if (mounted) unawaited(_loadMastery());
+    } catch (_) {
+      if (mounted) {
+        TopGlassSnackBar.show(
+          context,
+          message: '문항을 불러오지 못했어요.',
+          icon: Icons.wifi_off_rounded,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _launching = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final mastery = _mastery;
+    final problemBased = mastery?.problemBased ?? false;
     return YggGroupedCard(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
       child: Column(
@@ -796,6 +896,45 @@ class _HomeworkDetailPanel extends StatelessWidget {
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.hintColor,
               ),
+            ),
+          ],
+          if (problemBased) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(
+                  mastery!.mastered
+                      ? Icons.verified_rounded
+                      : Icons.checklist_rounded,
+                  size: 18,
+                  color: mastery.mastered
+                      ? YggGlassTokens.confirmActionColor
+                      : theme.hintColor,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '문항 ${mastery.passed}/${mastery.total} 통과',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: mastery.mastered
+                        ? YggGlassTokens.confirmActionColor
+                        : theme.hintColor,
+                  ),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed:
+                      _launching || mastery.mastered ? null : _openSolve,
+                  icon: _launching
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.edit_note_rounded, size: 18),
+                  label: Text(mastery.mastered ? '통과' : '풀기'),
+                ),
+              ],
             ),
           ],
           const SizedBox(height: 16),

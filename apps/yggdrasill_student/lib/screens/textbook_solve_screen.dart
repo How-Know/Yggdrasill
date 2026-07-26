@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show base64Encode;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,8 @@ import 'package:http/http.dart' as http;
 import 'package:pdfrx/pdfrx.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
+import '../services/handwriting_candidates.dart';
+import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
@@ -29,12 +32,42 @@ const double _kPageSheetShadowBleed = 40;
 /// 연습장 위쪽 라운드 그림자가 잘리지 않도록 확보하는 여백.
 const double _kScratchTopShadow = 20;
 
+/// 과제로 배정된 문항만 풀도록 범위를 좁히는 컨텍스트.
+/// null 이면 교재 풀기 탭에서 들어온 자유 풀이다.
+class HomeworkSolveScope {
+  const HomeworkSolveScope({
+    required this.groupId,
+    required this.title,
+    required this.cropIds,
+    required this.rawPages,
+  });
+
+  final String groupId;
+  final String title;
+
+  /// 배정된 문항 crop id. 페이지에 다른 문항이 섞여 있어도 이것만 보여준다.
+  final Set<String> cropIds;
+
+  /// 배정 문항이 있는 페이지. 이 페이지들 사이에서만 이동한다.
+  final Set<int> rawPages;
+
+  bool get isEmpty => cropIds.isEmpty;
+}
+
 /// 교재 풀이 화면.
 /// 좌: 단원트리(대→중→소→페이지), 우: 페이지 문항 + 정답 입력 + 일괄 채점.
+///
+/// [homework] 가 주어지면 과제 스코프로 동작한다. 배정 문항만 노출하고,
+/// 채점 결과를 과제에 연결해 기록하며, 전부 맞히면 과제를 통과시킨다.
 class TextbookSolveScreen extends StatefulWidget {
-  const TextbookSolveScreen({super.key, required this.book});
+  const TextbookSolveScreen({
+    super.key,
+    required this.book,
+    this.homework,
+  });
 
   final StudentTextbook book;
+  final HomeworkSolveScope? homework;
 
   @override
   State<TextbookSolveScreen> createState() => _TextbookSolveScreenState();
@@ -70,6 +103,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
 
   /// crop_id → 신고 상태 (open: 검토 중, accepted: 신고 인정, rejected: 반려)
   final Map<String, String> _reportStatuses = <String, String>{};
+
+  /// crop_id → 마지막 필기 인식 스냅샷. 입력 모드 전환이나 문항 이동으로
+  /// 필기 패드가 언마운트된 뒤에도 신고(필기 인식 불량)에 첨부할 수 있다.
+  final Map<String, Map<String, dynamic>> _handwritingSnapshots =
+      <String, Map<String, dynamic>>{};
 
   /// 펼쳐진 세트형 문항 카드
   final Set<String> _expandedSetCrops = <String>{};
@@ -272,10 +310,15 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         _expandTreeThroughBigs();
       });
       if (selectLastPage) {
-        // 첫 진입: 이어서 풀던 페이지 → 없거나 못 찾으면 첫 페이지.
-        final resumed = widget.book.lastRawPage != null &&
-            _selectPageByRawPage(widget.book.lastRawPage!);
-        if (!resumed) _selectFirstPage();
+        if (widget.homework != null) {
+          // 과제 스코프: 배정된 첫 페이지부터. 이어풀기는 적용하지 않는다.
+          _selectFirstPage();
+        } else {
+          // 첫 진입: 이어서 풀던 페이지 → 없거나 못 찾으면 첫 페이지.
+          final resumed = widget.book.lastRawPage != null &&
+              _selectPageByRawPage(widget.book.lastRawPage!);
+          if (!resumed) _selectFirstPage();
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -318,9 +361,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   /// 트리 순서를 따른 전체 페이지 목록 (이전/다음 페이지 이동용).
+  /// 과제 스코프면 배정 문항이 있는 페이지만 남긴다.
   List<({TbPageStat page, String pathLabel})> _flattenedPages() {
     final tree = _tree;
     if (tree == null) return const [];
+    final scope = widget.homework;
     final out = <({TbPageStat page, String pathLabel})>[];
     for (final big in tree.bigUnits) {
       for (final mid in big.mids) {
@@ -328,12 +373,24 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           final pathLabel =
               '${mid.name} · ${small.name.isEmpty ? small.subKey : small.name}';
           for (final page in small.pages) {
+            if (scope != null && !scope.rawPages.contains(page.rawPage)) {
+              continue;
+            }
             out.add((page: page, pathLabel: pathLabel));
           }
         }
       }
     }
     return out;
+  }
+
+  /// 과제 스코프면 배정된 문항만 남긴다.
+  List<PageProblem> _scopedProblems(List<PageProblem> problems) {
+    final scope = widget.homework;
+    if (scope == null) return problems;
+    return problems
+        .where((p) => scope.cropIds.contains(p.cropId))
+        .toList(growable: false);
   }
 
   void _expandTreeForPage(TbPageStat page) {
@@ -435,12 +492,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _treeOpen = false;
     });
     try {
-      final problems = await TextbookApi.instance.pageProblems(
+      final loaded = await TextbookApi.instance.pageProblems(
         bookId: widget.book.bookId,
         gradeLabel: widget.book.gradeLabel,
         rawPage: page.rawPage,
       );
       if (!mounted) return;
+      final problems = _scopedProblems(loaded);
       setState(() {
         _problems = problems;
         _loadingProblems = false;
@@ -587,6 +645,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         gradeLabel: widget.book.gradeLabel,
         answersByCropId: toSubmit,
         partAnswersByCropId: partSubmit,
+        homeworkGroupId: widget.homework?.groupId,
       );
       if (!mounted) return;
       setState(() {
@@ -626,6 +685,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       );
       // 트리의 페이지 현황 갱신
       _loadTree();
+      await _maybeCompleteHomework();
     } catch (_) {
       if (mounted) {
         TopGlassSnackBar.show(
@@ -636,6 +696,40 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       }
     } finally {
       if (mounted) setState(() => _grading = false);
+    }
+  }
+
+  // ----------------------------------------------------------- 과제 통과 판정
+
+  /// 과제 스코프에서 배정 문항을 전부 맞혔으면 서버에 통과를 요청한다.
+  /// 조건 판정은 전적으로 서버가 한다 (클라이언트는 신뢰하지 않는다).
+  Future<void> _maybeCompleteHomework() async {
+    final scope = widget.homework;
+    if (scope == null) return;
+    try {
+      final result =
+          await StudentApi.instance.completeHomeworkIfMastered(scope.groupId);
+      if (!mounted) return;
+      if (result['ok'] != true) {
+        final remaining = (result['remaining'] as num?)?.toInt() ?? 0;
+        if (remaining > 0) {
+          TopGlassSnackBar.show(
+            context,
+            message: '$remaining문제 남았어요.',
+            icon: Icons.flag_outlined,
+          );
+        }
+        return;
+      }
+      TopGlassSnackBar.show(
+        context,
+        message: '과제를 모두 맞혔어요! 통과 처리했어요.',
+        icon: Icons.verified_rounded,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (_) {
+      // 통과 판정 실패가 채점 결과를 되돌리지는 않는다. 다음 채점 때 재시도된다.
     }
   }
 
@@ -677,6 +771,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         cropId: problem.cropId,
         correct: marked,
         answer: _answers[problem.cropId],
+        homeworkGroupId: widget.homework?.groupId,
       );
       if (!mounted) return;
       setState(() {
@@ -687,6 +782,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             (_attemptCounts[problem.cropId] ?? 0) + 1;
       });
       _loadTree();
+      await _maybeCompleteHomework();
     } catch (_) {
       if (mounted) {
         TopGlassSnackBar.show(
@@ -747,6 +843,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         cropId: problem.cropId,
         correct: marked,
         partMarks: {partKey: marked},
+        homeworkGroupId: widget.homework?.groupId,
       );
       if (!mounted) return;
       setState(() {
@@ -762,6 +859,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             (_attemptCounts[problem.cropId] ?? 0) + 1;
       });
       _loadTree();
+      await _maybeCompleteHomework();
     } catch (_) {
       if (mounted) {
         TopGlassSnackBar.show(
@@ -1334,11 +1432,17 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     if (input == null || !mounted) return;
 
     // 「필기 인식이 잘 안돼요」 신고면 필기 원본 데이터를 함께 첨부한다.
-    // 필기 패드는 선택된 문항의 입력이므로 다른 문항 신고에는 붙이지 않는다.
+    // 지금 패드에 있는 필기를 우선 쓰고, 모드 전환·문항 이동으로 패드가
+    // 사라졌으면 문항별로 보관해 둔 마지막 인식 스냅샷을 쓴다.
+    final wantsHandwriting =
+        input.issueTypes.contains('handwriting_recognition');
     Map<String, dynamic>? handwriting;
-    if (input.issueTypes.contains('handwriting_recognition') &&
-        problem.cropId == _selectedCropId) {
-      final payload = _pencilKey.currentState?.handwritingReportPayload;
+    if (wantsHandwriting) {
+      Map<String, dynamic>? payload;
+      if (problem.cropId == _selectedCropId) {
+        payload = _pencilKey.currentState?.handwritingReportPayload;
+      }
+      payload ??= _handwritingSnapshots[problem.cropId];
       if (payload != null) {
         final answerKey = _answerKeyOf(
           problem.cropId,
@@ -1346,14 +1450,28 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         );
         final candidates =
             (payload['recognized_candidates'] as List?) ?? const [];
+        final recognizedText = '${payload['recognized_text'] ?? ''}'.trim();
         handwriting = <String, dynamic>{
           ...payload,
-          'recognized_text':
-              candidates.isEmpty ? '' : candidates.first.toString(),
+          'recognized_text': recognizedText.isNotEmpty
+              ? recognizedText
+              : (candidates.isEmpty ? '' : candidates.first.toString()),
           'submitted_answer': _answers[answerKey] ?? '',
-          'input_mode': _inputMode.name,
+          'input_mode': '${payload['input_mode'] ?? _inputMode.name}',
         };
       }
+    }
+
+    // 필기 단독 신고인데 보낼 필기 데이터가 없으면 서버에 빈 신고를
+    // 보내는 대신 바로 안내한다.
+    final handwritingOnly = wantsHandwriting && input.issueTypes.length == 1;
+    if (handwritingOnly && handwriting == null) {
+      TopGlassSnackBar.show(
+        context,
+        message: '보낼 필기 데이터가 없어요. 정답 칸에 필기한 뒤 다시 신고해 주세요.',
+        icon: Icons.draw_rounded,
+      );
+      return;
     }
 
     final Map<String, dynamic> result;
@@ -2921,6 +3039,24 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                       showControls: false,
                       showEmptyHint: false,
                       embedded: true,
+                      // null 반환(답 형태 후보 없음) 시 패드가 VLM 폴백을 탄다.
+                      candidateSelector: (candidates) =>
+                          pickPlausibleHandwritingCandidate(
+                        candidates,
+                        answerKind: problem.answerKind,
+                      ),
+                      remoteRecognizer: (png) =>
+                          TextbookApi.instance.recognizeHandwriting(
+                        imageBase64: base64Encode(png),
+                        answerKind: problem.answerKind,
+                      ),
+                      onSnapshot: (payload) {
+                        _handwritingSnapshots[problem.cropId] =
+                            <String, dynamic>{
+                          ...payload,
+                          'input_mode': _InputMode.pencil.name,
+                        };
+                      },
                       onRecognized: (text) => _setAnswer(answerKey, text),
                     ),
                   ),

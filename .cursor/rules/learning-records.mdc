@@ -11,13 +11,18 @@ solve-time measurement, reliability scoring, or the recommendation engine,
 **read `docs/architecture/learning-records.md` first.** It records decisions made
 on 2026-07-25 that are not obvious from the schema alone.
 
-Current state: schema, write RPCs, and analytics views exist on the server.
-**Nothing writes to them yet — the iPad student app is the trigger.**
+Current state: schema, write RPCs, and analytics views exist on the server. The
+first writer is live — the student app's homework-scoped solving path records
+attempts through `learning_log_homework_attempt`. Everything else (daily tests,
+monthly exams, free practice, paper range timings) still has no writer.
 
 ## Non-negotiables
 
-1. Event tables are append-only. A retry is a new `learning_attempts` row with a
-   higher `attempt_no`, never an UPDATE of the previous result.
+1. Event tables are append-only: a retry is a new `learning_attempts` row with a
+   higher `attempt_no`. **Grading is the exception** — finalizing an already
+   logged attempt (self-check to teacher-confirmed) or back-filling
+   `assist_level` from the watch updates the same row. Retry = new row,
+   grading = same row.
 2. Never let the client compute `attempt_no`, `exposure_seq`, or
    `reliability_score`. Server triggers own those columns.
 3. Never collapse the reliability axes (`supervision`, `answer_access`,
@@ -32,6 +37,19 @@ Current state: schema, write RPCs, and analytics views exist on the server.
    `derived_from_range` for range-split estimates.
 7. Never treat `FREEPLAY` (self-paced) data as ability evidence — self-selection
    bias. Volume metrics only.
+8. Mastery loop (page-bundle homework repeated until every problem passes) has
+   settled rules in §9 of the doc: migrated textbooks only, wrong-only reissue by
+   default, no auto-waive, home self-check is provisional, and `skipped` must
+   stay distinct from `wrong` in the raw data.
+9. A mastery-loop assignment passes through exactly two paths: the teacher's
+   complete button in grading mode, or `student_complete_homework_group_if_mastered`
+   when every assigned problem has a correct attempt. Do not add a third.
+10. Judge mastery from `learning_attempts` only. `student_textbook_answer_records`
+    is keyed `(student_id, crop_id)` and cannot distinguish assignments or cycles —
+    it is a latest-state cache, not evidence.
+11. Keep auto-graded and student-self-marked attempts in **separate sessions**.
+    Reliability is computed per session, so mixing them drags the auto-graded
+    records down and inflates the self-marked ones.
 
 ## Before adding a new test type
 

@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_digital_ink_recognition/google_mlkit_digital_ink_recognition.dart'
     as mlkit;
+
+import '../services/handwriting_ink_png.dart';
 
 /// ML Kit 모델과 인식기를 앱 전체에서 한 번만 준비해 재사용한다.
 ///
@@ -102,6 +105,9 @@ class PencilInputPad extends StatefulWidget {
   const PencilInputPad({
     super.key,
     required this.onRecognized,
+    this.candidateSelector,
+    this.remoteRecognizer,
+    this.onSnapshot,
     this.height = 220,
     this.showControls = true,
     this.showEmptyHint = true,
@@ -109,6 +115,21 @@ class PencilInputPad extends StatefulWidget {
   });
 
   final ValueChanged<String> onRecognized;
+
+  /// 인식 후보 목록에서 답으로 쓸 후보를 고른다.
+  /// null 반환 = "답 형태 후보 없음" → [remoteRecognizer] 폴백을 시도한다.
+  /// 콜백 자체가 null이면 첫 번째 후보를 쓴다.
+  final String? Function(List<String> candidates)? candidateSelector;
+
+  /// VLM 2차 인식 폴백. 온디바이스 후보가 전부 답 형태가 아니거나
+  /// 인식이 실패했을 때, 필기 렌더 PNG 를 넘기면 인식 텍스트를 돌려준다.
+  final Future<String?> Function(Uint8List png)? remoteRecognizer;
+
+  /// 인식을 시도할 때마다(실패 포함) 필기 스냅샷을 전달한다.
+  /// 호출부가 문항별로 보관해 두면 패드가 언마운트된 뒤에도
+  /// 신고(필기 인식 불량)에 첨부할 수 있다.
+  final ValueChanged<Map<String, dynamic>>? onSnapshot;
+
   final double height;
   final bool showControls;
   final bool showEmptyHint;
@@ -146,6 +167,9 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   /// 마지막 인식 시점의 필기 스냅샷 — 신고(필기 인식 불량) 첨부용.
   Map<String, dynamic>? _lastRecognitionSnapshot;
+
+  /// 마지막 인식 이후 획이 바뀌었는지. 스냅샷의 획·후보 정합성 판단용.
+  bool _strokesDirty = false;
 
   @override
   void initState() {
@@ -205,6 +229,7 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   void _startStroke(Offset position, int timestamp, double pressure) {
     _debounce?.cancel();
+    _strokesDirty = true;
     setState(() {
       _strokes.add(<Offset>[position]);
       _strokeTimes.add(<int>[timestamp]);
@@ -286,13 +311,54 @@ class PencilInputPadState extends State<PencilInputPad> {
         ink,
         context,
       );
-      _lastRecognitionSnapshot = _buildSnapshot(candidates);
-      if (!mounted || candidates.isEmpty) return;
-      widget.onRecognized(candidates.first.trim());
+      String selected = '';
+      var needFallback = candidates.isEmpty;
+      if (candidates.isNotEmpty) {
+        if (widget.candidateSelector != null) {
+          final picked = widget.candidateSelector!(candidates)?.trim();
+          if (picked == null || picked.isEmpty) {
+            // 온디바이스 후보 전부가 답 형태가 아님 → VLM 폴백 시도.
+            selected = candidates.first.trim();
+            needFallback = true;
+          } else {
+            selected = picked;
+          }
+        } else {
+          selected = candidates.first.trim();
+        }
+      }
+      var usedRemote = false;
+      if (needFallback) {
+        final remote = await _tryRemoteRecognize();
+        if (remote != null) {
+          selected = remote;
+          usedRemote = true;
+        }
+      }
+      _publishSnapshot(
+        candidates,
+        recognizedText: selected,
+        usedRemoteFallback: usedRemote,
+      );
+      if (!mounted || selected.isEmpty) return;
+      widget.onRecognized(selected);
     } catch (e, stack) {
       debugPrint('Digital ink recognition failed: $e\n$stack');
-      if (mounted) {
-        setState(() => _recognitionError = '인식하지 못했어요. 다시 써 주세요.');
+      // 온디바이스 인식 자체가 실패해도 VLM 폴백은 시도한다.
+      final remote = await _tryRemoteRecognize();
+      if (remote != null) {
+        _publishSnapshot(
+          const <String>[],
+          recognizedText: remote,
+          usedRemoteFallback: true,
+        );
+        if (mounted) widget.onRecognized(remote);
+      } else {
+        // 인식 실패도 신고 대상이므로 획 스냅샷은 남긴다.
+        _publishSnapshot(const <String>[]);
+        if (mounted) {
+          setState(() => _recognitionError = '인식하지 못했어요. 다시 써 주세요.');
+        }
       }
     } finally {
       if (mounted) setState(() => _recognizing = false);
@@ -310,6 +376,7 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   void _undo() {
     if (_strokes.isEmpty) return;
+    _strokesDirty = true;
     setState(() {
       _strokes.removeLast();
       _strokeTimes.removeLast();
@@ -325,12 +392,55 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   void clearStrokes() => _clear();
 
-  Map<String, dynamic> _buildSnapshot(List<String> candidates) {
+  /// VLM 2차 인식 폴백. 현재 획을 PNG 로 렌더해 [widget.remoteRecognizer]에
+  /// 넘긴다. 실패·타임아웃·빈 결과는 모두 null (호출부가 기존 동작 유지).
+  Future<String?> _tryRemoteRecognize() async {
+    final recognizer = widget.remoteRecognizer;
+    if (recognizer == null || _strokes.isEmpty) return null;
+    try {
+      // await 중 학생이 이어 쓸 수 있으므로 획을 복사해 렌더한다.
+      final png = await renderHandwritingPng(
+        strokes: <List<Offset>>[for (final s in _strokes) List.of(s)],
+        canvasSize: _canvasSize,
+      );
+      if (png == null) return null;
+      final text = await recognizer(png).timeout(const Duration(seconds: 12));
+      final trimmed = text?.trim() ?? '';
+      return trimmed.isEmpty ? null : trimmed;
+    } catch (e) {
+      debugPrint('Remote handwriting fallback failed: $e');
+      return null;
+    }
+  }
+
+  /// 인식 시도 직후 스냅샷을 갱신하고 호출부에 전달한다.
+  void _publishSnapshot(
+    List<String> candidates, {
+    String recognizedText = '',
+    bool usedRemoteFallback = false,
+  }) {
+    final snapshot = _buildSnapshot(
+      candidates,
+      recognizedText: recognizedText,
+      usedRemoteFallback: usedRemoteFallback,
+    );
+    _lastRecognitionSnapshot = snapshot;
+    _strokesDirty = false;
+    widget.onSnapshot?.call(snapshot);
+  }
+
+  Map<String, dynamic> _buildSnapshot(
+    List<String> candidates, {
+    String recognizedText = '',
+    bool usedRemoteFallback = false,
+  }) {
     return <String, dynamic>{
       'canvas_width': _canvasSize.width,
       'canvas_height': _canvasSize.height,
       'model': _DigitalInkService.model,
       'recognized_candidates': candidates,
+      'recognized_text': recognizedText,
+      if (usedRemoteFallback) 'used_remote_fallback': true,
       'captured_at': DateTime.now().toUtc().toIso8601String(),
       'strokes': <Map<String, dynamic>>[
         for (var i = 0; i < _strokes.length; i++)
@@ -348,17 +458,15 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   /// 신고(필기 인식 불량) 첨부용 필기 데이터.
   ///
-  /// 캔버스에 획이 남아 있으면 현재 획 기준, 지워졌으면 마지막 인식 시점의
-  /// 스냅샷을 돌려준다. 필기 이력이 전혀 없으면 null.
+  /// 마지막 인식 이후 획이 그대로면 그 스냅샷을(획·후보 정합), 인식 전에
+  /// 획이 바뀌었으면 현재 획을 후보 없이 돌려준다. 획을 모두 지웠으면
+  /// 마지막 인식 스냅샷. 필기 이력이 전혀 없으면 null.
   Map<String, dynamic>? get handwritingReportPayload {
-    if (_strokes.isNotEmpty) {
-      final snapshot = _buildSnapshot(
-        (_lastRecognitionSnapshot?['recognized_candidates'] as List<String>?) ??
-            const <String>[],
-      );
-      return snapshot;
+    if (_strokes.isEmpty) return _lastRecognitionSnapshot;
+    if (!_strokesDirty && _lastRecognitionSnapshot != null) {
+      return _lastRecognitionSnapshot;
     }
-    return _lastRecognitionSnapshot;
+    return _buildSnapshot(const <String>[]);
   }
 
   @override

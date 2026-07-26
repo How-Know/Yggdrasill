@@ -240,6 +240,7 @@ class TextbookApi {
     required String gradeLabel,
     required Map<String, String> answersByCropId,
     Map<String, Map<String, String>> partAnswersByCropId = const {},
+    String? homeworkGroupId,
   }) async {
     final items = <Map<String, dynamic>>[
       ...answersByCropId.entries
@@ -258,11 +259,34 @@ class TextbookApi {
         'book_id': bookId,
         'grade_label': gradeLabel,
         'items': items,
+        if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
+          'homework_group_id': homeworkGroupId,
       },
     );
     return GradeResult.fromJson(
       (response.data as Map<String, dynamic>?) ?? const {},
     );
+  }
+
+  /// 필기 인식 VLM 폴백 — 온디바이스(ML Kit) 후보가 전부 답 형태가 아닐 때
+  /// 필기 렌더 PNG(base64)를 서버(Gemini)로 보내 2차 인식한다.
+  /// 실패·미설정 시 null (호출부는 온디바이스 결과로 폴백).
+  Future<String?> recognizeHandwriting({
+    required String imageBase64,
+    String answerKind = 'subjective',
+  }) async {
+    final response = await _client.functions.invoke(
+      'student_handwriting_recognize',
+      body: {
+        'image_base64': imageBase64,
+        'mime_type': 'image/png',
+        'answer_kind': answerKind,
+      },
+    );
+    final data = (response.data as Map<String, dynamic>?) ?? const {};
+    if (data['ok'] != true) return null;
+    final text = '${data['text'] ?? ''}'.trim();
+    return text.isEmpty ? null : text;
   }
 
   /// 셀프 채점용 정답 공개 (self 모드 문항만 허용).
@@ -289,6 +313,7 @@ class TextbookApi {
     required bool correct,
     String? answer,
     Map<String, bool>? partMarks,
+    String? homeworkGroupId,
   }) async {
     final response = await _client.functions.invoke(
       'student_textbook_grade',
@@ -298,6 +323,8 @@ class TextbookApi {
         'grade_label': gradeLabel,
         'crop_id': cropId,
         'correct': correct,
+        if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
+          'homework_group_id': homeworkGroupId,
         if (answer != null) 'answer': answer,
         if (partMarks != null && partMarks.isNotEmpty)
           'part_marks': partMarks.entries

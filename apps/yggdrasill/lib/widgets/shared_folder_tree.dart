@@ -77,6 +77,7 @@ class SharedFolderTreePanel extends StatelessWidget {
     this.accentColor = const Color(0xFF33A373),
     this.listBottomPadding = 8,
     this.wrapNodeRow,
+    this.titleLeading,
     this.titleTrailing,
     this.reserveTitleTrailingSlot = false,
     this.reserveSubtitleSlot = false,
@@ -85,6 +86,7 @@ class SharedFolderTreePanel extends StatelessWidget {
 
   final String title;
   final String? subtitle;
+  final Widget? titleLeading;
   final Widget? titleTrailing;
   final bool reserveTitleTrailingSlot;
   final bool reserveSubtitleSlot;
@@ -191,13 +193,18 @@ class SharedFolderTreePanel extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: titleStyle,
+              if (titleLeading != null) ...[
+                titleLeading!,
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: titleStyle,
+                ),
               ),
-              const Spacer(),
               if (slotWidth > 0)
                 SizedBox(
                   width: slotWidth,

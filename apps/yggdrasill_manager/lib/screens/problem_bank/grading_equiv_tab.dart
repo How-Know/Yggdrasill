@@ -1,22 +1,20 @@
-// 문제은행 「필기」 탭 본문.
+// 문제은행 「채점」 탭 본문.
 //
-// 학생앱에서 「필기 인식이 잘 안돼요」로 신고된 필기 샘플
-// (student_handwriting_samples)을 목록으로 보여주고, 선택한 샘플의
-// 필기 원본 렌더·인식 결과·정답을 나란히 확인한 뒤 사용자+AI가 판단해
-// 개선 방향(review_note)을 기록한다.
+// 학생앱 자동 채점에서 수학적 동치 판정이 개입한 케이스
+// (student_grading_equiv_logs)를 목록으로 보여주고, 정답·학생 답·판정
+// 내역을 확인한 뒤 교사가 동치 여부를 확정한다.
+// 「판정(결정적/AI) + 교사 확정」 쌍이 향후 자체 서술형 채점 AI 의
+// 학습 데이터가 된다.
 //
-// problem_bank_screen.dart 가 16,000줄이 넘어 본문 UI 를 이 파일로 분리했다.
-// 색상 토큰(_panel/_field/_text/_textSub 등)은 문제은행 화면과 동일한 값을 쓴다.
+// 색상 토큰(_panel/_field/_text/_textSub 등)은 문제은행 화면과 동일한 값.
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../../services/problem_bank_service.dart';
-import 'handwriting_sample_render.dart';
 
-class HandwritingReviewTab extends StatefulWidget {
-  const HandwritingReviewTab({
+class GradingEquivTab extends StatefulWidget {
+  const GradingEquivTab({
     super.key,
     required this.academyId,
     required this.service,
@@ -26,11 +24,10 @@ class HandwritingReviewTab extends StatefulWidget {
   final ProblemBankService service;
 
   @override
-  State<HandwritingReviewTab> createState() => _HandwritingReviewTabState();
+  State<GradingEquivTab> createState() => _GradingEquivTabState();
 }
 
-class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
-  // 문제은행 화면과 동일한 다크 패널 토큰.
+class _GradingEquivTabState extends State<GradingEquivTab> {
   static const Color _panel = Color(0xFF10171A);
   static const Color _field = Color(0xFF15171C);
   static const Color _border = Color(0xFF223131);
@@ -46,27 +43,28 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
     'dismissed': '무시됨',
     '': '전체',
   };
-  static const Map<String, String> _verdictLabels = <String, String>{
-    'recognizer_limit': '인식 모델 한계',
-    'ambiguous_writing': '필기 모호',
-    'ui_issue': '앱/전처리 문제',
-    'other': '기타',
+  static const Map<String, String> _methodLabels = <String, String>{
+    'deterministic': '결정적 동치',
+    'ai_unit': 'AI 단위 판정',
+    'ai_equiv': 'AI 표현 동치',
+  };
+  static const Map<String, String> _flagLabels = <String, String>{
+    'form_differs': '표기 다름',
+    'unit_hint': '단위 힌트',
+    'unit_caution': '단위 주의',
   };
 
   final TextEditingController _reviewNoteCtrl = TextEditingController();
 
-  List<_HandwritingSample> _samples = <_HandwritingSample>[];
+  List<_EquivLog> _logs = <_EquivLog>[];
   String _statusFilter = 'open';
   String? _selectedId;
   bool _isLoading = false;
-  bool _isAssessing = false;
-  bool _isSavingReview = false;
-  // 선택 샘플의 AI 판단 결과 (저장 전 임시값 포함). 저장 시 p_ai_assessment 로 전달.
-  Map<String, dynamic>? _aiAssessment;
+  bool _isSaving = false;
 
-  _HandwritingSample? get _selected {
-    for (final s in _samples) {
-      if (s.id == _selectedId) return s;
+  _EquivLog? get _selected {
+    for (final log in _logs) {
+      if (log.id == _selectedId) return log;
     }
     return null;
   }
@@ -74,7 +72,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
   @override
   void initState() {
     super.initState();
-    unawaited(_loadSamples());
+    unawaited(_loadLogs());
   }
 
   @override
@@ -98,103 +96,70 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
     });
   }
 
-  Future<void> _loadSamples() async {
+  Future<void> _loadLogs() async {
     final academyId = widget.academyId.trim();
     if (academyId.isEmpty) return;
     setState(() => _isLoading = true);
     try {
-      final rows = await widget.service.listHandwritingSamples(
+      final rows = await widget.service.listGradingEquivLogs(
         academyId: academyId,
         status: _statusFilter,
       );
       if (!mounted) return;
-      final samples = rows
-          .map(_HandwritingSample.fromMap)
-          .toList(growable: false);
+      final logs = rows.map(_EquivLog.fromMap).toList(growable: false);
       setState(() {
-        _samples = samples;
-        // 선택 중이던 샘플이 필터에서 사라지면 첫 샘플로 이동.
-        final stillThere = samples.any((s) => s.id == _selectedId);
+        _logs = logs;
+        final stillThere = logs.any((log) => log.id == _selectedId);
         if (!stillThere) {
-          _applySelection(samples.isEmpty ? null : samples.first);
+          _applySelection(logs.isEmpty ? null : logs.first);
         } else {
-          // 서버 값이 갱신됐을 수 있으므로 선택 샘플 기준으로 다시 동기화.
           _applySelection(_selected);
         }
       });
     } catch (e) {
-      _showSnack('필기 샘플 조회 실패: $e', error: true);
+      _showSnack('채점 로그 조회 실패: $e', error: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  /// setState 안에서 호출된다. 선택 변경 시 메모/AI 판단 상태를 샘플 값으로 리셋.
-  void _applySelection(_HandwritingSample? sample) {
-    _selectedId = sample?.id;
-    _reviewNoteCtrl.text = sample?.reviewNote ?? '';
-    _aiAssessment = sample?.aiAssessment;
+  /// setState 안에서 호출된다. 선택 변경 시 메모를 로그 값으로 리셋.
+  void _applySelection(_EquivLog? log) {
+    _selectedId = log?.id;
+    _reviewNoteCtrl.text = log?.reviewNote ?? '';
   }
 
-  Future<void> _runAiAssessment() async {
-    final sample = _selected;
-    if (sample == null || _isAssessing) return;
-    setState(() => _isAssessing = true);
+  Future<void> _saveReview(String status, {String? teacherVerdict}) async {
+    final log = _selected;
+    if (log == null || _isSaving) return;
+    setState(() => _isSaving = true);
     try {
-      // 화면 캡처가 아니라 획 데이터에서 고정 해상도로 직접 렌더한다 —
-      // 창 크기·스크롤 상태와 무관하게 항상 같은 품질의 이미지가 간다.
-      final png = await renderHandwritingInkPng(sample.ink);
-      final imageBase64 = png == null ? null : base64Encode(png);
-      if (imageBase64 == null || imageBase64.isEmpty) {
-        _showSnack('필기 이미지를 렌더하지 못했습니다.', error: true);
-        return;
-      }
-      final assessment = await widget.service.assessHandwritingSample(
-        imageBase64: imageBase64,
-        recognizedText: sample.recognizedText,
-        recognizedCandidates: sample.recognizedCandidates,
-        expectedAnswer: sample.expectedAnswer,
-        expectedAnswerKind: sample.expectedAnswerKind,
-        submittedAnswer: sample.submittedAnswer,
-        note: sample.note,
-      );
-      if (!mounted) return;
-      setState(() => _aiAssessment = assessment);
-      _showSnack('AI 판단을 받았습니다. 내용을 확인하고 리뷰를 저장하세요.');
-    } catch (_) {
-      _showSnack('AI 판단을 사용할 수 없어요(게이트웨이 연결 실패)', error: true);
-    } finally {
-      if (mounted) setState(() => _isAssessing = false);
-    }
-  }
-
-  Future<void> _saveReview(String status) async {
-    final sample = _selected;
-    if (sample == null || _isSavingReview) return;
-    setState(() => _isSavingReview = true);
-    try {
-      await widget.service.reviewHandwritingSample(
-        sampleId: sample.id,
+      await widget.service.reviewGradingEquivLog(
+        logId: log.id,
         status: status,
+        teacherVerdict: teacherVerdict,
         reviewNote: _reviewNoteCtrl.text.trim(),
-        aiAssessment: _aiAssessment,
       );
       if (!mounted) return;
-      switch (status) {
-        case 'resolved':
-          _showSnack('판단 완료로 저장했습니다.');
+      switch (teacherVerdict) {
+        case 'equivalent':
+          _showSnack('「동치 맞음」으로 확정했습니다.');
           break;
-        case 'dismissed':
-          _showSnack('무시 처리했습니다.');
+        case 'not_equivalent':
+          _showSnack('「동치 아님」으로 확정했습니다.');
           break;
         default:
-          _showSnack('다시 검토 대기로 되돌렸습니다.');
+          _showSnack(status == 'dismissed'
+              ? '무시 처리했습니다.'
+              : status == 'open'
+                  ? '다시 검토 대기로 되돌렸습니다.'
+                  : '저장했습니다.');
       }
-      await _loadSamples();
+      await _loadLogs();
     } catch (e) {
       _showSnack('리뷰 저장 실패: $e', error: true);
     } finally {
-      if (mounted) setState(() => _isSavingReview = false);
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -227,8 +192,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
     }
   }
 
-  Widget _buildStatusBadge(String status) {
-    final color = _statusColor(status);
+  Widget _buildBadge(String label, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -237,7 +201,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
         border: Border.all(color: color),
       ),
       child: Text(
-        _statusLabel(status),
+        label,
         style: TextStyle(
           color: color,
           fontSize: 11,
@@ -260,7 +224,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
   }
 
   // -------------------------------------------------------------------------
-  // 좌측: 샘플 목록
+  // 좌측: 로그 목록
   // -------------------------------------------------------------------------
 
   Widget _buildListPanel() {
@@ -275,7 +239,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            '필기 인식 리뷰',
+            '동치 채점 리뷰',
             style: TextStyle(
               color: _text,
               fontSize: 16,
@@ -284,7 +248,8 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
           ),
           const SizedBox(height: 6),
           const Text(
-            '학생앱에서 「필기 인식이 잘 안돼요」로 신고된 필기 샘플을 검토합니다.',
+            '자동 채점에서 수학적 동치 판정(결정적/AI)이 개입한 케이스를 '
+            '검토하고 교사가 동치 여부를 확정합니다.',
             style: TextStyle(color: _textSub, fontSize: 12.5, height: 1.35),
           ),
           const SizedBox(height: 14),
@@ -313,14 +278,14 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
             ],
             onChanged: (value) {
               setState(() => _statusFilter = value ?? 'open');
-              unawaited(_loadSamples());
+              unawaited(_loadLogs());
             },
           ),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: _isLoading ? null : () => unawaited(_loadSamples()),
+              onPressed: _isLoading ? null : () => unawaited(_loadLogs()),
               style: FilledButton.styleFrom(
                 backgroundColor: _accent,
                 foregroundColor: Colors.white,
@@ -340,7 +305,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
           ),
           const SizedBox(height: 14),
           Text(
-            '샘플 ${_samples.length}건',
+            '판정 로그 ${_logs.length}건',
             style: const TextStyle(
               color: _textSub,
               fontSize: 12.5,
@@ -349,18 +314,18 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: _samples.isEmpty
+            child: _logs.isEmpty
                 ? const Center(
                     child: Text(
-                      '표시할 필기 샘플이 없습니다.',
+                      '표시할 판정 로그가 없습니다.',
                       style: TextStyle(color: _textSub),
                     ),
                   )
                 : ListView.separated(
-                    itemCount: _samples.length,
+                    itemCount: _logs.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (context, index) =>
-                        _buildSampleCard(_samples[index]),
+                        _buildLogCard(_logs[index]),
                   ),
           ),
         ],
@@ -368,14 +333,14 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
     );
   }
 
-  Widget _buildSampleCard(_HandwritingSample sample) {
-    final selected = sample.id == _selectedId;
+  Widget _buildLogCard(_EquivLog log) {
+    final selected = log.id == _selectedId;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          if (sample.id == _selectedId) return;
-          setState(() => _applySelection(sample));
+          if (log.id == _selectedId) return;
+          setState(() => _applySelection(log));
         },
         borderRadius: BorderRadius.circular(12),
         child: Container(
@@ -390,9 +355,9 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
             children: [
               Row(
                 children: [
-                  if (sample.sampleNo > 0) ...[
+                  if (log.logNo > 0) ...[
                     Text(
-                      '#${sample.sampleNo}',
+                      '#${log.logNo}',
                       style: const TextStyle(
                         color: _accent,
                         fontSize: 13.5,
@@ -403,7 +368,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
                   ],
                   Expanded(
                     child: Text(
-                      sample.studentName,
+                      log.studentName,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: _text,
@@ -413,22 +378,39 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _buildStatusBadge(sample.reviewStatus),
+                  _buildBadge(
+                    _statusLabel(log.reviewStatus),
+                    _statusColor(log.reviewStatus),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
               Text(
-                sample.locationLabel,
+                log.locationLabel,
                 style: const TextStyle(
                   color: _textSub,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                '접수 ${_formatTime(sample.createdAt)}',
-                style: const TextStyle(color: _textSub, fontSize: 11.5),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  _buildBadge(
+                    _methodLabels[log.method] ?? log.method,
+                    log.method == 'deterministic' ? _accent : _warn,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildBadge(
+                    log.finalCorrect ? '정답 처리' : '오답 처리',
+                    log.finalCorrect ? _accent : _danger,
+                  ),
+                  const Spacer(),
+                  Text(
+                    _formatTime(log.createdAt),
+                    style: const TextStyle(color: _textSub, fontSize: 11.5),
+                  ),
+                ],
               ),
             ],
           ),
@@ -438,11 +420,11 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
   }
 
   // -------------------------------------------------------------------------
-  // 우측: 선택 샘플 상세
+  // 우측: 선택 로그 상세
   // -------------------------------------------------------------------------
 
   Widget _buildDetailPanel() {
-    final sample = _selected;
+    final log = _selected;
     return Container(
       decoration: BoxDecoration(
         color: _panel,
@@ -450,10 +432,10 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
         border: Border.all(color: _border),
       ),
       padding: const EdgeInsets.all(16),
-      child: sample == null
+      child: log == null
           ? const Center(
               child: Text(
-                '좌측 목록에서 필기 샘플을 선택하세요.',
+                '좌측 목록에서 판정 로그를 선택하세요.',
                 style: TextStyle(color: _textSub),
               ),
             )
@@ -463,8 +445,8 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
                   children: [
                     Expanded(
                       child: Text(
-                        '${sample.sampleNo > 0 ? '#${sample.sampleNo} · ' : ''}'
-                        '${sample.studentName} · ${sample.locationLabel}',
+                        '${log.logNo > 0 ? '#${log.logNo} · ' : ''}'
+                        '${log.studentName} · ${log.locationLabel}',
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: _text,
@@ -475,29 +457,28 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      '접수 ${_formatTime(sample.createdAt)}',
+                      '접수 ${_formatTime(log.createdAt)}',
                       style: const TextStyle(color: _textSub, fontSize: 11.5),
                     ),
                     const SizedBox(width: 8),
-                    _buildStatusBadge(sample.reviewStatus),
+                    _buildBadge(
+                      _statusLabel(log.reviewStatus),
+                      _statusColor(log.reviewStatus),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 14),
-                _buildSectionTitle('학생 필기'),
+                _buildSectionTitle('정답 · 학생 답 비교'),
                 const SizedBox(height: 8),
-                _buildHandwritingCanvas(sample),
+                _buildComparisonSection(log),
                 const SizedBox(height: 14),
-                _buildSectionTitle('인식 결과 · 정답 비교'),
+                _buildSectionTitle('판정 내역'),
                 const SizedBox(height: 8),
-                _buildComparisonSection(sample),
+                _buildVerdictSection(log),
                 const SizedBox(height: 14),
-                _buildSectionTitle('AI 판단'),
+                _buildSectionTitle('교사 확정 · 리뷰'),
                 const SizedBox(height: 8),
-                _buildAiSection(sample),
-                const SizedBox(height: 14),
-                _buildSectionTitle('개선 방향 · 리뷰'),
-                const SizedBox(height: 8),
-                _buildReviewSection(sample),
+                _buildReviewSection(log),
               ],
             ),
     );
@@ -510,40 +491,6 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
         color: _textSub,
         fontSize: 12.5,
         fontWeight: FontWeight.w800,
-      ),
-    );
-  }
-
-  Widget _buildHandwritingCanvas(_HandwritingSample sample) {
-    if (sample.ink.isEmpty) {
-      return Container(
-        height: 120,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: _field,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _border),
-        ),
-        child: const Text(
-          '필기 획 데이터가 없습니다.',
-          style: TextStyle(color: _textSub),
-        ),
-      );
-    }
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 300),
-        child: AspectRatio(
-          aspectRatio: sample.ink.aspectRatio,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: RepaintBoundary(
-              child: CustomPaint(
-                painter: HandwritingInkPainter(ink: sample.ink),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -590,195 +537,95 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
     );
   }
 
-  Widget _buildComparisonSection(_HandwritingSample sample) {
-    return Column(
+  Widget _buildComparisonSection(_EquivLog log) {
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: _buildInfoTile('인식 결과', sample.recognizedText),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _buildInfoTile('제출된 답', sample.submittedAnswer),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _buildInfoTile(
-                '문항 정답',
-                sample.expectedAnswer,
-                trailing: sample.expectedAnswerKind.isEmpty
-                    ? null
-                    : Text(
-                        sample.expectedAnswerKind,
-                        style: const TextStyle(
-                          color: _accent,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-              ),
-            ),
-          ],
-        ),
-        if (sample.recognizedCandidates.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _field,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _border),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '인식 후보',
-                  style: TextStyle(
-                    color: _textSub,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w800,
+        Expanded(
+          child: _buildInfoTile(
+            '문항 정답',
+            log.expectedAnswer,
+            trailing: log.partKey.isEmpty
+                ? null
+                : Text(
+                    '파트 ${log.partKey}',
+                    style: const TextStyle(
+                      color: _accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final candidate in sample.recognizedCandidates)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _panel,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: _border),
-                        ),
-                        child: Text(
-                          candidate,
-                          style: const TextStyle(
-                            color: _text,
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
           ),
-        ],
-        if (sample.note.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          _buildInfoTile('학생 메모', sample.note),
-        ],
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildInfoTile('학생 답', log.submittedAnswer),
+        ),
       ],
     );
   }
 
-  Widget _buildAiSection(_HandwritingSample sample) {
-    final assessment = _aiAssessment;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        FilledButton.icon(
-          onPressed: (_isAssessing || sample.ink.isEmpty)
-              ? null
-              : () => unawaited(_runAiAssessment()),
-          style: FilledButton.styleFrom(
-            backgroundColor: _accent,
-            foregroundColor: Colors.white,
-          ),
-          icon: _isAssessing
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Icon(Icons.auto_awesome, size: 16),
-          label: Text(_isAssessing ? 'AI 판단 중...' : 'AI 판단'),
-        ),
-        if (assessment != null) ...[
-          const SizedBox(height: 10),
-          _buildAssessmentCard(assessment),
-        ],
-      ],
-    );
+  String _boolLabel(bool? value, {String yes = '예', String no = '아니오'}) {
+    if (value == null) return '-';
+    return value ? yes : no;
   }
 
-  Widget _buildAssessmentCard(Map<String, dynamic> assessment) {
-    final verdict = '${assessment['verdict'] ?? ''}'.trim();
-    final verdictLabel = _verdictLabels[verdict] ?? (verdict.isEmpty ? '기타' : verdict);
-    final readAs = '${assessment['read_as'] ?? ''}'.trim();
-    final cause = '${assessment['cause'] ?? ''}'.trim();
-    final improvement = '${assessment['improvement'] ?? ''}'.trim();
+  Widget _buildVerdictSection(_EquivLog log) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: _field,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _accent.withValues(alpha: 0.7)),
+        border: Border.all(color: _border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: _accent.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: _accent),
-                ),
-                child: Text(
-                  verdictLabel,
-                  style: const TextStyle(
-                    color: _accent,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
+              _buildBadge(
+                _methodLabels[log.method] ?? log.method,
+                log.method == 'deterministic' ? _accent : _warn,
               ),
-              if (readAs.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '사람 눈으로 읽으면: $readAs',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _textSub,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
+              _buildBadge(
+                log.finalCorrect ? '최종 정답 처리' : '최종 오답 처리',
+                log.finalCorrect ? _accent : _danger,
+              ),
+              for (final flag in log.flags)
+                _buildBadge(_flagLabels[flag] ?? flag, _textSub),
             ],
           ),
-          if (cause.isNotEmpty) ...[
-            const SizedBox(height: 8),
+          const SizedBox(height: 10),
+          Text(
+            '결정적 판정: ${log.deterministicCorrect ? '동치(정답)' : '불일치'}',
+            style: const TextStyle(color: _text, fontSize: 13, height: 1.4),
+          ),
+          if (log.method == 'ai_equiv')
             Text(
-              '원인: $cause',
+              'AI 표현 동치 판정: '
+              '${_boolLabel(log.aiEquivalent, yes: '동치', no: '동치 아님')}',
               style: const TextStyle(color: _text, fontSize: 13, height: 1.4),
             ),
-          ],
-          if (improvement.isNotEmpty) ...[
+          if (log.method == 'ai_unit')
+            Text(
+              'AI 단위 지정 판정: '
+              '${_boolLabel(log.aiUnitSpecified, yes: '발문이 단위 지정', no: '지정 없음')}',
+              style: const TextStyle(color: _text, fontSize: 13, height: 1.4),
+            ),
+          if (log.teacherVerdict.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              '개선 방향: $improvement',
-              style: const TextStyle(color: _text, fontSize: 13, height: 1.4),
+              '교사 확정: '
+              '${log.teacherVerdict == 'equivalent' ? '동치 맞음' : '동치 아님'}',
+              style: const TextStyle(
+                color: _accent,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                height: 1.4,
+              ),
             ),
           ],
         ],
@@ -786,7 +633,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
     );
   }
 
-  Widget _buildReviewSection(_HandwritingSample sample) {
+  Widget _buildReviewSection(_EquivLog log) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -795,8 +642,8 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
           maxLines: 3,
           style: const TextStyle(color: _text, fontSize: 13.5),
           decoration: const InputDecoration(
-            labelText: '개선 방향 메모',
-            hintText: '사용자+AI가 합의한 최종 개선 방향을 기록하세요.',
+            labelText: '리뷰 메모',
+            hintText: '판정 근거나 개선 방향을 기록하세요.',
             labelStyle: TextStyle(color: _textSub),
             hintStyle: TextStyle(color: _textSub, fontSize: 12.5),
             filled: true,
@@ -813,31 +660,45 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
         Row(
           children: [
             FilledButton.icon(
-              onPressed: (_isSavingReview || sample.reviewStatus == 'resolved')
+              onPressed: _isSaving
                   ? null
-                  : () => unawaited(_saveReview('resolved')),
+                  : () => unawaited(
+                      _saveReview('resolved', teacherVerdict: 'equivalent')),
               style: FilledButton.styleFrom(
                 backgroundColor: _accent,
                 foregroundColor: Colors.white,
               ),
               icon: const Icon(Icons.check_circle_outline, size: 16),
-              label: const Text('판단 완료'),
+              label: const Text('동치 맞음'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: _isSaving
+                  ? null
+                  : () => unawaited(_saveReview('resolved',
+                      teacherVerdict: 'not_equivalent')),
+              style: FilledButton.styleFrom(
+                backgroundColor: _danger,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.cancel_outlined, size: 16),
+              label: const Text('동치 아님'),
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
-              onPressed: (_isSavingReview || sample.reviewStatus == 'dismissed')
+              onPressed: (_isSaving || log.reviewStatus == 'dismissed')
                   ? null
                   : () => unawaited(_saveReview('dismissed')),
               style: OutlinedButton.styleFrom(
-                foregroundColor: _danger,
-                side: const BorderSide(color: _danger),
+                foregroundColor: _textSub,
+                side: const BorderSide(color: _border),
               ),
               icon: const Icon(Icons.block_outlined, size: 16),
               label: const Text('무시'),
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
-              onPressed: (_isSavingReview || sample.reviewStatus == 'open')
+              onPressed: (_isSaving || log.reviewStatus == 'open')
                   ? null
                   : () => unawaited(_saveReview('open')),
               style: OutlinedButton.styleFrom(
@@ -847,7 +708,7 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('다시 열기'),
             ),
-            if (_isSavingReview) ...[
+            if (_isSaving) ...[
               const SizedBox(width: 10),
               const SizedBox(
                 width: 16,
@@ -860,10 +721,10 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
             ],
           ],
         ),
-        if (sample.reviewedAt != null) ...[
+        if (log.reviewedAt != null) ...[
           const SizedBox(height: 8),
           Text(
-            '마지막 리뷰 ${_formatTime(sample.reviewedAt)}',
+            '마지막 리뷰 ${_formatTime(log.reviewedAt)}',
             style: const TextStyle(color: _textSub, fontSize: 11.5),
           ),
         ],
@@ -876,94 +737,97 @@ class _HandwritingReviewTabState extends State<HandwritingReviewTab> {
 // 데이터 모델
 // ---------------------------------------------------------------------------
 
-class _HandwritingSample {
-  const _HandwritingSample({
+class _EquivLog {
+  const _EquivLog({
     required this.id,
-    required this.sampleNo,
+    required this.logNo,
     required this.createdAt,
     required this.studentName,
     required this.bookName,
-    required this.gradeLabel,
     required this.problemNumber,
     required this.displayPage,
-    required this.recognizedText,
-    required this.recognizedCandidates,
-    required this.submittedAnswer,
+    required this.partKey,
     required this.expectedAnswer,
-    required this.expectedAnswerKind,
-    required this.note,
+    required this.submittedAnswer,
+    required this.method,
+    required this.flags,
+    required this.deterministicCorrect,
+    required this.aiEquivalent,
+    required this.aiUnitSpecified,
+    required this.finalCorrect,
     required this.reviewStatus,
-    required this.aiAssessment,
+    required this.teacherVerdict,
     required this.reviewNote,
     required this.reviewedAt,
-    required this.ink,
   });
 
   final String id;
 
-  /// 접수 순서대로 붙는 고정 번호 — 「#3」처럼 샘플 지칭용.
-  final int sampleNo;
+  /// 접수 순서대로 붙는 고정 번호 — 「#3」처럼 로그 지칭용.
+  final int logNo;
   final DateTime? createdAt;
   final String studentName;
   final String bookName;
-  final String gradeLabel;
   final String problemNumber;
   final int? displayPage;
-  final String recognizedText;
-  final List<String> recognizedCandidates;
-  final String submittedAnswer;
+  final String partKey;
   final String expectedAnswer;
-  final String expectedAnswerKind;
-  final String note;
+  final String submittedAnswer;
+  final String method;
+  final List<String> flags;
+  final bool deterministicCorrect;
+  final bool? aiEquivalent;
+  final bool? aiUnitSpecified;
+  final bool finalCorrect;
   final String reviewStatus;
-  final Map<String, dynamic>? aiAssessment;
+  final String teacherVerdict;
   final String reviewNote;
   final DateTime? reviewedAt;
-  final HandwritingInk ink;
 
   String get locationLabel {
     final parts = <String>[
       if (bookName.isNotEmpty) bookName,
       if (displayPage != null) 'p.$displayPage',
       if (problemNumber.isNotEmpty) '$problemNumber번',
+      if (partKey.isNotEmpty) partKey,
     ];
     return parts.isEmpty ? '교재 문항' : parts.join(' · ');
   }
 
-  static _HandwritingSample fromMap(Map<String, dynamic> map) {
-    final payload = map['payload'] is Map
-        ? Map<String, dynamic>.from(map['payload'] as Map)
-        : const <String, dynamic>{};
-    final candidates = payload['recognized_candidates'] is List
-        ? (payload['recognized_candidates'] as List)
-            .map((e) => '$e'.trim())
-            .where((s) => s.isNotEmpty)
-            .toList(growable: false)
-        : const <String>[];
+  static bool? _boolOrNull(dynamic value) {
+    if (value is bool) return value;
+    return null;
+  }
+
+  static _EquivLog fromMap(Map<String, dynamic> map) {
     final displayPage =
         int.tryParse('${map['display_page'] ?? map['raw_page'] ?? ''}');
-    return _HandwritingSample(
+    return _EquivLog(
       id: '${map['id'] ?? ''}',
-      sampleNo: int.tryParse('${map['sample_no'] ?? ''}') ?? 0,
+      logNo: int.tryParse('${map['log_no'] ?? ''}') ?? 0,
       createdAt: DateTime.tryParse('${map['created_at'] ?? ''}'),
       studentName: '${map['student_name'] ?? '학생'}'.trim(),
       bookName: '${map['book_name'] ?? ''}'.trim(),
-      gradeLabel: '${map['grade_label'] ?? ''}'.trim(),
       problemNumber: '${map['problem_number'] ?? ''}'.trim(),
       displayPage: displayPage,
-      recognizedText: '${map['recognized_text'] ?? ''}'.trim(),
-      recognizedCandidates: candidates,
-      submittedAnswer: '${map['submitted_answer'] ?? ''}'.trim(),
+      partKey: '${map['part_key'] ?? ''}'.trim(),
       expectedAnswer: '${map['expected_answer'] ?? ''}'.trim(),
-      expectedAnswerKind: '${map['expected_answer_kind'] ?? ''}'.trim(),
-      note: '${map['note'] ?? ''}'.trim(),
+      submittedAnswer: '${map['submitted_answer'] ?? ''}'.trim(),
+      method: '${map['method'] ?? 'deterministic'}'.trim(),
+      flags: map['flags'] is List
+          ? (map['flags'] as List)
+              .map((e) => '$e'.trim())
+              .where((s) => s.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[],
+      deterministicCorrect: map['deterministic_correct'] == true,
+      aiEquivalent: _boolOrNull(map['ai_equivalent']),
+      aiUnitSpecified: _boolOrNull(map['ai_unit_specified']),
+      finalCorrect: map['final_correct'] == true,
       reviewStatus: '${map['review_status'] ?? 'open'}'.trim(),
-      aiAssessment: map['ai_assessment'] is Map
-          ? Map<String, dynamic>.from(map['ai_assessment'] as Map)
-          : null,
+      teacherVerdict: '${map['teacher_verdict'] ?? ''}'.trim(),
       reviewNote: '${map['review_note'] ?? ''}'.trim(),
       reviewedAt: DateTime.tryParse('${map['reviewed_at'] ?? ''}'),
-      ink: HandwritingInk.fromPayload(payload),
     );
   }
 }

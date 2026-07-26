@@ -398,6 +398,19 @@ class HomeworkStore {
         (message.contains('does not exist') || message.contains('42703'));
   }
 
+  bool _isMissingSourceStageColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('source_stage') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  /// 과제 다이얼로그의 "단계" 선택 → `homework_item_problems.source_stage`.
+  static String _normalizeProblemStage(dynamic value) {
+    const allowed = <String>{'original', 'variant1', 'variant2', 'variant3'};
+    final raw = (value is String ? value : '').trim();
+    return allowed.contains(raw) ? raw : 'original';
+  }
+
   bool _isMissingAssignmentCodeColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('assignment_code') &&
@@ -2805,6 +2818,7 @@ class HomeworkStore {
         final typeGroupLabel = typeGroups is List && typeGroups.isNotEmpty
             ? '${typeGroups.first}'
             : '';
+        final sourceStage = _normalizeProblemStage(mapping['problemStage']);
         for (final rawCrop in crops) {
           if (rawCrop is! Map) continue;
           final crop = Map<String, dynamic>.from(rawCrop);
@@ -2931,11 +2945,22 @@ class HomeworkStore {
             'bbox_1k': crop['bbox1k'] ?? source['bbox_1k'],
             'item_region_1k': crop['itemRegion1k'] ?? source['item_region_1k'],
             'crop_snapshot': snapshot,
+            'source_stage': sourceStage,
           });
         }
       }
       if (rows.isNotEmpty) {
-        await supa.from('homework_item_problems').insert(rows);
+        try {
+          await supa.from('homework_item_problems').insert(rows);
+        } catch (e) {
+          if (!_isMissingSourceStageColumnError(e)) rethrow;
+          await supa.from('homework_item_problems').insert(
+                rows
+                    .map((row) => Map<String, dynamic>.from(row)
+                      ..remove('source_stage'))
+                    .toList(growable: false),
+              );
+        }
       }
     } catch (_) {
       // Optional forward-compatible table. Page/unit mappings remain canonical

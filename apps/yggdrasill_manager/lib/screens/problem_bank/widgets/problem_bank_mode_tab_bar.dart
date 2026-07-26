@@ -91,6 +91,20 @@ class ProblemBankModeTabBar extends StatelessWidget {
                     }
                   },
                 ),
+                const SizedBox(width: 4),
+                _ModeTabButton(
+                  label: '채점',
+                  icon: Icons.rule_rounded,
+                  selected: selectedIndex == 4,
+                  accentColor: accentColor,
+                  textColor: textColor,
+                  textSubColor: textSubColor,
+                  onTap: () {
+                    if (controller.index != 4) {
+                      controller.animateTo(4);
+                    }
+                  },
+                ),
               ],
             );
           },

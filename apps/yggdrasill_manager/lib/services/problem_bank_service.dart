@@ -2589,6 +2589,44 @@ class ProblemBankService {
     return assessment.map((k, dynamic v) => MapEntry('$k', v));
   }
 
+  /// 채점 탭: 동치 판정 로그 목록 조회. [status]가 빈 문자열이면 전체 상태.
+  Future<List<Map<String, dynamic>>> listGradingEquivLogs({
+    required String academyId,
+    String status = 'open',
+    int limit = 200,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    if (safeAcademyId.isEmpty) return const <Map<String, dynamic>>[];
+    final rows = await _client.rpc('staff_grading_equiv_logs', params: {
+      'p_academy_id': safeAcademyId,
+      'p_status': status.trim(),
+      'p_limit': limit.clamp(1, 500),
+    });
+    return (rows as List<dynamic>)
+        .whereType<Map>()
+        .map((row) => row.map((k, dynamic v) => MapEntry('$k', v)))
+        .toList(growable: false);
+  }
+
+  /// 채점 탭: 교사 동치 확정 저장 (상태 + 동치 여부 라벨 + 메모).
+  Future<void> reviewGradingEquivLog({
+    required String logId,
+    required String status,
+    String? teacherVerdict,
+    String? reviewNote,
+  }) async {
+    final result =
+        await _client.rpc('staff_review_grading_equiv_log', params: {
+      'p_log_id': logId.trim(),
+      'p_status': status.trim(),
+      'p_teacher_verdict': teacherVerdict,
+      'p_review_note': reviewNote,
+    });
+    if (result is Map && result['ok'] != true) {
+      throw Exception('grading_equiv_review_save_failed: ${result['error']}');
+    }
+  }
+
   Future<void> updateDocumentMeta({
     required String documentId,
     required Map<String, dynamic> meta,
