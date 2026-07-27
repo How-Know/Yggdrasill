@@ -1188,6 +1188,7 @@ class _TextbookAuthoringStageDialogState
       bookId: widget.bookId,
       gradeLabel: widget.gradeLabel,
       expectedNumbers: expectedNumbers,
+      seriesKey: widget.seriesKey.trim().toLowerCase(),
     );
     _answerVlmPageCache[key] = result;
     return result;
@@ -1553,6 +1554,7 @@ class _TextbookAuthoringStageDialogState
                 imageBytes: png,
                 rawPage: page,
                 expectedNumbers: expectedNumbers,
+                seriesKey: widget.seriesKey.trim().toLowerCase(),
               );
           _bodyVlmPageCache[cacheKey] = res;
         } catch (e) {

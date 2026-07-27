@@ -393,9 +393,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     return int.tryParse(t);
   }
 
-  /// 개념서(개념원리)는 중단원 아래에 실제 소단원 행(이름+페이지)을 두고,
-  /// A~D 문제 카테고리 슬롯은 소단원 페이지 입력에서 자동 유도한다.
-  bool get _seriesHasSubUnitRows => _seriesKey == 'wonri';
+  /// 개념서(개념원리·개념+유형)는 중단원 아래에 실제 소단원 행(이름+페이지)을
+  /// 두고, 문제 카테고리 슬롯 페이지는 소단원 입력에서 자동 유도한다.
+  bool get _seriesHasSubUnitRows => _series.hasSubUnitRows;
 
   // ── 목차 자동 인식 ────────────────────────────────────────────────────────
   //
@@ -481,6 +481,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     final tree = buildTocAutofillTree(
       toc,
       subUnitRows: _seriesHasSubUnitRows,
+      seriesKey: _seriesKey,
       tocPageOffset: tocPageOffset,
       lastRawPage: document.pages.length,
     );
@@ -1371,12 +1372,18 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                   icon: const Icon(Icons.add, size: 14),
                   label: const Text('소단원 추가', style: TextStyle(fontSize: 11)),
                 ),
-                // 연습문제는 소단원 사이사이에 여러 번 있을 수 있어 항상 노출.
+                // 마무리 문제 묶음(연습문제·단원 다지기)은 소단원 사이사이에
+                // 여러 번 있을 수 있어 항상 노출한다.
                 TextButton.icon(
-                  onPressed: () => setState(() => mid.subUnits
-                      .add(_SubUnitEdit(name: '연습문제', isExercise: true))),
+                  onPressed: () => setState(() => mid.subUnits.add(
+                        _SubUnitEdit(
+                          name: _series.unitEndRowName,
+                          isExercise: true,
+                        ),
+                      )),
                   icon: const Icon(Icons.add_task, size: 14),
-                  label: const Text('연습문제 추가', style: TextStyle(fontSize: 11)),
+                  label: Text('${_series.unitEndRowName} 추가',
+                      style: const TextStyle(fontSize: 11)),
                 ),
               ],
             ),

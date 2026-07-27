@@ -33,6 +33,8 @@ export async function extractAnswersOnPage({
   displayPage,
   pageOffset,
   expectedNumbers,
+  expectedEntries,
+  series,
   model,
   apiKey,
   timeoutMs = 90000,
@@ -65,6 +67,8 @@ export async function extractAnswersOnPage({
               displayPage,
               pageOffset,
               expectedNumbers,
+              expectedEntries,
+              series,
             }),
           },
         ],
@@ -74,7 +78,15 @@ export async function extractAnswersOnPage({
       temperature: 0.1,
       responseMimeType: 'application/json',
       maxOutputTokens: 32768,
-      thinkingConfig: { thinkingLevel: 'low' },
+      // 개념+유형 답지는 한 지면에 코너별 박스가 6~10개 쌓이고, 각 박스 안에서
+      // 필수 문제와 따름 문제가 다시 갈린다. thinkingLevel=low 로는 박스 하나당
+      // 첫 문항만 뽑고 멈추는 누락이 재현된다. 이 시리즈만 사고 예산을 올린다.
+      thinkingConfig: {
+        thinkingLevel:
+          String(series || '').trim().toLowerCase() === 'gaeyu'
+            ? 'medium'
+            : 'low',
+      },
     },
   };
 
@@ -380,10 +392,23 @@ function normalizeProblemNumberKey(input) {
   if (!text) return '';
   const range = parseProblemNumberRange(text);
   if (range) return `${range.from}-${range.to}`;
-  const match = text.match(/\d+/);
-  if (!match) return text.replace(/\s+/g, '');
+  const compact = text.replace(/\s+/g, '');
+  // "2-1"(따름 문제), "109-2"(블록 접두어), "개념확인105", "예제1" 처럼 숫자
+  // 앞뒤에 의미 있는 조각이 붙는 번호는 통째로 키에 남긴다. 첫 숫자만 남기면
+  // "2-1"→"2", "109-1"/"109-2"→"109" 이 돼서 서로 다른 문항이 같은 키가 되고,
+  // 중복 제거 단계에서 뒤에 온 정답이 통째로 버려진다.
+  if (
+    /^\d+(?:[-\u2013\u2014~]\d+)+$/.test(compact) ||
+    /^[가-힣]+\d/.test(compact)
+  ) {
+    return compact
+      .replace(/[\u2013\u2014~]/g, '-')
+      .replace(/\d+/g, (digits) => String(Number(digits)));
+  }
+  const match = compact.match(/\d+/);
+  if (!match) return compact;
   const n = Number(match[0]);
-  return Number.isFinite(n) ? `${n}` : text.replace(/\s+/g, '');
+  return Number.isFinite(n) ? `${n}` : compact;
 }
 
 function parseBbox4(arr) {

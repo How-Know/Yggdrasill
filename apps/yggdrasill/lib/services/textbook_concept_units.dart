@@ -124,3 +124,111 @@ int? conceptSubUnitIndexForPage(
   }
   return null;
 }
+
+/// 개념원리 section / sub_key → 기본 유형명.
+const Map<String, String> kWonriTypeNameBySection = {
+  'concept_drill': '개념원리 익히기',
+  'type_example': '필수유형',
+  'check': '확인 체크',
+  'exercise': '연습문제',
+  'special_lecture': '특강',
+};
+
+const Map<String, String> kWonriTypeNameBySubKey = {
+  'A': '개념원리 익히기',
+  'B': '필수유형',
+  'C': '확인 체크',
+  'D': '연습문제',
+  'E': '특강',
+};
+
+/// 개념원리 문항 표시용 유형명.
+///
+/// 우선순위: content_group(type) → item_name → section → sub_key.
+/// 필수유형은 content_group 이 있으면 `01 제목`처럼 세부 유형으로,
+/// 연습문제는 item_name(STEP1/실력 UP 등)으로 나뉜다.
+String wonriTypeDisplayName({
+  required String section,
+  required String subKey,
+  required String itemName,
+  String typeGroupKind = '',
+  String typeGroupLabel = '',
+  String typeGroupTitle = '',
+}) {
+  final kind = typeGroupKind.trim().toLowerCase();
+  final groupLabel = typeGroupLabel.trim();
+  final groupTitle = typeGroupTitle.trim();
+  if (kind == 'type' && groupLabel.isNotEmpty) {
+    return groupTitle.isEmpty ? groupLabel : '$groupLabel $groupTitle';
+  }
+
+  final normalizedItem = normalizeWonriItemName(itemName);
+  if (normalizedItem.isNotEmpty) return normalizedItem;
+
+  final bySection = kWonriTypeNameBySection[section.trim()] ?? '';
+  if (bySection.isNotEmpty) return bySection;
+
+  final bySub = kWonriTypeNameBySubKey[subKey.trim().toUpperCase()] ?? '';
+  if (bySub.isNotEmpty) return bySub;
+
+  return '';
+}
+
+/// 탐색기/필터용 유형 그룹 키 (`label|title` 형식, [TbExItem.typeGroupTitleOf] 호환).
+String wonriTypeGroupKey({
+  required String section,
+  required String subKey,
+  required String itemName,
+  String typeGroupKind = '',
+  String typeGroupLabel = '',
+  String typeGroupTitle = '',
+}) {
+  final kind = typeGroupKind.trim().toLowerCase();
+  final groupLabel = typeGroupLabel.trim();
+  final groupTitle = typeGroupTitle.trim();
+  if (kind == 'type' && groupLabel.isNotEmpty) {
+    return '$groupLabel|$groupTitle';
+  }
+  final name = wonriTypeDisplayName(
+    section: section,
+    subKey: subKey,
+    itemName: itemName,
+    typeGroupKind: typeGroupKind,
+    typeGroupLabel: typeGroupLabel,
+    typeGroupTitle: typeGroupTitle,
+  );
+  if (name.isEmpty) return '유형 미지정|';
+  return '$name|';
+}
+
+String normalizeWonriItemName(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return '';
+  switch (text) {
+    case '확인체크':
+      return '확인 체크';
+    case '필수':
+      return '필수유형';
+    case '실력':
+    case '실력UP':
+      return '실력 UP';
+    case '수능기출':
+      return '수능 기출';
+    case '평가원기출':
+      return '평가원 기출';
+    case '교육청기출':
+      return '교육청 기출';
+    default:
+      return text;
+  }
+}
+
+/// 문제집(RPM 등) C단계 특수 섹션명. 해당 없으면 null.
+String? problemBookSpecialSectionTitle(String rawLabel) {
+  final label = rawLabel.trim();
+  if (label.isEmpty) return null;
+  final compact = label.replaceAll(RegExp(r'\s+'), '');
+  if (compact.contains('서술')) return '서술형 주관식';
+  if (compact.contains('실력')) return '실력 UP';
+  return null;
+}

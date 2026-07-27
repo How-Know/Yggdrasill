@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../../services/textbook_series_catalog.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'textbook_course_edit_dialog.dart';
 import 'textbook_crop_extract_dialog.dart';
@@ -303,7 +304,9 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     if (payload == null) return const <Map<String, dynamic>>[];
     final units = payload['units'];
     if (units is! List) return const <Map<String, dynamic>>[];
-    final isWonri = '${payload['series'] ?? ''}'.trim().toLowerCase() == 'wonri';
+    final isWonri =
+        textbookSeriesByKey('${payload['series'] ?? ''}')?.hasSubUnitRows ??
+            false;
     final out = <Map<String, dynamic>>[];
     for (var b = 0; b < units.length; b += 1) {
       final rawBig = units[b];

@@ -131,18 +131,22 @@ class TextbookVlmSolutionRefService {
     return TextbookVlmSolutionRefPageResult.fromMap(json);
   }
 
-  /// 개념원리 필수유형 전용 — 본문 PDF 페이지에서 "풀이" 단락 좌표와
-  /// 굵은 글씨 정답을 함께 추출한다. (POST /textbook/vlm/extract-body-solutions)
+  /// 정답·풀이가 본문에 인쇄된 문항 전용 — 본문 PDF 페이지에서 풀이 단락
+  /// 좌표와 정답을 함께 추출한다. 개념원리 필수유형·특강은 "풀이" 단락,
+  /// 개념+유형 쓱쓱 서술형 예제는 "풀이 과정"과 "답" 을 읽는다.
+  /// (POST /textbook/vlm/extract-body-solutions)
   Future<TextbookVlmBodySolutionPageResult> extractBodySolutionsOnPage({
     required Uint8List imageBytes,
     required int rawPage,
     List<String>? expectedNumbers,
+    String seriesKey = 'wonri',
     String mimeType = 'image/png',
   }) async {
     final body = <String, dynamic>{
       'image_base64': base64Encode(imageBytes),
       'mime_type': mimeType,
       'raw_page': rawPage,
+      'series': seriesKey,
       if (expectedNumbers != null && expectedNumbers.isNotEmpty)
         'expected_numbers': expectedNumbers,
     };

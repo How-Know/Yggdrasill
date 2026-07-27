@@ -1938,7 +1938,17 @@ class HomeworkStore {
       for (final entry in _byStudentId.values) {
         _sortStudentList(entry);
       }
+      await _hydratePageMappingsFromServer(
+        academyId: academyId,
+        items: _byStudentId.values.expand((e) => e).toList(growable: false),
+      );
       await _reloadGroups(academyId: academyId, bump: false);
+      for (final sid in _byStudentId.keys.toList(growable: false)) {
+        await _unifyGroupAssignmentCodes(
+          academyId: academyId,
+          studentId: sid,
+        );
+      }
       _loaded = true;
       _bump();
       _subscribeRealtime(academyId);
@@ -5302,8 +5312,28 @@ class HomeworkStore {
     if (group != null) {
       group.learningTrackCode = resolvedLearningTrackCode;
     }
+    // 그룹에 이미 있는 하위과제의 코드를 재사용해 그룹당 1코드로 맞춘다.
+    final inheritedGroupCode = () {
+      for (final existing in itemsInGroup(
+        studentId,
+        cleanedGroupId,
+        includeCompleted: true,
+      )) {
+        final code = _normalizeAssignmentCode(existing.assignmentCode);
+        if (code != null &&
+            HomeworkLearningTrack.assignmentCodeMatchesTrack(
+              code,
+              resolvedLearningTrackCode,
+            )) {
+          return code;
+        }
+      }
+      return null;
+    }();
     final resolvedAssignmentCode = _ensureAssignmentCodeForTrack(
-        assignmentCode, resolvedLearningTrackCode);
+      assignmentCode ?? inheritedGroupCode,
+      resolvedLearningTrackCode,
+    );
     final resolvedSplitParts =
         (defaultSplitParts ?? template?.defaultSplitParts ?? 1)
             .clamp(1, 4)
@@ -5527,6 +5557,7 @@ class HomeworkStore {
         }
       }
       if (_supportsAssignmentCodeColumn && _isAssignmentCodeConflictError(e)) {
+        // 그룹 공유 코드가 아직 unique 제약에 걸리면(마이그레이션 전) 개별 코드로 폴백.
         item.assignmentCode = _issueAssignmentCode(item.learningTrackCode);
         try {
           await persistToServer();
@@ -5660,6 +5691,24 @@ class HomeworkStore {
       return const <HomeworkItem>[];
     }
     final groupLearningTrackCode = groupTrackCodes.first;
+    // 그룹 전체 하위과제가 하나의 과제코드를 공유한다.
+    final sharedAssignmentCode = () {
+      for (final entry in normalized) {
+        final fromEntry = _normalizeAssignmentCode(
+          asNullableText(
+            entry['assignmentCode'] ?? entry['assignment_code'],
+          ),
+        );
+        if (fromEntry != null &&
+            HomeworkLearningTrack.assignmentCodeMatchesTrack(
+              fromEntry,
+              groupLearningTrackCode,
+            )) {
+          return fromEntry;
+        }
+      }
+      return _issueAssignmentCode(groupLearningTrackCode);
+    }();
 
     final cleanedFlowId = (flowId ?? '').trim();
     final cleanedGroupTitle =
@@ -5706,52 +5755,44 @@ class HomeworkStore {
         });
       }
 
-      final pendingCreates = <Future<String?>>[];
+      final createdIds = <String>[];
       for (int idx = 0; idx < normalized.length; idx++) {
         final entry = normalized[idx];
-        pendingCreates.add(
-          addWaitingItemToGroup(
-            studentId: studentId,
-            groupId: groupId,
-            title: asText(entry['title']),
-            assignmentCode: asNullableText(
-              entry['assignmentCode'] ?? entry['assignment_code'],
-            ),
-            learningTrackCode: asNullableText(entry['learningTrackCode']),
-            body: asText(entry['body']),
-            page: asText(entry['page']),
-            count: asPositiveInt(entry['count']),
-            timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
-            pbPresetId: asNullableText(entry['pbPresetId']),
-            type: asText(entry['type']),
-            memo: asText(entry['memo']),
-            content: asText(entry['content']),
-            bookId: asNullableText(entry['bookId']),
-            gradeLabel: asNullableText(entry['gradeLabel']),
-            sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
-            sourceUnitPath: asNullableText(entry['sourceUnitPath']),
-            unitMappings: asUnitMappings(entry['unitMappings']),
-            flowId: asNullableText(entry['flowId']) ??
-                (cleanedFlowId.isEmpty ? null : cleanedFlowId),
-            testOriginFlowId: asNullableText(entry['testOriginFlowId']),
-            color: asColor(entry['color']),
-            defaultSplitParts: asSplitParts(entry['splitParts']),
-            itemOrderIndexOverride: idx,
-            deferReload: true,
-            deferBump: true,
-            localOnly: reserveAssignments,
-          ),
+        final createdId = await addWaitingItemToGroup(
+          studentId: studentId,
+          groupId: groupId,
+          title: asText(entry['title']),
+          assignmentCode: sharedAssignmentCode,
+          learningTrackCode: asNullableText(entry['learningTrackCode']),
+          body: asText(entry['body']),
+          page: asText(entry['page']),
+          count: asPositiveInt(entry['count']),
+          timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
+          pbPresetId: asNullableText(entry['pbPresetId']),
+          type: asText(entry['type']),
+          memo: asText(entry['memo']),
+          content: asText(entry['content']),
+          bookId: asNullableText(entry['bookId']),
+          gradeLabel: asNullableText(entry['gradeLabel']),
+          sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
+          sourceUnitPath: asNullableText(entry['sourceUnitPath']),
+          unitMappings: asUnitMappings(entry['unitMappings']),
+          flowId: asNullableText(entry['flowId']) ??
+              (cleanedFlowId.isEmpty ? null : cleanedFlowId),
+          testOriginFlowId: asNullableText(entry['testOriginFlowId']),
+          color: asColor(entry['color']),
+          defaultSplitParts: asSplitParts(entry['splitParts']),
+          itemOrderIndexOverride: idx,
+          deferReload: true,
+          deferBump: true,
+          localOnly: reserveAssignments,
         );
-      }
-      if (pendingCreates.isNotEmpty && !reserveAssignments) {
-        _bump();
-      }
-      final createdResults = await Future.wait(pendingCreates);
-      final createdIds = <String>[];
-      for (final createdId in createdResults) {
         if (createdId != null && createdId.isNotEmpty) {
           createdIds.add(createdId);
         }
+      }
+      if (createdIds.isNotEmpty && !reserveAssignments) {
+        _bump();
       }
 
       final createdBeforeReload = <HomeworkItem>[];
@@ -5822,17 +5863,23 @@ class HomeworkStore {
   Future<void> _reloadStudent(String studentId) async {
     try {
       final oldCodes = <String, String>{};
+      final oldMappings = <String, List<Map<String, dynamic>>>{};
       for (final old in _byStudentId[studentId] ?? <HomeworkItem>[]) {
         final c = (old.assignmentCode ?? '').trim();
         if (c.isNotEmpty) oldCodes[old.id] = c;
+        final mappings = old.unitMappings;
+        if (mappings != null && mappings.isNotEmpty) {
+          oldMappings[old.id] = mappings
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: false);
+        }
       }
 
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
-      final supa = Supabase.instance.client;
       final data = await _fetchHomeworkRows(
-        supa: supa,
+        supa: Supabase.instance.client,
         academyId: academyId,
         studentId: studentId,
       );
@@ -5852,14 +5899,28 @@ class HomeworkStore {
             'for ${item.id}: ${oldCodes[item.id]}',
           );
         }
+        // reload 행에는 unitMappings 가 없어 페이지 요약이 비게 된다.
+        // 직전 로컬 매핑을 잠시 보존한 뒤 서버 page 행으로 보강한다.
+        if ((item.unitMappings == null || item.unitMappings!.isEmpty) &&
+            oldMappings.containsKey(item.id)) {
+          item.unitMappings = oldMappings[item.id];
+        }
       }
 
       _sortStudentList(list);
       _byStudentId[studentId] = list;
+      await _hydratePageMappingsFromServer(
+        academyId: academyId,
+        items: list,
+      );
       await _reloadGroups(
         academyId: academyId,
         studentId: studentId,
         bump: false,
+      );
+      await _unifyGroupAssignmentCodes(
+        academyId: academyId,
+        studentId: studentId,
       );
       _syncRecoveredAssignmentCodesToServer(
         studentId: studentId,
@@ -5868,5 +5929,154 @@ class HomeworkStore {
       _consumeMarkedAutoCompleteForWaitingItems(studentId);
       _bump();
     } catch (_) {}
+  }
+
+  /// `homework_item_pages` → unitMappings.pageCounts 복원.
+  /// (reload 후 page 필드가 비어 있어도 그룹 카드 페이지 요약이 유지되게 한다.)
+  Future<void> _hydratePageMappingsFromServer({
+    required String academyId,
+    required List<HomeworkItem> items,
+  }) async {
+    if (items.isEmpty) return;
+    final ids = <String>[];
+    final byId = <String, HomeworkItem>{};
+    for (final item in items) {
+      final id = item.id.trim();
+      if (id.isEmpty) continue;
+      ids.add(id);
+      byId[id] = item;
+    }
+    if (ids.isEmpty) return;
+
+    final pageCountsByItem = <String, Map<String, int>>{};
+    final supa = Supabase.instance.client;
+    const batchSize = 200;
+    try {
+      for (var offset = 0; offset < ids.length; offset += batchSize) {
+        final batch = ids.sublist(
+          offset,
+          offset + batchSize > ids.length ? ids.length : offset + batchSize,
+        );
+        final raw = await supa
+            .from('homework_item_pages')
+            .select('homework_item_id, page_number, problem_count')
+            .eq('academy_id', academyId)
+            .inFilter('homework_item_id', batch);
+        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        for (final row in rows) {
+          final itemId = (row['homework_item_id'] as String?)?.trim() ?? '';
+          final page = _parseIntOpt(row['page_number']);
+          if (itemId.isEmpty || page == null || page <= 0) continue;
+          final count = _parseIntOpt(row['problem_count']) ?? 0;
+          pageCountsByItem
+              .putIfAbsent(itemId, () => <String, int>{})['$page'] = count > 0
+              ? count
+              : 1;
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[HW][hydratePages][ERROR] $e\n$st');
+      return;
+    }
+
+    for (final entry in pageCountsByItem.entries) {
+      final item = byId[entry.key];
+      if (item == null) continue;
+      final counts = entry.value;
+      if (counts.isEmpty) continue;
+      final pageNums = counts.keys
+          .map((e) => int.tryParse(e))
+          .whereType<int>()
+          .where((e) => e > 0)
+          .toList()
+        ..sort();
+      if (pageNums.isEmpty) continue;
+
+      final existing = item.unitMappings;
+      if (existing == null || existing.isEmpty) {
+        item.unitMappings = <Map<String, dynamic>>[
+          {
+            'pageCounts': Map<String, int>.from(counts),
+            'startPage': pageNums.first,
+            'endPage': pageNums.last,
+            'sourceScope': 'hydrated_pages',
+          },
+        ];
+        continue;
+      }
+
+      final first = Map<String, dynamic>.from(existing.first);
+      final current = first['pageCounts'] ?? first['page_counts'];
+      final hasCounts = current is Map && current.isNotEmpty;
+      if (!hasCounts) {
+        first['pageCounts'] = Map<String, int>.from(counts);
+        first['startPage'] =
+            first['startPage'] ?? first['start_page'] ?? pageNums.first;
+        first['endPage'] =
+            first['endPage'] ?? first['end_page'] ?? pageNums.last;
+        item.unitMappings = <Map<String, dynamic>>[
+          first,
+          ...existing.skip(1).map((e) => Map<String, dynamic>.from(e)),
+        ];
+      }
+    }
+  }
+
+  /// 그룹 내 하위과제가 서로 다른 과제코드를 가지면 대표 코드로 통일한다.
+  Future<void> _unifyGroupAssignmentCodes({
+    required String academyId,
+    required String studentId,
+  }) async {
+    if (!_supportsAssignmentCodeColumn) return;
+    final groups = _groupsByStudentId[studentId] ?? const <HomeworkGroup>[];
+    if (groups.isEmpty) return;
+    final supa = Supabase.instance.client;
+
+    for (final group in groups) {
+      final children = itemsInGroup(
+        studentId,
+        group.id,
+        includeCompleted: true,
+      );
+      if (children.length <= 1) continue;
+
+      String? canonical;
+      for (final child in children) {
+        final code = _normalizeAssignmentCode(child.assignmentCode);
+        if (code != null) {
+          canonical = code;
+          break;
+        }
+      }
+      canonical ??= _issueAssignmentCode(
+        _groupLearningTrackCode(studentId, group.id) ??
+            HomeworkLearningTrack.extra.code,
+      );
+
+      for (final child in children) {
+        final current = _normalizeAssignmentCode(child.assignmentCode);
+        if (current == canonical) continue;
+        child.assignmentCode = canonical;
+        try {
+          await supa.from('homework_items').update({
+            'assignment_code': canonical,
+          }).eq('id', child.id).eq('academy_id', academyId);
+        } catch (e) {
+          if (_isMissingAssignmentCodeColumnError(e)) {
+            _supportsAssignmentCodeColumn = false;
+            return;
+          }
+          // unique 제약이 아직 남아 있으면 통일은 건너뛴다.
+          if (_isAssignmentCodeConflictError(e)) {
+            debugPrint(
+              '[HW][unifyAssignmentCode] conflict group=${group.id} '
+              'item=${child.id} code=$canonical',
+            );
+            continue;
+          }
+          debugPrint('[HW][unifyAssignmentCode][ERROR] $e');
+        }
+      }
+    }
   }
 }

@@ -45,6 +45,10 @@ class TextbookSeriesCatalogEntry {
     required this.subPreset,
     this.defaultTextbookType = '문제집',
     this.notes = '',
+    this.hasSubUnitRows = false,
+    this.unitEndRowName = '연습문제',
+    this.unitEndSlotKeys = const <String>{},
+    this.supportsProblemExtraction = true,
   });
 
   final String key;
@@ -52,6 +56,23 @@ class TextbookSeriesCatalogEntry {
   final List<TextbookSubSectionPreset> subPreset;
   final String defaultTextbookType;
   final String notes;
+
+  /// 개념서처럼 중단원 아래에 책의 실제 소단원 행(이름 + 페이지)을 두는지 여부.
+  /// true 면 [subPreset] 은 단원이 아니라 문제 카테고리 슬롯이고, 슬롯의 페이지
+  /// 범위는 사용자가 입력한 소단원 행에서 자동 유도된다.
+  final bool hasSubUnitRows;
+
+  /// 중단원 끝에 붙는 마무리 문제 묶음 행의 이름.
+  /// 개념원리는 "연습문제", 개념+유형은 "단원 다지기".
+  final String unitEndRowName;
+
+  /// 마무리 행의 페이지 범위에서 유도되는 슬롯 키. 나머지 슬롯은 일반 소단원
+  /// 행 전체 범위를 쓴다.
+  final Set<String> unitEndSlotKeys;
+
+  /// 문항 추출(VLM 분석 → 크롭 저장)까지 지원하는지. false 면 목차·단원 구조
+  /// 입력까지만 열어 두고 분석 실행을 막는다.
+  final bool supportsProblemExtraction;
 }
 
 /// Single source of truth for the series dropdown. Extending this list adds
@@ -102,6 +123,9 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     key: 'wonri',
     displayName: '개념원리',
     defaultTextbookType: '개념서',
+    hasSubUnitRows: true,
+    unitEndRowName: '연습문제',
+    unitEndSlotKeys: <String>{'D'},
     notes:
         '개념원리는 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
         '페이지는 소단원별로만 입력하며, 개념원리 익히기 / 필수유형 / 확인 체크 / 연습문제 '
@@ -117,7 +141,60 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       // 여기(payload)에는 두지 않는다.
     ],
   ),
+  // 개념+유형(개념플러스유형) 개념서. 개념원리와 같은 대-중-소 3계층이지만
+  // 지면 구성이 다르다:
+  //   - 개념 전용 페이지가 없다. 한 페이지에 개념확인과 필수 문제가 같이 있고,
+  //     필수 문제 아래에 "7-1", "7-2" 처럼 번호가 붙는 따름 문제가 이어진다.
+  //   - 소단원이 끝나면 반드시 "쏙쏙 개념 익히기"가 나오고, 그 앞에 자기 지면을
+  //     가진 "한 번 더 연습"이 불규칙하게 붙을 수 있다. 둘 다 번호가 1부터
+  //     시작하므로 한 번 더 연습은 전용 슬롯 'F'에 따로 담는다.
+  //   - 중단원 끝에는 탄탄 단원 다지기 → 쓱쓱 서술형 완성하기 → 개념 리뷰 →
+  //     마인드맵 순으로 이어진다. 목차에는 이 넷이 "단원 다지기 / 서술형
+  //     완성하기", "개념 리뷰 / 마인드맵" 두 줄로 인쇄되는데, 하나의 "단원
+  //     다지기" 소단원 행으로 합쳐서 다룬다 (개념 리뷰·마인드맵은 문항 없음).
+  TextbookSeriesCatalogEntry(
+    key: 'gaeyu',
+    displayName: '개념+유형',
+    defaultTextbookType: '개념서',
+    hasSubUnitRows: true,
+    unitEndRowName: '단원 다지기',
+    unitEndSlotKeys: <String>{'D', 'E'},
+    supportsProblemExtraction: true,
+    notes:
+        '개념+유형은 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
+        '페이지는 소단원별로만 입력하며, 개념확인 / 필수 문제 / 쏙쏙 개념 익히기 '
+        '분류는 VLM이 해당 페이지 안에서 자동으로 나눕니다. 중단원 끝의 '
+        '단원 다지기 / 서술형 완성하기 / 개념 리뷰 / 마인드맵은 "단원 다지기" '
+        '소단원 한 행으로 합쳐 입력합니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: '개념확인'),
+      TextbookSubSectionPreset(key: 'B', displayName: '필수 문제'),
+      TextbookSubSectionPreset(key: 'C', displayName: '쏙쏙 개념 익히기'),
+      TextbookSubSectionPreset(key: 'D', displayName: '탄탄 단원 다지기'),
+      TextbookSubSectionPreset(key: 'E', displayName: '쓱쓱 서술형 완성하기'),
+      // 한 번 더 연습(sub_key 'F')은 개념원리 특강과 같은 이유로 payload 슬롯이
+      // 아니다. 소단원마다 있는 코너가 아니라서 슬롯으로 두면 한 번 더 연습이
+      // 없는 소단원까지 미완료로 집계된다. 크롭 저장 전용 카테고리로만 쓴다.
+    ],
+  ),
 ];
+
+// 개념+유형 문항 번호 규칙.
+//
+// 정답 파일(스피드 체크)이 본문 페이지 배지("P. 8")로 블록을 묶고 그 안에
+// 카테고리별로 답을 나열하는 구조라, 아래 규칙대로 붙인 번호가 정답·해설
+// 추출 단계의 매칭 키가 된다.
+//
+//   A 개념확인            번호가 없다 → "개념확인8" 처럼 본문 인쇄 페이지를 붙인다
+//   B 필수 문제·따름 문제  소단원마다 리셋. "7", "7-1", "7-2"
+//   C 쏙쏙 개념 익히기     소단원마다 리셋. "한 번 더 +1" 배지는 같은 번호를 잇는다
+//   D 탄탄 단원 다지기     중단원마다 리셋
+//   E 쓱쓱 서술형 완성하기 중단원마다 리셋. 예제·유제·연습해 보자가 모두 1번부터
+//                          시작하므로 "예제1" / "유제1" / "연습1" 로 접두어를 붙인다
+//   F 한 번 더 연습        소단원마다 리셋
+//
+// 정답 출처는 E의 예제만 본문(개념원리 필수유형과 같은 방식)이고 나머지는 모두
+// 정답·해설 파일이다. 개념확인은 정답만 있고 상세 해설이 없다.
 
 TextbookSeriesCatalogEntry? textbookSeriesByKey(String key) {
   final trimmed = key.trim().toLowerCase();

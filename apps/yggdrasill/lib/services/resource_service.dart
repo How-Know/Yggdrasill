@@ -1061,7 +1061,7 @@ class ResourceService {
           .select(
             'id, big_order, mid_order, sub_key, big_name, mid_name, '
             'raw_page, display_page, section, '
-            'problem_number, label, is_set_header, set_from, set_to, '
+            'problem_number, label, item_name, is_set_header, set_from, set_to, '
             'content_group_kind, content_group_label, content_group_title, '
             'content_group_order, pb_question_uid, '
             'column_index, bbox_1k, item_region_1k',

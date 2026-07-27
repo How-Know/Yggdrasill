@@ -18,6 +18,16 @@ String textbookAnswerNumberKey(String raw) {
   if (numbers.isEmpty) return input.replaceAll(RegExp(r'\s+'), '');
   final isRange = RegExp(r'(\d+)\s*(?:~|-|–|—|〜)\s*(\d+)').hasMatch(input);
   if (isRange && numbers.length >= 2) return '${numbers[0]}-${numbers[1]}';
+  // "개념확인105", "예제1" 처럼 한글 코너 이름이 번호의 일부인 개념+유형 문항은
+  // 숫자만 남기면 같은 숫자를 쓰는 다른 코너 문항과 키가 겹친다. 게이트웨이
+  // normalizeProblemNumberKey 와 같은 규칙으로 접두어를 유지한다.
+  final compact = input.replaceAll(RegExp(r'\s+'), '');
+  if (RegExp(r'^[가-힣]+\d').hasMatch(compact)) {
+    return compact.replaceAllMapped(
+      RegExp(r'\d+'),
+      (m) => '${int.parse(m.group(0)!)}',
+    );
+  }
   return numbers.first;
 }
 
@@ -121,6 +131,7 @@ class TextbookVlmAnswerService {
     required String bookId,
     required String gradeLabel,
     List<String>? expectedNumbers,
+    String seriesKey = '',
     String mimeType = 'image/png',
   }) async {
     final body = <String, dynamic>{
@@ -130,6 +141,7 @@ class TextbookVlmAnswerService {
       'academy_id': academyId,
       'book_id': bookId,
       'grade_label': gradeLabel,
+      if (seriesKey.trim().isNotEmpty) 'series': seriesKey.trim(),
       if (expectedNumbers != null && expectedNumbers.isNotEmpty)
         'expected_numbers': expectedNumbers,
     };

@@ -19,6 +19,7 @@ import '../services/resource_service.dart';
 import '../services/student_behavior_assignment_store.dart';
 import '../services/tag_store.dart';
 import '../services/tenant_service.dart';
+import '../utils/homework_page_text.dart';
 import '../widgets/dialog_tokens.dart';
 
 class HomeworkAssignSelection {
@@ -587,10 +588,14 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                   selectedGroups[group.id] ?? false;
                               final int totalCount = children.fold<int>(
                                   0, (sum, item) => sum + (item.count ?? 0));
-                              final allPages = children
-                                  .map((item) => (item.page ?? '').trim())
-                                  .where((p) => p.isNotEmpty)
-                                  .toList();
+                              final mergedPages = mergeHomeworkItemPageRanges(
+                                children.map(
+                                  (item) => (
+                                    page: item.page,
+                                    unitMappings: item.unitMappings,
+                                  ),
+                                ),
+                              );
                               final String groupTitle =
                                   group.title.trim().isNotEmpty
                                       ? group.title.trim()
@@ -598,8 +603,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                               final String meta = [
                                 if (children.length > 1)
                                   '하위 ${children.length}개',
-                                if (allPages.isNotEmpty)
-                                  'p.${allPages.join(", ")}',
+                                if (mergedPages.isNotEmpty) 'p.$mergedPages',
                                 if (totalCount > 0) '$totalCount문항',
                               ].join(' · ');
                               return Container(
@@ -1848,7 +1852,6 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     int groupTotalCount = 0;
     bool hasActivity = false;
     DateTime? earliestAssigned;
-    final groupPages = <String>[];
     String? firstBookAndCourse;
     for (final hw in children) {
       coveredDonutItemIds.add(hw.id);
@@ -1862,8 +1865,6 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       groupCheckCount += todayChecks;
       final hwCount = hw.count;
       if (hwCount != null && hwCount > 0) groupTotalCount += hwCount;
-      final p = (hw.page ?? '').trim();
-      if (p.isNotEmpty) groupPages.add(p);
       firstBookAndCourse ??= _formatBookAndCourseFromHomework(hw);
       final assignedAt = latestAssignmentByItem[hw.id]?.assignedAt;
       if (assignedAt != null &&
@@ -1875,9 +1876,15 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final groupTitle = group.title.trim().isNotEmpty
         ? group.title.trim()
         : children.first.title.trim();
+    final mergedGroupPages = mergeHomeworkItemPageRanges(
+      children.map(
+        (hw) => (page: hw.page, unitMappings: hw.unitMappings),
+      ),
+    );
     final subs = <_SubWorkEntry>[];
     for (final hw in children) {
       final t = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
+      // 개념원리 하위과제는 page 를 비우므로 문항수만 보이게 '-' 유지.
       final pg = (hw.page ?? '').trim();
       final ct =
           (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
@@ -1887,7 +1894,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       _ClassWorkEntry(
         title: groupTitle,
         bookAndCourse: firstBookAndCourse ?? '',
-        page: groupPages.isEmpty ? '-' : groupPages.join(', '),
+        page: mergedGroupPages.isEmpty ? '-' : mergedGroupPages,
         count: groupTotalCount > 0 ? groupTotalCount.toString() : '-',
         assignedAt: earliestAssigned,
         studyMs: groupStudyMs,
@@ -1989,8 +1996,11 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     ..sort((a, b) => (a.completedAt ?? DateTime(1900))
         .compareTo(b.completedAt ?? DateTime(1900)));
   for (final hw in completedItems) {
-    final pageText =
-        (hw.page ?? '').trim().isEmpty ? 'p.-' : 'p.${hw.page!.trim()}';
+    final resolvedPage = homeworkItemPageRangeText(
+      page: hw.page,
+      unitMappings: hw.unitMappings,
+    );
+    final pageText = resolvedPage.isEmpty ? 'p.-' : 'p.$resolvedPage';
     final attempts = hw.checkCount <= 0 ? 1 : hw.checkCount;
     completedEntries.add(
       _TodoListEntry(

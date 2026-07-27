@@ -14,6 +14,7 @@ import '../../services/learning_problem_bank_service.dart';
 import '../../services/student_textbook_active_store.dart';
 import '../../services/tenant_service.dart';
 import '../../services/textbook_concept_units.dart';
+import '../../services/textbook_explorer_service.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/latex_text_renderer.dart';
@@ -86,6 +87,8 @@ class HomeworkQuickAddProxyDialogState
   List<_LinkedTextbook> _allLinkedTextbooks = const <_LinkedTextbook>[];
   Map<String, bool> _textbookActiveOverrides = const <String, bool>{};
   String? _selectedLinkedBookKey;
+  /// 선택 교재 payload `series` (`ssen` / `rpm` / `wonri` …).
+  String? _linkedBookSeriesKey;
   List<_BigUnitSelectionNode> _units = const <_BigUnitSelectionNode>[];
   List<_TextbookProblemRegion> _problemRegions =
       const <_TextbookProblemRegion>[];
@@ -1305,6 +1308,7 @@ class HomeworkQuickAddProxyDialogState
         _units = const <_BigUnitSelectionNode>[];
         _problemRegions = const <_TextbookProblemRegion>[];
         _selectedProblemRegionIds.clear();
+        _linkedBookSeriesKey = null;
         _rangePickerMode = 'page';
         _activeMidKey = null;
         _activeTypeSmallKey = null;
@@ -1335,7 +1339,11 @@ class HomeworkQuickAddProxyDialogState
       final row = results[0] as Map<String, dynamic>?;
       final problemRows = (results[1] as List<Map<String, dynamic>>?) ??
           const <Map<String, dynamic>>[];
-      final parsed = _parseSelectionUnits(row?['payload']);
+      final payload = row?['payload'];
+      final seriesKey = payload is Map
+          ? '${payload['series'] ?? ''}'.trim().toLowerCase()
+          : '';
+      final parsed = _parseSelectionUnits(payload);
       final problemRegions = _parseTextbookProblemRegions(problemRows);
       _applyProblemRegionCountsToUnits(parsed, problemRegions);
       // 트리를 먼저 그린 뒤 출제 잠금 상태는 백그라운드 보강.
@@ -1347,6 +1355,7 @@ class HomeworkQuickAddProxyDialogState
         _units = parsed;
         _problemRegions = problemRegions;
         _selectedProblemRegionIds.clear();
+        _linkedBookSeriesKey = seriesKey.isEmpty ? null : seriesKey;
         _activeMidKey = _firstActiveMidKey(parsed);
         _activeTypeSmallKey = null;
         _pendingScrollSmallExpandKey = null;
@@ -1361,6 +1370,7 @@ class HomeworkQuickAddProxyDialogState
         _units = const <_BigUnitSelectionNode>[];
         _problemRegions = const <_TextbookProblemRegion>[];
         _selectedProblemRegionIds.clear();
+        _linkedBookSeriesKey = null;
         _rangePickerMode = 'page';
         _activeMidKey = null;
         _activeTypeSmallKey = null;
@@ -1435,6 +1445,15 @@ class HomeworkQuickAddProxyDialogState
       await controller.load();
     }
     if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+    final seriesKey = TextbookExplorerService.instance.seriesKeyOf(
+      bookId: linked.bookId,
+      gradeLabel: linked.gradeLabel,
+    );
+    if (mounted) {
+      setState(() {
+        _linkedBookSeriesKey = seriesKey.isEmpty ? null : seriesKey;
+      });
+    }
     _rebuildProblemRegionsFromExplorer();
     _syncMigratedExplorerSelection();
     await _applyMigratedHomeworkIssueStats();
@@ -1756,6 +1775,7 @@ class HomeworkQuickAddProxyDialogState
                 label: item.difficultyLabel,
                 section: item.section,
                 isSetHeader: item.isSetHeader,
+                isWonri: item.isWonri,
                 pbQuestionUid: item.questionUid,
                 typeKind: item.typeGroupKind,
                 typeLabel: item.typeGroupLabel,
@@ -1985,6 +2005,25 @@ class HomeworkQuickAddProxyDialogState
       final typeKind = '${row['content_group_kind'] ?? ''}'.trim();
       final typeLabel = '${row['content_group_label'] ?? ''}'.trim();
       final typeTitle = '${row['content_group_title'] ?? ''}'.trim();
+      final itemName = '${row['item_name'] ?? ''}'.trim();
+      final rawLabel = '${row['label'] ?? ''}'.trim();
+      final section = '${row['section'] ?? ''}'.trim();
+      final normalizedItem = normalizeWonriItemName(itemName);
+      // section 이 개념원리 카테고리이거나 item_name 이 개념원리 유형명일 때만.
+      // (쎈도 sub_key A/B/C 를 쓰므로 sub_key 단독으로는 판별하지 않는다.)
+      final isWonri = kWonriTypeNameBySection.containsKey(section) ||
+          normalizedItem == '개념원리 익히기' ||
+          normalizedItem == '필수유형' ||
+          normalizedItem == '확인 체크' ||
+          normalizedItem == '특강' ||
+          normalizedItem == '연습문제' ||
+          normalizedItem.startsWith('STEP') ||
+          normalizedItem.contains('실력') ||
+          normalizedItem.contains('기출');
+      // 개념원리는 item_name 에 유형명이 있고 label 은 비어 있는 경우가 많다.
+      final displayLabel = isWonri
+          ? (normalizedItem.isNotEmpty ? normalizedItem : rawLabel)
+          : rawLabel;
       out.add(
         _TextbookProblemRegion(
           id: id.isEmpty
@@ -1999,9 +2038,10 @@ class HomeworkQuickAddProxyDialogState
           rawPage: rawPage,
           displayPage: displayPage,
           problemNumber: problemNumber,
-          label: '${row['label'] ?? ''}'.trim(),
-          section: '${row['section'] ?? ''}'.trim(),
+          label: displayLabel,
+          section: section,
           isSetHeader: row['is_set_header'] == true,
+          isWonri: isWonri,
           pbQuestionUid: '${row['pb_question_uid'] ?? ''}'.trim(),
           typeKind: typeKind,
           typeLabel: typeLabel,
@@ -2433,8 +2473,70 @@ class HomeworkQuickAddProxyDialogState
     return false;
   }
 
+  bool _isSsenLinkedBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
+    if (series == 'ssen') return true;
+    final name = book.bookName.trim();
+    final lower = name.toLowerCase();
+    return name.contains('쎈') || lower.contains('ssen');
+  }
+
+  bool _isRpmLinkedBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
+    if (series == 'rpm') return true;
+    final name = book.bookName.trim();
+    final lower = name.toLowerCase();
+    return name.contains('RPM') ||
+        name.contains('ＲＰＭ') ||
+        lower.contains('rpm');
+  }
+
+  /// 쎈·RPM 공통: A/B/C 문제집 (하위과제=유형명, 그룹=중단원+단계).
+  bool _isSsenLikeLinkedBook(_LinkedTextbook? book) =>
+      _isSsenLinkedBook(book) || _isRpmLinkedBook(book);
+
+  /// 수력충전: 미이관 교재. 그룹과제명만 중단원명으로 둔다.
+  bool _isSuryeokLinkedBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final name = book.bookName.trim();
+    final compact = name.replaceAll(RegExp(r'\s+'), '');
+    return compact.contains('수력충전');
+  }
+
+  String? _ssenStageLetter(String? raw) {
+    final text = (raw ?? '').trim().toUpperCase();
+    if (text.isEmpty) return null;
+    if (text == 'A' || text == 'B' || text == 'C') return text;
+    final match = RegExp(r'([ABC])\s*단계').firstMatch(text);
+    if (match != null) return match.group(1);
+    final head = RegExp(r'^([ABC])\b').firstMatch(text);
+    return head?.group(1);
+  }
+
+  /// RPM C단계 서술형/실력 UP 섹션명. 해당 없으면 null.
+  String? _rpmSpecialSectionTitle(_TextbookProblemRegion region) {
+    return problemBookSpecialSectionTitle(region.label);
+  }
+
+  String _problemSubtaskGroupKey(
+    _TextbookProblemRegion region,
+    _LinkedTextbook book,
+  ) {
+    if (_isRpmLinkedBook(book)) {
+      final special = _rpmSpecialSectionTitle(region);
+      if (special != null) {
+        return '${region.bigOrder}|${region.midOrder}|${region.subKey}|rpm|$special';
+      }
+    }
+    return region.typeGroupKey;
+  }
+
   /// 초안 소과제들의 단원 매핑으로 그룹 제목을 결정한다.
   /// 개념원리: 소단원 1개 → 소단원명, 같은 중단원 여러 소단원 → 중단원명,
+  /// 쎈·RPM: 중단원명 + A/B/C.
+  /// 수력충전: 중단원명.
   /// 여러 중단원 → `그룹 과제`.
   String _resolveGroupTitleFromDraftItems(List<_DraftGroupItem> items) {
     if (items.isEmpty) return '그룹 과제';
@@ -2451,6 +2553,62 @@ class HomeworkQuickAddProxyDialogState
     }
 
     final book = _selectedLinkedBook;
+    if (_isSuryeokLinkedBook(book)) {
+      final midKeys = <String>{};
+      final midNames = <String, String>{};
+      for (final item in items) {
+        for (final raw in item.unitMappings) {
+          final m = Map<String, dynamic>.from(raw);
+          final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
+          final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
+          final midName = '${m['midName'] ?? m['mid_name'] ?? ''}'.trim();
+          if (bigOrder == null || midOrder == null) continue;
+          final midKey = '$bigOrder|$midOrder';
+          midKeys.add(midKey);
+          if (midName.isNotEmpty) midNames[midKey] = midName;
+        }
+      }
+      if (midKeys.length == 1) {
+        final midName = midNames[midKeys.first] ?? '';
+        return midName.isEmpty ? '그룹 과제' : _truncateTitle(midName, 25);
+      }
+      return '그룹 과제';
+    }
+
+    if (_isSsenLikeLinkedBook(book)) {
+      final midKeys = <String>{};
+      final midNames = <String, String>{};
+      final stages = <String>{};
+      for (final item in items) {
+        for (final raw in item.unitMappings) {
+          final m = Map<String, dynamic>.from(raw);
+          final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
+          final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
+          final midName = '${m['midName'] ?? m['mid_name'] ?? ''}'.trim();
+          final subKey = '${m['subKey'] ?? m['sub_key'] ?? ''}'.trim();
+          final stage = _ssenStageLetter(subKey);
+          if (bigOrder == null || midOrder == null) continue;
+          final midKey = '$bigOrder|$midOrder';
+          midKeys.add(midKey);
+          if (midName.isNotEmpty) midNames[midKey] = midName;
+          if (stage != null) stages.add(stage);
+        }
+      }
+      if (midKeys.length == 1) {
+        final midName = midNames[midKeys.first] ?? '';
+        if (midName.isEmpty) return '그룹 과제';
+        if (stages.length == 1) {
+          return _truncateTitle('$midName ${stages.first}', 25);
+        }
+        if (stages.length > 1) {
+          final ordered = stages.toList()..sort();
+          return _truncateTitle('$midName ${ordered.join('/')}', 25);
+        }
+        return _truncateTitle(midName, 25);
+      }
+      return '그룹 과제';
+    }
+
     if (_isWonriLinkedBook(book)) {
       final smallKeys = <String>{};
       final midKeys = <String>{};
@@ -2462,7 +2620,10 @@ class HomeworkQuickAddProxyDialogState
           final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
           final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
           final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
-          final subKey = '${m['subKey'] ?? m['sub_key'] ?? ''}'.trim();
+          // 개념원리 crop.sub_key 는 A~E(카테고리)라 소단원 키가 될 수 없다.
+          // displaySubKey(U*) / smallOrder / smallName 으로 실제 소단원을 구분한다.
+          final displaySubKey =
+              '${m['displaySubKey'] ?? m['display_sub_key'] ?? ''}'.trim();
           final midName = '${m['midName'] ?? m['mid_name'] ?? ''}'.trim();
           final smallName =
               '${m['smallName'] ?? m['small_name'] ?? ''}'.trim();
@@ -2470,13 +2631,14 @@ class HomeworkQuickAddProxyDialogState
           final midKey = '$bigOrder|$midOrder';
           midKeys.add(midKey);
           if (midName.isNotEmpty) midNames[midKey] = midName;
-          final smallKey = subKey.isNotEmpty
-              ? '$bigOrder|$midOrder|$subKey'
-              : (smallOrder == null
-                  ? '$bigOrder|$midOrder|${smallName.isEmpty ? item.title : smallName}'
-                  : '$bigOrder|$midOrder|$smallOrder');
+          final smallKey = displaySubKey.isNotEmpty
+              ? '$bigOrder|$midOrder|$displaySubKey'
+              : (smallOrder != null
+                  ? '$bigOrder|$midOrder|$smallOrder'
+                  : '$bigOrder|$midOrder|${smallName.isEmpty ? item.title : smallName}');
           smallKeys.add(smallKey);
-          final resolvedSmall = smallName.isNotEmpty ? smallName : item.title.trim();
+          final resolvedSmall =
+              smallName.isNotEmpty ? smallName : item.title.trim();
           if (resolvedSmall.isNotEmpty) smallNames[smallKey] = resolvedSmall;
         }
       }
@@ -3996,25 +4158,59 @@ class HomeworkQuickAddProxyDialogState
     final groups = <String, List<_TextbookProblemRegion>>{};
     final order = <String>[];
     for (final region in selected) {
-      final key = region.typeGroupKey;
+      final key = _problemSubtaskGroupKey(region, book);
       if (!groups.containsKey(key)) order.add(key);
       groups.putIfAbsent(key, () => <_TextbookProblemRegion>[]).add(region);
     }
     final items = <_DraftGroupItem>[];
     for (final key in order) {
       final regions = groups[key]!;
-      final first = regions.first;
-      final smallKey = '${first.bigOrder}|${first.midOrder}|${first.subKey}';
       items.add(
         _buildProblemSubtaskDraftItem(
           book,
           regions,
-          smallNodes[smallKey],
+          _resolveSmallNodeForRegions(regions, smallNodes),
           draftKey: 'auto_prob_$key',
         ),
       );
     }
     return items;
+  }
+
+  /// 개념원리는 crop.sub_key(A~E) ≠ 소단원(U*) 이므로 이름·페이지로 소단원을 찾는다.
+  _SmallUnitSelectionNode? _resolveSmallNodeForRegions(
+    List<_TextbookProblemRegion> regions,
+    Map<String, _SmallUnitSelectionNode> smallNodes,
+  ) {
+    if (regions.isEmpty) return null;
+    final first = regions.first;
+    final bySub = smallNodes['${first.bigOrder}|${first.midOrder}|${first.subKey}'];
+    if (bySub != null) return bySub;
+
+    final smallName = first.smallName.trim();
+    if (smallName.isNotEmpty) {
+      for (final entry in smallNodes.entries) {
+        if (!entry.key.startsWith('${first.bigOrder}|${first.midOrder}|')) {
+          continue;
+        }
+        if (entry.value.name.trim() == smallName) return entry.value;
+      }
+    }
+
+    final pages = regions.map((e) => e.displayPage).where((p) => p > 0);
+    for (final page in pages) {
+      for (final entry in smallNodes.entries) {
+        if (!entry.key.startsWith('${first.bigOrder}|${first.midOrder}|')) {
+          continue;
+        }
+        final small = entry.value;
+        final start = small.startPage;
+        if (start == null) continue;
+        final end = small.endPage ?? start;
+        if (page >= start && page <= end) return small;
+      }
+    }
+    return null;
   }
 
   _DraftGroupItem _buildProblemSubtaskDraftItem(
@@ -4039,15 +4235,51 @@ class HomeworkQuickAddProxyDialogState
     final first = regions.first;
     final smallName = (smallNode?.name ?? first.smallName).trim();
     final midName = first.midName.trim();
-    final title = smallName.isNotEmpty
-        ? smallName
-        : (groupLabels.length == 1
-            ? groupLabels.first
-            : '유형별 문항 ${regions.length}개');
+    final typeTitle = first.typeTitle.trim();
+    final isSsenLike = _isSsenLikeLinkedBook(book);
+    final isRpm = _isRpmLinkedBook(book);
+    final isWonri = _isWonriLinkedBook(book) || first.isWonri;
+    final wonriTypeName = isWonri ? first.wonriTypeName : '';
+    final rpmSectionTitle = isRpm ? _rpmSpecialSectionTitle(first) : null;
+    // 쎈·RPM·개념원리: 하위과제명은 유형/섹션명. 그 외는 소단원명 우선.
+    final String title;
+    if (rpmSectionTitle != null) {
+      title = rpmSectionTitle;
+    } else if (isSsenLike) {
+      if (typeTitle.isNotEmpty) {
+        title = typeTitle;
+      } else if (groupLabels.isNotEmpty) {
+        title = groupLabels.first;
+      } else if (smallName.isNotEmpty) {
+        title = smallName;
+      } else {
+        title = '유형별 문항 ${regions.length}개';
+      }
+    } else if (isWonri) {
+      if (wonriTypeName.isNotEmpty) {
+        title = wonriTypeName;
+      } else if (groupLabels.isNotEmpty) {
+        title = groupLabels.first;
+      } else if (smallName.isNotEmpty) {
+        title = smallName;
+      } else {
+        title = '유형별 문항 ${regions.length}개';
+      }
+    } else {
+      title = smallName.isNotEmpty
+          ? smallName
+          : (groupLabels.length == 1
+              ? groupLabels.first
+              : '유형별 문항 ${regions.length}개');
+    }
+    final pathTypeLabel = rpmSectionTitle ??
+        (isSsenLike && typeTitle.isNotEmpty ? typeTitle : '');
     final pathSummary = [
       first.bigName,
       midName,
       if (smallName.isNotEmpty) smallName,
+      if (pathTypeLabel.isNotEmpty) pathTypeLabel,
+      if (isWonri && wonriTypeName.isNotEmpty) wonriTypeName,
     ].where((e) => e.trim().isNotEmpty).join(' > ');
     final mapping = <String, dynamic>{
       'selectionMode': 'problem',
@@ -4056,6 +4288,7 @@ class HomeworkQuickAddProxyDialogState
       'midOrder': first.midOrder,
       if (smallNode != null) 'smallOrder': smallNode.orderIndex,
       'subKey': first.subKey,
+      if (smallNode != null) 'displaySubKey': smallNode.subKey,
       'bigName': first.bigName,
       'midName': midName,
       'smallName': smallName,
@@ -4071,17 +4304,37 @@ class HomeworkQuickAddProxyDialogState
       'problemCrops': regions.map((e) => e.toMappingJson()).toList(),
       'problemStage': _migratedProblemStageCode,
       'typeGroups': groupLabels,
+      if (isWonri && wonriTypeName.isNotEmpty) 'wonriTypeName': wonriTypeName,
+      if (rpmSectionTitle != null) 'rpmSectionTitle': rpmSectionTitle,
       'weight': 1.0,
     };
+    // 개념원리: 표시용 page 는 비우고, pageCounts/problemCrops 로 페이지·통계를 유지.
+    final storedPage = isWonri ? '' : pageText;
+    final sourceUnitPath = rpmSectionTitle != null
+        ? rpmSectionTitle
+        : (isSsenLike
+            ? (typeTitle.isNotEmpty
+                ? typeTitle
+                : (groupLabels.isNotEmpty
+                    ? groupLabels.join(', ')
+                    : smallName))
+            : (isWonri
+                ? (wonriTypeName.isNotEmpty
+                    ? wonriTypeName
+                    : (groupLabels.isNotEmpty
+                        ? groupLabels.join(', ')
+                        : smallName))
+                : (smallName.isNotEmpty
+                    ? smallName
+                    : (groupLabels.join(', ')))));
     return _assembleSubtaskDraftItem(
       book: book,
       title: title,
-      page: pageText,
+      page: storedPage,
       count: '${regions.length}',
       pathSummary: pathSummary,
       sourceUnitLevel: 'problem',
-      sourceUnitPath:
-          smallName.isNotEmpty ? smallName : (groupLabels.join(', ')),
+      sourceUnitPath: sourceUnitPath,
       unitMappings: <Map<String, dynamic>>[mapping],
       draftKey: draftKey,
     );
@@ -5149,40 +5402,7 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
-  Widget _buildEmbeddedDraftList() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 4,
-              height: 14,
-              decoration: BoxDecoration(
-                color: kDlgAccent,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '하위 과제 ${_draftGroupItems.length}개',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: UtilityGlassDialogTokens.iconColor,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Expanded(child: _buildDraftGroupItemList()),
-      ],
-    );
-  }
+  Widget _buildEmbeddedDraftList() => _buildDraftGroupItemList();
 
   Widget _buildDraftGroupItemList() {
     if (_draftGroupItems.isEmpty) {
@@ -5256,13 +5476,19 @@ class HomeworkQuickAddProxyDialogState
               tilePadding: const EdgeInsets.fromLTRB(10, 0, 8, 0),
               childrenPadding: const EdgeInsets.fromLTRB(12, 0, 10, 10),
               leading: _autoSubtaskMode
-                  ? Container(
-                      width: 8,
-                      height: 8,
-                      margin: const EdgeInsets.only(top: 6),
-                      decoration: const BoxDecoration(
-                        color: kDlgAccent,
-                        shape: BoxShape.circle,
+                  ? SizedBox(
+                      width: 22,
+                      child: Text(
+                        '${index + 1}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: UtilityGlassDialogTokens.iconColor.withValues(
+                            alpha: 0.75,
+                          ),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
                       ),
                     )
                   : ReorderableDragStartListener(
@@ -5687,6 +5913,7 @@ class HomeworkQuickAddProxyDialogState
     if (!mounted) return;
     setState(() {
       _selectedLinkedBookKey = null;
+      _linkedBookSeriesKey = null;
       _manualPageMode = false;
       _units = const <_BigUnitSelectionNode>[];
       _problemRegions = const <_TextbookProblemRegion>[];
@@ -5772,25 +5999,18 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
-  Widget _buildAddChildButton() {
-    final showNaesinPanel = _shouldShowNaesinPanel();
-    final showControls = showNaesinPanel ||
-        _useCustomSource ||
-        _selectedLinkedBookKey != null ||
-        _draftGroupItems.isNotEmpty;
-    if (!showControls) return const SizedBox.shrink();
-    const actionHeight = 40.0;
-    final autoCheckbox = SizedBox(
-      height: actionHeight,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => _setAutoSubtaskMode(!_autoSubtaskMode),
+  Widget _buildAutoCheckbox() {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => _setAutoSubtaskMode(!_autoSubtaskMode),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              width: 22,
-              height: 22,
+              width: 20,
+              height: 20,
               child: Checkbox(
                 value: _autoSubtaskMode,
                 activeColor: kDlgAccent,
@@ -5801,11 +6021,13 @@ class HomeworkQuickAddProxyDialogState
               ),
             ),
             const SizedBox(width: 6),
-            const Text(
+            Text(
               '자동',
               style: TextStyle(
-                color: kDlgText,
-                fontSize: 13.2,
+                color: UtilityGlassDialogTokens.iconColor.withValues(
+                  alpha: 0.9,
+                ),
+                fontSize: 13,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -5813,22 +6035,42 @@ class HomeworkQuickAddProxyDialogState
         ),
       ),
     );
-    Widget? addButton;
-    if (!_autoSubtaskMode) {
-      if (showNaesinPanel) {
-        addButton = OutlinedButton(
-          onPressed: () =>
-              _showDialogSnackBar('추가할 내신 셀을 클릭하면 하위 과제로 담깁니다.'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: kDlgText,
-            side: const BorderSide(color: kDlgBorder),
-            minimumSize: const Size(0, actionHeight),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+  }
+
+  /// 수동 모드에서만 표시. 자동 체크는 타이틀 행에 둔다.
+  Widget? _buildManualAddChildButton() {
+    if (_autoSubtaskMode) return null;
+    final showNaesinPanel = _shouldShowNaesinPanel();
+    final showControls = showNaesinPanel ||
+        _useCustomSource ||
+        _selectedLinkedBookKey != null ||
+        _draftGroupItems.isNotEmpty;
+    if (!showControls) return null;
+    const actionHeight = 40.0;
+    if (showNaesinPanel) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: SizedBox(
+          height: actionHeight,
+          child: OutlinedButton(
+            onPressed: () =>
+                _showDialogSnackBar('추가할 내신 셀을 클릭하면 하위 과제로 담깁니다.'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: kDlgText,
+              side: const BorderSide(color: kDlgBorder),
+              minimumSize: const Size(0, actionHeight),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+            ),
+            child: const Text('+ 하위 과제 추가'),
           ),
-          child: const Text('+ 하위 과제 추가'),
-        );
-      } else {
-        addButton = OutlinedButton(
+        ),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerRight,
+      child: SizedBox(
+        height: actionHeight,
+        child: OutlinedButton(
           onPressed: (_useCustomSource || _selectedLinkedBookKey != null)
               ? _addDraftGroupItemFromInput
               : null,
@@ -5839,15 +6081,8 @@ class HomeworkQuickAddProxyDialogState
             padding: const EdgeInsets.symmetric(horizontal: 16),
           ),
           child: const Text('+ 하위 과제 추가'),
-        );
-      }
-    }
-    return Row(
-      children: [
-        autoCheckbox,
-        const Spacer(),
-        if (addButton != null) SizedBox(height: actionHeight, child: addButton),
-      ],
+        ),
+      ),
     );
   }
 
@@ -5933,12 +6168,26 @@ class HomeworkQuickAddProxyDialogState
     final subKeys = activeSmall == null
         ? mid.smalls.map((small) => small.subKey).toSet()
         : <String>{activeSmall.subKey};
+    bool regionInActiveSmall(_TextbookProblemRegion region) {
+      if (!mid.isConcept) {
+        return subKeys.isEmpty || subKeys.contains(region.subKey);
+      }
+      // 개념원리: crop.sub_key 는 A~E, 소단원은 U* — 이름·페이지로 매칭.
+      if (activeSmall == null) return true;
+      final name = region.smallName.trim();
+      if (name.isNotEmpty && name == activeSmall.name.trim()) return true;
+      final start = activeSmall.startPage;
+      if (start == null) return false;
+      final end = activeSmall.endPage ?? start;
+      return region.displayPage >= start && region.displayPage <= end;
+    }
+
     final regions = _problemRegions
         .where((region) =>
             !region.isSetHeader &&
             region.bigOrder == big.orderIndex &&
             region.midOrder == mid.orderIndex &&
-            (subKeys.isEmpty || subKeys.contains(region.subKey)))
+            regionInActiveSmall(region))
         .toList()
       ..sort((a, b) {
         if (a.displayPage != b.displayPage) {
@@ -5949,6 +6198,16 @@ class HomeworkQuickAddProxyDialogState
         if (ao != bo) return ao.compareTo(bo);
         return a.problemNumber.compareTo(b.problemNumber);
       });
+    final book = _selectedLinkedBook;
+    String regionKey(_TextbookProblemRegion region) {
+      if (book == null) return region.typeGroupKey;
+      return _problemSubtaskGroupKey(region, book);
+    }
+
+    String regionHeaderLabel(_TextbookProblemRegion region) {
+      return _rpmSpecialSectionTitle(region) ?? region.typeGroupLabel;
+    }
+
     final out = <_TypeProblemFlatEntry>[];
     String? currentTypeKey;
     final pageGroups = <int, List<_TextbookProblemRegion>>{};
@@ -5961,15 +6220,17 @@ class HomeworkQuickAddProxyDialogState
       out.add(_TypeProblemFlatEntry.pageHeader(page));
       currentTypeKey = null;
       for (final region in pageGroups[page]!) {
-        final groupKey = '${region.displayPage}|${region.typeGroupKey}';
+        final groupKey = '${region.displayPage}|${regionKey(region)}';
         if (currentTypeKey != groupKey) {
           currentTypeKey = groupKey;
           final groupRegions = pageGroups[page]!
-              .where((e) => '${e.displayPage}|${e.typeGroupKey}' == groupKey)
+              .where(
+                (e) => '${e.displayPage}|${regionKey(e)}' == groupKey,
+              )
               .toList(growable: false);
           out.add(
             _TypeProblemFlatEntry.typeHeader(
-              label: region.typeGroupLabel,
+              label: regionHeaderLabel(region),
               regions: groupRegions,
             ),
           );
@@ -8159,14 +8420,7 @@ class HomeworkQuickAddProxyDialogState
             )
           : rangeContent,
     );
-    Widget secondaryActions() {
-      final showControls = showNaesinPanel ||
-          _useCustomSource ||
-          _selectedLinkedBookKey != null ||
-          _draftGroupItems.isNotEmpty;
-      if (!showControls) return const SizedBox.shrink();
-      return _buildAddChildButton();
-    }
+    Widget? secondaryActions() => _buildManualAddChildButton();
 
     Widget detailsPanel({
       required bool compact,
@@ -8177,20 +8431,23 @@ class HomeworkQuickAddProxyDialogState
           _useCustomSource || (!_autoSubtaskMode && _detailsPanelExpanded);
       final sectionTitle = _useCustomSource ? '사용자화 과제' : '하위 과제 정보';
       final canToggleDetails = showDetailEditors && !_useCustomSource;
-      final header = Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: canToggleDetails
-              ? () => setState(
-                    () => _detailsPanelExpanded = !_detailsPanelExpanded,
-                  )
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Row(
-              children: [
-                Expanded(
+      final showAutoCheckbox = !_useCustomSource &&
+          (hasBookSelection || showNaesinPanel);
+      final header = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          children: [
+            Expanded(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: canToggleDetails
+                      ? () => setState(
+                            () =>
+                                _detailsPanelExpanded = !_detailsPanelExpanded,
+                          )
+                      : null,
                   child: Text(
                     sectionTitle,
                     maxLines: 1,
@@ -8202,8 +8459,22 @@ class HomeworkQuickAddProxyDialogState
                     ),
                   ),
                 ),
-                if (canToggleDetails)
-                  Icon(
+              ),
+            ),
+            if (showAutoCheckbox) ...[
+              const SizedBox(width: 8),
+              _buildAutoCheckbox(),
+            ],
+            if (canToggleDetails) ...[
+              const SizedBox(width: 4),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => setState(
+                    () => _detailsPanelExpanded = !_detailsPanelExpanded,
+                  ),
+                  child: Icon(
                     expanded
                         ? Icons.expand_less_rounded
                         : Icons.expand_more_rounded,
@@ -8212,9 +8483,10 @@ class HomeworkQuickAddProxyDialogState
                     ),
                     size: 22,
                   ),
-              ],
-            ),
-          ),
+                ),
+              ),
+            ],
+          ],
         ),
       );
       final detailBody = _buildRightDetailPanel(
@@ -8223,6 +8495,7 @@ class HomeworkQuickAddProxyDialogState
       );
       final pinChildActions = _useCustomSource || hasBookSelection;
       final showEmbeddedList = hasBookSelection && !_useCustomSource;
+      final addChildButton = secondaryActions();
       final panel = Container(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         decoration: BoxDecoration(
@@ -8264,8 +8537,10 @@ class HomeworkQuickAddProxyDialogState
                         ),
                       ),
                   ],
-                  const SizedBox(height: 12),
-                  secondaryActions(),
+                  if (addChildButton != null) ...[
+                    const SizedBox(height: 12),
+                    addChildButton,
+                  ],
                   if (showEmbeddedList) ...[
                     const SizedBox(height: 12),
                     Expanded(
@@ -8437,7 +8712,13 @@ class HomeworkQuickAddProxyDialogState
           ],
           if (showNaesinPanel && !hasBookSelection && !_useCustomSource) ...[
             const SizedBox(height: 10),
-            secondaryActions(),
+            Row(
+              children: [
+                _buildAutoCheckbox(),
+                const Spacer(),
+                if (secondaryActions() case final naesinAdd?) naesinAdd,
+              ],
+            ),
           ],
           const SizedBox(height: 10),
           primaryActions(),
@@ -8870,6 +9151,7 @@ class _TextbookProblemRegion {
   final String label;
   final String section;
   final bool isSetHeader;
+  final bool isWonri;
   final String pbQuestionUid;
   final String typeKind;
   final String typeLabel;
@@ -8892,6 +9174,7 @@ class _TextbookProblemRegion {
     required this.label,
     required this.section,
     required this.isSetHeader,
+    this.isWonri = false,
     required this.pbQuestionUid,
     required this.typeKind,
     required this.typeLabel,
@@ -8902,12 +9185,32 @@ class _TextbookProblemRegion {
   });
 
   String get typeGroupKey {
+    if (isWonri) {
+      // 개념원리: 소단원(표시명) × 세부 유형명으로 하위과제를 나눈다.
+      final typeName = wonriTypeName;
+      final smallId = smallName.trim().isNotEmpty ? smallName.trim() : subKey;
+      return '$bigOrder|$midOrder|$smallId|$typeName';
+    }
     final kind = typeKind.isEmpty ? 'section' : typeKind;
     final label = typeLabel.isEmpty ? section : typeLabel;
     return '$bigOrder|$midOrder|$subKey|$kind|${typeOrder ?? -1}|$label';
   }
 
+  /// 개념원리 세부 유형명 (필수유형 content_group / STEP1 등).
+  String get wonriTypeName => wonriTypeDisplayName(
+        section: section,
+        subKey: subKey,
+        itemName: label,
+        typeGroupKind: typeKind,
+        typeGroupLabel: typeLabel,
+        typeGroupTitle: typeTitle,
+      );
+
   String get typeGroupLabel {
+    if (isWonri) {
+      final wonriName = wonriTypeName;
+      if (wonriName.isNotEmpty) return wonriName;
+    }
     if (typeTitle.isNotEmpty && typeLabel.isNotEmpty) {
       return '$typeLabel $typeTitle';
     }

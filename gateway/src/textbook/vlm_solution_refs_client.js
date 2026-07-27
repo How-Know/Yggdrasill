@@ -233,10 +233,22 @@ function normalizeProblemNumberKey(input) {
   if (!text) return '';
   const range = parseProblemNumberRange(text);
   if (range) return `${range.from}-${range.to}`;
-  const match = text.match(/\d+/);
-  if (!match) return text.replace(/\s+/g, '');
+  const compact = text.replace(/\s+/g, '');
+  // vlm_answer_client.js 의 같은 이름 함수와 규칙을 맞춘다. "2-1", "109-2",
+  // "개념확인105" 처럼 숫자 앞뒤 조각이 의미를 갖는 번호를 첫 숫자로 뭉개면
+  // 서로 다른 문항이 같은 키가 돼 해설 좌표가 하나만 남는다.
+  if (
+    /^\d+(?:[-\u2013\u2014~]\d+)+$/.test(compact) ||
+    /^[가-힣]+\d/.test(compact)
+  ) {
+    return compact
+      .replace(/[\u2013\u2014~]/g, '-')
+      .replace(/\d+/g, (digits) => String(Number(digits)));
+  }
+  const match = compact.match(/\d+/);
+  if (!match) return compact;
   const n = Number(match[0]);
-  return Number.isFinite(n) ? `${n}` : text.replace(/\s+/g, '');
+  return Number.isFinite(n) ? `${n}` : compact;
 }
 
 function parseBbox4(arr) {

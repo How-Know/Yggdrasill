@@ -4141,28 +4141,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   Set<int> _textbookProblemPagesFromItem(HomeworkItem item) {
-    final out = <int>{...parseHomeworkPageNumbers(item.page ?? '')};
-    for (final rawMapping
-        in item.unitMappings ?? const <Map<String, dynamic>>[]) {
-      final mapping = Map<String, dynamic>.from(rawMapping);
-      final pageCounts = mapping['pageCounts'];
-      if (pageCounts is Map) {
-        for (final rawKey in pageCounts.keys) {
-          final page = _intFromDynamic(rawKey);
-          if (page != null && page > 0) out.add(page);
-        }
-      }
-      final startPage = _intFromDynamic(mapping['startPage']);
-      final endPage = _intFromDynamic(mapping['endPage']);
-      if (startPage != null && endPage != null) {
-        final start = math.min(startPage, endPage);
-        final end = math.max(startPage, endPage);
-        for (var page = start; page <= end; page++) {
-          if (page > 0) out.add(page);
-        }
-      }
-    }
-    return out;
+    return homeworkItemDisplayPages(
+      page: item.page,
+      unitMappings: item.unitMappings,
+    );
   }
 
   int _textbookQuestionIndexFromRow(
@@ -8220,11 +8202,11 @@ class _DepartureHomeworkDraftPanelState
   }
 
   String _groupDetail(List<HomeworkItem> children) {
-    final pages = children
-        .map((item) => (item.page ?? '').trim())
-        .where((page) => page.isNotEmpty)
-        .toList(growable: false);
-    final mergedPages = mergeHomeworkPageRawStrings(pages);
+    final mergedPages = mergeHomeworkItemPageRanges(
+      children.map(
+        (item) => (page: item.page, unitMappings: item.unitMappings),
+      ),
+    );
     final totalCount =
         children.fold<int>(0, (sum, item) => sum + (item.count ?? 0));
     return <String>[
@@ -9035,18 +9017,16 @@ List<_HomeworkOverviewCompletedGroupEntry>
       }
       return children.first;
     }();
-    final pageLabels = <String>[];
     int totalQuestionCount = 0;
     int groupCheckCount = 0;
     int homeworkCount = 0;
     HomeworkAssignmentBrief? latestBrief;
+    final groupPageSummary = mergeHomeworkItemPageRanges(
+      children.map(
+        (item) => (page: item.page, unitMappings: item.unitMappings),
+      ),
+    );
     for (final child in children) {
-      final page = (child.page ?? '').trim();
-      if (page.isNotEmpty &&
-          !pageLabels.contains(page) &&
-          pageLabels.length < 4) {
-        pageLabels.add(page);
-      }
       final count = child.count ?? 0;
       if (count > 0) totalQuestionCount += count;
       if (child.checkCount > groupCheckCount) {
@@ -9078,11 +9058,8 @@ List<_HomeworkOverviewCompletedGroupEntry>
             ? totalQuestionCount.toString()
             : resolveSplitCount(totalQuestionCount, splitParts, splitRound)
                 .toString());
-    final String pageSummary = () {
-      if (pageLabels.isEmpty) return '-';
-      if (pageLabels.length <= 3) return pageLabels.join(', ');
-      return '${pageLabels.take(3).join(', ')}, ...';
-    }();
+    final String pageSummary =
+        groupPageSummary.isEmpty ? '-' : groupPageSummary;
     final String line4Left = 'p.$pageSummary';
     final String line4Right =
         '총 ${displayCount.isNotEmpty ? displayCount : '-'}문항';
@@ -10971,7 +10948,6 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
         _activatingReservedGroupActionKeys.contains(actionKey);
 
     final flowLabels = <String>{};
-    final pageLabels = <String>[];
     int totalQuestionCount = 0;
     int totalAssignmentCount = 0;
     DateTime? dueDate;
@@ -10981,10 +10957,6 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
       final flowId = (hw.flowId ?? assignment.flowId ?? '').trim();
       final flowLabel = (flowNames[flowId] ?? '').trim();
       if (flowLabel.isNotEmpty) flowLabels.add(flowLabel);
-      final page = (hw.page ?? '').trim();
-      if (page.isNotEmpty && !pageLabels.contains('p.$page')) {
-        pageLabels.add('p.$page');
-      }
       final count = hw.count ?? 0;
       if (count > 0) totalQuestionCount += count;
       totalAssignmentCount += assignmentCounts[hw.id] ?? 0;
@@ -10993,6 +10965,14 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
         assignment.dueDate == null ? null : _dateOnly(assignment.dueDate!),
       );
     }
+    final groupPageSummary = mergeHomeworkItemPageRanges(
+      entries.map(
+        (entry) => (
+          page: entry.value.page,
+          unitMappings: entry.value.unitMappings,
+        ),
+      ),
+    );
 
     final String flowSummary = flowLabels.isEmpty
         ? '플로우 미지정'
@@ -11001,7 +10981,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
             : '플로우 ${flowLabels.length}개');
     final String topMeta = <String>[
       flowSummary,
-      if (pageLabels.isNotEmpty) pageLabels.take(3).join(', '),
+      if (groupPageSummary.isNotEmpty) 'p.$groupPageSummary',
       if (totalQuestionCount > 0) '$totalQuestionCount문항',
     ].join(' · ');
     final String bottomMeta = <String>[
@@ -11549,7 +11529,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       }
       final childCount = child.count;
       if (childCount != null && childCount > 0) totalCount += childCount;
-      final p = (child.page ?? '').trim();
+      final p = homeworkItemPageRangeText(
+        page: child.page,
+        unitMappings: child.unitMappings,
+      );
       if (p.isNotEmpty) pages.add(p);
       final updated = child.updatedAt;
       if (updated != null &&
@@ -11684,8 +11667,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final summary = buildGroupSummary(group, children);
     final bool hasRunningChild = summary.phase == 2 ||
         children.any((e) => e.runStart != null || e.phase == 2);
-    final bool groupExpanded =
-        hasRunningChild || expandedHomeworkIds.contains(group.id);
+    // 수행 단계 자동 펼침 없음 — 카드 탭으로만 펼침/접힘.
+    final bool groupExpanded = expandedHomeworkIds.contains(group.id);
     DateTime? dueDate = assignmentDueByGroupId[group.id];
     bool hasHomeworkAssignment = assignmentDueByGroupId.containsKey(group.id);
     for (final child in children) {
@@ -12293,18 +12276,17 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
   final DateTime? assignedDateBase = firstAssignedAt ?? firstCreatedAt;
   final String assignedDateText =
       assignedDateBase == null ? '-' : _formatDateShort(assignedDateBase);
-  final sortedCodes = byId.values
-      .map((hw) =>
-          _formatHomeworkAssignmentCode(hw.assignmentCode, fallback: ''))
-      .where((code) => code.isNotEmpty)
-      .toSet()
-      .toList(growable: false)
-    ..sort();
-  final String assignmentCodeText = sortedCodes.isEmpty
-      ? '-'
-      : (sortedCodes.length == 1
-          ? sortedCodes.first
-          : '${sortedCodes.first} 외 ${sortedCodes.length - 1}건');
+  String assignmentCodeText = '-';
+  for (final hw in byId.values) {
+    final code = _formatHomeworkAssignmentCode(
+      hw.assignmentCode,
+      fallback: '',
+    );
+    if (code.isNotEmpty) {
+      assignmentCodeText = code;
+      break;
+    }
+  }
   return _HomeworkPrintOverlayMeta(
     assignedDateText: assignedDateText,
     bookCourseText: bookCourseText,
@@ -13007,7 +12989,10 @@ String _normalizePageRangeForPrint(String raw) {
 }
 
 Future<String> _homeworkPrintStoredPageRange(HomeworkItem hw) async {
-  return (hw.page ?? '').trim();
+  return homeworkItemPageRangeText(
+    page: hw.page,
+    unitMappings: hw.unitMappings,
+  );
 }
 
 Future<Map<String, String>> _homeworkPrintPageRangeByChildId(
@@ -15458,20 +15443,18 @@ Widget _buildHomeworkChipVisual(
   final String line5Right = splitCycleText.isEmpty
       ? repeatCycleText
       : '$repeatCycleText · $splitCycleText';
-  final sortedAssignmentCodes = (groupChildren.isNotEmpty
-          ? groupChildren
-          : [hw])
-      .map((item) =>
-          _formatHomeworkAssignmentCode(item.assignmentCode, fallback: ''))
-      .where((code) => code.isNotEmpty)
-      .toSet()
-      .toList(growable: false)
-    ..sort();
-  final String assignmentCodeText = sortedAssignmentCodes.isEmpty
-      ? '-'
-      : (sortedAssignmentCodes.length == 1
-          ? sortedAssignmentCodes.first
-          : '${sortedAssignmentCodes.first} 외 ${sortedAssignmentCodes.length - 1}건');
+  // 그룹 과제는 하위과제 공통 1개 코드만 표시한다.
+  final String assignmentCodeText = () {
+    final sources = groupChildren.isNotEmpty ? groupChildren : [hw];
+    for (final item in sources) {
+      final code = _formatHomeworkAssignmentCode(
+        item.assignmentCode,
+        fallback: '',
+      );
+      if (code.isNotEmpty) return code;
+    }
+    return '-';
+  }();
   final double fixedWidth = ClassContentScreen._studentColumnContentWidth;
   final double maxRowW = fixedWidth - leftPad - rightPad;
   final bool hasGroupChildren = groupChildren.isNotEmpty;
@@ -15709,15 +15692,21 @@ Widget _buildHomeworkChipVisual(
     ),
   );
 
+  final String collapsedCountText =
+      '${displayCount.isNotEmpty ? displayCount : '-'}문항';
   Widget collapsedRow3 = ConstrainedBox(
     constraints: BoxConstraints(maxWidth: maxRowW),
     child: Row(
       children: [
-        Text(startDateText, style: secondaryRowStyle),
+        Text(line4PageText, style: secondaryRowStyle),
         const SizedBox(width: 8),
-        Text(progressText, style: secondaryRowStyle),
+        Text(collapsedCountText, style: secondaryRowStyle),
         const Spacer(),
-        Text('총 $durationText', style: secondaryRowStyle),
+        Text(
+          startDateText,
+          style: secondaryRowStyle,
+          textAlign: TextAlign.right,
+        ),
       ],
     ),
   );
@@ -15764,8 +15753,6 @@ Widget _buildHomeworkChipVisual(
 
   final List<Widget> columnChildren;
   if (isExpanded) {
-    final String expandedLine3Left = '시작 $startedAtText · $progressText';
-    final String expandedLine3Right = '총 $durationText';
     final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
 
     String groupChildLabel(HomeworkItem child) {
@@ -15975,7 +15962,7 @@ Widget _buildHomeworkChipVisual(
           children: [
             Expanded(
               child: Text(
-                expandedLine3Left,
+                line4PageText,
                 style: secondaryRowStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -15983,7 +15970,7 @@ Widget _buildHomeworkChipVisual(
             ),
             const SizedBox(width: 8),
             Text(
-              expandedLine3Right,
+              line4TotalCountText,
               style: secondaryRowStyle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -15997,17 +15984,22 @@ Widget _buildHomeworkChipVisual(
         constraints: BoxConstraints(maxWidth: maxRowW),
         child: Row(
           children: [
-            Expanded(
-              child: Text(
-                line4PageText,
-                style: secondaryRowStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+            Text(
+              '시작 $startedAtText',
+              style: secondaryRowStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(width: 8),
             Text(
-              line4TotalCountText,
+              progressText,
+              style: secondaryRowStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const Spacer(),
+            Text(
+              '총 $durationText',
               style: secondaryRowStyle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

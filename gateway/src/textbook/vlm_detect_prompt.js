@@ -58,10 +58,16 @@ const WONRI_LABELS = Object.freeze([
   '교육청기출',
 ]);
 
+// 개념+유형 라벨 집합.
+//   상/중/하        — 탄탄 단원 다지기 문항 번호 위의 원 세 개 중 칠해진 개수.
+//   예제/유제/연습  — 쓱쓱 서술형 완성하기의 세 갈래. 번호가 각각 1부터 시작해서
+//                     클라이언트가 이 라벨로 접두어를 붙인다.
+const GAEYU_LABELS = Object.freeze(['상', '중', '하', '예제', '유제', '연습']);
+
 // 시리즈 전체 라벨 합집합. normalizeDetectResult 의 허용 집합으로 사용한다
 // (쎈 페이지에 상중/중요가 인쇄될 일이 없으므로 합집합이어도 오탐 위험은 낮다).
 export const VLM_DETECT_LABELS = Object.freeze([
-  ...new Set([...SSEN_LABELS, ...RPM_LABELS, ...WONRI_LABELS]),
+  ...new Set([...SSEN_LABELS, ...RPM_LABELS, ...WONRI_LABELS, ...GAEYU_LABELS]),
 ]);
 
 export function buildRpmSetHeaderPrompt({ rawPage, displayPage }) {
@@ -207,6 +213,18 @@ const SERIES_CONFIGS = Object.freeze({
     labelRules: [],
     partCExtra: [],
   },
+  // 개념+유형(개념서). 개념원리와 같은 이유로 전용 빌더로 분기한다.
+  gaeyu: {
+    key: 'gaeyu',
+    bookName: '개념+유형',
+    partA: '개념확인',
+    partB: '필수 문제',
+    partC: '쏙쏙 개념 익히기',
+    partD: '탄탄 단원 다지기',
+    labels: GAEYU_LABELS,
+    labelRules: [],
+    partCExtra: [],
+  },
 });
 
 export function resolveDetectSeriesConfig(series) {
@@ -223,6 +241,13 @@ export const VLM_DETECT_SECTIONS = Object.freeze([
   'type_example', // B 필수유형
   'check', // C 확인 체크
   'exercise', // D 연습문제 (STEP1/STEP2/실력 UP)
+  // 개념+유형 전용 섹션. sub_key A~F 슬롯과 1:1 대응한다.
+  'concept_check', // A 개념확인
+  'essential_problem', // B 필수 문제 (따름 문제 포함)
+  'step_drill', // C 쏙쏙 개념 익히기 (STEP1)
+  'unit_drill', // D 탄탄 단원 다지기 (STEP2)
+  'descriptive', // E 쓱쓱 서술형 완성하기 (STEP3)
+  'extra_practice', // F 한 번 더 연습
   'unknown',
 ]);
 
@@ -233,6 +258,16 @@ export const WONRI_SECTION_BY_SUB_KEY = Object.freeze({
   B: 'type_example',
   C: 'check',
   D: 'exercise',
+});
+
+// 개념+유형 슬롯(sub_key) → 탐지 섹션 매핑.
+export const GAEYU_SECTION_BY_SUB_KEY = Object.freeze({
+  A: 'concept_check',
+  B: 'essential_problem',
+  C: 'step_drill',
+  D: 'unit_drill',
+  E: 'descriptive',
+  F: 'extra_practice',
 });
 
 export const VLM_DETECT_PAGE_KINDS = Object.freeze([
@@ -255,6 +290,9 @@ export function buildDetectProblemsPrompt({
     // 개념원리는 단일 패스: sectionHint 없이 페이지의 모든 카테고리 문항을
     // 한 번에 감지하고 문항마다 category 를 붙인다.
     return buildWonriDetectPrompt({ displayPage, rawPage });
+  }
+  if (cfg.key === 'gaeyu') {
+    return buildGaeyuDetectPrompt({ displayPage, rawPage });
   }
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
@@ -639,6 +677,172 @@ function buildWonriDetectPrompt({ displayPage, rawPage }) {
     '[D6] 문항번호가 잘려 있거나 흐릿해 판독이 불확실하면 그래도 items 에 포함하되,',
     '     notes 에 짧게 "숫자 N 번 판독 불확실" 처럼 기록한다.',
     '[D7] 같은 번호가 중복되면 카테고리가 다르면 둘 다 유지하고, 같은 카테고리에서',
+    '     중복이면 더 신뢰도 높은 것 하나만 남겨라.',
+    '[D8] items 는 위→아래, 좌단→우단 순으로 정렬하라.',
+    '[D9] page_kind 규칙:',
+    '     - 문항이 하나라도 있으면 "problem_page" (개념 설명이 섞여 있으면 "mixed").',
+    '     - 문항이 하나도 없으면 "concept_page" + items=[].',
+    '',
+    '=== 절대 금지 ===',
+    '[N1] stem, choices, answer, figures 등 다른 필드를 만들지 마라. 이 프롬프트는 "번호 위치 탐지 전용" 이다.',
+    '[N2] 없는 문항을 추측해서 만들지 마라. 보이는 것만 담는다.',
+    '',
+    '지금 첨부된 이미지를 분석해 위 스키마로만 출력하라.',
+  ];
+  return lines.join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 개념+유형(gaeyu) 전용 프롬프트 — 개념원리와 같은 **단일 패스**.
+//
+// 카테고리 (sub_key A~F 슬롯과 1:1):
+//   concept_check     — A 개념확인 (번호가 인쇄돼 있지 않다)
+//   essential_problem — B 필수 문제 + 따름 문제("1-1", "1-2")
+//   step_drill        — C 쏙쏙 개념 익히기 (STEP1)
+//   unit_drill        — D 탄탄 단원 다지기 (STEP2, 난이도·중요 표시 있음)
+//   descriptive       — E 쓱쓱 서술형 완성하기 (STEP3, 예제/유제/연습해 보자)
+//   extra_practice    — F 한 번 더 연습
+//
+// 번호 접두어(개념확인N / 예제N / 유제N / 연습N)는 모델이 조합하지 않는다.
+// 모델은 인쇄된 숫자와 갈래 라벨만 읽고, 접두어는 vlm_detect_client 가 붙인다.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const GAEYU_ITEM_CATEGORIES = Object.freeze([
+  'concept_check',
+  'essential_problem',
+  'step_drill',
+  'unit_drill',
+  'descriptive',
+  'extra_practice',
+]);
+
+function buildGaeyuDetectPrompt({ displayPage, rawPage }) {
+  const pageLine =
+    displayPage != null && Number.isFinite(displayPage)
+      ? `이 이미지는 교재(개념+유형) 스캔본의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
+      : `이 이미지는 교재(개념+유형) 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
+
+  const lines = [
+    '당신은 한국 중등 교재 스캔본에서 "문항 번호" 의 위치를 탐지하는 비전 AI 입니다.',
+    '반드시 아래 JSON 스키마만 출력하세요. 설명·마크다운·주석·코드펜스 모두 금지.',
+    '',
+    pageLine,
+    '',
+    '=== 책 구조 (매우 중요) ===',
+    '개념+유형(개념서)에는 개념만 있는 전용 페이지가 거의 없다. 한 페이지에 개념',
+    '설명과 여러 카테고리의 문항이 함께 인쇄되므로, 보이는 문항을 **모두** 수집하고',
+    '문항마다 category 필드로 어느 코너인지 표시하라.',
+    '',
+    '  (1) 개념 + 문제 페이지 — 페이지 상단에 초록색 두 자리 배지("O1")와 소단원명.',
+    '      아래로 다음이 순서대로 이어진다.',
+    '      · 노란 개념 설명 상자: 상자 제목 앞의 굵은 한 자리 숫자("1 제곱근의 뜻")는',
+    '        개념 번호이지 문항 번호가 아니다. 절대 items 에 넣지 마라.',
+    '      · "개념 확인" 민트색 원형 배지: 그 오른쪽/아래의 문항이 개념확인 문항이다.',
+    '        **인쇄된 번호가 없다.** → category="concept_check", number="" 로 두어라.',
+    '        한 페이지에 개념확인은 보통 한 개다.',
+    '      · "필수 문제" 보라색 배지: 배지 바로 아래 왼쪽 여백에 그 문항의 유형명',
+    '        (예: "제곱근의 뜻")이 작게 인쇄된다. 오른쪽에 보라색 원 안 숫자가 문항',
+    '        번호다. → category="essential_problem", number=원 안 숫자 원문.',
+    '      · 필수 문제 아래로 "1-1", "1-2" 처럼 하이픈이 붙은 번호가 이어진다.',
+    '        같은 필수 문제에 딸린 따름 문제다. → category="essential_problem",',
+    '        number="1-1" 처럼 하이픈 포함 원문 그대로.',
+    '  (2) 쏙쏙 개념 익히기 — 상단에 주황색 "STEP 1" 원 배지와 "쏙쏙 개념 익히기".',
+    '      굵은 숫자 1, 2, 3 … 이 세로로 나열된다.',
+    '      → category="step_drill", label="".',
+    '      문항 본문 안이나 번호 옆에 "한 번 더" 배지가 붙는 경우가 있는데, 이건',
+    '      쌍둥이 문항 표시이고 번호를 새로 시작하지 않는다. 그대로 같은 번호를 쓴다.',
+    '  (3) 한 번 더 연습 — 상단에 초록색 "한번 더 연습" 배지와 소단원명이 인쇄된',
+    '      **별도 페이지**. 번호 모양은 쏙쏙과 똑같지만 1번부터 새로 시작한다.',
+    '      → category="extra_practice". 상단 배지가 "한번 더 연습"이면 그 페이지의',
+    '      문항은 절대 step_drill 로 분류하지 마라.',
+    '  (4) 탄탄 단원 다지기 — 상단에 파란색 "STEP 2" 원 배지와 "탄탄 단원 다지기".',
+    '      각 문항 번호 **바로 위에 작은 원 세 개**가 인쇄돼 있고, 왼쪽부터 주황색으로',
+    '      칠해진 개수가 난이도다. → 1개="하", 2개="중", 3개="상" 을 label 에 넣어라.',
+    '      번호 뒤에 노란 별 모양 배경이 깔린 문항은 중요 문항이다.',
+    '      → category="unit_drill", label=난이도, is_important=true/false.',
+    '      원 세 개가 안 보이면 label="" 로 두고 지어내지 마라.',
+    '  (5) 쓱쓱 서술형 완성하기 — 상단에 파란색 "STEP 3" 원 배지.',
+    '      · 왼쪽 단: 보라색 "예제 1" 배지 + 문제 상자, 그 아래 "풀이 과정"의',
+    '        1단계·2단계·3단계와 "답"이 **이미 채워져** 있다.',
+    '        → category="descriptive", label="예제", number="1".',
+    '      · 오른쪽 단: "따라 해보자" 리본 아래 파란색 "유제 1" 배지 + 문제 상자,',
+    '        그 아래 풀이 과정 칸이 **비어 있다**.',
+    '        → category="descriptive", label="유제", number="1".',
+    '      · 다음 페이지의 "연습해 보자" 구간 문항(번호 1, 2, 3, 4)',
+    '        → category="descriptive", label="연습", number=인쇄된 숫자.',
+    '      예제·유제·연습해 보자는 번호가 각각 1부터 시작한다. 서로 합치거나 이어서',
+    '      매기지 말고, 반드시 label 로 갈래를 구분해 인쇄된 숫자를 그대로 넣어라.',
+    '  (6) 개념 Review / 마인드맵 — 빈칸 채우기 정리 지면이라 문항이 아니다.',
+    '      번호 ①②③ 이 많이 보여도 모두 무시한다.',
+    '      → page_kind="concept_page", items=[].',
+    '',
+    '=== 출력 스키마 ===',
+    '{',
+    '  "section": "concept_check" | "essential_problem" | "step_drill" | "unit_drill" | "descriptive" | "extra_practice" | "unknown",',
+    '  "page_kind": "problem_page" | "concept_page" | "mixed" | "unknown",',
+    '  "page_layout": "two_column" | "one_column" | "unknown",',
+    '  "items": [',
+    '    {',
+    '      "number": "<인쇄된 문항번호 원문. 개념확인이면 빈 문자열 \\"\\">",',
+    '      "category": "concept_check" | "essential_problem" | "step_drill" | "unit_drill" | "descriptive" | "extra_practice",',
+    '      "label": "<\\"상\\"|\\"중\\"|\\"하\\"|\\"예제\\"|\\"유제\\"|\\"연습\\", 해당 없으면 \\"\\">",',
+    '      "is_important": <bool — 탄탄의 노란 별 표시. 그 외에는 false>,',
+    '      "is_set_header": <bool>,',
+    '      "set_range": {"from": <int>, "to": <int>} | null,',
+    '      "content_group": {',
+    '        "kind": "type" | "none",',
+    '        "label": "<예: \\"필수 문제 1\\", 없으면 빈 문자열>",',
+    '        "title": "<필수 문제 왼쪽 여백의 유형명, 없으면 빈 문자열>",',
+    '        "order": <int> | null',
+    '      },',
+    '      "column": 1 | 2 | null,',
+    '      "bbox": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '      "item_region": [<ymin>, <xmin>, <ymax>, <xmax>]',
+    '    }',
+    '  ],',
+    '  "notes": "<정확도에 영향을 주는 특이사항 간단히, 없으면 빈 문자열>"',
+    '}',
+    '',
+    'section 은 이 페이지에서 문항 수가 가장 많은 카테고리 하나를 적는다.',
+    '문항이 없으면 "unknown".',
+    '',
+    '=== 탐지 규칙 ===',
+    '[D0] 페이지에 보이는 문항을 카테고리 구분 없이 **모두** items 에 담아라.',
+    '     한 페이지에 개념확인·필수 문제·따름 문제가 함께 있으면 셋 다 수집한다.',
+    '[D0-Cat] 카테고리는 **페이지 상단 배지**를 최우선 근거로 삼는다.',
+    '     "STEP 1 쏙쏙 개념 익히기" → step_drill, "한번 더 연습" → extra_practice,',
+    '     "STEP 2 탄탄 단원 다지기" → unit_drill, "STEP 3 쓱쓱 서술형 완성하기" → descriptive.',
+    '     상단 배지가 없는 본문 지면에서만 "개념 확인"/"필수 문제" 배지로 판단한다.',
+    '[D0-Concept] 문항이 아닌 것들 — 절대 items 에 넣지 마라:',
+    '     - 노란 개념 상자 제목 앞의 굵은 한 자리 숫자(개념 번호).',
+    '     - 왼쪽 여백의 회색 도움말/공식 정리 상자와 그 안의 화살표 항목.',
+    '     - 오른쪽 여백의 "용어" 상자, 참고 말풍선.',
+    '     - "정답과 해설 17쪽" 같은 안내 문구와 쪽번호.',
+    '     - 개념 Review·마인드맵의 빈칸 번호.',
+    '[D1] 본문 안의 "(1), (2)" 같은 소문항 레이블, "①~⑤" 선택지 기호,',
+    '     "풀이 과정", "1단계", "답" 같은 섹션 헤더는 문항 번호가 아니다.',
+    '     단, "1-1", "1-2" 처럼 하이픈으로 이어진 번호는 따름 문제이므로 반드시 수집한다.',
+    '[D2] 페이지 번호(쪽 번호)는 문항 번호가 아니다. 넣지 마라.',
+    '[D3] 레이아웃이 2단이면 column 은 좌측단 = 1, 우측단 = 2. 1단이거나 판단 불가이면 null.',
+    '[D4] bbox 는 "문항번호 숫자 및 바로 옆 배지까지만" 감싸는 최소 박스.',
+    '     개념확인처럼 번호가 없으면 "개념 확인" 배지 자체를 bbox 로 잡는다.',
+    '     좌표계: 이미지 좌상단 (0,0), 우하단 (1000,1000). 순서는 [ymin, xmin, ymax, xmax].',
+    '[D5] item_region 은 이 문항의 본문 영역만 타이트하게 감싸는 박스다.',
+    '     그대로 크롭 이미지로 잘라 저장되므로 본문이 아닌 것은 어떤 것도 들어가면 안 된다.',
+    '     - 문항 번호와 배지는 bbox 에만 담고 item_region 에서 제외한다.',
+    '     - **포함**: 지문, 보기 상자, 조건 상자, 표, 그림, 선택지(①~⑤), 소문항 "(1)/(2)".',
+    '     - **제외**: 왼쪽/오른쪽 여백의 도움말·용어 상자, 이웃 문항, 코너 헤더.',
+    '     - **쓱쓱 예제(label="예제")**: 문제 상자만 감싼다. 아래 "풀이 과정"과 "답"은',
+    '       반드시 제외한다. 아래 경계는 "풀이 과정" 글자가 시작되기 직전이다.',
+    '     - **쓱쓱 유제(label="유제")**: 문제 상자만 감싼다. 아래 빈 풀이 칸은 제외한다.',
+    '     - 각 변마다 0..1000 스케일 기준 6~12 정도의 아주 작은 여백만 둔다.',
+    '     - 두 문항의 item_region 은 원칙적으로 서로 겹치지 않아야 한다.',
+    '[D6] content_group 규칙:',
+    '     - 필수 문제와 그에 딸린 따름 문제("1-1", "1-2")는 같은 유형명을 공유한다.',
+    '       kind="type", label="필수 문제 1", title="제곱근의 뜻" 처럼 채운다.',
+    '     - 유형명 아래의 설명 문장이나 공식은 title 에 넣지 마라. 제목 한 줄만 쓴다.',
+    '     - 그 외 카테고리는 kind="none", label="", title="", order=null.',
+    '[D7] 같은 번호라도 카테고리가 다르면 둘 다 유지한다. 같은 카테고리 안에서',
     '     중복이면 더 신뢰도 높은 것 하나만 남겨라.',
     '[D8] items 는 위→아래, 좌단→우단 순으로 정렬하라.',
     '[D9] page_kind 규칙:',

@@ -38,6 +38,7 @@ class TextbookCropUploadItem {
     required this.problemNumber,
     this.label = '',
     this.itemName = '',
+    this.isImportant = false,
     this.isSetHeader = false,
     this.setFrom,
     this.setTo,
@@ -67,6 +68,10 @@ class TextbookCropUploadItem {
   /// 쎈의 난이도(label)와 별개 컬럼(item_name)에 저장된다. 난이도가 있는
   /// 시리즈(쎈/RPM)에서는 빈 문자열.
   final String itemName;
+
+  /// 개념+유형 탄탄 단원 다지기의 "⭐중요" 표시. 난이도(label)와 별개라
+  /// 둘을 함께 저장한다.
+  final bool isImportant;
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
@@ -310,6 +315,7 @@ class TextbookCropUploader {
       'problem_number': item.problemNumber,
       'label': item.label,
       if (item.itemName.isNotEmpty) 'item_name': item.itemName,
+      if (item.isImportant) 'is_important': true,
       'is_set_header': item.isSetHeader,
       if (item.setFrom != null) 'set_from': item.setFrom,
       if (item.setTo != null) 'set_to': item.setTo,

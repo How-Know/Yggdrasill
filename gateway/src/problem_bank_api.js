@@ -6440,6 +6440,13 @@ async function handleTextbookVlmDetectProblems(body, res) {
     'check',
     'exercise',
     'special_lecture',
+    // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
+    'concept_check',
+    'essential_problem',
+    'step_drill',
+    'unit_drill',
+    'descriptive',
+    'extra_practice',
   ].includes(rawSectionHint)
     ? rawSectionHint
     : '';
@@ -6547,6 +6554,9 @@ async function handleTextbookVlmDetectProblems(body, res) {
     sectionHint,
     expectedStartNumber,
     series,
+    // 개념+유형 개념확인은 번호가 없어 본문 인쇄 페이지를 번호로 쓴다.
+    displayPage,
+    rawPage,
   });
   // 개념원리: 문항이 감지된 페이지는 전용 2차 판독으로 페이지 종류를 확정한다.
   //   concept("개념원리 이해" 개념 페이지)이면 참조 라벨("필수 04" 등) 오인
@@ -6970,6 +6980,9 @@ async function handleTextbookVlmExtractBodySolutions(body, res) {
       rawPage,
       displayPage: rawPage,
       expectedNumbers,
+      // 개념원리 필수유형·특강과 개념+유형 쓱쓱 예제는 지면 구성이 달라
+      // 프롬프트를 시리즈별로 분기한다.
+      series: String(body?.series || 'wonri').trim().toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
@@ -7254,6 +7267,8 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       // 개념서 문항이름(개념원리 익히기 / 필수유형 / 확인 체크 / STEP1 등).
       // 난이도(label)와 별개 컬럼. 다른 시리즈는 빈 문자열.
       item_name: c.item_name != null ? String(c.item_name) : '',
+      // 개념+유형 탄탄 단원 다지기의 "중요" 표시. 난이도와 별개로 함께 둔다.
+      is_important: Boolean(c.is_important),
       is_set_header: Boolean(c.is_set_header),
       set_from: Number.isFinite(setFrom) ? setFrom : null,
       set_to: Number.isFinite(setTo) ? setTo : null,
@@ -7460,18 +7475,33 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   const gradeLabel = String(body?.grade_label || '').trim();
 
   // expected_numbers can be either ["0001","12"] or [{problem_number:"0001", crop_id:"..."}, ...]
+  //
+  // 개념+유형은 코너(필수 문제 / 쏙쏙 / 한번 더 연습 / 탄탄 / 쓱쓱)마다 번호가
+  // 1번부터 다시 시작하고 답지도 코너별 박스로 인쇄된다. 번호 문자열만 넘기면
+  // 같은 "1" 이 어느 박스의 1번인지 모델이 고를 수 없으므로, 객체 형태로 오는
+  // 코너 이름과 본문 페이지를 프롬프트까지 그대로 들고 간다.
   const expectedRaw = Array.isArray(body?.expected_numbers)
     ? body.expected_numbers
     : [];
-  const expectedNumbers = expectedRaw
+  const expectedEntries = expectedRaw
     .map((v) => {
-      if (v == null) return '';
-      if (typeof v === 'string') return v.trim();
-      if (typeof v === 'object')
-        return String(v.problem_number || v.number || '').trim();
-      return '';
+      if (v == null) return null;
+      if (typeof v === 'string') {
+        return { number: v.trim(), corner: '', page: 0 };
+      }
+      if (typeof v !== 'object') return null;
+      const page = Number.parseInt(
+        String(v.page ?? v.display_page ?? v.body_page ?? ''),
+        10,
+      );
+      return {
+        number: String(v.problem_number || v.number || '').trim(),
+        corner: String(v.corner || v.item_name || '').trim(),
+        page: Number.isFinite(page) && page > 0 ? page : 0,
+      };
     })
-    .filter((s) => s.length > 0);
+    .filter((e) => e && e.number.length > 0);
+  const expectedNumbers = expectedEntries.map((e) => e.number);
 
   const displayPage = rawPage;
   const pageOffset = 0;
@@ -7486,6 +7516,8 @@ async function handleTextbookVlmExtractAnswers(body, res) {
       displayPage,
       pageOffset,
       expectedNumbers,
+      expectedEntries,
+      series: String(body?.series || '').trim().toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,

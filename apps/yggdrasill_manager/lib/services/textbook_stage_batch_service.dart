@@ -43,6 +43,7 @@ class TextbookStageBatchService {
     required int bigOrder,
     required int midOrder,
     required String subKey,
+    String seriesKey = '',
     void Function(String status)? onStatus,
   }) async {
     final crops = await _loadCrops(
@@ -85,6 +86,7 @@ class TextbookStageBatchService {
         academyId: academyId,
         bookId: bookId,
         gradeLabel: gradeLabel,
+        seriesKey: seriesKey,
         crops: crops,
         onStatus: onStatus,
       );
@@ -169,6 +171,7 @@ class TextbookStageBatchService {
     required String bookId,
     required String gradeLabel,
     required List<_BatchCrop> crops,
+    String seriesKey = '',
     void Function(String status)? onStatus,
   }) async {
     final answerCrops = crops.where((crop) => !crop.isSetHeader).toList();
@@ -227,6 +230,7 @@ class TextbookStageBatchService {
           bookId: bookId,
           gradeLabel: gradeLabel,
           expectedNumbers: expected,
+          seriesKey: seriesKey,
         );
         for (final item in result.items) {
           if (item.answerText.trim().isEmpty) continue;

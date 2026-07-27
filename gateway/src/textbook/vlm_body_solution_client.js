@@ -18,7 +18,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function buildBodySolutionsPrompt({ rawPage, displayPage, expectedNumbers }) {
+export function buildBodySolutionsPrompt({
+  rawPage,
+  displayPage,
+  expectedNumbers,
+  series = 'wonri',
+}) {
+  if (String(series || '').trim().toLowerCase() === 'gaeyu') {
+    return buildConceptPlusBodySolutionsPrompt({
+      rawPage,
+      displayPage,
+      expectedNumbers,
+    });
+  }
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 교재(개념원리) 본문 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -85,12 +97,92 @@ export function buildBodySolutionsPrompt({ rawPage, displayPage, expectedNumbers
   ].join('\n');
 }
 
+// 개념+유형 "쓱쓱 서술형 완성하기" 예제 전용.
+//
+// 왼쪽 단의 예제만 풀이 과정(1단계·2단계·3단계)과 "답"이 본문에 채워져 있고,
+// 오른쪽 단의 유제는 빈 칸이라 정답이 정답 파일에 있다. 이 호출은 예제만
+// 대상으로 한다.
+function buildConceptPlusBodySolutionsPrompt({
+  rawPage,
+  displayPage,
+  expectedNumbers,
+}) {
+  const pageLine =
+    displayPage != null && Number.isFinite(displayPage)
+      ? `이 이미지는 교재(개념+유형) 본문 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
+      : `이 이미지는 교재(개념+유형) 본문 PDF 의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((n) => String(n || '').trim()).filter(Boolean)
+    : [];
+  const expectedBlock = expected.length
+    ? [
+        '=== 기대 예제 번호 (매우 중요) ===',
+        `이 페이지에서 아래 번호들의 풀이 과정과 답을 찾고 싶다: ${expected.join(', ')}`,
+        '"예제1" 은 이 페이지의 "예제 1" 배지를 뜻한다. problem_number 도 같은 형식으로 적어라.',
+        '이 페이지에 보이지 않는 번호는 item 을 만들지 말고 완전히 생략하라.',
+      ]
+    : [
+        '=== 기대 예제 번호 ===',
+        '이 페이지에서 보이는 모든 "예제"의 풀이 과정과 답을 찾아라.',
+        'problem_number 는 "예제1", "예제2" 형식으로 적어라.',
+      ];
+
+  return [
+    '당신은 한국 중등 수학 개념서(개념+유형)의 "쓱쓱 서술형 완성하기" 지면에서',
+    '예제의 풀이 과정 위치와 답을 추출하는 비전 AI 입니다.',
+    '반드시 아래 JSON 스키마만 출력하세요. 설명·마크다운·주석·코드펜스 모두 금지.',
+    '',
+    pageLine,
+    '',
+    '=== 페이지 구조 (매우 중요) ===',
+    '이 지면은 두 단으로 나뉜다.',
+    '  · 왼쪽 단: 보라색 "예제 N" 배지와 문제 상자, 그 아래 "풀이 과정" 단락에',
+    '    1단계·2단계·3단계 소제목과 식이 **모두 채워져** 있고 맨 아래 "답" 이 있다.',
+    '  · 오른쪽 단: "따라 해보자" 리본 아래 파란색 "유제 N" 배지와 문제 상자,',
+    '    그 아래 풀이 과정은 소제목만 있고 식과 답이 **비어 있다**.',
+    '**이번 호출 대상은 왼쪽 단의 예제뿐이다.** 유제는 학생이 직접 푸는 빈칸이라',
+    '절대 item 으로 만들지 마라. 답이 비어 있으면 유제다.',
+    '',
+    ...expectedBlock,
+    '',
+    '=== 출력 스키마 ===',
+    '{',
+    '  "items": [',
+    '    {',
+    '      "problem_number": "<예제 번호. \\"예제1\\", \\"예제2\\" 형식>",',
+    '      "answer_kind": "objective" | "subjective",',
+    '      "answer_text": "<맨 아래 \\"답\\" 옆의 값. 수식은 LaTeX. 못 찾으면 빈 문자열>",',
+    '      "answer_latex_2d": "<주관식일 때 2D 렌더용 LaTeX. 단순하면 answer_text 와 동일. 객관식이면 빈 문자열>",',
+    '      "number_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '      "content_region": [<ymin>, <xmin>, <ymax>, <xmax>]',
+    '    }',
+    '  ],',
+    '  "notes": "<특이사항 간단히, 없으면 빈 문자열>"',
+    '}',
+    '',
+    '=== 규칙 ===',
+    '[B1] number_region 은 "예제 N" 배지만 감싸는 최소 박스.',
+    '     좌표계: 이미지 좌상단 (0,0), 우하단 (1000,1000). [ymin, xmin, ymax, xmax] 순서.',
+    '[B2] content_region 은 "풀이 과정" 헤더부터 "답" 줄 끝까지를 감싸는 박스다.',
+    '     위쪽 문제 상자와 오른쪽 단의 유제는 절대 포함하지 마라.',
+    '[B3] answer_text 는 풀이 과정 맨 아래 "답" 기호 오른쪽의 값이다.',
+    '     - 수식은 LaTeX 로: 분수 "3/4" → "\\\\frac{3}{4}", 루트 "√2" → "\\\\sqrt{2}".',
+    '     - 한글 답은 \\\\text{...} 로 감싸지 말고 원문 그대로.',
+    '[B4] 문제 본문과 단계 소제목을 answer_text 에 넣지 마라. 최종 답만.',
+    '[B5] 같은 번호가 중복되면 더 신뢰도 높은 것 하나만 남겨라.',
+    '[B6] 없는 번호/정답을 추측해서 만들지 마라. 보이는 것만 담는다.',
+    '',
+    '지금 첨부된 이미지를 분석해 위 스키마로만 출력하라.',
+  ].join('\n');
+}
+
 export async function extractBodySolutionsOnPage({
   imageBase64,
   mimeType = 'image/png',
   rawPage,
   displayPage,
   expectedNumbers = [],
+  series = 'wonri',
   model,
   apiKey,
   timeoutMs = 120000,
@@ -117,6 +209,7 @@ export async function extractBodySolutionsOnPage({
               rawPage,
               displayPage,
               expectedNumbers,
+              series,
             }),
           },
         ],

@@ -34,6 +34,89 @@ const Set<String> kWonriCategoryLabels = <String>{
   '교육청기출',
 };
 
+/// 개념+유형 목차/트리에서 단원명이 아니라 문제 카테고리 라벨인 항목들.
+const Set<String> kConceptPlusCategoryLabels = <String>{
+  '개념확인',
+  '개념 확인',
+  '필수문제',
+  '필수 문제',
+  '따름문제',
+  '따름 문제',
+  '쏙쏙 개념 익히기',
+  '쏙쏙 개념익히기',
+  '개념 익히기',
+  '개념익히기',
+  '탄탄 단원 다지기',
+  '탄탄 단원다지기',
+  '쓱쓱 서술형 완성하기',
+  '쓱쓱 서술형완성하기',
+  '한번 더 연습',
+  '한 번 더 연습',
+  'STEP1',
+  'STEP2',
+  'STEP3',
+};
+
+/// 개념+유형 중단원 끝의 마무리 지면 이름들.
+///
+/// 목차에는 "• 단원 다지기 / 서술형 완성하기", "• 개념 리뷰 / 마인드맵" 두 줄로
+/// 인쇄된다. 네 지면을 "단원 다지기" 소단원 한 행으로 합쳐서 다룬다.
+const Set<String> _kConceptPlusUnitEndNames = <String>{
+  '단원다지기',
+  '서술형완성하기',
+  '개념리뷰',
+  '마인드맵',
+};
+
+bool _isConceptPlusUnitEndName(String name) {
+  for (final token in name.split('/')) {
+    final compact = token.replaceAll(RegExp(r'\s+'), '');
+    if (compact.isEmpty) continue;
+    if (_kConceptPlusUnitEndNames.contains(compact)) return true;
+  }
+  return false;
+}
+
+/// 목차 트리를 만들 때 쓰는 시리즈별 규칙.
+@immutable
+class TocAutofillSeriesRules {
+  const TocAutofillSeriesRules({
+    required this.categoryLabels,
+    required this.unitEndRowName,
+    required this.isUnitEndName,
+    this.mergeUnitEndRows = false,
+  });
+
+  /// 단원명으로 잘못 올라온 문제 카테고리 라벨 — 트리에서 걸러낸다.
+  final Set<String> categoryLabels;
+
+  /// 중단원 끝 마무리 행에 붙일 표준 이름.
+  final String unitEndRowName;
+
+  /// 목차의 소단원 이름이 마무리 지면인지 판정한다.
+  final bool Function(String name) isUnitEndName;
+
+  /// 연달아 나오는 마무리 행을 한 행으로 합칠지 여부. 개념+유형처럼 마무리
+  /// 지면이 목차에서 여러 줄로 쪼개져 인쇄되는 교재에 쓴다.
+  final bool mergeUnitEndRows;
+}
+
+TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
+  if (seriesKey.trim().toLowerCase() == 'gaeyu') {
+    return TocAutofillSeriesRules(
+      categoryLabels: kConceptPlusCategoryLabels,
+      unitEndRowName: '단원 다지기',
+      isUnitEndName: _isConceptPlusUnitEndName,
+      mergeUnitEndRows: true,
+    );
+  }
+  return TocAutofillSeriesRules(
+    categoryLabels: kWonriCategoryLabels,
+    unitEndRowName: '연습문제',
+    isUnitEndName: (name) => name == '연습문제',
+  );
+}
+
 /// 목차에서 읽어온 단원 이름 앞의 번호 표기를 제거한다.
 /// 예: "I. 다항식" → "다항식", "Ⅰ. 다항식" → "다항식",
 ///     "1. 다항식의 연산" → "다항식의 연산", "01 다항식의 덧셈과 뺄셈" → "다항식의 덧셈과 뺄셈"
@@ -46,6 +129,9 @@ String stripTocUnitNumbering(String raw) {
   // 쎈 목차처럼 구분자 없이 "IV 통계"로 오는 경우. 뒤가 한글일 때만 제거해
   // 영문 단원명의 첫 단어를 로마숫자로 오인하지 않는다.
   s = s.replaceFirst(RegExp(r'^[IVXivx]+\s+(?=[가-힣])'), '');
+  // 개념+유형처럼 소단원 번호 "01"의 0을 알파벳 O 모양으로 디자인한 교재는
+  // OCR 결과가 "O1 순서쌍과 좌표"로 올라온다. 뒤가 한글일 때만 제거한다.
+  s = s.replaceFirst(RegExp(r'^[OoＯｏ]\s*\d+\s*[.)\-·]?\s+(?=[가-힣])'), '');
   // 아라비아 숫자 ("1.", "01", "1-1." 등).
   s = s.replaceFirst(RegExp(r'^\d+(\s*-\s*\d+)?\s*[.)\-·]?\s+'), '');
   s = s.replaceFirst(RegExp(r'^\d+(\s*-\s*\d+)?\s*[.)\-·]\s*'), '');
@@ -66,7 +152,8 @@ class TocAutofillSubUnit {
   final bool isExercise;
 
   /// 목차에 인쇄된 시작 페이지 숫자 (보정 전).
-  final int? printedPage;
+  /// 마무리 행을 합칠 때 뒤 줄의 페이지로 보완할 수 있어 가변이다.
+  int? printedPage;
 
   /// 보정 적용 후 PDF raw 페이지. [buildTocAutofillTree] 가 채운다.
   int? startPage;
@@ -100,49 +187,61 @@ class TocAutofillBigUnit {
 
 /// VLM 목차 결과를 이름 정리 + 페이지 자동 채움까지 끝낸 트리로 변환한다.
 ///
-/// [subUnitRows] 가 true(개념원리)면 책의 소단원/연습문제 행을 midUnits 아래
+/// [subUnitRows] 가 true(개념서)면 책의 소단원/마무리 행을 midUnits 아래
 /// subUnits 로 담고, false(쎈/RPM)면 대/중단원 이름만 담는다.
+/// [seriesKey] 는 카테고리 라벨 필터와 마무리 행 처리 규칙을 고른다.
 /// [tocPageOffset] = PDF raw 페이지 − 목차에 인쇄된 페이지.
 List<TocAutofillBigUnit> buildTocAutofillTree(
   TextbookTocParseResult toc, {
   required bool subUnitRows,
+  String seriesKey = '',
   int tocPageOffset = 0,
   int? lastRawPage,
 }) {
+  final rules = tocAutofillRulesFor(seriesKey);
   final bigs = <TocAutofillBigUnit>[];
   for (final big in toc.bigUnits) {
     final bigOut = TocAutofillBigUnit(name: stripTocUnitNumbering(big.name));
     for (final mid in big.midUnits) {
       final midName = stripTocUnitNumbering(mid.name);
       // 카테고리 라벨이 단원명으로 잘못 올라온 경우 스킵한다.
-      if (kWonriCategoryLabels.contains(midName)) continue;
+      if (rules.categoryLabels.contains(midName)) continue;
       final midOut = TocAutofillMidUnit(
         name: midName,
         printedPage: mid.page,
       );
       if (subUnitRows) {
-        // 연습문제는 소단원 사이사이에 여러 번 나올 수 있으므로
-        // 목차에 인쇄된 순서 그대로 행을 만든다.
+        // 마무리 행(개념원리 연습문제)은 소단원 사이사이에 여러 번 나올 수
+        // 있으므로 목차에 인쇄된 순서 그대로 행을 만든다.
         for (final sub in mid.subUnits) {
           final subName = stripTocUnitNumbering(sub.name);
           if (subName.isEmpty) continue;
-          if (sub.isExercise || subName == '연습문제') {
+          if (sub.isExercise || rules.isUnitEndName(subName)) {
+            // 개념+유형은 마무리 지면이 목차에서 두 줄로 쪼개져 인쇄되므로
+            // 앞 행에 합치고 페이지는 먼저 인쇄된 값을 유지한다.
+            final last =
+                midOut.subUnits.isEmpty ? null : midOut.subUnits.last;
+            if (rules.mergeUnitEndRows && last != null && last.isExercise) {
+              last.printedPage ??= sub.page;
+              continue;
+            }
             midOut.subUnits.add(TocAutofillSubUnit(
-              name: '연습문제',
+              name: rules.unitEndRowName,
               isExercise: true,
               printedPage: sub.page,
             ));
             continue;
           }
-          if (kWonriCategoryLabels.contains(subName)) continue;
+          if (rules.categoryLabels.contains(subName)) continue;
           midOut.subUnits.add(TocAutofillSubUnit(
             name: subName,
             printedPage: sub.page,
           ));
         }
         if (mid.hasExercise && !midOut.subUnits.any((s) => s.isExercise)) {
-          midOut.subUnits
-              .add(TocAutofillSubUnit(name: '연습문제', isExercise: true));
+          midOut.subUnits.add(
+            TocAutofillSubUnit(name: rules.unitEndRowName, isExercise: true),
+          );
         }
       }
       bigOut.midUnits.add(midOut);

@@ -107,7 +107,19 @@ class TbExItem {
     if (typeGroupKind == 'type' && typeGroupLabel.isNotEmpty) {
       return '$typeGroupLabel|$typeGroupTitle';
     }
-    if (isWonri && section == 'check') return '확인 체크|';
+    if (isWonri) {
+      return wonriTypeGroupKey(
+        section: section,
+        subKey: subKey,
+        itemName: difficultyLabel,
+        typeGroupKind: typeGroupKind,
+        typeGroupLabel: typeGroupLabel,
+        typeGroupTitle: typeGroupTitle,
+      );
+    }
+    // RPM(및 유사 문제집) C단계 서술형/실력 UP — label 을 유형 키로 쓴다.
+    final special = problemBookSpecialSectionTitle(difficultyLabel);
+    if (special != null) return '$special|';
     return '유형 미지정|';
   }
 
@@ -274,6 +286,18 @@ class TextbookExplorerService {
   // v4: 서버의 정규화 특강 페이지 범위를 함께 반영.
   String _cacheKey(String bookId, String gradeLabel) =>
       'v4|${bookId.trim()}|${gradeLabel.trim()}';
+
+  /// 캐시된 payload 의 series 키 (`ssen` / `rpm` / `wonri` …). 없으면 빈 문자열.
+  String seriesKeyOf({
+    required String bookId,
+    required String gradeLabel,
+  }) {
+    final payload = _payloadCache[_cacheKey(bookId, gradeLabel)];
+    if (payload is Map) {
+      return '${payload['series'] ?? ''}'.trim().toLowerCase();
+    }
+    return '';
+  }
 
   /// 단원트리 표시용 최소 로드(메타+크롭 병렬). PB 보강은 [enrich]에서.
   Future<TbExData> loadCore({
@@ -503,11 +527,17 @@ class TextbookExplorerService {
       return (box[index] / 1000.0).clamp(0.0, 1.0);
     }
 
+    final itemName = '${row['item_name'] ?? ''}'.trim();
+    final rawLabel = '${row['label'] ?? ''}'.trim();
+    // 개념원리는 난이도(label)가 비어 있고 문항이름(item_name)에 유형명이 있다.
+    final displayLabel = isWonri
+        ? (itemName.isNotEmpty ? itemName : rawLabel)
+        : _normalizeDifficulty(rawLabel);
     return TbExItem(
       cropId: '${row['id'] ?? ''}'.trim(),
       questionUid: '${row['pb_question_uid'] ?? ''}'.trim(),
       problemNumber: number,
-      difficultyLabel: _normalizeDifficulty('${row['label'] ?? ''}'),
+      difficultyLabel: displayLabel,
       answerKind: TbAnswerKind.unknown,
       section: '${row['section'] ?? ''}'.trim(),
       isWonri: isWonri,

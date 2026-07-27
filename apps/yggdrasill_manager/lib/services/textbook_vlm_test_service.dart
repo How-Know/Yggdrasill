@@ -503,15 +503,21 @@ class TextbookVlmItem {
     required this.bbox,
     required this.itemRegion,
     this.category = '',
+    this.isImportant = false,
   });
 
   final String number;
   final String label;
 
-  /// 개념원리(wonri) 단일 패스 전용 — 문항 카테고리.
-  /// 'concept_drill' | 'type_example' | 'check' | 'exercise' | ''(비-wonri).
-  /// sub_key A~D 슬롯과 1:1 대응한다.
+  /// 개념서(개념원리·개념+유형) 단일 패스 전용 — 문항 카테고리.
+  /// 개념원리는 concept_drill / type_example / check / exercise /
+  /// special_lecture, 개념+유형은 concept_check / essential_problem /
+  /// step_drill / unit_drill / descriptive / extra_practice 를 쓰고,
+  /// 각각 sub_key 슬롯과 1:1 대응한다. 문제집(쎈·RPM)에서는 빈 문자열.
   final String category;
+
+  /// 개념+유형 탄탄 단원 다지기의 노란 별(중요) 표시. 난이도와 별개 값이다.
+  final bool isImportant;
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
@@ -576,11 +582,19 @@ class TextbookVlmItem {
             : 'none';
 
     const allowedCategories = {
+      // 개념원리
       'concept_drill',
       'type_example',
       'check',
       'exercise',
       'special_lecture',
+      // 개념+유형
+      'concept_check',
+      'essential_problem',
+      'step_drill',
+      'unit_drill',
+      'descriptive',
+      'extra_practice',
     };
     final categoryRaw = '${map['category'] ?? ''}'.trim();
 
@@ -588,6 +602,7 @@ class TextbookVlmItem {
       number: number,
       label: '${map['label'] ?? ''}',
       category: allowedCategories.contains(categoryRaw) ? categoryRaw : '',
+      isImportant: map['is_important'] == true,
       isSetHeader: map['is_set_header'] == true || inferredRange != null,
       setFrom: from,
       setTo: to,

@@ -9,6 +9,7 @@ import {
   buildDetectProblemsPrompt,
   buildRpmSetHeaderPrompt,
   buildWonriPageClassPrompt,
+  GAEYU_ITEM_CATEGORIES,
   VLM_DETECT_LABELS,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
@@ -257,6 +258,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     'check',
     'exercise',
     'special_lecture',
+    // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
+    ...GAEYU_ITEM_CATEGORIES,
   ];
   const section = String(parsedJson.section || '').trim();
   out.section = [...knownSections, 'unknown'].includes(section)
@@ -296,13 +299,24 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   }
 
   const series = String(opts?.series || '').trim().toLowerCase();
+  const isGaeyu = series === 'gaeyu';
+  // 개념+유형 개념확인은 번호가 인쇄돼 있지 않아 본문 인쇄 페이지를 번호로 쓴다.
+  const conceptCheckPage = firstFiniteNumber(opts?.displayPage, opts?.rawPage);
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   let droppedLectureConceptNumbers = 0;
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
-    const number = String(raw.number ?? '').trim();
-    if (!number) continue;
+    const printedNumber = String(raw.number ?? '').trim();
     const label = normalizeDifficultyLabel(raw.label);
+    const number = isGaeyu
+      ? formatGaeyuNumber({
+          category: normalizeGaeyuCategory(raw, label),
+          label,
+          printedNumber,
+          conceptCheckPage,
+        })
+      : printedNumber;
+    if (!number) continue;
     const inferredSetRange = parseBasicDrillRange(number, series === 'rpm');
     const isSet = Boolean(raw.is_set_header) || Boolean(inferredSetRange);
     let setRange = null;
@@ -327,9 +341,11 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
         raw.content_region ??
         raw.content_bbox,
     );
-    // 개념원리 단일 패스: 문항마다 카테고리를 붙인다. 모델이 category 를
+    // 개념서 단일 패스: 문항마다 카테고리를 붙인다. 모델이 category 를
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
-    const category = normalizeWonriCategory(raw, label, series);
+    const category = isGaeyu
+      ? normalizeGaeyuCategory(raw, label)
+      : normalizeWonriCategory(raw, label, series);
     // 특강 예제는 배지에 "특강 01" 처럼 2자리 번호가 인쇄된다. 특강 개념
     // 페이지의 사각 박스 개념 번호(1, 2 같은 한 자리 수)를 모델이 특강
     // 예제로 오인하면 존재하지 않는 문항이 저장되므로 여기서 걸러낸다.
@@ -342,10 +358,13 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       continue;
     }
     // 유형 그룹(content_group)은 문항 단위로 판단한다.
-    // 개념원리는 B 필수유형(type_example)과 E 특강(special_lecture)만
-    // "필수유형 01"/"특강 01" 그룹(제목 포함)을 갖는다.
+    // 개념원리는 B 필수유형(type_example)과 E 특강(special_lecture)만,
+    // 개념+유형은 B 필수 문제(essential_problem)만 유형명 그룹을 갖는다.
+    const groupAllowedCategories = isGaeyu
+      ? ['essential_problem']
+      : ['type_example', 'special_lecture'];
     const groupDisallowed = category
-      ? category !== 'type_example' && category !== 'special_lecture'
+      ? !groupAllowedCategories.includes(category)
       : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
     const group = groupDisallowed
       ? { kind: 'none', label: '', title: '', order: null }
@@ -354,6 +373,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       number,
       label,
       category,
+      // 개념+유형 탄탄 단원 다지기의 노란 별(중요) 표시. 난이도(label)와 별개다.
+      is_important: isGaeyu && raw.is_important === true,
       is_set_header: isSet,
       set_range: setRange,
       content_group: group,
@@ -376,6 +397,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     }
   }
   backfillWonriCategories(out, series);
+  backfillGaeyuCategories(out, series);
   backfillMissingItemRegions(out);
   backfillBasicDrillItemRegions(out, series);
   backfillMissingBboxes(out);
@@ -448,6 +470,74 @@ function backfillWonriCategories(result, series) {
   result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return null;
+}
+
+// 개념+유형 단일 패스 — 문항의 category 를 검증/보정한다.
+// 모델이 category 를 빠뜨렸을 때만 라벨로 추정한다. "예제/유제/연습" 은
+// 쓱쓱 서술형 완성하기에서만 쓰는 라벨이라 카테고리를 되짚을 수 있다.
+function normalizeGaeyuCategory(raw, label) {
+  const value = String(raw?.category ?? '').trim();
+  if (GAEYU_ITEM_CATEGORIES.includes(value)) return value;
+  if (label === '예제' || label === '유제' || label === '연습') {
+    return 'descriptive';
+  }
+  return '';
+}
+
+// 개념+유형 문항 번호를 저장용 키로 바꾼다.
+//   개념확인 — 인쇄된 번호가 없다. 정답 파일이 본문 페이지 배지("P. 8")로
+//              블록을 묶으므로 본문 인쇄 페이지를 번호로 삼는다.
+//   쓱쓱     — 예제·유제·연습해 보자가 각각 1번부터 시작해서 서로 겹친다.
+//              갈래 라벨을 접두어로 붙여 한 슬롯 안에서 구분한다.
+function formatGaeyuNumber({ category, label, printedNumber, conceptCheckPage }) {
+  if (category === 'concept_check') {
+    if (conceptCheckPage == null) return '';
+    return `개념확인${conceptCheckPage}`;
+  }
+  if (category === 'descriptive') {
+    const digits = printedNumber.match(/\d+/);
+    if (!digits) return '';
+    if (label === '예제' || label === '유제' || label === '연습') {
+      return `${label}${Number.parseInt(digits[0], 10)}`;
+    }
+    return printedNumber;
+  }
+  return printedNumber;
+}
+
+// category 를 못 받은 문항을 같은 페이지의 다수 카테고리(또는 페이지 section)
+// 로 채운다. 개념+유형이 아닌 시리즈에는 아무 것도 하지 않는다.
+function backfillGaeyuCategories(result, series) {
+  if (series !== 'gaeyu') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+  const missing = result.items.filter((item) => !item.category);
+  if (missing.length === 0) return;
+
+  const counts = new Map();
+  for (const item of result.items) {
+    if (!item.category) continue;
+    counts.set(item.category, (counts.get(item.category) || 0) + 1);
+  }
+  let fallback = '';
+  if (counts.size > 0) {
+    fallback = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  } else if (GAEYU_ITEM_CATEGORIES.includes(result.section)) {
+    fallback = result.section;
+  }
+  if (!fallback) return;
+  for (const item of missing) {
+    item.category = fallback;
+  }
+  const suffix = `gaeyu_category_backfilled=${missing.length}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+}
+
 function annotateExpectedBasicDrillStart(result, expectedStartNumber) {
   const expected = normalizeExpectedStartNumber(expectedStartNumber);
   if (
@@ -500,6 +590,11 @@ function normalizeDifficultyLabel(input) {
   if (!raw) return '';
   const compact = raw.replace(/\s+/g, '');
   if (!compact || compact === '사고의기술') return '';
+  // 개념+유형 쓱쓱 서술형 완성하기의 세 갈래. 번호 접두어로 쓰이므로
+  // "예제 1"/"유제1"/"연습해 보자" 같은 표기 변형을 먼저 흡수한다.
+  if (/^예제\d*$/.test(compact)) return '예제';
+  if (/^유제\d*$/.test(compact)) return '유제';
+  if (/^연습(해보자)?\d*$/.test(compact)) return '연습';
   if (compact.includes('서술형') || compact.includes('논술')) return '서술형';
   if (compact === '대표문제') return '대표 문제';
   if (compact === '교육청기출') return '교육청기출';

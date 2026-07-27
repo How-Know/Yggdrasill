@@ -1,5 +1,6 @@
 import 'textbook_book_registry.dart';
 import 'textbook_pdf_service.dart';
+import 'textbook_series_catalog.dart';
 
 class TextbookUnitProgress {
   const TextbookUnitProgress({
@@ -57,8 +58,11 @@ class TextbookUnitProgressService {
     if (payload == null) return const <Map<String, dynamic>>[];
     final units = payload['units'];
     if (units is! List) return const <Map<String, dynamic>>[];
+    // 개념서(개념원리·개념+유형)는 고정 카테고리 슬롯이 아니라 목차에서 뽑은
+    // 실제 소단원 행을 진행률 단위로 쓴다.
     final isWonri =
-        '${payload['series'] ?? ''}'.trim().toLowerCase() == 'wonri';
+        textbookSeriesByKey('${payload['series'] ?? ''}')?.hasSubUnitRows ??
+            false;
     final out = <Map<String, dynamic>>[];
     for (var b = 0; b < units.length; b += 1) {
       final rawBig = units[b];
