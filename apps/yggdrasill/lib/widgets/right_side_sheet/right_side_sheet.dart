@@ -22,6 +22,7 @@ import '../latex_text_renderer.dart';
 import '../../app_overlays.dart';
 import '../../models/memo.dart';
 import '../../services/ai_summary.dart';
+import '../../services/answer_render_image_cache.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/problem_question_issue_report_service.dart';
@@ -3507,17 +3508,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _autoOpenedAnswerSessionId = sessionId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || widget.session?.sessionId.trim() != sessionId) return;
+      final firstFocus = _firstAnswerPdfFocus(session);
       unawaited(
-        Future<void>.delayed(const Duration(milliseconds: 220), () async {
-          if (!mounted || widget.session?.sessionId.trim() != sessionId) return;
-          final firstFocus = _firstAnswerPdfFocus(session);
-          await _openSessionAnswerSheet(
-            session,
-            initialShowSolution: false,
-            focusPageNumber: firstFocus.pageNumber,
-            focusRect1k: firstFocus.rect1k,
-          );
-        }),
+        _openSessionAnswerSheet(
+          session,
+          initialShowSolution: false,
+          focusPageNumber: firstFocus.pageNumber,
+          focusRect1k: firstFocus.rect1k,
+        ),
       );
     });
   }
@@ -3618,25 +3616,35 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       final academyId = await _resolveActiveAcademyId();
       if (academyId.isEmpty) return;
       final storedRendersByKey = <String, LearningProblemAnswerRender>{};
-      for (final entry in sourceIdsByLookup.entries) {
-        final lookupParts = entry.key.split('\n');
-        if (lookupParts.length != 2) continue;
-        final sourceKind = lookupParts[0];
-        final answerKind = lookupParts[1];
-        final rendersBySourceId = await RightSheetAnswerPreloadService.instance
-            .loadUnifiedAnswerRenderAssets(
-          academyId: academyId,
-          sourceKind: sourceKind,
-          answerKind: answerKind,
-          sourceIds: entry.value,
-          // v11(uniform-line, 투명+틴트)이 기본. 아직 재렌더 전이면 v10 폴백.
-          styleVersion: kUnifiedAnswerRenderStyleVersionV11,
-          fallbackStyleVersions: const <String>[
-            kUnifiedAnswerRenderStyleVersion,
-          ],
-          partExpectedSourceIds:
-              partExpectedByLookup[entry.key] ?? const <String>{},
-        );
+      // 주관식·서술형 조회는 서로 독립이므로 함께 보낸다.
+      final lookupResults = await Future.wait(
+        sourceIdsByLookup.entries.map((entry) async {
+          final lookupParts = entry.key.split('\n');
+          if (lookupParts.length != 2) {
+            return (
+              lookupKey: entry.key,
+              renders: const <String, LearningProblemAnswerRender>{},
+            );
+          }
+          final renders = await RightSheetAnswerPreloadService.instance
+              .loadUnifiedAnswerRenderAssets(
+            academyId: academyId,
+            sourceKind: lookupParts[0],
+            answerKind: lookupParts[1],
+            sourceIds: entry.value,
+            // v11(uniform-line, 투명+틴트)이 기본. 아직 재렌더 전이면 v10 폴백.
+            styleVersion: kUnifiedAnswerRenderStyleVersionV11,
+            fallbackStyleVersions: const <String>[
+              kUnifiedAnswerRenderStyleVersion,
+            ],
+            partExpectedSourceIds:
+                partExpectedByLookup[entry.key] ?? const <String>{},
+          );
+          return (lookupKey: entry.key, renders: renders);
+        }),
+      );
+      for (final result in lookupResults) {
+        final rendersBySourceId = result.renders;
         for (final renderEntry in rendersBySourceId.entries) {
           // 파트 렌더 키는 'sourceId#(1)' 형태 — 셀 키에도 같은 접미사를 붙인다.
           final renderKey = renderEntry.key;
@@ -3644,8 +3652,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           final sourceId =
               hashIdx < 0 ? renderKey : renderKey.substring(0, hashIdx);
           final partSuffix = hashIdx < 0 ? '' : renderKey.substring(hashIdx);
-          final cellKeys = cellKeysBySourceLookup['${entry.key}\n$sourceId'] ??
-              const <String>[];
+          final cellKeys =
+              cellKeysBySourceLookup['${result.lookupKey}\n$sourceId'] ??
+                  const <String>[];
           for (final cellKey in cellKeys) {
             storedRendersByKey['$cellKey$partSuffix'] = renderEntry.value;
           }
@@ -5303,8 +5312,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               children: [
                 for (int i = 0; i < _recentSearches.length; i++)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: fabStyle.panel,
                       borderRadius: BorderRadius.circular(999),
@@ -5802,6 +5811,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return '';
   }
 
+  Future<String> _usablePreloadedPdfPath(String rawPath) async {
+    final path = rawPath.trim();
+    if (path.isEmpty) return '';
+    if (_isSessionAnswerWebUrl(path)) return path;
+    if (!path.toLowerCase().endsWith('.pdf')) return '';
+    return await File(path).exists() ? path : '';
+  }
+
   BuildContext get _navigatorContext => widget.dialogContext ?? context;
 
   Future<T?> _showTopOverlayDialog<T>({
@@ -5878,6 +5895,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final cacheKey = session.answerViewerCacheKey.trim().isEmpty
         ? 'right_sheet_answer:${session.sessionId}'
         : session.answerViewerCacheKey.trim();
+    final preloaded =
+        RightSheetAnswerPreloadService.instance.getPdfLinks(cacheKey);
+    final preloadedAnswer =
+        await _usablePreloadedPdfPath(preloaded?.answerPath ?? '');
+    final preloadedSolution =
+        await _usablePreloadedPdfPath(preloaded?.solutionPath ?? '');
+    if (!mounted) return;
     setState(() => _answerPdfOpening = true);
     try {
       final baseIsSolution = preferSolutionRawAsBase && solutionRaw.isNotEmpty;
@@ -5887,7 +5911,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       // solution PDF (143~318MB). Falls back to the full PDF on any failure.
       String solutionPageFile = '';
       int effectiveFocusPage = focusPageNumber;
-      if (focusPageNumber > 0 && solutionRaw.isNotEmpty) {
+      if (focusPageNumber > 0 &&
+          solutionRaw.isNotEmpty &&
+          (initialShowSolution || preferSolutionRawAsBase)) {
         final solRef = _textbookPdfRefFromStoragePath(solutionRaw, kind: 'sol');
         if (solRef != null) {
           try {
@@ -5907,6 +5933,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       if (baseIsSolution && solutionPageFile.isNotEmpty) {
         // Base document is the solution itself; serve only the focused page.
         answerPath = solutionPageFile;
+      } else if (baseIsSolution && preloadedSolution.isNotEmpty) {
+        answerPath = preloadedSolution;
+      } else if (!baseIsSolution && preloadedAnswer.isNotEmpty) {
+        answerPath = preloadedAnswer;
       } else {
         answerPath = await _resolveSessionPdfViewerPath(
           raw,
@@ -5932,6 +5962,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         solutionPath = '';
       } else if (solutionPageFile.isNotEmpty) {
         solutionPath = solutionPageFile;
+      } else if (preloadedSolution.isNotEmpty) {
+        solutionPath = preloadedSolution;
       } else if (solutionRaw.isEmpty) {
         solutionPath = '';
       } else {
@@ -6615,7 +6647,18 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   /// 건너뛴다. 그래서 "(2)번 답이 (1)" 같은 내용 속 번호를 마커로
   /// 오인하지 않는다. 파싱이 애매하면 빈 목록(세트형 아님)을 반환한다.
   static const List<String> _setPartKoreanKeys = [
-    '가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타',
+    '가',
+    '나',
+    '다',
+    '라',
+    '마',
+    '바',
+    '사',
+    '아',
+    '자',
+    '차',
+    '카',
+    '타',
   ];
 
   List<({String label, String value})> _splitSetAnswerParts(String raw) {
@@ -6628,8 +6671,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     var expected = 1;
     var contentStart = -1;
     var korean = false; // 첫 마커가 (가)면 한글 시퀀스 모드
-    String labelOf(int n) =>
-        korean ? '(${_setPartKoreanKeys[n - 1]})' : '($n)';
+    String labelOf(int n) => korean ? '(${_setPartKoreanKeys[n - 1]})' : '($n)';
     while (i < text.length) {
       final head = text.substring(i);
       var markerLen = 0;
@@ -6829,8 +6871,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
     final imageAlignment =
         alignLeft ? Alignment.centerLeft : Alignment.centerRight;
-    final image = Image.network(
-      url,
+    final image = Image(
+      image: AnswerRenderImageProvider(url),
       width: displayWidth,
       height: displayHeight,
       fit: BoxFit.contain,
@@ -7137,8 +7179,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             spacing: 16,
             runSpacing: 8,
             children: [
-              for (final part in setParts)
-                _setPartStatusChip(cell, part.label),
+              for (final part in setParts) _setPartStatusChip(cell, part.label),
             ],
           ),
         ),
@@ -7215,8 +7256,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final tintColor = _renderTintColor(render);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final image = Image.network(
-          render.url,
+        final image = Image(
+          image: AnswerRenderImageProvider(render.url),
           width: displayWidth,
           height: displayHeight,
           fit: BoxFit.contain,
@@ -8356,8 +8397,8 @@ class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
                           minScale: 0.8,
                           maxScale: 8,
                           child: Center(
-                            child: Image.network(
-                              widget.url,
+                            child: Image(
+                              image: AnswerRenderImageProvider(widget.url),
                               fit: BoxFit.contain,
                               filterQuality: FilterQuality.high,
                             ),

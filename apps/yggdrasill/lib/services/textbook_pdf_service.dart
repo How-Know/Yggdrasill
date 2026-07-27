@@ -145,7 +145,7 @@ class TextbookPdfService {
     final dbPath = p.join(support.path, _dbFileName);
     final db = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: (db, _) async {
         await db.execute('''
           CREATE TABLE textbook_local_cache (
@@ -157,6 +157,22 @@ class TextbookPdfService {
             created_at INTEGER NOT NULL
           )
         ''');
+        await db.execute('''
+          CREATE TABLE textbook_local_cache_alias (
+            alias_key TEXT PRIMARY KEY,
+            link_id TEXT NOT NULL
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, _) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS textbook_local_cache_alias (
+              alias_key TEXT PRIMARY KEY,
+              link_id TEXT NOT NULL
+            )
+          ''');
+        }
       },
     );
     _db = db;
@@ -180,6 +196,90 @@ class TextbookPdfService {
     return 'by_tuple:${ref.academyId}:${ref.fileId}:${ref.gradeLabel}:${ref.kind}';
   }
 
+  List<String> _cacheAliasKeys(TextbookPdfRef ref) {
+    final out = <String>[];
+    final storageKey = ref.storageKey?.trim() ?? '';
+    if (storageKey.isNotEmpty) out.add('by_storage:$storageKey');
+    if (ref.academyId != null ||
+        ref.fileId != null ||
+        ref.gradeLabel != null ||
+        ref.kind != null) {
+      out.add(_fallbackLinkKey(ref));
+    }
+    return out.toSet().toList(growable: false);
+  }
+
+  Future<void> _registerCacheAliases(
+    TextbookPdfRef ref,
+    String linkId,
+  ) async {
+    final safeLinkId = linkId.trim();
+    if (safeLinkId.isEmpty) return;
+    final aliases = _cacheAliasKeys(ref)
+        .where((alias) => alias.trim().isNotEmpty && alias != safeLinkId)
+        .toList(growable: false);
+    if (aliases.isEmpty) return;
+    final db = await _database();
+    final batch = db.batch();
+    for (final alias in aliases) {
+      batch.insert(
+        'textbook_local_cache_alias',
+        {'alias_key': alias, 'link_id': safeLinkId},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<MapEntry<String, Map<String, Object?>>?> _lookupCacheForRef(
+    TextbookPdfRef ref,
+  ) async {
+    final directId = ref.linkId == null ? '' : '${ref.linkId}'.trim();
+    if (directId.isNotEmpty) {
+      final direct = await _lookupCache(directId);
+      if (direct != null) return MapEntry(directId, direct);
+    }
+    final aliases = _cacheAliasKeys(ref);
+    if (aliases.isEmpty) return null;
+    final db = await _database();
+    for (final alias in aliases) {
+      final rows = await db.query(
+        'textbook_local_cache_alias',
+        columns: const <String>['link_id'],
+        where: 'alias_key = ?',
+        whereArgs: <Object?>[alias],
+        limit: 1,
+      );
+      if (rows.isEmpty) continue;
+      final linkId = '${rows.first['link_id'] ?? ''}'.trim();
+      if (linkId.isEmpty) continue;
+      final cached = await _lookupCache(linkId);
+      if (cached != null) return MapEntry(linkId, cached);
+    }
+    return null;
+  }
+
+  Future<TextbookPdfSource?> _resolveCachedRef(TextbookPdfRef ref) async {
+    try {
+      final found = await _lookupCacheForRef(ref);
+      if (found == null) return null;
+      final localPath = '${found.value['local_path'] ?? ''}'.trim();
+      if (localPath.isEmpty) return null;
+      final file = File(localPath);
+      if (!await file.exists() || await file.length() <= 0) return null;
+      await _touchCache(found.key);
+      return TextbookPdfSource.localFile(
+        path: localPath,
+        migrationStatus: 'migrated',
+        linkId: found.key,
+      );
+    } catch (_) {
+      // Cache DB is an optimization only. Any local DB/plugin issue must keep
+      // the existing Gateway/Supabase mixed-migration route available.
+      return null;
+    }
+  }
+
   Future<bool> _cacheExists(String linkKey) async {
     final row = await _lookupCache(linkKey);
     if (row == null) return false;
@@ -193,10 +293,16 @@ class TextbookPdfService {
   /// link id from the gateway, then checks the local cache table.
   Future<bool> isCached(TextbookPdfRef ref) async {
     try {
+      if (await _resolveCachedRef(ref) != null) return true;
       final target = await _resolveTarget(ref);
       final linkKey =
           target.linkId.isNotEmpty ? target.linkId : _fallbackLinkKey(ref);
-      if (await _cacheExists(linkKey)) return true;
+      if (await _cacheExists(linkKey)) {
+        if (target.kind == 'storage') {
+          await _registerCacheAliases(ref, linkKey);
+        }
+        return true;
+      }
       final fallbackKey = _fallbackLinkKey(ref);
       if (fallbackKey != linkKey) {
         return _cacheExists(fallbackKey);
@@ -436,8 +542,12 @@ class TextbookPdfService {
     //     the gateway for a signed URL.
     //   - Example: await SecurityGate.instance.assertTextbookAccess(ref);
 
-    // First ask the gateway so we know the current migration status and the
-    // canonical link_id to key the cache off of.
+    // Only storage-backed files ever receive cache aliases. Therefore this
+    // fast path cannot turn a legacy Dropbox link into a local-file route.
+    final fastCached = await _resolveCachedRef(ref);
+    if (fastCached != null) return fastCached;
+
+    // No verified local alias yet: use the existing mixed-migration routing.
     final target = await _resolveTarget(ref);
     final linkKey = target.linkId.isNotEmpty
         ? target.linkId
@@ -466,6 +576,7 @@ class TextbookPdfService {
         final expectedSize = target.fileSizeBytes;
         if (expectedSize == 0 || expectedSize == localSize) {
           await _touchCache(linkKey);
+          await _registerCacheAliases(ref, linkKey);
           return TextbookPdfSource.localFile(
             path: localPath,
             migrationStatus: target.migrationStatus,
@@ -486,6 +597,7 @@ class TextbookPdfService {
         signedUrl: target.url,
         onProgress: onProgress,
       );
+      await _registerCacheAliases(ref, linkKey);
       return TextbookPdfSource.localFile(
         path: localPath,
         migrationStatus: target.migrationStatus,
@@ -703,6 +815,11 @@ class TextbookPdfService {
     } catch (_) {}
     final db = await _database();
     await db.delete(
+      'textbook_local_cache_alias',
+      where: 'link_id = ?',
+      whereArgs: [linkId],
+    );
+    await db.delete(
       'textbook_local_cache',
       where: 'link_id = ?',
       whereArgs: [linkId],
@@ -719,6 +836,7 @@ class TextbookPdfService {
         if (await f.exists()) await f.delete();
       } catch (_) {}
     }
+    await db.delete('textbook_local_cache_alias');
     await db.delete('textbook_local_cache');
   }
 

@@ -708,6 +708,9 @@ class _GradingModePageState extends State<GradingModePage> {
     final normalizedKind = kind.trim().toLowerCase() == 'sol' ? 'sol' : 'ans';
     final raw = rawPath.trim();
     if (raw.isEmpty) return '';
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return raw;
+    }
     try {
       final source = await TextbookPdfService.instance.resolve(
         TextbookPdfRef(
@@ -739,27 +742,31 @@ class _GradingModePageState extends State<GradingModePage> {
     final gradeLabel = grade.gradeLabel.trim().isNotEmpty
         ? grade.gradeLabel.trim()
         : grade.gradeKey.trim();
-    final answerPath = await _resolveAnswerBookPdfPath(
-      bookId: book.id,
-      gradeLabel: gradeLabel,
-      kind: 'ans',
-      rawPath: answerPathRaw,
-    );
+    final solutionPathRaw = grade.solutionPath.trim();
+    final resolvedPaths = await Future.wait<String>([
+      _resolveAnswerBookPdfPath(
+        bookId: book.id,
+        gradeLabel: gradeLabel,
+        kind: 'ans',
+        rawPath: answerPathRaw,
+      ),
+      if (solutionPathRaw.isNotEmpty)
+        _resolveAnswerBookPdfPath(
+          bookId: book.id,
+          gradeLabel: gradeLabel,
+          kind: 'sol',
+          rawPath: solutionPathRaw,
+        )
+      else
+        Future<String>.value(''),
+    ]);
+    final answerPath = resolvedPaths[0];
+    final solutionPath = resolvedPaths[1];
     if (!mounted) return;
     if (answerPath.isEmpty) {
       showAppSnackBar(context, '정답 PDF를 열 수 없습니다.');
       return;
     }
-    final solutionPathRaw = grade.solutionPath.trim();
-    final solutionPath = solutionPathRaw.isEmpty
-        ? ''
-        : await _resolveAnswerBookPdfPath(
-            bookId: book.id,
-            gradeLabel: gradeLabel,
-            kind: 'sol',
-            rawPath: solutionPathRaw,
-          );
-    if (!mounted) return;
     final titleBase = book.name.trim().isEmpty
         ? '\uC815\uB2F5 \uBC14\uB85C\uAC00\uAE30'
         : book.name.trim();

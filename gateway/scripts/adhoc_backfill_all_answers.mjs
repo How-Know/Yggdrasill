@@ -22,6 +22,10 @@ const port = process.env.PB_API_PORT || '8787';
 // (이전 96 descriptor 렌더 ~155s 기준, 40문항이면 여유 있게 5분 이내)
 const LIMIT = 40;
 const SOURCE_KIND = process.argv[2] || 'pb_question';
+// 굽는 스타일. 지정하지 않으면 게이트웨이의 생성 기본값(v11)을 따른다.
+const STYLE_VERSION = process.env.BACKFILL_STYLE_VERSION || 'answer-xelatex-v11-uniform-line';
+// 기본은 이미 있는 자산 건너뛰기. 템플릿 리비전 강제 재렌더가 필요할 때만 1.
+const FORCE = process.env.BACKFILL_FORCE === '1';
 // 시작 offset: 인자가 있으면 우선, 없으면 체크포인트 파일에서 복구 (pm2 자동재시작 대비)
 const cp = readCheckpoint();
 if (cp && cp.offset === 'done') {
@@ -62,16 +66,19 @@ for (const academyId of academies) {
   let totalRendered = 0;
   let totalFailed = 0;
   const allErrors = [];
-  console.log(`${ts()} === academy ${academyId} (${SOURCE_KIND}) ===`);
+  console.log(
+    `${ts()} === academy ${academyId} (${SOURCE_KIND}, ${STYLE_VERSION}, force=${FORCE}) ===`,
+  );
 
   while (true) {
     page += 1;
     const res = await postBackfill({
       academy_id: academyId,
       source_kind: SOURCE_KIND,
+      style_version: STYLE_VERSION,
       limit: LIMIT,
       offset,
-      force: true,
+      force: FORCE,
     });
     if (!res.ok) {
       const txt = await res.text();

@@ -4047,6 +4047,12 @@ const UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS = [
   UNIFIED_ANSWER_RENDER_STYLE_VERSION,
   UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11,
 ];
+// 새로 굽는 자산의 스타일. 읽기 쪽 폴백 기본값인
+// UNIFIED_ANSWER_RENDER_STYLE_VERSION(v10)과 분리해 둔다. 이 값을 v10 으로
+// 두면 신규·수정 문항이 계속 구버전으로만 구워져 앱이 폴백을 반복한다.
+const UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION =
+  process.env.UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION
+  || UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
 const UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS = {
   // 세로는 스트럿이 만든 고정 높이를 유지하고, 가로만 잉크 기준으로 크롭한다.
   // (가로를 페이지 전체로 두면 클라이언트에서 컨테이너에 맞춰 축소되어
@@ -4389,7 +4395,7 @@ function unifiedAnswerRenderDescriptor({
   sourceId,
   answerKind,
   answerText,
-  styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+  styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
   partKey = '',
 }) {
   const safeSourceKind = String(sourceKind || '').trim();
@@ -4467,7 +4473,7 @@ function unifiedAnswerPartDescriptors({
 
 function textbookAnswerUnifiedDescriptor(
   answerRow,
-  { styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION } = {},
+  { styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION } = {},
 ) {
   const cropId = String(answerRow?.crop_id || '').trim();
   const answerText = normalizeTextbookAnswerForRender(answerRow);
@@ -4498,7 +4504,7 @@ function textbookAnswerUnifiedDescriptorsWithParts(answerRow, { styleVersion } =
 
 function pbAnswerUnifiedDescriptors(
   questionRow,
-  { styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION } = {},
+  { styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION } = {},
 ) {
   const sourceId = String(questionRow?.id || '').trim();
   if (!isUuid(sourceId)) return [];
@@ -4541,6 +4547,53 @@ async function createAnswerRenderAssetSignedUrl(bucket, storagePath) {
     .from(safeBucket)
     .createSignedUrl(safePath, ANSWER_RENDER_EXPIRES_SEC);
   return String(data?.signedUrl || '').trim();
+}
+
+function answerRenderAssetSignKey(bucket, storagePath) {
+  return `${String(bucket || UNIFIED_ANSWER_RENDER_BUCKET).trim()}\n${String(storagePath || '').trim()}`;
+}
+
+/// Signs every asset in one request per bucket. Signing one-by-one costs a
+/// round trip per question, which dominated the right-sheet answer list load.
+async function createAnswerRenderAssetSignedUrls(rows) {
+  const pathsByBucket = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const bucket = String(row?.storage_bucket || UNIFIED_ANSWER_RENDER_BUCKET).trim();
+    const storagePath = String(row?.storage_path || '').trim();
+    if (!bucket || !storagePath) continue;
+    if (!pathsByBucket.has(bucket)) pathsByBucket.set(bucket, new Set());
+    pathsByBucket.get(bucket).add(storagePath);
+  }
+  const urlBySignKey = new Map();
+  await Promise.all(
+    [...pathsByBucket.entries()].map(async ([bucket, pathSet]) => {
+      const paths = [...pathSet];
+      try {
+        const { data, error } = await supa.storage
+          .from(bucket)
+          .createSignedUrls(paths, ANSWER_RENDER_EXPIRES_SEC);
+        if (error) throw error;
+        for (const entry of Array.isArray(data) ? data : []) {
+          const signedUrl = String(entry?.signedUrl || entry?.signedURL || '').trim();
+          const entryPath = String(entry?.path || '').trim();
+          if (!signedUrl || !entryPath) continue;
+          urlBySignKey.set(answerRenderAssetSignKey(bucket, entryPath), signedUrl);
+        }
+      } catch (err) {
+        console.warn(
+          '[answer-render] batch sign failed, falling back to per-path:',
+          err?.message || err,
+        );
+        for (const storagePath of paths) {
+          const url = await createAnswerRenderAssetSignedUrl(bucket, storagePath);
+          if (url) {
+            urlBySignKey.set(answerRenderAssetSignKey(bucket, storagePath), url);
+          }
+        }
+      }
+    }),
+  );
+  return urlBySignKey;
 }
 
 function computeRightSheetAnswerDisplayMetrics(row) {
@@ -4596,10 +4649,14 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
       : [])
     .map((style) => String(style || '').trim())
     .filter((style) => UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS.includes(style));
-  // 요청한 스타일(허용 목록 내)을 우선순위대로 존중하고, 없으면 기본 v10.
+  // 요청한 스타일(허용 목록 내)을 우선순위대로 존중한다. 지정이 없으면 최신
+  // 스타일을 우선하고 아직 재렌더 전인 자산은 구버전으로 폴백한다.
   const orderedStyles = styleVersions.length > 0
     ? [...new Set(styleVersions)]
-    : [UNIFIED_ANSWER_RENDER_STYLE_VERSION];
+    : [...new Set([
+      UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
+      UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+    ])];
   const requestedAnswerKind = normalizeUnifiedAnswerKind(
     body?.answer_kind || body?.answerKind || 'subjective',
   );
@@ -4665,6 +4722,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
 
   const renders = [];
   const v11MissingSourceIds = [];
+  const emitTargets = [];
   for (const sourceId of sourceIds) {
     const mainRow = bestByEntryKey.get(`${sourceId}\n${requestedAnswerKind}`);
     if (wantsV11) {
@@ -4676,30 +4734,38 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     for (const answerKind of answerKindCandidates) {
       const row = bestByEntryKey.get(`${sourceId}\n${answerKind}`);
       if (!row) continue;
-      const url = await createAnswerRenderAssetSignedUrl(row.storage_bucket, row.storage_path);
-      if (!url) continue;
-      const partKey = answerKind.includes('#')
-        ? answerKind.slice(answerKind.indexOf('#') + 1)
-        : '';
-      const displayMetrics = computeRightSheetAnswerDisplayMetrics(row);
-      renders.push({
-        key: partKey ? `${sourceId}#${partKey}` : sourceId,
-        source_id: sourceId,
-        answer_kind: String(row.answer_kind || '').trim(),
-        part_key: partKey,
-        url,
-        width: Number(row.width_px || 0),
-        height: Number(row.height_px || 0),
-        pixelRatio: Number(row.pixel_ratio || UNIFIED_ANSWER_RENDER_PIXEL_RATIO),
-        styleVersion: String(row.style_version || '').trim(),
-        engine: String(row.engine || '').trim(),
-        // 알파 글리프 PNG 여부 — true 면 앱이 테마 색으로 틴트해 그린다.
-        transparent: row.transparent === true,
-        ...displayMetrics,
-        cached: true,
-        error: '',
-      });
+      emitTargets.push({ sourceId, answerKind, row });
     }
+  }
+  const signedUrlBySignKey = await createAnswerRenderAssetSignedUrls(
+    emitTargets.map((target) => target.row),
+  );
+  for (const { sourceId, answerKind, row } of emitTargets) {
+    const url = signedUrlBySignKey.get(
+      answerRenderAssetSignKey(row.storage_bucket, row.storage_path),
+    ) || '';
+    if (!url) continue;
+    const partKey = answerKind.includes('#')
+      ? answerKind.slice(answerKind.indexOf('#') + 1)
+      : '';
+    const displayMetrics = computeRightSheetAnswerDisplayMetrics(row);
+    renders.push({
+      key: partKey ? `${sourceId}#${partKey}` : sourceId,
+      source_id: sourceId,
+      answer_kind: String(row.answer_kind || '').trim(),
+      part_key: partKey,
+      url,
+      width: Number(row.width_px || 0),
+      height: Number(row.height_px || 0),
+      pixelRatio: Number(row.pixel_ratio || UNIFIED_ANSWER_RENDER_PIXEL_RATIO),
+      styleVersion: String(row.style_version || '').trim(),
+      engine: String(row.engine || '').trim(),
+      // 알파 글리프 PNG 여부 — true 면 앱이 테마 색으로 틴트해 그린다.
+      transparent: row.transparent === true,
+      ...displayMetrics,
+      cached: true,
+      error: '',
+    });
   }
 
   // v11 파일럿: 요청 소스 전체를 백그라운드 백필에 넘긴다. 백필이 소스 해시를
@@ -4727,11 +4793,27 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
 
 // v11 백그라운드 렌더 — 동일 대상 중복 트리거 방지용 인플라이트 키 집합.
 const unifiedAnswerV11InflightKeys = new Set();
+// 같은 대상을 다시 열 때마다 디스크립터 조회가 반복되지 않도록 하는 쿨다운.
+// 객관식처럼 렌더할 정답이 없는 소스는 영원히 'v11 없음'으로 남기 때문에
+// 이 가드가 없으면 열람할 때마다 빈 백필이 실행된다.
+const UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS = 10 * 60 * 1000;
+const unifiedAnswerV11BackfillCheckedAt = new Map();
 
 function scheduleUnifiedAnswerRenderV11Backfill({ academyId, sourceKind, sourceIds }) {
   const ids = [...new Set(sourceIds)].sort();
   const inflightKey = `${academyId}\n${sourceKind}\n${ids.join(',')}`;
   if (unifiedAnswerV11InflightKeys.has(inflightKey)) return;
+  const now = Date.now();
+  const checkedAt = unifiedAnswerV11BackfillCheckedAt.get(inflightKey) || 0;
+  if (now - checkedAt < UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS) return;
+  unifiedAnswerV11BackfillCheckedAt.set(inflightKey, now);
+  if (unifiedAnswerV11BackfillCheckedAt.size > 500) {
+    for (const [key, at] of unifiedAnswerV11BackfillCheckedAt) {
+      if (now - at >= UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS) {
+        unifiedAnswerV11BackfillCheckedAt.delete(key);
+      }
+    }
+  }
   unifiedAnswerV11InflightKeys.add(inflightKey);
   (async () => {
     try {
@@ -5086,8 +5168,9 @@ async function renderUnifiedTextbookAnswerAssetsForRows({
   answerRows,
   force = false,
 }) {
+  // 세트형 정답은 파트별 렌더까지 함께 굽는다 (v11 전용 디스크립터).
   const descriptors = (Array.isArray(answerRows) ? answerRows : [])
-    .map((row) => textbookAnswerUnifiedDescriptor(row))
+    .flatMap((row) => textbookAnswerUnifiedDescriptorsWithParts(row))
     .filter(Boolean);
   const targets = await filterUnifiedDescriptorsNeedingRender({
     academyId,
@@ -7056,6 +7139,21 @@ function normalizeTextbookExpectedStartNumber(input) {
 const MAX_CROP_BATCH = 120;
 const MAX_CROP_BYTES = 25 * 1024 * 1024; // matches the bucket limit
 
+// textbook_problem_crops / textbook_pb_extract_runs 의 sub_key CHECK 제약과
+// 반드시 같은 집합이어야 한다. 슬롯을 늘리는 마이그레이션을 넣으면 여기도 같이
+// 늘려라 — 한쪽만 바뀌면 DB 는 받아주는데 API 가 400 으로 막는다.
+//   A~C  쎈/RPM 3단계
+//   A~E  개념원리 (익히기·필수유형·확인체크·연습문제·특강)
+//   A~F  개념+유형 (개념확인·필수문제·쏙쏙·탄탄·쓱쓱·한 번 더 연습)
+const TEXTBOOK_CROP_SUB_KEYS = Object.freeze([
+  'A',
+  'B',
+  'C',
+  'D',
+  'E',
+  'F',
+]);
+
 function parseIntArray(input, expectedLen) {
   if (!Array.isArray(input)) return null;
   if (typeof expectedLen === 'number' && input.length !== expectedLen) {
@@ -7106,8 +7204,7 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     sendJson(res, 400, { ok: false, error: 'invalid_unit_order' });
     return;
   }
-  // A/B/C = 쎈/RPM 3슬롯, D = 개념원리의 연습문제 슬롯 (DB CHECK 와 동일).
-  if (!['A', 'B', 'C', 'D', 'E'].includes(subKeyRaw)) {
+  if (!TEXTBOOK_CROP_SUB_KEYS.includes(subKeyRaw)) {
     sendJson(res, 400, { ok: false, error: `invalid_sub_key: ${subKeyRaw}` });
     return;
   }
@@ -7383,7 +7480,7 @@ async function handleTextbookCropsSyncScope(body, res) {
     !gradeLabel ||
     !Number.isFinite(bigOrder) ||
     !Number.isFinite(midOrder) ||
-    !['A', 'B', 'C', 'D', 'E'].includes(subKey) ||
+    !TEXTBOOK_CROP_SUB_KEYS.includes(subKey) ||
     rawPages.length === 0 ||
     rawPages.length > 120
   ) {
@@ -8292,7 +8389,7 @@ async function fetchUnifiedTextbookAnswerDescriptors({
   limit,
   offset,
   sourceIds = [],
-  styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+  styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
 }) {
   let query = supa
     .from('textbook_problem_answers')
@@ -8326,7 +8423,7 @@ async function fetchUnifiedPbAnswerDescriptors({
   limit,
   offset,
   sourceIds = [],
-  styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+  styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
 }) {
   let query = supa
     .from('pb_questions')
@@ -8379,7 +8476,9 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
   const offset = Math.max(0, Number.parseInt(String(body?.offset || '0'), 10) || 0);
   const force = body?.force === true;
   const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(
-    body?.style_version || body?.styleVersion || '',
+    body?.style_version
+    || body?.styleVersion
+    || UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
   );
   const requestedSourceIds = (Array.isArray(body?.source_ids)
     ? body.source_ids

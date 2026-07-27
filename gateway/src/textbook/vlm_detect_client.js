@@ -481,12 +481,16 @@ function firstFiniteNumber(...values) {
 // 개념+유형 단일 패스 — 문항의 category 를 검증/보정한다.
 // 모델이 category 를 빠뜨렸을 때만 라벨로 추정한다. "예제/유제/연습" 은
 // 쓱쓱 서술형 완성하기에서만 쓰는 라벨이라 카테고리를 되짚을 수 있다.
+const GAEYU_DESCRIPTIVE_NUMBER_PREFIX = Object.freeze({
+  예제: '예제',
+  유제: '유제',
+  '서술형 연습': '연습',
+});
+
 function normalizeGaeyuCategory(raw, label) {
   const value = String(raw?.category ?? '').trim();
   if (GAEYU_ITEM_CATEGORIES.includes(value)) return value;
-  if (label === '예제' || label === '유제' || label === '연습') {
-    return 'descriptive';
-  }
+  if (GAEYU_DESCRIPTIVE_NUMBER_PREFIX[label]) return 'descriptive';
   return '';
 }
 
@@ -503,9 +507,8 @@ function formatGaeyuNumber({ category, label, printedNumber, conceptCheckPage })
   if (category === 'descriptive') {
     const digits = printedNumber.match(/\d+/);
     if (!digits) return '';
-    if (label === '예제' || label === '유제' || label === '연습') {
-      return `${label}${Number.parseInt(digits[0], 10)}`;
-    }
+    const prefix = GAEYU_DESCRIPTIVE_NUMBER_PREFIX[label];
+    if (prefix) return `${prefix}${Number.parseInt(digits[0], 10)}`;
     return printedNumber;
   }
   return printedNumber;
@@ -592,9 +595,13 @@ function normalizeDifficultyLabel(input) {
   if (!compact || compact === '사고의기술') return '';
   // 개념+유형 쓱쓱 서술형 완성하기의 세 갈래. 번호 접두어로 쓰이므로
   // "예제 1"/"유제1"/"연습해 보자" 같은 표기 변형을 먼저 흡수한다.
+  //
+  // "연습해 보자" 는 그냥 "연습" 으로 두면 같은 교재의 "한 번 더 연습" 과 배지에서
+  // 구별되지 않는다. 저장 라벨은 "서술형 연습" 으로 고정한다. (번호 접두어는
+  // 답지 매칭 키로 이미 쓰이고 있어 "연습1" 그대로 유지한다.)
   if (/^예제\d*$/.test(compact)) return '예제';
   if (/^유제\d*$/.test(compact)) return '유제';
-  if (/^연습(해보자)?\d*$/.test(compact)) return '연습';
+  if (/^(서술형)?연습(해보자)?\d*$/.test(compact)) return '서술형 연습';
   if (compact.includes('서술형') || compact.includes('논술')) return '서술형';
   if (compact === '대표문제') return '대표 문제';
   if (compact === '교육청기출') return '교육청기출';

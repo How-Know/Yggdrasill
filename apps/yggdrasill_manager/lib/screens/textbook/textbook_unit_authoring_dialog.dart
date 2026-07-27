@@ -290,7 +290,11 @@ class _TextbookUnitAuthoringDialogState
     }
     if (_seriesKey == 'gaeyu') {
       final label = item.label.trim();
-      if (label == '예제' || label == '유제' || label == '연습') {
+      // "연습" 은 구버전 크롭 복원용. 현재 저장 라벨은 "서술형 연습" 이다.
+      if (label == '예제' ||
+          label == '유제' ||
+          label == '서술형 연습' ||
+          label == '연습') {
         return 'descriptive';
       }
       if (_kGaeyuSubKeyByCategory.containsKey(pageSection)) return pageSection;
@@ -383,8 +387,10 @@ class _TextbookUnitAuthoringDialogState
             return '쓱쓱 서술형 예제';
           case '유제':
             return '쓱쓱 서술형 유제';
+          // "연습" 은 구버전 크롭 복원용. 현재 저장 라벨은 "서술형 연습" 이다.
+          case '서술형 연습':
           case '연습':
-            return '쓱쓱 서술형 연습해 보자';
+            return '쓱쓱 서술형 연습';
           default:
             return '쓱쓱 서술형 완성하기';
         }
@@ -2642,9 +2648,12 @@ class _TextbookUnitAuthoringDialogState
       unawaited(_loadStageStatuses());
 
       // 특강(E) 크롭이 새로 저장됐으면 정규화 특강 소단원을 재동기화한다.
-      final hasSpecial = allRows.any(
-        (r) => '${r['sub_key'] ?? ''}'.trim().toUpperCase() == 'E',
-      );
+      // 슬롯 E 는 개념원리에서만 특강이다 — 개념+유형의 E 는 쓱쓱 서술형이라
+      // 여기서 걸리면 있지도 않은 특강 소단원이 단원 트리에 생긴다.
+      final hasSpecial = _seriesKey == 'wonri' &&
+          allRows.any(
+            (r) => '${r['sub_key'] ?? ''}'.trim().toUpperCase() == 'E',
+          );
       if (hasSpecial) {
         unawaited(_rebuildSpecialUnits());
       }

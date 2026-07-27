@@ -3689,6 +3689,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         sourceKind: 'pb_question',
         answerKind: entry.key,
         sourceIds: entry.value,
+        styleVersion: kUnifiedAnswerRenderStyleVersionV11,
+        fallbackStyleVersions: const <String>[kUnifiedAnswerRenderStyleVersion],
       );
     }
     final textbookSourceContext = await _loadProblemBankTextbookSourceContext(
@@ -4089,14 +4091,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         bookId: ref.bookId,
         gradeLabel: ref.gradeLabel,
       );
-      final answerPath = await _resolveTextbookPdfPathForRightSheet(
-        textbookLinks: links,
-        kind: 'ans',
-      );
-      final solutionPath = await _resolveTextbookPdfPathForRightSheet(
-        textbookLinks: links,
-        kind: 'sol',
-      );
+      final resolvedPaths = await Future.wait<String>([
+        _resolveTextbookPdfPathForRightSheet(
+          textbookLinks: links,
+          kind: 'ans',
+        ),
+        _resolveTextbookPdfPathForRightSheet(
+          textbookLinks: links,
+          kind: 'sol',
+        ),
+      ]);
+      final answerPath = resolvedPaths[0];
+      final solutionPath = resolvedPaths[1];
       pdfPathsByBookGrade[key] = <String, String>{
         'answer': answerPath,
         'solution': solutionPath,
@@ -4375,14 +4381,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       baseItem,
       allowFlowFallback: true,
     );
-    final answerPathRaw = await _resolveTextbookPdfPathForRightSheet(
-      textbookLinks: textbookLinks,
-      kind: 'ans',
-    );
-    final solutionPathRaw = await _resolveTextbookPdfPathForRightSheet(
-      textbookLinks: textbookLinks,
-      kind: 'sol',
-    );
+    final resolvedPaths = await Future.wait<String>([
+      _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: textbookLinks,
+        kind: 'ans',
+      ),
+      _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: textbookLinks,
+        kind: 'sol',
+      ),
+    ]);
+    final answerPathRaw = resolvedPaths[0];
+    final solutionPathRaw = resolvedPaths[1];
 
     final assignedRows = await _loadAssignedTextbookProblemRows(
       textbookItems: textbookItems,
@@ -4652,14 +4662,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       hw,
       allowFlowFallback: true,
     );
-    final answerPathRaw = await _resolveTextbookPdfPathForRightSheet(
-      textbookLinks: textbookLinks,
-      kind: 'ans',
-    );
-    final solutionPathRaw = await _resolveTextbookPdfPathForRightSheet(
-      textbookLinks: textbookLinks,
-      kind: 'sol',
-    );
+    final resolvedPaths = await Future.wait<String>([
+      _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: textbookLinks,
+        kind: 'ans',
+      ),
+      _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: textbookLinks,
+        kind: 'sol',
+      ),
+    ]);
+    final answerPathRaw = resolvedPaths[0];
+    final solutionPathRaw = resolvedPaths[1];
     return <String, String>{
       'answerPathRaw': answerPathRaw,
       'solutionPathRaw': solutionPathRaw,
@@ -4675,12 +4689,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final raw = normalizedKind == 'sol'
         ? textbookLinks.solutionPathRaw.trim()
         : textbookLinks.answerPathRaw.trim();
+    if (raw.isEmpty || _isWebUrl(raw)) return raw;
     try {
       final source = await TextbookPdfService.instance.resolve(
         TextbookPdfRef(
           fileId: textbookLinks.bookId,
           gradeLabel: textbookLinks.gradeLabel,
           kind: normalizedKind == 'sol' ? 'sol' : 'ans',
+          storageKey: _textbookStorageKeyFromRaw(raw),
         ),
       );
       return (source.localPath ?? source.url ?? '').trim();

@@ -7546,6 +7546,19 @@ class DataManager {
     List<Map<String, dynamic>> links,
   ) =>
       ResourceService.instance.saveFlowTextbookLinks(flowId, links);
+
+  Future<Map<String, dynamic>> unbindStudentTextbook({
+    required String studentId,
+    required String flowId,
+    required String bookId,
+    required String gradeLabel,
+  }) =>
+      ResourceService.instance.unbindStudentTextbook(
+        studentId: studentId,
+        flowId: flowId,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
   Future<Map<String, dynamic>?> loadTextbookMetadataPayload({
     required String bookId,
     required String gradeLabel,

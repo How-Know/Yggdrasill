@@ -480,14 +480,18 @@ class RightSheetGradingSearchService {
       hw,
       allowFlowFallback: true,
     );
-    final answerPathRaw = await _resolveTextbookPdfPathForRightSheet(
-      textbookLinks: textbookLinks,
-      kind: 'ans',
-    );
-    final solutionPathRaw = await _resolveTextbookPdfPathForRightSheet(
-      textbookLinks: textbookLinks,
-      kind: 'sol',
-    );
+    final resolvedPaths = await Future.wait<String>([
+      _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: textbookLinks,
+        kind: 'ans',
+      ),
+      _resolveTextbookPdfPathForRightSheet(
+        textbookLinks: textbookLinks,
+        kind: 'sol',
+      ),
+    ]);
+    final answerPathRaw = resolvedPaths[0];
+    final solutionPathRaw = resolvedPaths[1];
     return <String, String>{
       'answerPathRaw': answerPathRaw,
       'solutionPathRaw': solutionPathRaw,
@@ -503,12 +507,14 @@ class RightSheetGradingSearchService {
     final raw = normalizedKind == 'sol'
         ? textbookLinks.solutionPathRaw.trim()
         : textbookLinks.answerPathRaw.trim();
+    if (raw.isEmpty || _isWebUrl(raw)) return raw;
     try {
       final source = await TextbookPdfService.instance.resolve(
         TextbookPdfRef(
           fileId: textbookLinks.bookId,
           gradeLabel: textbookLinks.gradeLabel,
           kind: normalizedKind == 'sol' ? 'sol' : 'ans',
+          storageKey: _textbookStorageKeyFromRaw(raw),
         ),
       );
       return (source.localPath ?? source.url ?? '').trim();
@@ -613,6 +619,8 @@ class RightSheetGradingSearchService {
         sourceKind: 'pb_question',
         answerKind: entry.key,
         sourceIds: entry.value,
+        styleVersion: kUnifiedAnswerRenderStyleVersionV11,
+        fallbackStyleVersions: const <String>[kUnifiedAnswerRenderStyleVersion],
       );
     }
 
@@ -972,6 +980,14 @@ class RightSheetGradingSearchService {
   bool _isWebUrl(String raw) {
     final lower = raw.trim().toLowerCase();
     return lower.startsWith('http://') || lower.startsWith('https://');
+  }
+
+  String? _textbookStorageKeyFromRaw(String rawPath) {
+    const prefix = 'storage://textbook/';
+    final trimmed = rawPath.trim();
+    if (!trimmed.toLowerCase().startsWith(prefix)) return null;
+    final key = trimmed.substring(prefix.length).split('?').first.trim();
+    return key.isEmpty ? null : key;
   }
 
   String _toLocalFilePath(String rawPath) {

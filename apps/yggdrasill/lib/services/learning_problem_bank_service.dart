@@ -3314,6 +3314,49 @@ class LearningProblemBankService {
     }
   }
 
+  /// 정답 렌더 자산의 서명 URL을 버킷당 한 번의 요청으로 발급한다.
+  ///
+  /// 문항별로 하나씩 발급하면 문항 수만큼 왕복이 생겨 정답리스트 로딩이
+  /// 그대로 느려진다. (게이트웨이를 못 쓰는 폴백 경로에서도 동일)
+  Future<Map<String, String>> _createAnswerRenderSignedUrls(
+    Iterable<Map<String, dynamic>> rows,
+  ) async {
+    const ttlSeconds = 60 * 60 * 24 * 7;
+    final pathsByBucket = <String, Set<String>>{};
+    for (final row in rows) {
+      final bucket = '${row['storage_bucket'] ?? ''}'.trim();
+      final path = '${row['storage_path'] ?? ''}'.trim();
+      if (bucket.isEmpty || path.isEmpty) continue;
+      pathsByBucket.putIfAbsent(bucket, () => <String>{}).add(path);
+    }
+    if (pathsByBucket.isEmpty) return const <String, String>{};
+    final out = <String, String>{};
+    await Future.wait(pathsByBucket.entries.map((entry) async {
+      final bucket = entry.key;
+      final paths = entry.value.toList(growable: false);
+      try {
+        final signed =
+            await _client.storage.from(bucket).createSignedUrls(paths, ttlSeconds);
+        for (final item in signed) {
+          final path = item.path.trim();
+          final url = item.signedUrl.trim();
+          if (path.isEmpty || url.isEmpty) continue;
+          out['$bucket\n$path'] = url;
+        }
+      } catch (_) {
+        for (final path in paths) {
+          try {
+            final url = await _client.storage
+                .from(bucket)
+                .createSignedUrl(path, ttlSeconds);
+            if (url.trim().isNotEmpty) out['$bucket\n$path'] = url.trim();
+          } catch (_) {}
+        }
+      }
+    }));
+    return out;
+  }
+
   Future<Map<String, LearningProblemAnswerRender>>
       loadUnifiedAnswerRenderAssets({
     required String academyId,
@@ -3418,14 +3461,16 @@ class LearningProblemBankService {
           bestRows[entryKey] = row;
         }
       }
+      final signedUrls = await _createAnswerRenderSignedUrls(
+        bestRows.values,
+      );
       final out = <String, LearningProblemAnswerRender>{};
       for (final entry in bestRows.entries) {
         final row = entry.value;
         final bucket = '${row['storage_bucket'] ?? ''}'.trim();
         final path = '${row['storage_path'] ?? ''}'.trim();
         if (bucket.isEmpty || path.isEmpty) continue;
-        final url =
-            await _client.storage.from(bucket).createSignedUrl(path, 60 * 60);
+        final url = signedUrls['$bucket\n$path'] ?? '';
         if (url.isEmpty) continue;
         final width = _intOrZero(row['width_px']);
         final height = _intOrZero(row['height_px']);

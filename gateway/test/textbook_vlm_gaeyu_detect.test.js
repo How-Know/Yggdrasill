@@ -47,6 +47,18 @@ test('개념+유형 프롬프트가 여섯 코너와 번호 규칙을 설명한�
   assert.match(prompt, /개념 Review \/ 마인드맵/);
 });
 
+// 파란 "교과서 +α" 카드는 제목 앞 숫자가 빨간 네모 안에 있어서 필수 문제로
+// 오인식됐다. 개념 카드 규칙이 배경색과 무관하게 서술돼 있어야 한다.
+test('개념+유형 프롬프트가 교과서 +α 개념 카드를 문항에서 제외한다', () => {
+  const prompt = gaeyuPrompt();
+  assert.match(prompt, /교과서 \+α/);
+  assert.match(prompt, /배경색·테두리색이 무엇이든 개념 카드/);
+  assert.match(prompt, /빨간 네모 안에 있어도 개념 번호/);
+  // 배지 없이는 필수 문제로 올리지 못하게 막는 게이트.
+  assert.match(prompt, /같은\*\*\n?.*\*\*줄에 실제로 보일 때만\*\*/s);
+  assert.match(prompt, /개념 카드 제목을 content_group\.title\(유형명\)로 쓰지 마라/);
+});
+
 test('개념+유형 개념확인은 본문 인쇄 페이지를 번호로 받는다', () => {
   const result = detect([
     { number: '', category: 'concept_check', label: '' },
@@ -89,6 +101,39 @@ test('개념+유형 쓱쓱 서술형은 갈래 접두어로 번호 충돌을 피
     result.items.map((item) => item.number),
     ['예제1', '유제1', '연습1'],
   );
+});
+
+// "연습해 보자" 를 라벨 "연습" 으로 두면 배지에서 "한 번 더 연습" 과 구별되지
+// 않는다. 저장 라벨만 "서술형 연습" 으로 바꾸고, 답지 매칭 키인 번호 접두어는
+// "연습1" 그대로 유지한다.
+test('개념+유형 연습해 보자 라벨은 서술형 연습으로 저장된다', () => {
+  const result = detect([
+    { number: '1', category: 'descriptive', label: '연습해 보자' },
+    { number: '2', category: 'descriptive', label: '연습 2' },
+    // 저장된 크롭을 되살릴 때 이미 정제된 라벨이 다시 들어와도 같은 결과여야 한다.
+    { number: '3', category: 'descriptive', label: '서술형 연습' },
+  ]);
+  assert.deepEqual(
+    result.items.map((item) => [item.number, item.label]),
+    [
+      ['연습1', '서술형 연습'],
+      ['연습2', '서술형 연습'],
+      ['연습3', '서술형 연습'],
+    ],
+  );
+  assert.ok(result.items.every((item) => item.category === 'descriptive'));
+});
+
+// 예제·유제 배지가 문제 상자 위 빈 공간으로, 연습해 보자 크롭이 풀이 여백까지
+// 잡히던 문제. 프롬프트에 위치 근거와 아래 경계가 명시돼 있어야 한다.
+test('개념+유형 프롬프트가 쓱쓱 번호 배지 위치와 크롭 경계를 못 박는다', () => {
+  const prompt = gaeyuPrompt();
+  assert.match(prompt, /\[D4-쓱쓱\]/);
+  assert.match(prompt, /문제 상자의 \*\*왼쪽 바깥\*\*/);
+  assert.match(prompt, /위쪽 빈 공간을 잡으면 틀린 것이다/);
+  assert.match(prompt, /"따라 해보자" 리본/);
+  assert.match(prompt, /쓱쓱 서술형 3갈래 공통\(예제·유제·연습해 보자\)/);
+  assert.match(prompt, /빈 여백을 같이 크롭하면 실패다/);
 });
 
 test('개념+유형 탄탄은 난이도와 중요 표시를 따로 담는다', () => {

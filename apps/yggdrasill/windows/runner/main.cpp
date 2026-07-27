@@ -18,6 +18,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   flutter::DartProject project(L"data");
+  // Flutter 3.38 can starve the Windows message loop when the platform and UI
+  // runners share the main thread (notably while pdfrx is opening large PDFs).
+  // Keep rendering work off the Win32 message-pump thread.
+  project.set_ui_thread_policy(flutter::UIThreadPolicy::RunOnSeparateThread);
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();

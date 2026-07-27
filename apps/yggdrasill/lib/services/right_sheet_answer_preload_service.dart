@@ -63,6 +63,8 @@ class RightSheetAnswerPreloadService {
       RightSheetAnswerPreloadService._();
 
   static const Duration _ttl = Duration(minutes: 20);
+  // 정답 렌더 서명 URL은 7일짜리로 발급되므로 20분마다 재발급할 이유가 없다.
+  static const Duration _assetTtl = Duration(hours: 6);
   static const Duration _failureBackoff = Duration(minutes: 2);
   static const int _maxCacheEntries = 800;
 
@@ -234,7 +236,7 @@ class RightSheetAnswerPreloadService {
       }
     });
 
-    final expiresAt = DateTime.now().add(_ttl);
+    final expiresAt = DateTime.now().add(_assetTtl);
     final failureExpiresAt = DateTime.now().add(_failureBackoff);
     for (final id in missing) {
       final render = fetched[id];
@@ -366,6 +368,7 @@ class RightSheetAnswerPreloadService {
     int maxQuestions = 60,
   }) async {
     final sourceIdsByLookup = <String, Set<String>>{};
+    final partExpectedByLookup = <String, Set<String>>{};
     var scanned = 0;
     for (final rawPage in session.gradingPages) {
       final rawCells = rawPage['cells'];
@@ -400,9 +403,15 @@ class RightSheetAnswerPreloadService {
                 .trim();
         if (sourceKind.isEmpty || sourceId.isEmpty) continue;
         final answerKind = _answerRenderKindForRawCell(rawCell);
+        final lookupKey = '$sourceKind\n$answerKind';
         sourceIdsByLookup
-            .putIfAbsent('$sourceKind\n$answerKind', () => <String>{})
+            .putIfAbsent(lookupKey, () => <String>{})
             .add(sourceId);
+        if (_looksLikeSetAnswer(answer)) {
+          partExpectedByLookup
+              .putIfAbsent(lookupKey, () => <String>{})
+              .add(sourceId);
+        }
       }
       if (scanned >= maxQuestions) break;
     }
@@ -414,8 +423,28 @@ class RightSheetAnswerPreloadService {
         sourceKind: parts[0],
         answerKind: parts[1],
         sourceIds: entry.value,
+        // 화면과 같은 스타일로 예열해야 캐시가 적중한다. 스타일 버전은 캐시
+        // 키의 일부라 v10 으로 예열하면 v11 을 그리는 화면에서 전부 미스가 난다.
+        styleVersion: kUnifiedAnswerRenderStyleVersionV11,
+        fallbackStyleVersions: const <String>[kUnifiedAnswerRenderStyleVersion],
+        partExpectedSourceIds:
+            partExpectedByLookup[entry.key] ?? const <String>{},
       );
     }
+  }
+
+  /// 세트형('(1) … (2) …') 정답인지에 대한 가벼운 판별.
+  ///
+  /// 정확한 분해는 화면 쪽 파서가 담당하고, 여기서는 파트 렌더까지 예열할
+  /// 대상을 고르기 위한 힌트로만 쓴다.
+  bool _looksLikeSetAnswer(String raw) {
+    final text = raw.trim();
+    if (text.length < 4) return false;
+    final numeric = RegExp(r'[(（]\s*1\s*[)）]').hasMatch(text) &&
+        RegExp(r'[(（]\s*2\s*[)）]').hasMatch(text);
+    final korean = RegExp(r'[(（]\s*가\s*[)）]').hasMatch(text) &&
+        RegExp(r'[(（]\s*나\s*[)）]').hasMatch(text);
+    return numeric || korean;
   }
 
   bool _isObjectiveAnswer(

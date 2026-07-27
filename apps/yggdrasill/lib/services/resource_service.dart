@@ -983,6 +983,38 @@ class ResourceService {
     }
   }
 
+  /// 학생-플로우 교재 바인딩 해제.
+  ///
+  /// 학생 스코프(풀이·신고·과제·학습기록·연결)만 삭제한다.
+  /// 원본 교재 메타데이터/크롭/학원 공용 자산은 건드리지 않는다.
+  Future<Map<String, dynamic>> unbindStudentTextbook({
+    required String studentId,
+    required String flowId,
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final sid = studentId.trim();
+    final fid = flowId.trim();
+    final bid = bookId.trim();
+    final grade = gradeLabel.trim();
+    if (sid.isEmpty || fid.isEmpty || bid.isEmpty || grade.isEmpty) {
+      throw ArgumentError('unbindStudentTextbook: missing args');
+    }
+    final raw = await Supabase.instance.client.rpc(
+      'unbind_student_textbook',
+      params: {
+        'p_student_id': sid,
+        'p_flow_id': fid,
+        'p_book_id': bid,
+        'p_grade_label': grade,
+      },
+    );
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
+    }
+    return <String, dynamic>{'ok': true};
+  }
+
   Future<Map<String, dynamic>?> loadTextbookMetadataPayload({
     required String bookId,
     required String gradeLabel,
@@ -1201,6 +1233,7 @@ class ResourceService {
         }
       } catch (_) {}
       try {
+        final imageAnswerRefs = <String, ({String bucket, String path})>{};
         for (final ids in chunks(byCropId.keys.toList(growable: false), 250)) {
           final answerRows = await supa
               .from('textbook_problem_answers')
@@ -1219,15 +1252,8 @@ class ResourceService {
             if (crop == null) continue;
             final imageBucket = '${answer['answer_image_bucket'] ?? ''}'.trim();
             final imagePath = '${answer['answer_image_path'] ?? ''}'.trim();
-            var imageUrl = '';
             if (imageBucket.isNotEmpty && imagePath.isNotEmpty) {
-              try {
-                imageUrl = await supa.storage
-                    .from(imageBucket)
-                    .createSignedUrl(imagePath, 60 * 30);
-              } catch (_) {
-                imageUrl = '';
-              }
+              imageAnswerRefs[cropId] = (bucket: imageBucket, path: imagePath);
             }
             crop.addAll({
               'answer_kind': answer['answer_kind'],
@@ -1240,7 +1266,7 @@ class ResourceService {
               'answer_note': answer['note'],
               'answer_image_bucket': answer['answer_image_bucket'],
               'answer_image_path': answer['answer_image_path'],
-              'answer_image_url': imageUrl,
+              'answer_image_url': '',
               'answer_image_width_px': answer['answer_image_width_px'],
               'answer_image_height_px': answer['answer_image_height_px'],
               'answer_image_size_bytes': answer['answer_image_size_bytes'],
@@ -1248,179 +1274,35 @@ class ResourceService {
             });
           }
         }
-        final renderedCropIds = <String>{};
-        Future<void> applyUnifiedRenderAssetsForStyle(
-          String styleVersion,
-        ) async {
-          final remainingIds = byCropId.keys
-              .where((id) => !renderedCropIds.contains(id))
-              .toList(growable: false);
-          if (remainingIds.isEmpty) return;
-          for (final ids in chunks(remainingIds, 250)) {
-            final renderRows = await supa
-                .from('answer_render_assets')
-                .select(
-                  'source_id, storage_bucket, storage_path, width_px, height_px, '
-                  'pixel_ratio, source_hash, engine, style_version, render_error',
-                )
-                .eq('academy_id', academyId)
-                .eq('source_kind', 'textbook_crop')
-                .eq('engine', 'xelatex')
-                .eq('style_version', styleVersion)
-                .eq('render_error', '')
-                .inFilter('source_id', ids);
-            for (final raw in renderRows) {
-              final render = Map<String, dynamic>.from(raw);
-              final cropId = '${render['source_id'] ?? ''}'.trim();
-              final crop = byCropId[cropId];
-              if (crop == null) continue;
-              if (renderedCropIds.contains(cropId)) continue;
-              final answerKind =
-                  '${crop['answer_kind'] ?? ''}'.trim().toLowerCase();
-              if (answerKind == 'image') continue;
-              final bucket =
-                  '${render['storage_bucket'] ?? 'textbook-answer-renders'}'
-                      .trim();
-              final storagePath = '${render['storage_path'] ?? ''}'.trim();
-              if (bucket.isEmpty || storagePath.isEmpty) continue;
-              var renderUrl = '';
-              try {
-                renderUrl = await supa.storage
-                    .from(bucket)
-                    .createSignedUrl(storagePath, 60 * 30);
-              } catch (_) {
-                renderUrl = '';
+        // 서명 URL은 버킷당 한 번에 발급한다. (문항 수만큼 왕복하면 채점
+        // 정답리스트가 열리기까지 그만큼 지연된다)
+        if (imageAnswerRefs.isNotEmpty) {
+          final pathsByBucket = <String, Set<String>>{};
+          for (final ref in imageAnswerRefs.values) {
+            pathsByBucket.putIfAbsent(ref.bucket, () => <String>{}).add(ref.path);
+          }
+          final signedByKey = <String, String>{};
+          await Future.wait(pathsByBucket.entries.map((entry) async {
+            try {
+              final signed = await supa.storage.from(entry.key).createSignedUrls(
+                    entry.value.toList(growable: false),
+                    60 * 60,
+                  );
+              for (final item in signed) {
+                signedByKey['${entry.key}\n${item.path}'] = item.signedUrl;
               }
-              if (renderUrl.isEmpty) continue;
-              crop.addAll({
-                'answer_render_image_bucket': bucket,
-                'answer_render_image_path': storagePath,
-                'answer_render_image_url': renderUrl,
-                'answer_render_image_width_px': render['width_px'],
-                'answer_render_image_height_px': render['height_px'],
-                'answer_render_pixel_ratio': render['pixel_ratio'],
-                'answer_render_source_hash': render['source_hash'],
-                'answer_render_style_version': render['style_version'],
-                'answer_image_url': renderUrl,
-                'answer_image_width_px': render['width_px'],
-                'answer_image_height_px': render['height_px'],
-              });
-              renderedCropIds.add(cropId);
-            }
+            } catch (_) {}
+          }));
+          for (final entry in imageAnswerRefs.entries) {
+            final url =
+                signedByKey['${entry.value.bucket}\n${entry.value.path}'] ?? '';
+            if (url.isEmpty) continue;
+            byCropId[entry.key]?['answer_image_url'] = url;
           }
         }
-
-        await applyUnifiedRenderAssetsForStyle(
-          'answer-xelatex-v5-rightsheet-bold',
-        );
-        await applyUnifiedRenderAssetsForStyle(
-          'answer-xelatex-v4-rightsheet-opaque',
-        );
-        final v3FallbackIds = byCropId.keys
-            .where((id) => !renderedCropIds.contains(id))
-            .toList(growable: false);
-        for (final ids in chunks(v3FallbackIds, 250)) {
-          final renderRows = await supa
-              .from('answer_render_assets')
-              .select(
-                'source_id, storage_bucket, storage_path, width_px, height_px, '
-                'pixel_ratio, source_hash, engine, style_version, render_error',
-              )
-              .eq('academy_id', academyId)
-              .eq('source_kind', 'textbook_crop')
-              .eq('engine', 'xelatex')
-              .eq('style_version', 'answer-xelatex-v3-unified')
-              .eq('render_error', '')
-              .inFilter('source_id', ids);
-          for (final raw in renderRows) {
-            final render = Map<String, dynamic>.from(raw);
-            final cropId = '${render['source_id'] ?? ''}'.trim();
-            final crop = byCropId[cropId];
-            if (crop == null) continue;
-            final answerKind =
-                '${crop['answer_kind'] ?? ''}'.trim().toLowerCase();
-            if (answerKind == 'image') continue;
-            final bucket =
-                '${render['storage_bucket'] ?? 'answer-renders'}'.trim();
-            final storagePath = '${render['storage_path'] ?? ''}'.trim();
-            if (bucket.isEmpty || storagePath.isEmpty) continue;
-            var renderUrl = '';
-            try {
-              renderUrl = await supa.storage
-                  .from(bucket)
-                  .createSignedUrl(storagePath, 60 * 30);
-            } catch (_) {
-              renderUrl = '';
-            }
-            if (renderUrl.isEmpty) continue;
-            crop.addAll({
-              'answer_render_image_bucket': bucket,
-              'answer_render_image_path': storagePath,
-              'answer_render_image_url': renderUrl,
-              'answer_render_image_width_px': render['width_px'],
-              'answer_render_image_height_px': render['height_px'],
-              'answer_render_pixel_ratio': render['pixel_ratio'],
-              'answer_render_source_hash': render['source_hash'],
-              'answer_render_style_version': render['style_version'],
-              'answer_image_url': renderUrl,
-              'answer_image_width_px': render['width_px'],
-              'answer_image_height_px': render['height_px'],
-            });
-            renderedCropIds.add(cropId);
-          }
-        }
-        final legacyFallbackIds = byCropId.keys
-            .where((id) => !renderedCropIds.contains(id))
-            .toList(growable: false);
-        for (final ids in chunks(legacyFallbackIds, 250)) {
-          final renderRows = await supa
-              .from('textbook_answer_render_assets')
-              .select(
-                'crop_id, storage_bucket, storage_path, width_px, height_px, '
-                'pixel_ratio, source_hash, engine, style_version, render_error',
-              )
-              .eq('academy_id', academyId)
-              .eq('engine', 'xelatex')
-              .eq('style_version', 'textbook-answer-xelatex-v2-hires')
-              .eq('render_error', '')
-              .inFilter('crop_id', ids);
-          for (final raw in renderRows) {
-            final render = Map<String, dynamic>.from(raw);
-            final cropId = '${render['crop_id'] ?? ''}'.trim();
-            final crop = byCropId[cropId];
-            if (crop == null) continue;
-            final answerKind =
-                '${crop['answer_kind'] ?? ''}'.trim().toLowerCase();
-            if (answerKind == 'image') continue;
-            final bucket =
-                '${render['storage_bucket'] ?? 'textbook-answer-renders'}'
-                    .trim();
-            final storagePath = '${render['storage_path'] ?? ''}'.trim();
-            if (bucket.isEmpty || storagePath.isEmpty) continue;
-            var renderUrl = '';
-            try {
-              renderUrl = await supa.storage
-                  .from(bucket)
-                  .createSignedUrl(storagePath, 60 * 30);
-            } catch (_) {
-              renderUrl = '';
-            }
-            if (renderUrl.isEmpty) continue;
-            crop.addAll({
-              'answer_render_image_bucket': bucket,
-              'answer_render_image_path': storagePath,
-              'answer_render_image_url': renderUrl,
-              'answer_render_image_width_px': render['width_px'],
-              'answer_render_image_height_px': render['height_px'],
-              'answer_render_pixel_ratio': render['pixel_ratio'],
-              'answer_render_source_hash': render['source_hash'],
-              'answer_render_style_version': render['style_version'],
-              'answer_image_url': renderUrl,
-              'answer_image_width_px': render['width_px'],
-              'answer_image_height_px': render['height_px'],
-            });
-          }
-        }
+        // 우측 정답리스트는 v11/v10 통합 렌더만 표시하므로 여기서 레거시
+        // 스타일(v5/v4/v3/textbook-v2) 자산을 조회·서명하지 않는다. 예전에는
+        // 문항 수만큼 서명 왕복이 발생했지만 그 URL은 화면에 쓰이지 않았다.
       } catch (_) {
         // Stage-2 answer sidecar can be absent while crop metadata is present.
       }

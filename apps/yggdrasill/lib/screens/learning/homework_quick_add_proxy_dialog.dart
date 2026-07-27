@@ -7803,11 +7803,132 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
-  Future<void> _showActiveTextbooksDialog() async {
+  Map<String, List<_LinkedTextbook>> _groupLinkedTextbooks(
+    Iterable<_LinkedTextbook> links,
+  ) {
     final groups = <String, List<_LinkedTextbook>>{};
-    for (final link in _allLinkedTextbooks) {
+    for (final link in links) {
       groups.putIfAbsent(link.gradeLabel, () => <_LinkedTextbook>[]).add(link);
     }
+    return groups;
+  }
+
+  Future<bool> _confirmUnbindTextbook(_LinkedTextbook link) async {
+    final bookLabel =
+        link.bookName.trim().isEmpty ? '선택한 교재' : link.bookName.trim();
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            '교재 바인딩 해제',
+            style: TextStyle(
+              color: kDlgText,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: Text(
+            '「$bookLabel」 바인딩을 해제하면 이 학생의 해당 교재 풀이·채점·과제·학습 기록이 '
+            '모두 삭제되며 복구할 수 없습니다.\n\n'
+            '원본 교재(학원 공용 메타데이터·문항)에는 영향을 주지 않습니다.',
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontSize: 14,
+              height: 1.45,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFC62828),
+              ),
+              child: const Text('바인딩 해제'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
+  }
+
+  Future<bool> _unbindLinkedTextbook(_LinkedTextbook link) async {
+    final confirmed = await _confirmUnbindTextbook(link);
+    if (!confirmed || !mounted) return false;
+    try {
+      await DataManager.instance.unbindStudentTextbook(
+        studentId: widget.studentId,
+        flowId: link.flowId,
+        bookId: link.bookId,
+        gradeLabel: link.gradeLabel,
+      );
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_ackPrefsKeyForLinkedBook(link));
+      } catch (_) {}
+
+      final bookIdentity = _bookIdentity(link);
+      final remaining = _allLinkedTextbooks
+          .where((row) => row.key != link.key)
+          .toList(growable: false);
+      final nextOverrides = Map<String, bool>.from(_textbookActiveOverrides)
+        ..removeWhere(
+          (key, _) =>
+              key == link.key ||
+              key.endsWith('|${link.bookId}|${link.gradeLabel}'),
+        );
+
+      if (!mounted) return true;
+      setState(() {
+        _allLinkedTextbooks = remaining;
+        _textbookActiveOverrides = nextOverrides;
+        if (_selectedLinkedBookKey == link.key ||
+            (bookIdentity != null &&
+                _bookIdentity(_selectedLinkedBook) == bookIdentity)) {
+          _selectedLinkedBookKey = null;
+          _units = const <_BigUnitSelectionNode>[];
+          _manualPageMode = false;
+        }
+        if (bookIdentity != null) {
+          _draftGroupItems.removeWhere(
+            (item) => '${item.bookId}|${item.gradeLabel}' == bookIdentity,
+          );
+        }
+      });
+      unawaited(
+        HomeworkStore.instance.reloadStudentHomework(widget.studentId),
+      );
+      if (mounted) {
+        await _handleFlowChanged(
+          preferredLinkedBookKey:
+              _isChildAddMode ? _lockedLinkedBookKeyForFlow(_flowId) : null,
+          forceNoBookSelection: _selectedLinkedBookKey == null,
+        );
+      }
+      if (mounted) {
+        _showDialogSnackBar('교재 바인딩을 해제했습니다.');
+      }
+      return true;
+    } catch (e) {
+      if (mounted) {
+        _showDialogSnackBar('바인딩 해제에 실패했습니다: $e');
+      }
+      return false;
+    }
+  }
+
+  Future<void> _showActiveTextbooksDialog() async {
+    var groups = _groupLinkedTextbooks(_allLinkedTextbooks);
     await showDialog<void>(
       context: context,
       barrierColor: Colors.black54,
@@ -7828,7 +7949,8 @@ class HomeworkQuickAddProxyDialogState
                   children: [
                     const Text(
                       '연결된 교재는 기본적으로 모두 표시됩니다. '
-                      '과제 출제에서 숨길 교재만 직접 꺼 주세요.',
+                      '과제 출제에서 숨길 교재만 직접 꺼 주세요.\n'
+                      '바인딩 해제는 이 학생의 해당 교재 데이터를 영구 삭제합니다.',
                       style: TextStyle(
                         color: kDlgTextSub,
                         fontSize: 13,
@@ -7867,57 +7989,101 @@ class HomeworkQuickAddProxyDialogState
                                 builder: (context) {
                                   final link = entry.value[i];
                                   final enabled = _isTextbookActive(link);
-                                  return SwitchListTile(
-                                    value: enabled,
-                                    activeThumbColor: kDlgAccent,
-                                    title: Text(
-                                      link.bookName,
-                                      style: const TextStyle(
-                                        color: kDlgText,
-                                        fontWeight: FontWeight.w700,
-                                      ),
+                                  return Padding(
+                                    padding: const EdgeInsets.only(right: 4),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: SwitchListTile(
+                                            value: enabled,
+                                            activeThumbColor: kDlgAccent,
+                                            title: Text(
+                                              link.bookName,
+                                              style: const TextStyle(
+                                                color: kDlgText,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            subtitle: Text(
+                                              link.flowName,
+                                              style: const TextStyle(
+                                                color: kDlgTextSub,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            onChanged: _isChildAddMode
+                                                ? null
+                                                : (next) async {
+                                                    setState(() {
+                                                      _textbookActiveOverrides =
+                                                          {
+                                                        ..._textbookActiveOverrides,
+                                                        link.key: next,
+                                                      };
+                                                      if (!next &&
+                                                          _selectedLinkedBookKey ==
+                                                              link.key) {
+                                                        _selectedLinkedBookKey =
+                                                            null;
+                                                        _units = const [];
+                                                      }
+                                                    });
+                                                    setModalState(() {});
+                                                    try {
+                                                      await StudentTextbookActiveStore
+                                                          .instance
+                                                          .setEnabled(
+                                                        studentId:
+                                                            widget.studentId,
+                                                        flowId: link.flowId,
+                                                        bookId: link.bookId,
+                                                        gradeLabel:
+                                                            link.gradeLabel,
+                                                        enabled: next,
+                                                      );
+                                                    } catch (_) {
+                                                      if (mounted) {
+                                                        _showDialogSnackBar(
+                                                          '활성 교재 설정을 저장하지 못했습니다.',
+                                                        );
+                                                      }
+                                                    }
+                                                  },
+                                          ),
+                                        ),
+                                        Tooltip(
+                                          message: '바인딩 해제',
+                                          child: IconButton(
+                                            onPressed: _isChildAddMode
+                                                ? null
+                                                : () async {
+                                                    final ok =
+                                                        await _unbindLinkedTextbook(
+                                                      link,
+                                                    );
+                                                    if (!ok || !mounted) {
+                                                      return;
+                                                    }
+                                                    setModalState(() {
+                                                      groups =
+                                                          _groupLinkedTextbooks(
+                                                        _allLinkedTextbooks,
+                                                      );
+                                                    });
+                                                  },
+                                            icon: const Icon(
+                                              Icons.link_off_rounded,
+                                              size: 20,
+                                            ),
+                                            color: const Color(0xFFC62828),
+                                            disabledColor:
+                                                kDlgTextSub.withValues(
+                                              alpha: 0.35,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    subtitle: Text(
-                                      link.flowName,
-                                      style: const TextStyle(
-                                        color: kDlgTextSub,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    onChanged: _isChildAddMode
-                                        ? null
-                                        : (next) async {
-                                            setState(() {
-                                              _textbookActiveOverrides = {
-                                                ..._textbookActiveOverrides,
-                                                link.key: next,
-                                              };
-                                              if (!next &&
-                                                  _selectedLinkedBookKey ==
-                                                      link.key) {
-                                                _selectedLinkedBookKey = null;
-                                                _units = const [];
-                                              }
-                                            });
-                                            setModalState(() {});
-                                            try {
-                                              await StudentTextbookActiveStore
-                                                  .instance
-                                                  .setEnabled(
-                                                studentId: widget.studentId,
-                                                flowId: link.flowId,
-                                                bookId: link.bookId,
-                                                gradeLabel: link.gradeLabel,
-                                                enabled: next,
-                                              );
-                                            } catch (_) {
-                                              if (mounted) {
-                                                _showDialogSnackBar(
-                                                  '활성 교재 설정을 저장하지 못했습니다.',
-                                                );
-                                              }
-                                            }
-                                          },
                                   );
                                 },
                               ),
