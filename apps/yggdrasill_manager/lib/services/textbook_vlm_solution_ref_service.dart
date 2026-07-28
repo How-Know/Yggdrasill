@@ -6,41 +6,6 @@ import 'package:http/http.dart' as http;
 
 import 'textbook_vlm_answer_service.dart';
 
-List<String> textbookSolutionRefMatchedExpectedNumbers({
-  required String detectedNumber,
-  required Map<String, String> expectedByKey,
-  Iterable<String>? allowedKeys,
-}) {
-  final allowed = allowedKeys?.toSet();
-  final detectedKey = textbookAnswerNumberKey(detectedNumber);
-  if (detectedKey.isEmpty) return const <String>[];
-  final exact = expectedByKey[detectedKey];
-  if (exact != null && (allowed == null || allowed.contains(detectedKey))) {
-    return <String>[exact];
-  }
-
-  final range = _solutionRefRange(detectedNumber);
-  if (range == null) return const <String>[];
-  final out = <String>[];
-  for (final entry in expectedByKey.entries) {
-    if (allowed != null && !allowed.contains(entry.key)) continue;
-    final n = int.tryParse(entry.key);
-    if (n == null || n < range.$1 || n > range.$2) continue;
-    out.add(entry.value);
-  }
-  return out;
-}
-
-(int, int)? _solutionRefRange(String raw) {
-  final match = RegExp(r'^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$')
-      .firstMatch(raw.trim());
-  if (match == null) return null;
-  final from = int.tryParse(match.group(1)!);
-  final to = int.tryParse(match.group(2)!);
-  if (from == null || to == null || from > to) return null;
-  return (from, to);
-}
-
 /// Stage-3 client — talks to:
 /// - POST `/textbook/vlm/detect-solution-refs`  — per-page bbox detection.
 /// - POST `/textbook/solution-refs/batch-upsert` — writes
@@ -98,8 +63,16 @@ class TextbookVlmSolutionRefService {
     required String bookId,
     required String gradeLabel,
     List<String>? expectedNumbers,
+    List<TextbookExpectedAnswer>? expectedDetails,
+    String seriesKey = '',
     String mimeType = 'image/png',
   }) async {
+    // 개념+유형 해설도 답지와 같은 코너 블록 구조라 번호만으로는 특정이 안 된다.
+    final expected = expectedDetails != null && expectedDetails.isNotEmpty
+        ? expectedDetails.map((e) => e.toJson()).toList()
+        : (expectedNumbers != null && expectedNumbers.isNotEmpty
+            ? expectedNumbers
+            : null);
     final body = <String, dynamic>{
       'image_base64': base64Encode(imageBytes),
       'mime_type': mimeType,
@@ -107,8 +80,8 @@ class TextbookVlmSolutionRefService {
       'academy_id': academyId,
       'book_id': bookId,
       'grade_label': gradeLabel,
-      if (expectedNumbers != null && expectedNumbers.isNotEmpty)
-        'expected_numbers': expectedNumbers,
+      if (seriesKey.trim().isNotEmpty) 'series': seriesKey.trim(),
+      if (expected != null) 'expected_numbers': expected,
     };
     final res = await _http.post(
       _uri('/textbook/vlm/detect-solution-refs'),
@@ -209,9 +182,13 @@ class TextbookVlmSolutionRefItem {
     required this.problemNumber,
     required this.numberRegion1k,
     this.contentRegion1k,
+    this.expectedIndex = -1,
   });
 
   final String problemNumber;
+
+  /// 게이트웨이가 특정한 기대 문항의 위치. 못 특정하면 -1.
+  final int expectedIndex;
 
   /// [ymin, xmin, ymax, xmax] in 0..1000 — bbox of the 문항 번호 글자.
   final List<int> numberRegion1k;
@@ -243,6 +220,7 @@ class TextbookVlmSolutionRefItem {
       problemNumber: '${map['problem_number'] ?? ''}'.trim(),
       numberRegion1k: num1k ?? const [0, 0, 0, 0],
       contentRegion1k: parseBbox(map['content_region']),
+      expectedIndex: asIntN(map['expected_index']) ?? -1,
     );
   }
 }
@@ -424,58 +402,6 @@ class TextbookVlmBodySolutionPageResult {
       notes: '${map['notes'] ?? ''}',
       elapsedMs: asInt(map['elapsed_ms']),
       model: '${map['model'] ?? ''}',
-    );
-  }
-}
-
-/// Matches a batch of VLM items against the expected Stage-1 문항번호 set.
-class TextbookSolutionRefMatchReport {
-  TextbookSolutionRefMatchReport({
-    required this.matched,
-    required this.missing,
-    required this.unexpected,
-  });
-
-  final Map<String, TextbookVlmSolutionRefItem> matched;
-  final List<String> missing;
-  final List<TextbookVlmSolutionRefItem> unexpected;
-
-  static TextbookSolutionRefMatchReport match({
-    required List<String> expectedNumbers,
-    required List<TextbookVlmSolutionRefItem> items,
-  }) {
-    final expectedSet = <String>{
-      for (final n in expectedNumbers)
-        if (n.trim().isNotEmpty) n.trim(),
-    };
-    final expectedByKey = <String, String>{
-      for (final n in expectedSet)
-        if (textbookAnswerNumberKey(n).isNotEmpty)
-          textbookAnswerNumberKey(n): n,
-    };
-    final byNumber = <String, TextbookVlmSolutionRefItem>{};
-    final unexpected = <TextbookVlmSolutionRefItem>[];
-    for (final it in items) {
-      final matched = textbookSolutionRefMatchedExpectedNumbers(
-        detectedNumber: it.problemNumber,
-        expectedByKey: expectedByKey,
-      );
-      if (matched.isEmpty) {
-        unexpected.add(it);
-        continue;
-      }
-      for (final expectedNumber in matched) {
-        byNumber.putIfAbsent(expectedNumber, () => it);
-      }
-    }
-    final missing = <String>[
-      for (final n in expectedSet)
-        if (!byNumber.containsKey(n)) n,
-    ];
-    return TextbookSolutionRefMatchReport(
-      matched: byNumber,
-      missing: missing,
-      unexpected: unexpected,
     );
   }
 }

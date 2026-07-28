@@ -35,7 +35,7 @@ function detect(items, opts = {}) {
 
 test('개념+유형 프롬프트가 여섯 코너와 번호 규칙을 설명한다', () => {
   const prompt = gaeyuPrompt();
-  assert.match(prompt, /"개념 확인" 민트색 원형 배지/);
+  assert.match(prompt, /"개념 확인" 전용 원형 배지/);
   assert.match(prompt, /\*\*인쇄된 번호가 없다\.\*\*/);
   assert.match(prompt, /"필수 문제" 보라색 배지/);
   assert.match(prompt, /"1-1", "1-2" 처럼 하이픈이 붙은 번호/);
@@ -61,7 +61,13 @@ test('개념+유형 프롬프트가 교과서 +α 개념 카드를 문항에서 
 
 test('개념+유형 개념확인은 본문 인쇄 페이지를 번호로 받는다', () => {
   const result = detect([
-    { number: '', category: 'concept_check', label: '' },
+    {
+      number: '',
+      category: 'concept_check',
+      label: '',
+      badge_text: '개념 확인',
+      badge_style: 'concept_check_round_two_line',
+    },
     { number: '1', category: 'essential_problem', label: '' },
   ]);
   assert.deepEqual(
@@ -71,7 +77,12 @@ test('개념+유형 개념확인은 본문 인쇄 페이지를 번호로 받는�
 });
 
 test('개념+유형 개념확인은 페이지를 모르면 저장하지 않는다', () => {
-  const result = detect([{ number: '', category: 'concept_check' }], {
+  const result = detect([{
+    number: '',
+    category: 'concept_check',
+    badge_text: '개념 확인',
+    badge_style: 'concept_check_round_two_line',
+  }], {
     displayPage: null,
     rawPage: null,
   });
@@ -171,6 +182,142 @@ test('개념+유형 category 누락은 같은 페이지 다수 카테고리로 �
     ['extra_practice', 'extra_practice', 'extra_practice'],
   );
   assert.match(result.notes, /gaeyu_category_backfilled=1/);
+});
+
+// 개념 설명 바로 아래에 있는 필수 문제를 모델이 "개념확인" 으로 읽어버리면,
+// 번호가 "개념확인11" 로 덮여 그 문항이 사라지고 뒤 번호가 전부 밀렸다.
+// 개념확인에는 번호가 인쇄되지 않으므로 번호 유무로 되돌릴 수 있다.
+test('번호가 인쇄된 문항은 concept_check 로 받아도 필수 문제로 되돌린다', () => {
+  const result = detect(
+    [
+      {
+        number: '',
+        category: 'concept_check',
+        badge_text: '개념 확인',
+        badge_style: 'concept_check_round_two_line',
+      },
+      { number: '11', category: 'concept_check' },
+      { number: '11-1', category: 'concept_check' },
+    ],
+    { displayPage: 11, rawPage: 11 },
+  );
+  assert.deepEqual(
+    result.items.map((item) => [item.number, item.category]),
+    [
+      ['개념확인11', 'concept_check'],
+      ['11', 'essential_problem'],
+      ['11-1', 'essential_problem'],
+    ],
+  );
+  assert.match(result.notes, /gaeyu_concept_check_with_number_fixed=2/);
+});
+
+test('번호가 인쇄된 concept_check 는 지면 코너가 있으면 그 코너로 되돌린다', () => {
+  const result = detect(
+    [{ number: '3', category: 'concept_check' }],
+    { displayPage: 20, rawPage: 20, sectionHint: 'step_drill' },
+  );
+  assert.deepEqual(
+    result.items.map((item) => [item.number, item.category]),
+    [['3', 'step_drill']],
+  );
+});
+
+test('배지 원문이 필수 문제면 빈 번호여도 concept_check로 바꾸지 않는다', () => {
+  const result = detect(
+    [
+      {
+        number: '',
+        category: 'concept_check',
+        badge_text: '필수 문제',
+      },
+    ],
+    { displayPage: 30, rawPage: 40 },
+  );
+  // 번호까지 놓친 문항은 저장할 수 없어 제외되지만, 개념확인30이라는 가짜
+  // 문항으로 바뀌어 뒤 매칭을 오염시키지는 않는다.
+  assert.deepEqual(result.items, []);
+});
+
+test('배지 원문은 모델이 고른 잘못된 category보다 우선한다', () => {
+  const result = detect([
+    {
+      number: '1',
+      category: 'concept_check',
+      badge_text: '필수 문제',
+      content_group: { kind: 'type', title: '정수와 유리수' },
+    },
+  ]);
+  assert.deepEqual(
+    result.items.map((item) => [
+      item.number,
+      item.category,
+      item.content_group_title,
+    ]),
+    [['1', 'essential_problem', '정수와 유리수']],
+  );
+});
+
+test('필수 문제 유형명은 category와 번호를 모두 잘못 읽은 경우에도 오분류를 막는다', () => {
+  const result = detect([
+    {
+      number: '',
+      category: 'concept_check',
+      badge_text: '',
+      content_group: { kind: 'type', title: '정수와 유리수' },
+    },
+  ]);
+  assert.deepEqual(result.items, []);
+});
+
+test('참고 설명은 개념 박스 아래에 있어도 개념확인으로 저장하지 않는다', () => {
+  const result = detect([
+    {
+      number: '',
+      category: 'concept_check',
+      badge_text: '참고',
+      badge_style: '',
+    },
+  ]);
+  assert.deepEqual(result.items, []);
+});
+
+test('한 지면에 개념확인이 둘이면 키가 겹치지 않게 꼬리표를 붙인다', () => {
+  const result = detect(
+    [
+      {
+        number: '',
+        category: 'concept_check',
+        badge_text: '개념 확인',
+        badge_style: 'concept_check_round_two_line',
+      },
+      {
+        number: '',
+        category: 'concept_check',
+        badge_text: '개념 확인',
+        badge_style: 'concept_check_round_two_line',
+      },
+    ],
+    { displayPage: 11, rawPage: 11 },
+  );
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['개념확인11', '개념확인11-2'],
+  );
+  assert.match(result.notes, /gaeyu_concept_check_duplicated=2/);
+});
+
+test('개념+유형 프롬프트가 개념확인·필수 문제 배지를 못 섞게 막는다', () => {
+  const prompt = gaeyuPrompt();
+  assert.match(prompt, /\*\*두 배지를 섞지 마라\.\*\*/);
+  assert.match(prompt, /\*\*번호가 인쇄돼 있으면 개념확인이 아니다\.\*\*/);
+  assert.match(prompt, /\[D0-Check\]/);
+  assert.match(prompt, /없을 때만\*\*/);
+  assert.match(prompt, /"badge_text"/);
+  assert.match(prompt, /"badge_style"/);
+  assert.match(prompt, /\[D0-Badge\]/);
+  assert.match(prompt, /보이는 그대로 베껴 써라/);
+  assert.match(prompt, /"참고" 캡슐/);
 });
 
 test('개념+유형 규칙은 다른 시리즈 정규화를 바꾸지 않는다', () => {

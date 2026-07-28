@@ -59,6 +59,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.onBack,
     this.onMinimize,
     this.onStageChanged,
+    this.onStartProblemExtraction,
   });
 
   final String academyId;
@@ -85,6 +86,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final VoidCallback? onBack;
   final VoidCallback? onMinimize;
   final VoidCallback? onStageChanged;
+  final Future<void> Function()? onStartProblemExtraction;
 
   static Future<void> show(
     BuildContext context, {
@@ -221,12 +223,9 @@ class _TextbookAuthoringStageDialogState
 
   static const int _kVlmLongEdgePx = 1500;
   static const int _kAnswerImageLongEdgePx = 3000;
-  static final Map<String, TextbookVlmAnswerPageResult> _answerVlmPageCache =
-      <String, TextbookVlmAnswerPageResult>{};
-  static final Map<String, TextbookVlmSolutionRefPageResult>
-      _solutionVlmPageCache = <String, TextbookVlmSolutionRefPageResult>{};
 
   final _pdfService = TextbookPdfService();
+  bool _startingPbRuns = false;
   final _answerService = TextbookVlmAnswerService();
   final _solRefService = TextbookVlmSolutionRefService();
   final _supa = Supabase.instance.client;
@@ -242,6 +241,7 @@ class _TextbookAuthoringStageDialogState
   // --- Stage 2 (answers) -----------------------------------------------
   bool _loadingAnswerPdf = false;
   String? _answerPdfError;
+  Future<PdfDocument?>? _answerPdfLoad;
   PdfDocument? _answerDocument;
   String? _answerLocalPath;
   final _answerViewerController = PdfViewerController();
@@ -262,6 +262,7 @@ class _TextbookAuthoringStageDialogState
   // --- Stage 3 (solution refs) -----------------------------------------
   bool _loadingSolutionPdf = false;
   String? _solutionPdfError;
+  Future<PdfDocument?>? _solutionPdfLoad;
   PdfDocument? _solutionDocument;
   String? _solutionLocalPath;
   final _solutionViewerController = PdfViewerController();
@@ -275,12 +276,10 @@ class _TextbookAuthoringStageDialogState
   final List<String> _solRefMissing = <String>[];
 
   // --- 개념원리 필수유형(wonri B): 본문 PDF에서 정답+풀이 좌표 추출 ------
-  bool _loadingBodyPdf = false;
   String? _bodyPdfError;
+  Future<PdfDocument?>? _bodyPdfLoad;
   PdfDocument? _bodyDocument;
   final Map<int, Uint8List> _bodyPagePngCache = <int, Uint8List>{};
-  static final Map<String, TextbookVlmBodySolutionPageResult>
-      _bodyVlmPageCache = <String, TextbookVlmBodySolutionPageResult>{};
 
   /// 개념원리(wonri)의 B(필수유형)·E(특강) 슬롯 여부. 이 경우 정답과 풀이가
   /// 모두 본문 PDF의 "풀이" 단락에 있으므로 Stage 2/3 VLM이 본문 추출로
@@ -510,9 +509,18 @@ class _TextbookAuthoringStageDialogState
 
   // --------------------------------------------------------------- pdf
 
-  Future<PdfDocument?> _ensureAnswerPdf() async {
-    if (_answerDocument != null) return _answerDocument;
-    if (_loadingAnswerPdf) return null;
+  /// 답지 PDF를 확보한다. 이미 내려받는 중이면 **그 작업을 기다린다**.
+  ///
+  /// 예전에는 로딩 중일 때 곧바로 null 을 돌려줬다. 그래서 다이얼로그가 열린
+  /// 직후 "정답 VLM 실행"을 누르면 아무 반응 없이 클릭이 사라졌다. 답지
+  /// 다운로드 URL 발급이 10초 넘게 걸리는 일이 있어 이 창은 생각보다 넓다.
+  Future<PdfDocument?> _ensureAnswerPdf() {
+    final loaded = _answerDocument;
+    if (loaded != null) return Future<PdfDocument?>.value(loaded);
+    return _answerPdfLoad ??= _loadAnswerPdf();
+  }
+
+  Future<PdfDocument?> _loadAnswerPdf() async {
     setState(() {
       _loadingAnswerPdf = true;
       _answerPdfError = null;
@@ -561,12 +569,18 @@ class _TextbookAuthoringStageDialogState
         _answerPdfError = '$e';
       });
       return null;
+    } finally {
+      _answerPdfLoad = null;
     }
   }
 
-  Future<PdfDocument?> _ensureSolutionPdf() async {
-    if (_solutionDocument != null) return _solutionDocument;
-    if (_loadingSolutionPdf) return null;
+  Future<PdfDocument?> _ensureSolutionPdf() {
+    final loaded = _solutionDocument;
+    if (loaded != null) return Future<PdfDocument?>.value(loaded);
+    return _solutionPdfLoad ??= _loadSolutionPdf();
+  }
+
+  Future<PdfDocument?> _loadSolutionPdf() async {
     setState(() {
       _loadingSolutionPdf = true;
       _solutionPdfError = null;
@@ -613,17 +627,20 @@ class _TextbookAuthoringStageDialogState
         _solutionPdfError = '$e';
       });
       return null;
+    } finally {
+      _solutionPdfLoad = null;
     }
   }
 
   /// 개념원리 필수유형 전용 — 본문 PDF(kind='body')를 내려받아 연다.
-  Future<PdfDocument?> _ensureBodyPdf() async {
-    if (_bodyDocument != null) return _bodyDocument;
-    if (_loadingBodyPdf) return null;
-    setState(() {
-      _loadingBodyPdf = true;
-      _bodyPdfError = null;
-    });
+  Future<PdfDocument?> _ensureBodyPdf() {
+    final loaded = _bodyDocument;
+    if (loaded != null) return Future<PdfDocument?>.value(loaded);
+    return _bodyPdfLoad ??= _loadBodyPdf();
+  }
+
+  Future<PdfDocument?> _loadBodyPdf() async {
+    setState(() => _bodyPdfError = null);
     try {
       final target = await _pdfService.requestDownloadUrl(
         academyId: widget.academyId,
@@ -653,16 +670,14 @@ class _TextbookAuthoringStageDialogState
       setState(() {
         _bodyDocument = doc;
         _bodyPagePngCache.clear();
-        _loadingBodyPdf = false;
       });
       return doc;
     } catch (e) {
       if (!mounted) return null;
-      setState(() {
-        _loadingBodyPdf = false;
-        _bodyPdfError = '$e';
-      });
+      setState(() => _bodyPdfError = '$e');
       return null;
+    } finally {
+      _bodyPdfLoad = null;
     }
   }
 
@@ -689,8 +704,18 @@ class _TextbookAuthoringStageDialogState
       await _runBodySolutionVlm();
       return;
     }
+    if (_answerDocument == null) {
+      setState(() => _answerStatus = '답지 PDF 준비 중…');
+    }
     final doc = await _ensureAnswerPdf();
-    if (doc == null) return;
+    if (doc == null) {
+      _toast('답지 PDF를 열 수 없어 정답 매칭을 실행하지 못했습니다', error: true);
+      if (mounted) {
+        setState(() => _answerStatus =
+            '답지 PDF 준비 실패${_answerPdfError == null ? '' : ' · $_answerPdfError'}');
+      }
+      return;
+    }
     if (_crops.isEmpty) {
       _toast('문항 번호가 비어 있어 정답 매칭을 실행할 수 없습니다', error: true);
       return;
@@ -710,11 +735,23 @@ class _TextbookAuthoringStageDialogState
         .where(
             (c) => _answersByCropId[c.id]?.answerText.trim().isNotEmpty != true)
         .toList();
-    final expected = <String>[
+    // 기대 문항은 **순서 배열**로 다룬다. 번호를 Map 키로 쓰면 코너마다
+    // 번호가 1번부터 다시 시작하는 개념+유형에서 같은 "1" 끼리 서로를
+    // 덮어쓴다(실제로 82개가 43개로 뭉개져 절반이 정답 없이 남았다).
+    final targets = <_AnswerTarget>[
       for (final c in targetCrops)
-        if (c.problemNumber.isNotEmpty) c.problemNumber,
+        if (c.problemNumber.isNotEmpty)
+          _AnswerTarget(
+            crop: c,
+            expected: textbookExpectedAnswerFor(
+              seriesKey: widget.seriesKey,
+              problemNumber: c.problemNumber,
+              section: c.section,
+              displayPage: c.displayPage,
+            ),
+          ),
     ];
-    if (expected.isEmpty) {
+    if (targets.isEmpty) {
       setState(() {
         _runningAnswerVlm = false;
         _answerStatus = savedCount > 0
@@ -728,24 +765,23 @@ class _TextbookAuthoringStageDialogState
     final startPage = pageRange.start;
     final endPage = pageRange.end;
     final scanTotal = endPage - startPage + 1;
-    final expectedByKey = <String, String>{
-      for (final number in expected)
-        if (textbookAnswerNumberKey(number).isNotEmpty)
-          textbookAnswerNumberKey(number): number,
-    };
-    final remainingKeys = expectedByKey.keys.toSet();
-    final aggregated = <TextbookVlmAnswerItem>[];
-    final imageByNumber = <String, _ImageAnswerCrop>{};
-    final pageByNumber = <String, ({int rawPage, int displayPage})>{};
+    debugPrint(
+      '[stage2] start scopes=${_activeScopes.map((s) => s.subKey).join("/")} '
+      'target=${targets.length} saved=$savedCount '
+      'answerPages=$startPage..$endPage/$totalPages',
+    );
+    final pending = <int>{for (var i = 0; i < targets.length; i += 1) i};
+    final hits = <int, _AnswerHit>{};
+    final detectedNumbers = <String>[];
     final pageErrors = <String>[];
 
     try {
       for (var page = startPage; page <= endPage; page += 1) {
-        if (remainingKeys.isEmpty) break;
+        if (pending.isEmpty) break;
         if (!mounted) return;
         setState(() {
           _answerStatus =
-              '답지 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${remainingKeys.length}개';
+              '답지 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
         });
         final Uint8List png;
         try {
@@ -761,70 +797,42 @@ class _TextbookAuthoringStageDialogState
           continue;
         }
         try {
-          final res = await _extractAnswersOnPageCached(
+          final order = pending.toList()..sort();
+          final batch = TextbookExpectedAnswerBatch(
+            positions: order,
+            entries: <TextbookExpectedAnswer>[
+              for (final position in order) targets[position].expected,
+            ],
+          );
+          final res = await _extractAnswersOnPage(
             imageBytes: png,
             page: page,
-            expectedNumbers: [
-              for (final key in remainingKeys) expectedByKey[key]!,
-            ],
+            expectedNumbers: batch.numbers,
+            expectedDetails: batch.entries,
           );
           for (final it in res.items) {
             if (it.answerText.trim().isEmpty) continue;
-            final matchedExpectedNumbers = textbookAnswerMatchedExpectedNumbers(
+            final matched = batch.resolve(
               detectedNumber: it.problemNumber,
-              expectedByKey: expectedByKey,
-              allowedKeys: remainingKeys,
+              expectedIndex: it.expectedIndex,
             );
-            if (matchedExpectedNumbers.isEmpty) {
-              continue;
-            }
-            aggregated.add(it);
-            final numberKey = textbookAnswerNumberKey(it.problemNumber);
-            pageByNumber.putIfAbsent(
-              it.problemNumber,
-              () => (rawPage: res.rawPage, displayPage: res.displayPage),
-            );
-            if (numberKey.isNotEmpty) {
-              pageByNumber.putIfAbsent(
-                numberKey,
-                () => (rawPage: res.rawPage, displayPage: res.displayPage),
-              );
-            }
-            for (final expectedNumber in matchedExpectedNumbers) {
-              final expectedKey = textbookAnswerNumberKey(expectedNumber);
-              pageByNumber.putIfAbsent(
-                expectedNumber,
-                () => (rawPage: res.rawPage, displayPage: res.displayPage),
-              );
-              if (expectedKey.isNotEmpty) {
-                pageByNumber.putIfAbsent(
-                  expectedKey,
-                  () => (rawPage: res.rawPage, displayPage: res.displayPage),
-                );
-              }
-            }
+            if (matched.isEmpty) continue;
+            detectedNumbers.add(it.problemNumber);
+            _ImageAnswerCrop? imageCrop;
             if (it.isImage && it.bbox != null) {
-              final crop = await _cropAnswerImageFromPage(
+              imageCrop = await _cropAnswerImageFromPage(
                     page: res.rawPage,
                     bbox1k: it.bbox!,
                   ) ??
                   _cropAnswerImage(png, it.bbox!);
-              if (crop != null) {
-                imageByNumber.putIfAbsent(it.problemNumber, () => crop);
-                if (numberKey.isNotEmpty) {
-                  imageByNumber.putIfAbsent(numberKey, () => crop);
-                }
-                for (final expectedNumber in matchedExpectedNumbers) {
-                  final expectedKey = textbookAnswerNumberKey(expectedNumber);
-                  imageByNumber.putIfAbsent(expectedNumber, () => crop);
-                  if (expectedKey.isNotEmpty) {
-                    imageByNumber.putIfAbsent(expectedKey, () => crop);
-                  }
-                }
-              }
             }
-            for (final expectedNumber in matchedExpectedNumbers) {
-              remainingKeys.remove(textbookAnswerNumberKey(expectedNumber));
+            for (final position in matched) {
+              if (!pending.remove(position)) continue;
+              hits[position] = _AnswerHit(
+                item: it,
+                rawPage: res.rawPage,
+                imageCrop: imageCrop,
+              );
             }
           }
         } catch (e) {
@@ -837,65 +845,49 @@ class _TextbookAuthoringStageDialogState
         });
       }
 
-      if (aggregated.isEmpty) {
-        final message = pageErrors.isEmpty
-            ? '답지 $startPage~$endPage 페이지에서 매칭 가능한 정답을 찾지 못했습니다.'
-            : pageErrors.take(3).join(' / ');
+      if (hits.isEmpty) {
+        final message = pageErrors.isNotEmpty
+            ? pageErrors.take(3).join(' / ')
+            : detectedNumbers.isEmpty
+                ? '답지 $startPage~$endPage 페이지에서 매칭 가능한 정답을 찾지 못했습니다.'
+                : '대상 문항과 매칭된 정답이 없습니다. '
+                    '감지 번호: ${detectedNumbers.take(12).join(', ')}';
         throw Exception(message);
       }
 
-      final report = TextbookAnswerMatchReport.match(
-        expectedNumbers: expected,
-        items: aggregated,
-      );
-      if (report.matched.isEmpty) {
-        final detected = aggregated
-            .map((item) => item.problemNumber)
-            .where((number) => number.trim().isNotEmpty)
-            .take(12)
-            .join(', ');
-        throw Exception(
-          detected.isEmpty
-              ? '답지 $startPage~$endPage 페이지에서 정답은 감지됐지만 대상 문항과 매칭되지 않았습니다.'
-              : '대상 문항과 매칭된 정답이 없습니다. 감지 번호: $detected',
-        );
-      }
-      final byNumber = <String, String>{
-        for (final c in targetCrops) c.problemNumber: c.id,
-      };
+      final missing = <String>[
+        for (final position in (pending.toList()..sort()))
+          targets[position].missingLabel,
+      ];
       setState(() {
-        for (final entry in report.matched.entries) {
-          final cropId = byNumber[entry.key];
-          if (cropId == null) continue;
-          final vlm = entry.value;
-          final answerPage = pageByNumber[entry.key] ??
-              pageByNumber[textbookAnswerNumberKey(vlm.problemNumber)];
-          final imageCrop = imageByNumber[entry.key] ??
-              imageByNumber[textbookAnswerNumberKey(vlm.problemNumber)];
-          _answersByCropId[cropId] = _AnswerDraft(
-            cropId: cropId,
-            problemNumber: entry.key,
+        for (final entry in hits.entries) {
+          final target = targets[entry.key];
+          final hit = entry.value;
+          final vlm = hit.item;
+          _answersByCropId[target.crop.id] = _AnswerDraft(
+            cropId: target.crop.id,
+            problemNumber: target.crop.problemNumber,
             kind: vlm.kind,
             answerText: vlm.answerText,
             answerLatex2d:
                 vlm.answerLatex2d.isEmpty ? vlm.answerText : vlm.answerLatex2d,
             source: 'vlm',
-            rawPage: answerPage?.rawPage,
+            rawPage: hit.rawPage,
             bbox1k: vlm.bbox,
-            answerImageBytes: imageCrop?.pngBytes,
+            answerImageBytes: hit.imageCrop?.pngBytes,
             answerImageRegion1k: vlm.isImage ? vlm.bbox : null,
-            answerImageWidthPx: imageCrop?.width,
-            answerImageHeightPx: imageCrop?.height,
+            answerImageWidthPx: hit.imageCrop?.width,
+            answerImageHeightPx: hit.imageCrop?.height,
             dirty: true,
           );
         }
         _answerMissing
           ..clear()
-          ..addAll(report.missing);
+          ..addAll(missing);
         _runningAnswerVlm = false;
-        _answerStatus = report.missing.isEmpty
-            ? 'VLM 완료 · 신규 ${report.matched.length}개 · 저장 $savedCount개'
-            : 'VLM 완료 · 신규 ${report.matched.length}개 · 저장 $savedCount개 · 누락 ${report.missing.length}개';
+        _answerStatus = missing.isEmpty
+            ? 'VLM 완료 · 신규 ${hits.length}개 · 저장 $savedCount개'
+            : 'VLM 완료 · 신규 ${hits.length}개 · 저장 $savedCount개 · 누락 ${missing.length}개';
       });
     } catch (e) {
       if (!mounted) return;
@@ -1153,45 +1145,22 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
-  String _vlmPageCacheKey(String stage, int page) {
-    return [
-      widget.academyId,
-      widget.bookId,
-      widget.gradeLabel,
-      stage,
-      page,
-    ].join('|');
-  }
-
-  String _expectedCacheKey(List<String> expectedNumbers) {
-    final normalized = expectedNumbers
-        .map((n) => n.trim())
-        .where((n) => n.isNotEmpty)
-        .toList()
-      ..sort();
-    return normalized.join(',');
-  }
-
-  Future<TextbookVlmAnswerPageResult> _extractAnswersOnPageCached({
+  Future<TextbookVlmAnswerPageResult> _extractAnswersOnPage({
     required Uint8List imageBytes,
     required int page,
     required List<String> expectedNumbers,
+    List<TextbookExpectedAnswer>? expectedDetails,
   }) async {
-    final key =
-        '${_vlmPageCacheKey('answer', page)}|${_expectedCacheKey(expectedNumbers)}';
-    final cached = _answerVlmPageCache[key];
-    if (cached != null) return cached;
-    final result = await _answerService.extractAnswersOnPage(
+    return _answerService.extractAnswersOnPage(
       imageBytes: imageBytes,
       rawPage: page,
       academyId: widget.academyId,
       bookId: widget.bookId,
       gradeLabel: widget.gradeLabel,
       expectedNumbers: expectedNumbers,
+      expectedDetails: expectedDetails,
       seriesKey: widget.seriesKey.trim().toLowerCase(),
     );
-    _answerVlmPageCache[key] = result;
-    return result;
   }
 
   Future<_ImageAnswerCrop?> _cropAnswerImageFromPage({
@@ -1280,25 +1249,22 @@ class _TextbookAuthoringStageDialogState
     return png;
   }
 
-  Future<TextbookVlmSolutionRefPageResult> _detectSolutionRefsOnPageCached({
+  Future<TextbookVlmSolutionRefPageResult> _detectSolutionRefsOnPage({
     required Uint8List imageBytes,
     required int page,
     required List<String> expectedNumbers,
+    List<TextbookExpectedAnswer>? expectedDetails,
   }) async {
-    final key =
-        '${_vlmPageCacheKey('solution', page)}|${_expectedCacheKey(expectedNumbers)}';
-    final cached = _solutionVlmPageCache[key];
-    if (cached != null) return cached;
-    final result = await _solRefService.detectOnPage(
+    return _solRefService.detectOnPage(
       imageBytes: imageBytes,
       rawPage: page,
       academyId: widget.academyId,
       bookId: widget.bookId,
       gradeLabel: widget.gradeLabel,
       expectedNumbers: expectedNumbers,
+      expectedDetails: expectedDetails,
+      seriesKey: widget.seriesKey.trim().toLowerCase(),
     );
-    _solutionVlmPageCache[key] = result;
-    return result;
   }
 
   Future<void> _runSolutionRefVlm() async {
@@ -1307,8 +1273,18 @@ class _TextbookAuthoringStageDialogState
       await _runBodySolutionVlm();
       return;
     }
+    if (_solutionDocument == null) {
+      setState(() => _solRefStatus = '해설 PDF 준비 중…');
+    }
     final doc = await _ensureSolutionPdf();
-    if (doc == null) return;
+    if (doc == null) {
+      _toast('해설 PDF를 열 수 없어 해설 좌표 탐지를 실행하지 못했습니다', error: true);
+      if (mounted) {
+        setState(() => _solRefStatus =
+            '해설 PDF 준비 실패${_solutionPdfError == null ? '' : ' · $_solutionPdfError'}');
+      }
+      return;
+    }
     if (_crops.isEmpty) {
       _toast('문항 번호가 비어 있어 해설 좌표 탐지를 실행할 수 없습니다', error: true);
       return;
@@ -1324,11 +1300,22 @@ class _TextbookAuthoringStageDialogState
         solRefCrops.where((c) => _solRefsByCropId.containsKey(c.id)).length;
     final targetCrops =
         solRefCrops.where((c) => !_solRefsByCropId.containsKey(c.id)).toList();
-    final expected = <String>[
+    // 정답 단계와 같은 이유로 순서 배열을 쓴다. 해설 지면도 코너 블록으로
+    // 나뉘고 번호가 겹친다.
+    final targets = <_AnswerTarget>[
       for (final c in targetCrops)
-        if (c.problemNumber.isNotEmpty) c.problemNumber,
+        if (c.problemNumber.isNotEmpty)
+          _AnswerTarget(
+            crop: c,
+            expected: textbookExpectedAnswerFor(
+              seriesKey: widget.seriesKey,
+              problemNumber: c.problemNumber,
+              section: c.section,
+              displayPage: c.displayPage,
+            ),
+          ),
     ];
-    if (expected.isEmpty) {
+    if (targets.isEmpty) {
       setState(() {
         _runningSolRefVlm = false;
         _solRefStatus = savedCount > 0
@@ -1337,29 +1324,28 @@ class _TextbookAuthoringStageDialogState
       });
       return;
     }
-    final expectedByKey = <String, String>{
-      for (final number in expected)
-        if (textbookAnswerNumberKey(number).isNotEmpty)
-          textbookAnswerNumberKey(number): number,
-    };
-    final remainingKeys = expectedByKey.keys.toSet();
     final totalPages = doc.pages.length;
     final pageRange =
         _pageRangeFromScopes(answer: false, pageCount: totalPages);
     final startPage = pageRange.start;
     final endPage = pageRange.end;
     final scanTotal = endPage - startPage + 1;
-    final aggregated =
-        <String, _SolutionRefWithPage>{}; // problem_number -> draft
+    debugPrint(
+      '[stage3] start scopes=${_activeScopes.map((s) => s.subKey).join("/")} '
+      'target=${targets.length} saved=$savedCount '
+      'solutionPages=$startPage..$endPage/$totalPages',
+    );
+    final pending = <int>{for (var i = 0; i < targets.length; i += 1) i};
+    final hits = <int, _SolutionRefWithPage>{};
     final pageErrors = <String>[];
 
     try {
       for (var page = startPage; page <= endPage; page += 1) {
-        if (remainingKeys.isEmpty) break;
+        if (pending.isEmpty) break;
         if (!mounted) return;
         setState(() {
           _solRefStatus =
-              '해설 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${remainingKeys.length}개';
+              '해설 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
         });
         final Uint8List png;
         try {
@@ -1375,30 +1361,31 @@ class _TextbookAuthoringStageDialogState
           continue;
         }
         try {
-          final res = await _detectSolutionRefsOnPageCached(
-            imageBytes: png,
-            page: page,
-            expectedNumbers: [
-              for (final key in remainingKeys) expectedByKey[key]!,
+          final order = pending.toList()..sort();
+          final batch = TextbookExpectedAnswerBatch(
+            positions: order,
+            entries: <TextbookExpectedAnswer>[
+              for (final position in order) targets[position].expected,
             ],
           );
+          final res = await _detectSolutionRefsOnPage(
+            imageBytes: png,
+            page: page,
+            expectedNumbers: batch.numbers,
+            expectedDetails: batch.entries,
+          );
           for (final it in res.items) {
-            for (final expectedNumber
-                in textbookSolutionRefMatchedExpectedNumbers(
+            final matched = batch.resolve(
               detectedNumber: it.problemNumber,
-              expectedByKey: expectedByKey,
-              allowedKeys: remainingKeys,
-            )) {
-              final numberKey = textbookAnswerNumberKey(expectedNumber);
-              aggregated.putIfAbsent(
-                expectedNumber,
-                () => _SolutionRefWithPage(
-                  item: it,
-                  rawPage: res.rawPage,
-                  displayPage: res.displayPage,
-                ),
+              expectedIndex: it.expectedIndex,
+            );
+            for (final position in matched) {
+              if (!pending.remove(position)) continue;
+              hits[position] = _SolutionRefWithPage(
+                item: it,
+                rawPage: res.rawPage,
+                displayPage: res.displayPage,
               );
-              remainingKeys.remove(numberKey);
             }
           }
         } catch (e) {
@@ -1411,29 +1398,24 @@ class _TextbookAuthoringStageDialogState
         });
       }
 
-      if (aggregated.isEmpty) {
+      if (hits.isEmpty) {
         final message = pageErrors.isEmpty
             ? '해설 $startPage~$endPage 페이지에서 대상 문항 좌표를 찾지 못했습니다.'
             : pageErrors.take(3).join(' / ');
         throw Exception(message);
       }
 
-      final byNumber = <String, String>{
-        for (final c in targetCrops) c.problemNumber: c.id,
-      };
-      final missing = <String>[];
+      final missing = <String>[
+        for (final position in (pending.toList()..sort()))
+          targets[position].missingLabel,
+      ];
       setState(() {
-        for (final c in targetCrops) {
-          final found = aggregated[c.problemNumber];
-          final cropId = byNumber[c.problemNumber];
-          if (cropId == null) continue;
-          if (found == null) {
-            missing.add(c.problemNumber);
-            continue;
-          }
-          _solRefsByCropId[cropId] = _SolRefDraft(
-            cropId: cropId,
-            problemNumber: c.problemNumber,
+        for (final entry in hits.entries) {
+          final target = targets[entry.key];
+          final found = entry.value;
+          _solRefsByCropId[target.crop.id] = _SolRefDraft(
+            cropId: target.crop.id,
+            problemNumber: target.crop.problemNumber,
             rawPage: found.rawPage,
             displayPage: found.displayPage,
             numberRegion1k: found.item.numberRegion1k,
@@ -1447,8 +1429,8 @@ class _TextbookAuthoringStageDialogState
           ..addAll(missing);
         _runningSolRefVlm = false;
         _solRefStatus = missing.isEmpty
-            ? 'VLM 완료 · 신규 ${aggregated.length}개 · 저장 $savedCount개'
-            : 'VLM 완료 · 신규 ${aggregated.length}개 · 저장 $savedCount개 · 누락 ${missing.length}개';
+            ? 'VLM 완료 · 신규 ${hits.length}개 · 저장 $savedCount개'
+            : 'VLM 완료 · 신규 ${hits.length}개 · 저장 $savedCount개 · 누락 ${missing.length}개';
       });
     } catch (e) {
       if (!mounted) return;
@@ -1464,11 +1446,16 @@ class _TextbookAuthoringStageDialogState
   /// Stage 3(해설 좌표, source_kind='body')를 함께 채운다.
   Future<void> _runBodySolutionVlm() async {
     if (_runningAnswerVlm || _runningSolRefVlm) return;
+    if (_bodyDocument == null) {
+      setState(() {
+        _answerStatus = '본문 PDF 준비 중…';
+        _solRefStatus = _answerStatus;
+      });
+    }
     final doc = await _ensureBodyPdf();
     if (doc == null) {
-      if (_bodyPdfError != null) {
-        _toast('본문 PDF 로드 실패: $_bodyPdfError', error: true);
-      }
+      _toast('본문 PDF 로드 실패${_bodyPdfError == null ? '' : ': $_bodyPdfError'}',
+          error: true);
       return;
     }
     if (_crops.isEmpty) {
@@ -1545,18 +1532,13 @@ class _TextbookAuthoringStageDialogState
             if (c.problemNumber.isNotEmpty) c.problemNumber,
         ];
         TextbookVlmBodySolutionPageResult res;
-        final cacheKey =
-            '${_vlmPageCacheKey('body', page)}|${_expectedCacheKey(expectedNumbers)}';
-        final cached = _bodyVlmPageCache[cacheKey];
         try {
-          res = cached ??
-              await _solRefService.extractBodySolutionsOnPage(
-                imageBytes: png,
-                rawPage: page,
-                expectedNumbers: expectedNumbers,
-                seriesKey: widget.seriesKey.trim().toLowerCase(),
-              );
-          _bodyVlmPageCache[cacheKey] = res;
+          res = await _solRefService.extractBodySolutionsOnPage(
+            imageBytes: png,
+            rawPage: page,
+            expectedNumbers: expectedNumbers,
+            seriesKey: widget.seriesKey.trim().toLowerCase(),
+          );
         } catch (e) {
           debugPrint('[wonri-body] vlm failed page=$page err=$e');
           pageErrors.add('p$page: VLM 실패 $e');
@@ -2457,10 +2439,11 @@ class _TextbookAuthoringStageDialogState
                 ),
                 const Spacer(),
                 FilledButton.icon(
-                  onPressed: (_runningSolRefVlm || _savingSolRefs)
-                      ? null
-                      : _completeIfReady,
-                  icon: _loadingPbRuns
+                  onPressed:
+                      (_runningSolRefVlm || _savingSolRefs || _startingPbRuns)
+                          ? null
+                          : _completeIfReady,
+                  icon: (_loadingPbRuns || _startingPbRuns)
                       ? const SizedBox(
                           width: 12,
                           height: 12,
@@ -2783,7 +2766,8 @@ class _TextbookAuthoringStageDialogState
             .eq('grade_label', widget.gradeLabel)
             .eq('big_order', scope.bigOrder)
             .eq('mid_order', scope.midOrder)
-            .eq('sub_key', scope.subKey);
+            .eq('sub_key', scope.subKey)
+            .eq('sub_index', scope.unitRowIndex ?? 0);
         final key = _scopeKey(scope);
         String? status;
         final documentIds = <String>[];
@@ -2954,6 +2938,39 @@ class _TextbookAuthoringStageDialogState
     });
   }
 
+  Future<({int total, int answers, int solutions})>
+      _persistedSidecarCoverage() async {
+    final ids = _crops
+        .where((crop) => !crop.isSetHeader)
+        .map((crop) => crop.id)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return (total: 0, answers: 0, solutions: 0);
+
+    Future<int> countRows(String table) async {
+      final found = <String>{};
+      for (var offset = 0; offset < ids.length; offset += 200) {
+        final end = math.min(offset + 200, ids.length);
+        final rows = await _supa
+            .from(table)
+            .select('crop_id')
+            .inFilter('crop_id', ids.sublist(offset, end));
+        for (final raw in (rows as List).whereType<Map>()) {
+          final id = '${raw['crop_id'] ?? ''}'.trim();
+          if (id.isNotEmpty) found.add(id);
+        }
+      }
+      return found.length;
+    }
+
+    return (
+      total: ids.length,
+      answers: await countRows('textbook_problem_answers'),
+      solutions: await countRows('textbook_problem_solution_refs'),
+    );
+  }
+
   Future<void> _completeIfReady() async {
     final hasDirtyAnswers = _answersByCropId.values.any((d) => d.dirty);
     final hasDirtySolRefs = _solRefsByCropId.values.any((d) => d.dirty);
@@ -2978,6 +2995,34 @@ class _TextbookAuthoringStageDialogState
     }
     await _refreshPbRunStatuses();
     if (!mounted) return;
+    final hasExistingPbRuns =
+        _pbRunStatusByKey.values.any((status) => status.trim().isNotEmpty);
+    if (!hasExistingPbRuns && widget.onStartProblemExtraction != null) {
+      final coverage = await _persistedSidecarCoverage();
+      if (!mounted) return;
+      if (coverage.answers < coverage.total ||
+          coverage.solutions < coverage.total) {
+        _toast(
+          '본문 문제 추출을 시작하지 않았습니다: '
+          '정답 ${coverage.answers}/${coverage.total} · '
+          '해설 ${coverage.solutions}/${coverage.total}',
+          error: true,
+        );
+        return;
+      }
+      setState(() => _startingPbRuns = true);
+      try {
+        await widget.onStartProblemExtraction!();
+      } catch (e) {
+        if (!mounted) return;
+        _toast('본문 문제 추출 시작 실패: $e', error: true);
+        return;
+      } finally {
+        if (mounted) setState(() => _startingPbRuns = false);
+      }
+      await _refreshPbRunStatuses();
+      if (!mounted) return;
+    }
     final failedPbRunMessages = _pbRunStatusByKey.entries
         .where((entry) => entry.value == 'failed')
         .map((entry) => _pbRunErrorByKey[entry.key] ?? '')
@@ -3007,6 +3052,39 @@ class _TextbookAuthoringStageDialogState
     }
     Navigator.of(context).maybePop();
   }
+}
+
+/// 정답·해설을 아직 못 채운 크롭 하나와, 그 크롭을 답지에서 특정하기 위한
+/// 기대 정보(코너 이름·본문 페이지)의 짝.
+///
+/// 목록에서의 위치가 곧 크롭의 신분증이다. 번호는 코너마다 겹치므로 쓸 수 없다.
+class _AnswerTarget {
+  const _AnswerTarget({required this.crop, required this.expected});
+
+  final _StageCrop crop;
+  final TextbookExpectedAnswer expected;
+
+  /// 누락 안내에 쓰는 이름. 번호만 적으면 "1, 1, 1" 처럼 보여서 어느 코너가
+  /// 빠졌는지 알 수 없다.
+  String get missingLabel {
+    final corner = expected.corner.trim();
+    return corner.isEmpty
+        ? crop.problemNumber
+        : '$corner ${crop.problemNumber}';
+  }
+}
+
+/// 크롭 하나에 연결된 VLM 정답 결과.
+class _AnswerHit {
+  const _AnswerHit({
+    required this.item,
+    required this.rawPage,
+    this.imageCrop,
+  });
+
+  final TextbookVlmAnswerItem item;
+  final int rawPage;
+  final _ImageAnswerCrop? imageCrop;
 }
 
 class _StageCrop {

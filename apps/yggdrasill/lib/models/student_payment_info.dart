@@ -9,6 +9,10 @@ class StudentPaymentInfo {
   final bool attendanceNotification; // 출결
   final bool departureNotification; // 하원
   final bool latenessNotification; // 지각
+  /// 납부 채널: cash / transfer / card / app
+  final String paymentChannel;
+  /// 결제 시 특이사항 메모 (nullable)
+  final String? paymentNote;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -23,6 +27,8 @@ class StudentPaymentInfo {
     this.attendanceNotification = false,
     this.departureNotification = false,
     this.latenessNotification = false,
+    this.paymentChannel = PaymentChannel.card,
+    this.paymentNote,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -39,6 +45,8 @@ class StudentPaymentInfo {
       attendanceNotification: (json['attendance_notification'] as int? ?? 0) == 1,
       departureNotification: (json['departure_notification'] as int? ?? 0) == 1,
       latenessNotification: (json['lateness_notification'] as int? ?? 0) == 1,
+      paymentChannel: PaymentChannel.normalize(json['payment_channel'] as String?),
+      paymentNote: json['payment_note'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -56,6 +64,8 @@ class StudentPaymentInfo {
       'attendance_notification': attendanceNotification ? 1 : 0,
       'departure_notification': departureNotification ? 1 : 0,
       'lateness_notification': latenessNotification ? 1 : 0,
+      'payment_channel': PaymentChannel.normalize(paymentChannel),
+      'payment_note': paymentNote,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -72,6 +82,9 @@ class StudentPaymentInfo {
     bool? attendanceNotification,
     bool? departureNotification,
     bool? latenessNotification,
+    String? paymentChannel,
+    String? paymentNote,
+    bool clearPaymentNote = false,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -83,15 +96,20 @@ class StudentPaymentInfo {
       tuitionFee: tuitionFee ?? this.tuitionFee,
       latenessThreshold: latenessThreshold ?? this.latenessThreshold,
       scheduleNotification: scheduleNotification ?? this.scheduleNotification,
-      attendanceNotification: attendanceNotification ?? this.attendanceNotification,
-      departureNotification: departureNotification ?? this.departureNotification,
+      attendanceNotification:
+          attendanceNotification ?? this.attendanceNotification,
+      departureNotification:
+          departureNotification ?? this.departureNotification,
       latenessNotification: latenessNotification ?? this.latenessNotification,
+      paymentChannel: paymentChannel ?? this.paymentChannel,
+      paymentNote: clearPaymentNote ? null : (paymentNote ?? this.paymentNote),
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 }
 
+/// 납부 주기(월납 등) — DB 컬럼 `payment_method`
 enum PaymentMethod {
   monthly('월납'),
   quarterly('분기납'),
@@ -100,4 +118,34 @@ enum PaymentMethod {
 
   const PaymentMethod(this.displayName);
   final String displayName;
+}
+
+/// 납부 채널(현금/이체/카드/앱) — DB 컬럼 `payment_channel`
+class PaymentChannel {
+  static const String cash = 'cash';
+  static const String transfer = 'transfer';
+  static const String card = 'card';
+  static const String app = 'app';
+
+  static const List<String> values = [cash, transfer, card, app];
+
+  static String normalize(String? raw) {
+    final v = (raw ?? '').trim().toLowerCase();
+    if (values.contains(v)) return v;
+    return card;
+  }
+
+  static String displayName(String? raw) {
+    switch (normalize(raw)) {
+      case cash:
+        return '현금';
+      case transfer:
+        return '이체';
+      case app:
+        return '앱';
+      case card:
+      default:
+        return '카드';
+    }
+  }
 }

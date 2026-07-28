@@ -331,6 +331,11 @@ class TextbookPdfService {
     required int midOrder,
     required String subKey,
     required String stage,
+    int subIndex = 0,
+    String? scopeKind,
+    int? unitRowIndex,
+    int? bodyStartPage,
+    int? bodyEndPage,
   }) async {
     final res = await _http.post(
       _uri('/textbook/stage/delete'),
@@ -342,7 +347,12 @@ class TextbookPdfService {
         'big_order': bigOrder,
         'mid_order': midOrder,
         'sub_key': subKey,
+        'sub_index': subIndex,
         'stage': stage,
+        if (scopeKind != null) 'scope_kind': scopeKind,
+        if (unitRowIndex != null) 'unit_row_index': unitRowIndex,
+        if (bodyStartPage != null) 'body_start_page': bodyStartPage,
+        if (bodyEndPage != null) 'body_end_page': bodyEndPage,
       }),
     );
     final json = _decode(res.body);

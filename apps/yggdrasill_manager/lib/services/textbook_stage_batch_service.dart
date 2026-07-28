@@ -96,6 +96,7 @@ class TextbookStageBatchService {
         bookId: bookId,
         gradeLabel: gradeLabel,
         crops: crops,
+        seriesKey: seriesKey,
         onStatus: onStatus,
       );
       return TextbookStageBatchResult(
@@ -120,7 +121,7 @@ class TextbookStageBatchService {
   }) async {
     final rows = await _supa
         .from('textbook_problem_crops')
-        .select('id, problem_number, is_set_header')
+        .select('id, problem_number, is_set_header, section, display_page')
         .eq('academy_id', academyId)
         .eq('book_id', bookId)
         .eq('grade_label', gradeLabel)
@@ -175,21 +176,31 @@ class TextbookStageBatchService {
     void Function(String status)? onStatus,
   }) async {
     final answerCrops = crops.where((crop) => !crop.isSetHeader).toList();
-    final expected = <String>[
-      for (final c in answerCrops) c.problemNumber,
+    // 개념+유형 답지는 코너별 박스로 인쇄되고 코너·소단원마다 번호가 1번부터
+    // 다시 시작한다. 번호를 Map 키로 쓰면 같은 "1" 끼리 서로를 덮어써서 절반이
+    // 정답 없이 남으므로, 목록의 위치를 열쇠로 쓴다.
+    final targets = <_BatchTarget>[
+      for (final c in answerCrops)
+        if (c.problemNumber.trim().isNotEmpty)
+          _BatchTarget(
+            crop: c,
+            expected: textbookExpectedAnswerFor(
+              seriesKey: seriesKey,
+              problemNumber: c.problemNumber,
+              section: c.section,
+              displayPage: c.displayPage,
+            ),
+          ),
     ];
-    if (expected.isEmpty) {
+    if (targets.isEmpty) {
       return const _SavedWithMissing(saved: 0, missing: <String>[]);
     }
-    final expectedByKey = <String, String>{
-      for (final number in expected)
-        if (textbookAnswerNumberKey(number).isNotEmpty)
-          textbookAnswerNumberKey(number): number,
-    };
+    final batch = TextbookExpectedAnswerBatch(
+      positions: <int>[for (var i = 0; i < targets.length; i += 1) i],
+      entries: <TextbookExpectedAnswer>[for (final t in targets) t.expected],
+    );
 
-    final aggregated = <TextbookVlmAnswerItem>[];
-    final imageByNumber = <String, _ImageAnswerCrop>{};
-    final pageByNumber = <String, ({int rawPage, int displayPage})>{};
+    final hits = <int, _BatchAnswerHit>{};
     final answerImagePageCache = <int, Uint8List>{};
     final pageErrors = <String>[];
     final totalPages = doc.pages.length;
@@ -229,60 +240,34 @@ class TextbookStageBatchService {
           academyId: academyId,
           bookId: bookId,
           gradeLabel: gradeLabel,
-          expectedNumbers: expected,
+          expectedNumbers: batch.numbers,
+          expectedDetails: batch.entries,
           seriesKey: seriesKey,
         );
         for (final item in result.items) {
           if (item.answerText.trim().isEmpty) continue;
-          final matchedExpectedNumbers = textbookAnswerMatchedExpectedNumbers(
+          final matched = batch.resolve(
             detectedNumber: item.problemNumber,
-            expectedByKey: expectedByKey,
+            expectedIndex: item.expectedIndex,
           );
-          if (matchedExpectedNumbers.isEmpty) continue;
-          aggregated.add(item);
-          final numberKey = textbookAnswerNumberKey(item.problemNumber);
-          pageByNumber.putIfAbsent(
-            item.problemNumber,
-            () => (rawPage: result.rawPage, displayPage: result.displayPage),
-          );
-          if (numberKey.isNotEmpty) {
-            pageByNumber.putIfAbsent(
-              numberKey,
-              () => (rawPage: result.rawPage, displayPage: result.displayPage),
-            );
-          }
-          for (final expectedNumber in matchedExpectedNumbers) {
-            final expectedKey = textbookAnswerNumberKey(expectedNumber);
-            pageByNumber.putIfAbsent(
-              expectedNumber,
-              () => (rawPage: result.rawPage, displayPage: result.displayPage),
-            );
-            if (expectedKey.isNotEmpty) {
-              pageByNumber.putIfAbsent(
-                expectedKey,
-                () =>
-                    (rawPage: result.rawPage, displayPage: result.displayPage),
-              );
-            }
-          }
+          if (matched.isEmpty) continue;
+          _ImageAnswerCrop? imageCrop;
           if (item.isImage && item.bbox != null) {
             final imagePng = await answerImagePagePng(result.rawPage);
-            final crop = imagePng == null
+            imageCrop = imagePng == null
                 ? _cropAnswerImage(png, item.bbox!)
                 : _cropAnswerImage(imagePng, item.bbox!);
-            if (crop != null) {
-              imageByNumber.putIfAbsent(item.problemNumber, () => crop);
-              if (numberKey.isNotEmpty) {
-                imageByNumber.putIfAbsent(numberKey, () => crop);
-              }
-              for (final expectedNumber in matchedExpectedNumbers) {
-                final expectedKey = textbookAnswerNumberKey(expectedNumber);
-                imageByNumber.putIfAbsent(expectedNumber, () => crop);
-                if (expectedKey.isNotEmpty) {
-                  imageByNumber.putIfAbsent(expectedKey, () => crop);
-                }
-              }
-            }
+          }
+          for (final position in matched) {
+            hits.putIfAbsent(
+              position,
+              () => _BatchAnswerHit(
+                item: item,
+                rawPage: result.rawPage,
+                displayPage: result.displayPage,
+                imageCrop: imageCrop,
+              ),
+            );
           }
         }
       } catch (e) {
@@ -292,50 +277,43 @@ class TextbookStageBatchService {
       }
     }
 
-    if (aggregated.isEmpty) {
+    if (hits.isEmpty) {
       final sample = pageErrors.isEmpty
           ? '모든 정답 PDF 페이지에서 매칭 가능한 정답을 찾지 못했습니다.'
           : pageErrors.take(3).join(' / ');
       throw Exception('정답 VLM 추출 실패: $sample');
     }
 
-    final report = TextbookAnswerMatchReport.match(
-      expectedNumbers: expected,
-      items: aggregated,
-    );
-    final cropIdByNumber = <String, String>{
-      for (final crop in answerCrops) crop.problemNumber: crop.id,
-    };
     final uploads = <TextbookAnswerUpload>[];
-    for (final entry in report.matched.entries) {
-      final cropId = cropIdByNumber[entry.key];
-      if (cropId == null) continue;
-      final item = entry.value;
-      final answerPage = pageByNumber[entry.key] ??
-          pageByNumber[textbookAnswerNumberKey(item.problemNumber)];
-      final imageCrop = imageByNumber[entry.key] ??
-          imageByNumber[textbookAnswerNumberKey(item.problemNumber)];
+    final missing = <String>[];
+    for (var position = 0; position < targets.length; position += 1) {
+      final hit = hits[position];
+      if (hit == null) {
+        missing.add(targets[position].missingLabel);
+        continue;
+      }
+      final item = hit.item;
       uploads.add(TextbookAnswerUpload(
-        cropId: cropId,
+        cropId: targets[position].crop.id,
         answerKind: item.kind,
         answerText: item.answerText,
         answerLatex2d:
             item.answerLatex2d.isEmpty ? item.answerText : item.answerLatex2d,
         answerSource: 'vlm',
-        rawPage: answerPage?.rawPage,
-        displayPage: answerPage?.displayPage,
+        rawPage: hit.rawPage,
+        displayPage: hit.displayPage,
         bbox1k: item.bbox,
-        answerImagePngBytes: imageCrop?.pngBytes,
+        answerImagePngBytes: hit.imageCrop?.pngBytes,
         answerImageRegion1k: item.isImage ? item.bbox : null,
-        answerImageWidthPx: imageCrop?.width,
-        answerImageHeightPx: imageCrop?.height,
+        answerImageWidthPx: hit.imageCrop?.width,
+        answerImageHeightPx: hit.imageCrop?.height,
       ));
     }
     final saved = await _answerService.batchUpsertAnswers(
       academyId: academyId,
       answers: uploads,
     );
-    return _SavedWithMissing(saved: saved, missing: report.missing);
+    return _SavedWithMissing(saved: saved, missing: missing);
   }
 
   _ImageAnswerCrop? _cropAnswerImage(Uint8List pagePng, List<int> bbox1k) {
@@ -368,18 +346,31 @@ class TextbookStageBatchService {
     required String bookId,
     required String gradeLabel,
     required List<_BatchCrop> crops,
+    String seriesKey = '',
     void Function(String status)? onStatus,
   }) async {
-    final expected = <String>[for (final c in crops) c.problemNumber];
-    if (expected.isEmpty) {
+    // 정답 단계와 같은 이유로 순서 배열을 쓴다.
+    final targets = <_BatchTarget>[
+      for (final c in crops)
+        if (c.problemNumber.trim().isNotEmpty)
+          _BatchTarget(
+            crop: c,
+            expected: textbookExpectedAnswerFor(
+              seriesKey: seriesKey,
+              problemNumber: c.problemNumber,
+              section: c.section,
+              displayPage: c.displayPage,
+            ),
+          ),
+    ];
+    if (targets.isEmpty) {
       return const _SavedWithMissing(saved: 0, missing: <String>[]);
     }
-    final expectedByKey = <String, String>{
-      for (final number in expected)
-        if (textbookAnswerNumberKey(number).isNotEmpty)
-          textbookAnswerNumberKey(number): number,
-    };
-    final aggregated = <String, _SolutionRefWithPage>{};
+    final batch = TextbookExpectedAnswerBatch(
+      positions: <int>[for (var i = 0; i < targets.length; i += 1) i],
+      entries: <TextbookExpectedAnswer>[for (final t in targets) t.expected],
+    );
+    final hits = <int, _SolutionRefWithPage>{};
     final totalPages = doc.pages.length;
     for (var page = 1; page <= totalPages; page += 1) {
       onStatus?.call('해설 VLM $page / $totalPages 페이지...');
@@ -400,16 +391,18 @@ class TextbookStageBatchService {
           academyId: academyId,
           bookId: bookId,
           gradeLabel: gradeLabel,
-          expectedNumbers: expected,
+          expectedNumbers: batch.numbers,
+          expectedDetails: batch.entries,
+          seriesKey: seriesKey,
         );
         for (final item in result.items) {
-          for (final expectedNumber
-              in textbookSolutionRefMatchedExpectedNumbers(
+          final matched = batch.resolve(
             detectedNumber: item.problemNumber,
-            expectedByKey: expectedByKey,
-          )) {
-            aggregated.putIfAbsent(
-              expectedNumber,
+            expectedIndex: item.expectedIndex,
+          );
+          for (final position in matched) {
+            hits.putIfAbsent(
+              position,
               () => _SolutionRefWithPage(
                 item: item,
                 rawPage: result.rawPage,
@@ -423,21 +416,16 @@ class TextbookStageBatchService {
       }
     }
 
-    final cropIdByNumber = <String, String>{
-      for (final crop in crops) crop.problemNumber: crop.id,
-    };
     final uploads = <TextbookSolutionRefUpload>[];
     final missing = <String>[];
-    for (final crop in crops) {
-      final found = aggregated[crop.problemNumber];
-      final cropId = cropIdByNumber[crop.problemNumber];
-      if (cropId == null) continue;
+    for (var position = 0; position < targets.length; position += 1) {
+      final found = hits[position];
       if (found == null) {
-        missing.add(crop.problemNumber);
+        missing.add(targets[position].missingLabel);
         continue;
       }
       uploads.add(TextbookSolutionRefUpload(
-        cropId: cropId,
+        cropId: targets[position].crop.id,
         rawPage: found.rawPage,
         displayPage: found.displayPage,
         numberRegion1k: found.item.numberRegion1k,
@@ -472,19 +460,58 @@ class _BatchCrop {
     required this.id,
     required this.problemNumber,
     required this.isSetHeader,
+    this.section = '',
+    this.displayPage,
   });
 
   final String id;
   final String problemNumber;
   final bool isSetHeader;
+  final String section;
+  final int? displayPage;
 
   factory _BatchCrop.fromRow(Map<dynamic, dynamic> row) {
+    final page = int.tryParse('${row['display_page'] ?? ''}');
     return _BatchCrop(
       id: '${row['id'] ?? ''}'.trim(),
       problemNumber: '${row['problem_number'] ?? ''}'.trim(),
       isSetHeader: row['is_set_header'] == true,
+      section: '${row['section'] ?? ''}'.trim(),
+      displayPage: page != null && page > 0 ? page : null,
     );
   }
+}
+
+/// 크롭 하나와, 그 크롭을 답지·해설에서 특정하기 위한 기대 정보의 짝.
+///
+/// 목록에서의 위치가 곧 크롭의 신분증이다. 번호는 코너마다 겹치므로 못 쓴다.
+class _BatchTarget {
+  const _BatchTarget({required this.crop, required this.expected});
+
+  final _BatchCrop crop;
+  final TextbookExpectedAnswer expected;
+
+  /// 누락 보고에 쓰는 이름. 번호만 적으면 어느 코너가 빠졌는지 알 수 없다.
+  String get missingLabel {
+    final corner = expected.corner.trim();
+    return corner.isEmpty
+        ? crop.problemNumber
+        : '$corner ${crop.problemNumber}';
+  }
+}
+
+class _BatchAnswerHit {
+  const _BatchAnswerHit({
+    required this.item,
+    required this.rawPage,
+    required this.displayPage,
+    this.imageCrop,
+  });
+
+  final TextbookVlmAnswerItem item;
+  final int rawPage;
+  final int displayPage;
+  final _ImageAnswerCrop? imageCrop;
 }
 
 class _SolutionRefWithPage {

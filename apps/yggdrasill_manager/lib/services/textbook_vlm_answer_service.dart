@@ -4,6 +4,124 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+/// 답지에서 문항 하나를 특정하기 위해 VLM 에 넘기는 한 줄.
+///
+/// 번호만으로 충분한 시리즈(쎈/RPM/개념원리)는 [corner]·[bodyPage] 를 비운다.
+class TextbookExpectedAnswer {
+  const TextbookExpectedAnswer({
+    required this.number,
+    this.corner = '',
+    this.bodyPage,
+  });
+
+  /// Stage 1 이 저장한 문항번호. VLM 도 이 문자열 그대로 돌려줘야 한다.
+  final String number;
+
+  /// 답지에 인쇄된 코너 이름 (예: "STEP1 쏙쏙 개념 익히기").
+  final String corner;
+
+  /// 답지 박스 오른쪽 위의 본문 페이지 배지 (예: P.109 → 109).
+  final int? bodyPage;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'problem_number': number,
+        if (corner.trim().isNotEmpty) 'corner': corner.trim(),
+        if (bodyPage != null && bodyPage! > 0) 'page': bodyPage,
+      };
+}
+
+/// 한 번의 VLM 호출에 실어 보낸 기대 문항 목록.
+///
+/// 번호를 Map 키로 쓰면 안 된다. 개념+유형은 코너마다, 소단원마다 번호가
+/// 1번부터 다시 시작해서 한 중단원 안에 "1" 인 문항이 다섯 개까지 생긴다.
+/// 실제로 1-1 교재에서 기대 82개가 번호키 43개로 뭉개졌고, 나머지 39개는
+/// 정답이 영원히 비어 있었다.
+///
+/// 그래서 목록의 **위치**를 열쇠로 쓴다. 게이트웨이는 결과마다 우리가 보낸
+/// 배열에서의 위치(`expected_index`)를 되돌려 주고, 못 되돌려 주면 번호로
+/// 되짚는다. [positions] 는 이 호출에 담은 항목이 호출자의 전체 목록에서
+/// 몇 번째였는지를 담는다(남은 항목만 골라 보내므로 호출마다 달라진다).
+class TextbookExpectedAnswerBatch {
+  TextbookExpectedAnswerBatch({
+    required this.positions,
+    required this.entries,
+  }) : assert(positions.length == entries.length);
+
+  /// 호출자의 전체 기대 목록에서의 위치.
+  final List<int> positions;
+
+  /// 이번 호출에 실제로 보낸 기대 문항.
+  final List<TextbookExpectedAnswer> entries;
+
+  bool get isEmpty => entries.isEmpty;
+
+  List<String> get numbers =>
+      <String>[for (final e in entries) e.number];
+
+  /// 결과 항목 하나가 가리키는 전체 목록 위치.
+  ///
+  /// [expectedIndex] 가 유효하면 그것만 믿는다. 없으면 번호로 찾고, 번호가
+  /// 겹치는 항목이 여럿이면 **하나만** 집는다. 근거 없이 여러 크롭에 같은
+  /// 정답을 붙이면 틀린 정답이 조용히 저장된다.
+  List<int> resolve({
+    required String detectedNumber,
+    int expectedIndex = -1,
+  }) {
+    if (expectedIndex >= 0 && expectedIndex < positions.length) {
+      return <int>[positions[expectedIndex]];
+    }
+    final key = textbookAnswerNumberKey(detectedNumber);
+    if (key.isNotEmpty) {
+      for (var i = 0; i < entries.length; i += 1) {
+        if (textbookAnswerNumberKey(entries[i].number) == key) {
+          return <int>[positions[i]];
+        }
+      }
+    }
+    // "1~5" 처럼 범위로 묶인 정답은 범위에 드는 기대 항목 전부에 붙는다.
+    final range = _answerNumberRange(detectedNumber);
+    if (range == null) return const <int>[];
+    final out = <int>[];
+    for (var i = 0; i < entries.length; i += 1) {
+      final n = int.tryParse(textbookAnswerNumberKey(entries[i].number));
+      if (n == null || n < range.$1 || n > range.$2) continue;
+      out.add(positions[i]);
+    }
+    return out;
+  }
+}
+
+/// 개념+유형 크롭의 section(카테고리) → 답지에 인쇄된 코너 이름.
+const Map<String, String> _kConceptPlusAnswerCorners = <String, String>{
+  'concept_check': '개념 확인',
+  'essential_problem': '필수 문제',
+  'step_drill': 'STEP1 쏙쏙 개념 익히기',
+  'unit_drill': 'STEP2 탄탄 단원 다지기',
+  'descriptive': 'STEP3 쓱쓱 서술형 완성하기',
+  'extra_practice': '한번 더 연습',
+};
+
+/// 코너 이름을 붙일 수 있는 시리즈인지. 지금은 개념+유형만 해당한다.
+bool textbookAnswerNeedsCorner(String seriesKey) =>
+    seriesKey.trim().toLowerCase() == 'gaeyu';
+
+/// 크롭 한 건을 답지 조회용 기대 문항으로 바꾼다.
+TextbookExpectedAnswer textbookExpectedAnswerFor({
+  required String seriesKey,
+  required String problemNumber,
+  String section = '',
+  int? displayPage,
+}) {
+  if (!textbookAnswerNeedsCorner(seriesKey)) {
+    return TextbookExpectedAnswer(number: problemNumber);
+  }
+  return TextbookExpectedAnswer(
+    number: problemNumber,
+    corner: _kConceptPlusAnswerCorners[section.trim()] ?? '',
+    bodyPage: displayPage != null && displayPage > 0 ? displayPage : null,
+  );
+}
+
 String textbookAnswerNumberKey(String raw) {
   final input = raw.trim();
   if (input.isEmpty) return '';
@@ -29,31 +147,6 @@ String textbookAnswerNumberKey(String raw) {
     );
   }
   return numbers.first;
-}
-
-List<String> textbookAnswerMatchedExpectedNumbers({
-  required String detectedNumber,
-  required Map<String, String> expectedByKey,
-  Iterable<String>? allowedKeys,
-}) {
-  final allowed = allowedKeys?.toSet();
-  final detectedKey = textbookAnswerNumberKey(detectedNumber);
-  if (detectedKey.isEmpty) return const <String>[];
-  final exact = expectedByKey[detectedKey];
-  if (exact != null && (allowed == null || allowed.contains(detectedKey))) {
-    return <String>[exact];
-  }
-
-  final range = _answerNumberRange(detectedNumber);
-  if (range == null) return const <String>[];
-  final out = <String>[];
-  for (final entry in expectedByKey.entries) {
-    if (allowed != null && !allowed.contains(entry.key)) continue;
-    final n = int.tryParse(entry.key);
-    if (n == null || n < range.$1 || n > range.$2) continue;
-    out.add(entry.value);
-  }
-  return out;
 }
 
 (int, int)? _answerNumberRange(String raw) {
@@ -124,6 +217,10 @@ class TextbookVlmAnswerService {
   /// [expectedNumbers] lets the prompt reason over the exact set of
   /// Stage-1 문항번호 the caller wants answers for. Pass `null` to extract
   /// every number that shows up on the page.
+  ///
+  /// [expectedDetails] 는 번호에 코너 이름과 본문 페이지를 덧붙인 형태다.
+  /// 개념+유형 답지는 코너마다 번호가 1번부터 다시 시작해서 번호만으로는
+  /// 어느 박스의 몇 번인지 특정할 수 없다. 주어지면 이쪽을 보낸다.
   Future<TextbookVlmAnswerPageResult> extractAnswersOnPage({
     required Uint8List imageBytes,
     required int rawPage,
@@ -131,9 +228,15 @@ class TextbookVlmAnswerService {
     required String bookId,
     required String gradeLabel,
     List<String>? expectedNumbers,
+    List<TextbookExpectedAnswer>? expectedDetails,
     String seriesKey = '',
     String mimeType = 'image/png',
   }) async {
+    final expected = expectedDetails != null && expectedDetails.isNotEmpty
+        ? expectedDetails.map((e) => e.toJson()).toList()
+        : (expectedNumbers != null && expectedNumbers.isNotEmpty
+            ? expectedNumbers
+            : null);
     final body = <String, dynamic>{
       'image_base64': base64Encode(imageBytes),
       'mime_type': mimeType,
@@ -142,8 +245,7 @@ class TextbookVlmAnswerService {
       'book_id': bookId,
       'grade_label': gradeLabel,
       if (seriesKey.trim().isNotEmpty) 'series': seriesKey.trim(),
-      if (expectedNumbers != null && expectedNumbers.isNotEmpty)
-        'expected_numbers': expectedNumbers,
+      if (expected != null) 'expected_numbers': expected,
     };
     final res = await _http.post(
       _uri('/textbook/vlm/extract-answers'),
@@ -252,9 +354,16 @@ class TextbookVlmAnswerItem {
     required this.answerLatex2d,
     this.answerAssets = const <TextbookVlmAnswerAsset>[],
     this.bbox,
+    this.expectedIndex = -1,
   });
 
   final String problemNumber;
+
+  /// 게이트웨이가 특정한 기대 문항의 위치. 못 특정하면 -1.
+  ///
+  /// 같은 번호가 코너마다 다시 나오는 개념+유형에서 번호 대신 이 값으로
+  /// 크롭을 찾는다. [TextbookExpectedAnswerBatch.resolve] 참고.
+  final int expectedIndex;
 
   /// 'objective' | 'subjective' | 'image'.
   final String kind;
@@ -450,6 +559,7 @@ class TextbookVlmAnswerItem {
       answerAssets: answerAssets,
       bbox: parseBbox(map['bbox']) ??
           (answerAssets.isEmpty ? null : answerAssets.first.bbox),
+      expectedIndex: asIntN(map['expected_index']) ?? -1,
     );
   }
 }
@@ -569,70 +679,4 @@ class TextbookAnswerUpload {
           'answer_image_height_px': answerImageHeightPx,
         if (note != null) 'note': note,
       };
-}
-
-/// Result of matching a batch of VLM answer items back to Stage-1 문항번호.
-///
-/// The Stage-2 UI consumes this: [matched] drives the main row renderer,
-/// [missing] drives a "VLM이 이 번호를 찾지 못했어요" warning block, and
-/// [unexpected] flags answers the VLM returned but Stage-1 never registered
-/// (usually typos like "0001" vs "001").
-class TextbookAnswerMatchReport {
-  TextbookAnswerMatchReport({
-    required this.matched,
-    required this.missing,
-    required this.unexpected,
-  });
-
-  final Map<String, TextbookVlmAnswerItem> matched;
-  final List<String> missing;
-  final List<TextbookVlmAnswerItem> unexpected;
-
-  /// [expectedNumbers] are the Stage-1 문항번호 strings (same case/shape the
-  /// UI hands the service). [items] are the flat list of VLM results across
-  /// all pages.
-  static TextbookAnswerMatchReport match({
-    required List<String> expectedNumbers,
-    required List<TextbookVlmAnswerItem> items,
-  }) {
-    final expectedSet = <String>{};
-    final expectedByKey = <String, String>{};
-    for (final n in expectedNumbers) {
-      final raw = n.trim();
-      if (raw.isEmpty) continue;
-      expectedSet.add(raw);
-      final key = textbookAnswerNumberKey(raw);
-      if (key.isNotEmpty) expectedByKey.putIfAbsent(key, () => raw);
-    }
-    final byNumber = <String, TextbookVlmAnswerItem>{};
-    final unexpected = <TextbookVlmAnswerItem>[];
-    for (final it in items) {
-      final matched = textbookAnswerMatchedExpectedNumbers(
-        detectedNumber: it.problemNumber,
-        expectedByKey: expectedByKey,
-      );
-      if (matched.isEmpty) {
-        unexpected.add(it);
-        continue;
-      }
-      // Keep the first non-empty answer; later duplicates win only if the
-      // prior entry had an empty answer_text.
-      for (final expectedNumber in matched) {
-        final prev = byNumber[expectedNumber];
-        if (prev == null || prev.answerText.trim().isEmpty) {
-          byNumber[expectedNumber] = it;
-        }
-      }
-    }
-    final missing = <String>[
-      for (final n in expectedSet)
-        if (!byNumber.containsKey(n) || byNumber[n]!.answerText.trim().isEmpty)
-          n,
-    ];
-    return TextbookAnswerMatchReport(
-      matched: byNumber,
-      missing: missing,
-      unexpected: unexpected,
-    );
-  }
 }

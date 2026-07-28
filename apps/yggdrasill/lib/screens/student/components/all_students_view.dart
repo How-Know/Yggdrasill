@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../../../models/student.dart';
 import '../../../models/student_flow.dart';
+import '../../../models/student_payment_info.dart';
 import '../../../models/education_level.dart';
 import 'package:intl/intl.dart';
 import 'package:material_symbols_icons/symbols.dart';
@@ -2620,6 +2621,15 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
                 ),
+                const SizedBox(height: 12),
+                _StudentPaymentChannelSection(
+                  studentId: student.id,
+                  studentName: student.name,
+                  registrationDate: registrationDate,
+                  outlineColor: outlineColor,
+                  labelStyle: labelStyle,
+                  valueStyle: valueStyle,
+                ),
               ],
             ),
           ),
@@ -3637,6 +3647,386 @@ class _StudentSignupCodeSectionState extends State<_StudentSignupCodeSection> {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// 납부 채널·특이사항을 상세 패널에서 설정/수정하는 섹션.
+class _StudentPaymentChannelSection extends StatefulWidget {
+  final String studentId;
+  final String studentName;
+  final DateTime registrationDate;
+  final Color outlineColor;
+  final TextStyle labelStyle;
+  final TextStyle valueStyle;
+
+  const _StudentPaymentChannelSection({
+    required this.studentId,
+    required this.studentName,
+    required this.registrationDate,
+    required this.outlineColor,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  @override
+  State<_StudentPaymentChannelSection> createState() =>
+      _StudentPaymentChannelSectionState();
+}
+
+class _StudentPaymentChannelSectionState
+    extends State<_StudentPaymentChannelSection> {
+  bool _busy = false;
+  late String _channel;
+  String? _note;
+
+  @override
+  void initState() {
+    super.initState();
+    final info =
+        DataManager.instance.getStudentPaymentInfo(widget.studentId);
+    _channel = PaymentChannel.normalize(info?.paymentChannel);
+    _note = info?.paymentNote;
+    DataManager.instance.studentPaymentInfosNotifier
+        .addListener(_syncFromManager);
+  }
+
+  @override
+  void didUpdateWidget(covariant _StudentPaymentChannelSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _syncFromManager();
+    }
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.studentPaymentInfosNotifier
+        .removeListener(_syncFromManager);
+    super.dispose();
+  }
+
+  void _syncFromManager() {
+    final info =
+        DataManager.instance.getStudentPaymentInfo(widget.studentId);
+    final nextChannel = PaymentChannel.normalize(info?.paymentChannel);
+    final nextNote = info?.paymentNote;
+    if (!mounted) return;
+    setState(() {
+      _channel = nextChannel;
+      _note = nextNote;
+    });
+  }
+
+  StudentPaymentInfo _baseInfo() {
+    final existing =
+        DataManager.instance.getStudentPaymentInfo(widget.studentId);
+    if (existing != null) return existing;
+    final now = DateTime.now();
+    return StudentPaymentInfo(
+      id: const Uuid().v4(),
+      studentId: widget.studentId,
+      registrationDate: widget.registrationDate,
+      paymentMethod: 'monthly',
+      tuitionFee: 0,
+      paymentChannel: PaymentChannel.card,
+      paymentNote: null,
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  Future<void> _save(StudentPaymentInfo next) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final existing =
+          DataManager.instance.getStudentPaymentInfo(widget.studentId);
+      if (existing == null) {
+        await DataManager.instance.addStudentPaymentInfo(next);
+      } else {
+        await DataManager.instance.updateStudentPaymentInfo(next);
+      }
+      if (!mounted) return;
+      showAppSnackBar(context, '납부 정보가 저장되었습니다.', useRoot: true);
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, '납부 정보 저장에 실패했습니다.', useRoot: true);
+        _syncFromManager();
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _changeChannel(String channel) async {
+    final normalized = PaymentChannel.normalize(channel);
+    if (normalized == _channel) return;
+    setState(() => _channel = normalized);
+    final next = _baseInfo().copyWith(
+      paymentChannel: normalized,
+      updatedAt: DateTime.now(),
+    );
+    await _save(next);
+  }
+
+  Future<void> _editNote() async {
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (_) => _StudentPaymentNoteEditDialog(
+        studentName: widget.studentName,
+        initialNote: _note,
+      ),
+    );
+    // null = 취소, '' = 비우기, 그 외 = 저장
+    if (!mounted || result == null) return;
+    final trimmed = result.trim();
+    final String? note = trimmed.isEmpty ? null : trimmed;
+    setState(() => _note = note);
+    final base = _baseInfo();
+    final next = note == null
+        ? base.copyWith(clearPaymentNote: true, updatedAt: DateTime.now())
+        : base.copyWith(paymentNote: note, updatedAt: DateTime.now());
+    await _save(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final noteText = (_note ?? '').trim();
+    final bool hasNote = noteText.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: BoxDecoration(
+        color: context.yggSurfaceBase,
+        borderRadius: BorderRadius.circular(14),
+        border:
+            Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.payments_outlined,
+                  size: 18, color: Color(0xFFB9C8C8)),
+              SizedBox(width: 8),
+              Text(
+                '납부 정보',
+                style: TextStyle(
+                  color: _studentListPrimaryTextColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text('납부 방식', style: widget.labelStyle),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: PopupMenuButton<String>(
+                    enabled: !_busy,
+                    tooltip: '납부 방식 선택',
+                    initialValue: _channel,
+                    onSelected: _changeChannel,
+                    color: kDlgBg,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      side: const BorderSide(color: kDlgBorder),
+                    ),
+                    itemBuilder: (context) => PaymentChannel.values
+                        .map(
+                          (v) => PopupMenuItem<String>(
+                            value: v,
+                            child: Text(
+                              PaymentChannel.displayName(v),
+                              style: TextStyle(
+                                color: v == _channel
+                                    ? kDlgAccent
+                                    : kDlgText,
+                                fontWeight: v == _channel
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          PaymentChannel.displayName(_channel),
+                          style: widget.valueStyle,
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.arrow_drop_down,
+                          color: widget.valueStyle.color ??
+                              const Color(0xFFEAF2F2),
+                          size: 20,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text('특이 사항', style: widget.labelStyle),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: InkWell(
+                    onTap: _busy ? null : _editNote,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 2),
+                      child: Text(
+                        hasNote ? noteText : '없음',
+                        textAlign: TextAlign.right,
+                        style: widget.valueStyle.copyWith(
+                          color: hasNote
+                              ? (widget.valueStyle.color ??
+                                  const Color(0xFFEAF2F2))
+                              : const Color(0xFF9FB3B3),
+                          fontWeight:
+                              hasNote ? FontWeight.w600 : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _busy ? null : _editNote,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF9FB3B3),
+                side: const BorderSide(color: Color(0xFF4D5A5A)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                textStyle: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: Text(hasNote ? '특이 사항 수정' : '특이 사항 입력'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentPaymentNoteEditDialog extends StatefulWidget {
+  final String studentName;
+  final String? initialNote;
+
+  const _StudentPaymentNoteEditDialog({
+    required this.studentName,
+    this.initialNote,
+  });
+
+  @override
+  State<_StudentPaymentNoteEditDialog> createState() =>
+      _StudentPaymentNoteEditDialogState();
+}
+
+class _StudentPaymentNoteEditDialogState
+    extends State<_StudentPaymentNoteEditDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialNote ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: const BorderSide(color: kDlgBorder),
+      ),
+      title: Text(
+        '${widget.studentName} 납부 특이 사항',
+        style: const TextStyle(
+            color: kDlgText, fontSize: 17, fontWeight: FontWeight.w700),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '결제 시 주의사항 등을 입력하세요.',
+            style: TextStyle(color: kDlgTextSub, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            maxLines: 4,
+            style: const TextStyle(color: kDlgText, fontSize: 15, height: 1.4),
+            cursorColor: kDlgAccent,
+            decoration: InputDecoration(
+              hintText: '예: 매월 5일 이체, 카드 거절 시 현금',
+              hintStyle: const TextStyle(color: kDlgTextSub, fontSize: 14),
+              filled: true,
+              fillColor: kDlgFieldBg,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kDlgBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kDlgAccent, width: 2),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소', style: TextStyle(color: kDlgTextSub)),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('저장',
+              style: TextStyle(color: kDlgAccent, fontWeight: FontWeight.w700)),
+        ),
+      ],
     );
   }
 }

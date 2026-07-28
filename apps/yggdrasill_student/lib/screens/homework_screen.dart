@@ -411,11 +411,6 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
           onPressed: _busy ? null : _addDescriptiveWriting,
           icon: const Icon(Icons.edit_note_rounded, size: 28),
         ),
-        IconButton(
-          tooltip: '새로고침',
-          onPressed: _refresh,
-          icon: const Icon(Icons.refresh_rounded),
-        ),
       ],
       bodyBuilder: (context, topInset, bottomInset) {
         return Padding(

@@ -6,6 +6,17 @@ import {
   joinGeminiTextParts,
   parseTextbookVlmJson,
 } from './vlm_json_parse.js';
+import {
+  buildExpectedIndex,
+  canonicalCorner,
+  expandBadgeRange,
+  resolveExpectedBox,
+} from './vlm_corner_guard.js';
+import {
+  normalizeProblemNumberKey,
+  parseProblemNumberRange,
+  parseSingleProblemNumber,
+} from './problem_number_key.js';
 
 const SOLREF_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const SOLREF_DEFAULT_MAX_RETRIES = 3;
@@ -30,6 +41,8 @@ export async function detectSolutionRefsOnPage({
   displayPage,
   pageOffset,
   expectedNumbers,
+  expectedEntries,
+  series,
   model,
   apiKey,
   timeoutMs = 90000,
@@ -59,6 +72,8 @@ export async function detectSolutionRefsOnPage({
               displayPage,
               pageOffset,
               expectedNumbers,
+              expectedEntries,
+              series,
             }),
           },
         ],
@@ -166,12 +181,24 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
   const expectedNumbers = Array.isArray(opts?.expectedNumbers)
     ? opts.expectedNumbers.map((n) => String(n || '').trim()).filter(Boolean)
     : [];
+  const expectedIndex = buildExpectedIndex(
+    opts?.expectedEntries,
+    normalizeProblemNumberKey,
+  );
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   const seen = new Set();
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
     const problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
+    const resolved = resolveExpectedBox(
+      raw,
+      problemNumber,
+      expectedIndex,
+      normalizeProblemNumberKey,
+    );
+    if (resolved.reject) continue;
+    const badgeCorner = canonicalCorner(raw.source_corner ?? raw.sourceCorner);
     const numberRegion = parseBbox4(raw.number_region);
     if (!numberRegion) continue;
     const contentRegion = parseBbox4(raw.content_region);
@@ -180,75 +207,72 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
       number_region: numberRegion,
       content_region: contentRegion,
     };
-    pushUniqueSolutionRef(out.items, seen, base);
-    for (const expanded of expandSolutionRefRange(problemNumber, expectedNumbers)) {
-      pushUniqueSolutionRef(out.items, seen, {
-        ...base,
-        problem_number: expanded,
-      });
+    if (resolved.matched) {
+      base.expected_index = resolved.matched.index;
+      base.problem_number = resolved.matched.number;
+    }
+    pushUniqueSolutionRef(out.items, seen, base, badgeCorner);
+    for (const expanded of expandSolutionRefRange(
+      problemNumber,
+      expectedNumbers,
+      expectedIndex,
+      raw,
+    )) {
+      pushUniqueSolutionRef(
+        out.items,
+        seen,
+        {
+          ...base,
+          problem_number: expanded.number,
+          ...(expanded.index >= 0 ? { expected_index: expanded.index } : {}),
+        },
+        badgeCorner,
+      );
     }
   }
   return out;
 }
 
-function pushUniqueSolutionRef(items, seen, item) {
-  const key = normalizeProblemNumberKey(item.problem_number);
+function pushUniqueSolutionRef(items, seen, item, badgeCorner = '') {
+  const key = solutionRefDedupKey(item, badgeCorner);
   if (!key || seen.has(key)) return;
   seen.add(key);
   items.push(item);
 }
 
-function expandSolutionRefRange(problemNumber, expectedNumbers) {
+/// 정답 쪽 `answerDedupKey` 와 같은 이유로 코너를 함께 묶는다. 해설 지면에도
+/// 코너 블록이 나란히 서고 번호가 겹친다.
+function solutionRefDedupKey(item, badgeCorner) {
+  if (Number.isInteger(item.expected_index) && item.expected_index >= 0) {
+    return `#${item.expected_index}`;
+  }
+  const numberKey = normalizeProblemNumberKey(item.problem_number);
+  if (!numberKey) return '';
+  return badgeCorner ? `${numberKey}|${badgeCorner}` : numberKey;
+}
+
+function expandSolutionRefRange(
+  problemNumber,
+  expectedNumbers,
+  expectedIndex,
+  raw,
+) {
   const range = parseProblemNumberRange(problemNumber);
-  if (!range || expectedNumbers.length === 0) return [];
+  if (!range) return [];
+  if (expectedIndex && expectedIndex.all.length > 0) {
+    return expandBadgeRange(range, expectedIndex, raw).map((candidate) => ({
+      number: candidate.number,
+      index: candidate.index,
+    }));
+  }
+  if (expectedNumbers.length === 0) return [];
   const out = [];
   for (const expected of expectedNumbers) {
     const n = parseSingleProblemNumber(expected);
     if (n == null || n < range.from || n > range.to) continue;
-    out.push(expected);
+    out.push({ number: expected, index: -1 });
   }
   return out;
-}
-
-function parseProblemNumberRange(input) {
-  const match = String(input || '')
-    .trim()
-    .match(/^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$/);
-  if (!match) return null;
-  const from = Number(match[1]);
-  const to = Number(match[2]);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return null;
-  return { from, to };
-}
-
-function parseSingleProblemNumber(input) {
-  const text = String(input || '').trim();
-  if (!/^\d+$/.test(text)) return null;
-  const n = Number(text);
-  return Number.isFinite(n) ? n : null;
-}
-
-function normalizeProblemNumberKey(input) {
-  const text = String(input || '').trim();
-  if (!text) return '';
-  const range = parseProblemNumberRange(text);
-  if (range) return `${range.from}-${range.to}`;
-  const compact = text.replace(/\s+/g, '');
-  // vlm_answer_client.js 의 같은 이름 함수와 규칙을 맞춘다. "2-1", "109-2",
-  // "개념확인105" 처럼 숫자 앞뒤 조각이 의미를 갖는 번호를 첫 숫자로 뭉개면
-  // 서로 다른 문항이 같은 키가 돼 해설 좌표가 하나만 남는다.
-  if (
-    /^\d+(?:[-\u2013\u2014~]\d+)+$/.test(compact) ||
-    /^[가-힣]+\d/.test(compact)
-  ) {
-    return compact
-      .replace(/[\u2013\u2014~]/g, '-')
-      .replace(/\d+/g, (digits) => String(Number(digits)));
-  }
-  const match = compact.match(/\d+/);
-  if (!match) return compact;
-  const n = Number(match[0]);
-  return Number.isFinite(n) ? `${n}` : compact;
 }
 
 function parseBbox4(arr) {

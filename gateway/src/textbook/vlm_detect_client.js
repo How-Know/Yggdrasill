@@ -304,13 +304,29 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   const conceptCheckPage = firstFiniteNumber(opts?.displayPage, opts?.rawPage);
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   let droppedLectureConceptNumbers = 0;
+  let gaeyuConceptCheckFixed = 0;
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
     const printedNumber = String(raw.number ?? '').trim();
     const label = normalizeDifficultyLabel(raw.label);
+    const gaeyuCategory = isGaeyu
+      ? resolveGaeyuCategory({
+          raw,
+          label,
+          printedNumber,
+          pageSection: out.section,
+        })
+      : '';
+    if (
+      isGaeyu &&
+      gaeyuCategory !== 'concept_check' &&
+      normalizeGaeyuCategory(raw, label) === 'concept_check'
+    ) {
+      gaeyuConceptCheckFixed += 1;
+    }
     const number = isGaeyu
       ? formatGaeyuNumber({
-          category: normalizeGaeyuCategory(raw, label),
+          category: gaeyuCategory,
           label,
           printedNumber,
           conceptCheckPage,
@@ -344,7 +360,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 개념서 단일 패스: 문항마다 카테고리를 붙인다. 모델이 category 를
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
     const category = isGaeyu
-      ? normalizeGaeyuCategory(raw, label)
+      ? gaeyuCategory
       : normalizeWonriCategory(raw, label, series);
     // 특강 예제는 배지에 "특강 01" 처럼 2자리 번호가 인쇄된다. 특강 개념
     // 페이지의 사각 박스 개념 번호(1, 2 같은 한 자리 수)를 모델이 특강
@@ -394,6 +410,25 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 걸러낸 개념 번호뿐이던 페이지는 개념 페이지로 되돌린다.
     if (out.items.length === 0 && out.page_kind === 'problem_page') {
       out.page_kind = 'concept_page';
+    }
+  }
+  if (gaeyuConceptCheckFixed > 0) {
+    const suffix = `gaeyu_concept_check_with_number_fixed=${gaeyuConceptCheckFixed}`;
+    out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+  }
+  if (isGaeyu) {
+    // 개념확인 번호는 지면 하나당 하나뿐이라 같은 지면에 둘이 나오면 키가
+    // 겹친다. 뒤엣것이 앞엣것을 조용히 덮어쓰지 않도록 꼬리표를 붙이고,
+    // 사람이 보고 지울 수 있게 notes 에 남긴다.
+    const conceptChecks = out.items.filter(
+      (item) => item.category === 'concept_check',
+    );
+    if (conceptChecks.length > 1) {
+      conceptChecks.forEach((item, index) => {
+        if (index > 0) item.number = `${item.number}-${index + 1}`;
+      });
+      const suffix = `gaeyu_concept_check_duplicated=${conceptChecks.length}`;
+      out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
     }
   }
   backfillWonriCategories(out, series);
@@ -492,6 +527,90 @@ function normalizeGaeyuCategory(raw, label) {
   if (GAEYU_ITEM_CATEGORIES.includes(value)) return value;
   if (GAEYU_DESCRIPTIVE_NUMBER_PREFIX[label]) return 'descriptive';
   return '';
+}
+
+function gaeyuCategoryFromBadge(raw) {
+  const badge = String(
+    raw?.badge_text ?? raw?.source_badge ?? raw?.corner_text ?? '',
+  )
+    .replace(/\s+/g, '')
+    .trim();
+  const style = String(raw?.badge_style ?? '').trim();
+  if (!badge) return '';
+  if (badge === '필수문제') return 'essential_problem';
+  // "참고" 캡슐이나 본문 속 '개념확인' 언급은 개념확인 문항이 아니다.
+  // 초록색 '개념' + 검정색 '확인'이 2줄로 들어간 전용 원형 배지가
+  // 확인된 경우에만 concept_check로 인정한다.
+  if (
+    badge === '개념확인' &&
+    style === 'concept_check_round_two_line'
+  ) {
+    return 'concept_check';
+  }
+  if (badge.includes('쏙쏙개념익히기')) return 'step_drill';
+  if (badge.includes('탄탄단원다지기')) return 'unit_drill';
+  if (badge.includes('쓱쓱서술형완성하기')) return 'descriptive';
+  if (badge.includes('한번더연습')) return 'extra_practice';
+  return '';
+}
+
+function hasGaeyuEssentialGroup(raw) {
+  const group = raw?.content_group;
+  if (!group || typeof group !== 'object') return false;
+  return [group.kind, group.label, group.title].some(
+    (value) => String(value ?? '').trim().length > 0,
+  );
+}
+
+// 개념확인 배지 옆에는 문항 번호가 인쇄되지 않는다. 그러니 번호가 찍혀 있는데
+// 모델이 concept_check 라고 했다면 같은 지면의 "필수 문제"(보라색 원 안 숫자)나
+// 따름 문제("1-1")를 잘못 읽은 것이다. 그대로 두면 번호가 "개념확인<페이지>" 로
+// 덮여 그 문항이 통째로 사라지고, 같은 지면에 개념확인이 하나 더 있으면 키까지
+// 겹쳐서 뒤 문항 번호가 전부 밀린다.
+function resolveGaeyuCategory({ raw, label, printedNumber, pageSection }) {
+  const category = normalizeGaeyuCategory(raw, label);
+  // 모델이 선택한 category보다 지면에 실제로 인쇄된 배지 원문을 우선한다.
+  // "필수 문제"를 읽고도 category만 concept_check로 잘못 고르는 경우를 막는다.
+  const badgeCategory = gaeyuCategoryFromBadge(raw);
+  if (badgeCategory) return badgeCategory;
+  if (category === 'concept_check') {
+    const badge = String(
+      raw?.badge_text ?? raw?.source_badge ?? raw?.corner_text ?? '',
+    )
+      .replace(/\s+/g, '')
+      .trim();
+    const style = String(raw?.badge_style ?? '').trim();
+    // 개념확인은 위치나 "참고" 내용으로 추측하지 않는다. 전용 배지가
+    // 검증되지 않았다면 가짜 개념확인 문항을 만드는 대신 버린다.
+    if (
+      badge !== '개념확인' ||
+      style !== 'concept_check_round_two_line'
+    ) {
+      if (hasGaeyuEssentialGroup(raw) || /\d/.test(printedNumber)) {
+        if (
+          GAEYU_ITEM_CATEGORIES.includes(pageSection) &&
+          pageSection !== 'concept_check'
+        ) {
+          return pageSection;
+        }
+        return 'essential_problem';
+      }
+      return '';
+    }
+  }
+  // 필수 문제만 유형명 그룹을 가진다. 모델이 번호와 배지 필드를 모두 놓쳐도
+  // 유형명은 읽은 경우가 많으므로 concept_check로 덮지 않는다.
+  if (category === 'concept_check' && hasGaeyuEssentialGroup(raw)) {
+    return 'essential_problem';
+  }
+  if (category !== 'concept_check' || !/\d/.test(printedNumber)) return category;
+  if (
+    GAEYU_ITEM_CATEGORIES.includes(pageSection) &&
+    pageSection !== 'concept_check'
+  ) {
+    return pageSection;
+  }
+  return 'essential_problem';
 }
 
 // 개념+유형 문항 번호를 저장용 키로 바꾼다.

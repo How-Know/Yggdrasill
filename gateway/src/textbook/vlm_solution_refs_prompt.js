@@ -6,11 +6,77 @@
 // 입력: 해설 PDF 의 한 페이지를 래스터한 PNG
 // 출력 규약: JSON only. 0..1000 정규화 [ymin, xmin, ymax, xmax].
 
+// 개념+유형 해설도 답지와 같은 코너 박스 구조라, 코너마다 번호가 1번부터
+// 다시 시작한다("필수 문제 4" 옆에 "STEP1 쏙쏙 개념 익히기"의 1~6 이 나란히
+// 있다). 번호만 주면 어느 코너의 몇 번인지 고를 수 없어서, 답지 프롬프트와
+// 같은 방식으로 코너·본문 페이지 배지를 함께 넘긴다.
+function buildConceptPlusSolutionRefRules(expectedEntries) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  return [
+    '',
+    '=== 개념+유형(개념플러스유형) 해설 전용 규칙 (최우선) ===',
+    '이 해설은 코너별 블록으로 나뉘고, 코너 제목 옆이나 블록 오른쪽 위에',
+    '"P.109" 같은 **본문 페이지 배지**가 붙는다. 코너 이름은 "개념 확인",',
+    '"필수 문제 ④", "3-1", "STEP1 쏙쏙 개념 익히기", "한번 더 연습",',
+    '"STEP2 탄탄 단원 다지기", "STEP3 쓱쓱 서술형 완성하기" 처럼 인쇄된다.',
+    '',
+    '[S1] 코너마다 번호가 1번부터 다시 시작한다. 번호만 보고 고르지 마라.',
+    '   반드시 (코너 이름 + 페이지 배지 + 번호) 세 가지가 모두 맞는 블록만 잡는다.',
+    '   기대 번호를 이 페이지에서 못 찾았으면 옆 코너의 같은 번호를 대신',
+    '   집어오지 말고 그냥 item 을 만들지 마라.',
+    '',
+    '[S2] 기대 번호 형식:',
+    '   - "개념확인111" → 배지 P.111 인 "개념 확인" 블록. 번호는 인쇄돼 있지 않다.',
+    '   - "7", "7-1", "7-2" → "필수 문제 ⑦" 과 그 아래 따름 문제 "7-1", "7-2".',
+    '   - "109-1" → 배지 P.109 인 "쏙쏙 개념 익히기"(또는 "한번 더 연습") 의 1번.',
+    '     앞자리는 본문 페이지이지 문항번호가 아니다. number_region 은 인쇄된',
+    '     "1" 만 감싼다.',
+    '   - "예제1", "유제1", "연습1" → "STEP3 쓱쓱 서술형 완성하기" 의 예제 1 /',
+    '     유제 1 / 연습해 보자 1.',
+    '',
+    '[S3] problem_number 는 해설에 찍힌 원문이 아니라 **기대 번호 문자열을 그대로**',
+    '   돌려줘라. 기대 번호 목록에 없는 문항은 아예 만들지 마라.',
+    '   이 규칙은 [R1] 의 "원문 그대로" 보다 우선한다.',
+    '',
+    '[S4] 배지는 "P.13" 처럼 한 쪽일 수도 있고 "P.12~13" 처럼 여러 쪽을 덮기도',
+    '   한다. 상세표의 배지가 그 **범위 안에 들어가면 일치**로 본다. 범위 배지',
+    '   블록 안의 번호는 쪽마다 끊기지 않고 1번부터 끝번호까지 이어지므로,',
+    '   그 범위에 걸린 상세표 문항은 하나도 빠뜨리지 말고 전부 만들어라.',
+    '',
+    '[S5] 같은 problem_number 가 상세표에 여러 줄 있는 것은 정상이다. 코너마다',
+    '   번호가 1번부터 다시 시작하므로 "1" 이 필수 문제·쏙쏙·탄탄에 각각 있다.',
+    '   줄마다 item 을 따로 만들고 source_corner 로 구분하라. 번호가 같다고',
+    '   하나로 합치거나 뒤 줄을 건너뛰면 그 문항의 해설 좌표가 빈다.',
+    '',
+    '[S6] item 마다 실제로 읽은 블록을 source_* 에 적어라.',
+    '   source_page 는 배지의 시작 쪽, source_page_end 는 끝 쪽이다',
+    '   ("P.13" → 13/13, "P.12~13" → 12/13). source_corner 는 코너 이름이다.',
+    '   검산용이므로 상세표에 맞추려고 지어내지 말고 보이는 대로 적어라.',
+    ...(rows.length
+      ? [
+          '',
+          '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+          '각 줄은 "돌려줄 problem_number | 찾을 코너 | 본문 페이지 배지" 이다.',
+          ...rows.map((e) => {
+            const corner = e.corner ? `코너="${e.corner}"` : '코너=미상';
+            const page = e.page ? `배지=P.${e.page}` : '배지=미상';
+            return `- problem_number="${e.number}" | ${corner} | ${page}`;
+          }),
+        ]
+      : []),
+  ];
+}
+
 export function buildDetectSolutionRefsPrompt({
   rawPage,
   displayPage,
   expectedNumbers,
+  expectedEntries,
+  series,
 }) {
+  const isConceptPlus = String(series || '').trim().toLowerCase() === 'gaeyu';
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 해설 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -42,6 +108,7 @@ export function buildDetectSolutionRefsPrompt({
     pageLine,
     '',
     ...expectedBlock,
+    ...(isConceptPlus ? buildConceptPlusSolutionRefRules(expectedEntries) : []),
     '',
     '=== 출력 스키마 ===',
     '{',
@@ -50,6 +117,13 @@ export function buildDetectSolutionRefsPrompt({
     '      "problem_number": "<원문 그대로. 예: \\"0001\\", \\"12\\", \\"48~52\\">",',
     '      "number_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
     '      "content_region": [<ymin>, <xmin>, <ymax>, <xmax>] | null',
+    ...(isConceptPlus
+      ? [
+          '      ,"source_corner": "<이 해설이 실린 블록의 코너 이름 (본 그대로)>",',
+          '      "source_page": <그 블록 배지의 시작 쪽. "P.12~13" 이면 12>,',
+          '      "source_page_end": <그 배지의 끝 쪽. "P.13" 이면 13, "P.12~13" 이면 13>',
+        ]
+      : []),
     '    }',
     '  ],',
     '  "notes": "<특이사항 간단히, 없으면 빈 문자열>"',

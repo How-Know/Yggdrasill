@@ -21,6 +21,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { callGeminiWithPdf } from './client.js';
 import { normalizeVlmQuestion, buildRowUpdate } from './writeback.js';
+import { normalizeProblemNumberKey } from '../../../textbook/problem_number_key.js';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -41,9 +42,12 @@ function parsePositiveInt(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// 답지·해설 매칭과 **같은** 규칙을 쓴다. 예전에는 여기만 정수 파싱이라
+// "개념확인8"·"예제1" 이 NaN 으로 떨어져 기대 목록이 비었고, 개념+유형의
+// 개념확인(A)·쓱쓱(E) 런이 vlm_textbook_crop_scope_empty 로 죽었다.
+// "1-1"(따름 문제)이 "1" 로 뭉개져 대표 문항에 덮이는 문제도 같은 원인이다.
 function problemNumberKey(v) {
-  const n = Number.parseInt(String(v ?? '').trim(), 10);
-  return Number.isFinite(n) && n > 0 ? String(n) : '';
+  return normalizeProblemNumberKey(v);
 }
 
 function stableShortHash(value) {
@@ -472,6 +476,71 @@ function foundQuestionNumbers(questions) {
     .filter(Boolean);
 }
 
+// 개념+유형의 개념확인은 지면에 번호가 없다. 기대 번호는 충돌 방지를 위해
+// "개념확인89"처럼 본문 페이지를 붙이지만, 모델이 보이는 배지 그대로
+// "개념확인"만 반환하는 경우가 있다. 같은 접두어를 가진 기대 번호와 모델 행이
+// 각각 하나뿐일 때만 그 행을 기대 번호로 보정한다. 숫자 문항이나 후보가 여러
+// 개인 경우에는 추측하지 않는다.
+function alignUniquePrefixedQuestionNumbers(questions, expectedNumbers) {
+  const rows = Array.isArray(questions) ? questions : [];
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((number) => compact(number)).filter(Boolean)
+    : [];
+  if (rows.length === 0 || expected.length === 0) return rows;
+
+  const foundKeys = new Set(
+    rows
+      .map((question) => problemNumberKey(question?.question_number))
+      .filter(Boolean),
+  );
+  const missingByPrefix = new Map();
+  for (const number of expected) {
+    if (foundKeys.has(problemNumberKey(number))) continue;
+    const match = number.replace(/\s+/g, '').match(/^([^\d]+)\d+(?:-\d+)?$/);
+    const prefix = compact(match?.[1] || '');
+    if (!prefix) continue;
+    const candidates = missingByPrefix.get(prefix) || [];
+    candidates.push(number);
+    missingByPrefix.set(prefix, candidates);
+  }
+
+  const rowIndexesByPrefix = new Map();
+  rows.forEach((question, index) => {
+    const number = compact(question?.question_number);
+    if (!number || /\d/.test(number)) return;
+    const indexes = rowIndexesByPrefix.get(number) || [];
+    indexes.push(index);
+    rowIndexesByPrefix.set(number, indexes);
+  });
+
+  const replacements = new Map();
+  for (const [prefix, numbers] of missingByPrefix.entries()) {
+    const indexes = rowIndexesByPrefix.get(prefix) || [];
+    if (numbers.length === 1 && indexes.length === 1) {
+      replacements.set(indexes[0], numbers[0]);
+    }
+  }
+  if (replacements.size === 0) return rows;
+
+  return rows.map((question, index) => {
+    const number = replacements.get(index);
+    if (!number) return question;
+    return {
+      ...(question || {}),
+      question_number: number,
+      original_question_number: compact(question?.question_number),
+      uncertain_fields: Array.from(
+        new Set([
+          ...(Array.isArray(question?.uncertain_fields)
+            ? question.uncertain_fields
+            : []),
+          'question_number',
+        ]),
+      ),
+    };
+  });
+}
+
 function alignQuestionNumbersByExpectedOrder(questions, expectedNumbers) {
   const rows = Array.isArray(questions) ? questions : [];
   const expected = Array.isArray(expectedNumbers)
@@ -793,6 +862,22 @@ async function callGeminiChunkWithRetry({
       let chunkQuestions = Array.isArray(result?.parsedJson?.questions)
         ? result.parsedJson.questions
         : [];
+      const prefixAlignedQuestions = alignUniquePrefixedQuestionNumbers(
+        chunkQuestions,
+        input.expectedQuestionNumbers,
+      );
+      if (prefixAlignedQuestions !== chunkQuestions) {
+        result.parsedJson.questions = prefixAlignedQuestions;
+        chunkQuestions = prefixAlignedQuestions;
+        if (typeof log === 'function') {
+          log('vlm_chunk_prefixed_question_number_aligned', {
+            chunkIndex: input.chunkIndex,
+            totalChunks: input.totalChunks,
+            pageRange: input.pageRange,
+            expectedHead: (input.expectedQuestionNumbers || []).slice(0, 8),
+          });
+        }
+      }
       let missingExpected = missingExpectedQuestionNumbers(
         chunkQuestions,
         input.expectedQuestionNumbers,
@@ -1292,6 +1377,38 @@ function buildDefaultPdfFigureLayout(assets) {
   return { version: 1, items, groups };
 }
 
+// 문항번호를 "숫자 조각 + 접두어" 로 쪼개 지면 순서대로 비교한다.
+//
+// 정수 파싱 하나로는 개념+유형의 번호를 줄 세울 수 없다. "예제1"·"유제1" 은
+// NaN 이 되고, "1"·"1-1"(따름 문제)은 둘 다 1 이라 순서가 DB 반환 순서에
+// 좌우된다. 기대 목록의 순서는 모델이 번호를 못 읽었을 때 순서대로 다시
+// 붙이는 근거가 되므로, 어긋나면 엉뚱한 문항에 답이 들어간다.
+//
+//   "1" < "1-1" < "1-2" < "2"        따름 문제는 대표 문항 바로 뒤.
+//   "예제1" < "유제1" < "예제2"        지면이 예제/유제를 한 줄씩 짝지어 싣는다.
+//   "개념확인8" < "개념확인9"
+function problemNumberSortKey(value) {
+  const text = String(value || '').trim();
+  return {
+    numbers: (text.match(/\d+/g) || []).map((digits) => Number(digits)),
+    text,
+  };
+}
+
+function compareProblemNumbers(a, b) {
+  const ka = problemNumberSortKey(a);
+  const kb = problemNumberSortKey(b);
+  const len = Math.max(ka.numbers.length, kb.numbers.length);
+  for (let i = 0; i < len; i += 1) {
+    const na = ka.numbers[i];
+    const nb = kb.numbers[i];
+    if (na === undefined) return -1;
+    if (nb === undefined) return 1;
+    if (na !== nb) return na - nb;
+  }
+  return ka.text.localeCompare(kb.text, 'ko');
+}
+
 function expectedQuestionNumbersForInput(cropPagesByNumber, input) {
   if (!(cropPagesByNumber instanceof Map) || cropPagesByNumber.size === 0) {
     return [];
@@ -1306,10 +1423,7 @@ function expectedQuestionNumbersForInput(cropPagesByNumber, input) {
   rows.sort((a, b) => {
     const pageDelta = Number(a.rawPage || 0) - Number(b.rawPage || 0);
     if (pageDelta !== 0) return pageDelta;
-    return (
-      Number.parseInt(String(a.problemNumber || ''), 10) -
-      Number.parseInt(String(b.problemNumber || ''), 10)
-    );
+    return compareProblemNumbers(a.problemNumber, b.problemNumber);
   });
   return rows.map((row) => row.problemNumber).filter(Boolean);
 }
@@ -1744,6 +1858,8 @@ export async function runVlmExtraction({
 }
 
 export {
+  alignUniquePrefixedQuestionNumbers,
+  expectedQuestionNumbersForInput,
   fetchTextbookAnswerSidecars,
   fetchTextbookCropPages,
   normalizedTextbookSubIndex,

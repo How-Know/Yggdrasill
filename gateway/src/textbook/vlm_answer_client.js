@@ -9,6 +9,17 @@ import {
   joinGeminiTextParts,
   parseTextbookVlmJson,
 } from './vlm_json_parse.js';
+import {
+  buildExpectedIndex,
+  canonicalCorner,
+  expandBadgeRange,
+  resolveExpectedBox,
+} from './vlm_corner_guard.js';
+import {
+  normalizeProblemNumberKey,
+  parseProblemNumberRange,
+  parseSingleProblemNumber,
+} from './problem_number_key.js';
 
 const ANSWER_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ANSWER_DEFAULT_MAX_RETRIES = 3;
@@ -292,12 +303,24 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
   const expectedNumbers = Array.isArray(opts?.expectedNumbers)
     ? opts.expectedNumbers.map((n) => String(n || '').trim()).filter(Boolean)
     : [];
+  const expectedIndex = buildExpectedIndex(
+    opts?.expectedEntries,
+    normalizeProblemNumberKey,
+  );
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   const seen = new Set();
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
     let problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
+    const resolved = resolveExpectedBox(
+      raw,
+      problemNumber,
+      expectedIndex,
+      normalizeProblemNumberKey,
+    );
+    if (resolved.reject) continue;
+    const badgeCorner = canonicalCorner(raw.source_corner ?? raw.sourceCorner);
     const kindRaw = String(raw.kind ?? '').trim().toLowerCase();
     let rawAnswerText = normalizeAnswerText(raw.answer_text);
     const subNumberMatch = problemNumber.match(/^(\d{1,5})\s*(\([0-9]+\))$/);
@@ -339,76 +362,72 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
       bbox,
       answer_assets: answerAssets,
     };
-    pushUniqueAnswerItem(out.items, seen, base);
-    for (const expanded of expandAnswerRange(problemNumber, expectedNumbers)) {
-      pushUniqueAnswerItem(out.items, seen, {
-        ...base,
-        problem_number: expanded,
-      });
+    if (resolved.matched) {
+      // 앱은 번호가 아니라 이 위치로 크롭을 찾는다. 같은 번호가 여러 코너에
+      // 있어도 서로 덮어쓰지 않는 유일한 방법이다.
+      base.expected_index = resolved.matched.index;
+      base.problem_number = resolved.matched.number;
+    }
+    pushUniqueAnswerItem(out.items, seen, base, badgeCorner);
+    for (const expanded of expandAnswerRange(
+      problemNumber,
+      expectedNumbers,
+      expectedIndex,
+      raw,
+    )) {
+      pushUniqueAnswerItem(
+        out.items,
+        seen,
+        {
+          ...base,
+          problem_number: expanded.number,
+          ...(expanded.index >= 0 ? { expected_index: expanded.index } : {}),
+        },
+        badgeCorner,
+      );
     }
   }
   return out;
 }
 
-function pushUniqueAnswerItem(items, seen, item) {
-  const key = normalizeProblemNumberKey(item.problem_number);
+function pushUniqueAnswerItem(items, seen, item, badgeCorner = '') {
+  const key = answerDedupKey(item, badgeCorner);
   if (!key || seen.has(key)) return;
   seen.add(key);
   items.push(item);
 }
 
-function expandAnswerRange(problemNumber, expectedNumbers) {
+/// 한 지면 응답 안에서 중복을 걸러낼 키.
+///
+/// 번호만 쓰면 같은 쪽에 나란히 인쇄된 "필수 문제 1" 과 "쏙쏙 1" 중 하나가
+/// 통째로 버려진다. 기대 항목이 특정됐으면 그 위치가 가장 정확한 키이고,
+/// 아니면 코너를 함께 묶는다.
+function answerDedupKey(item, badgeCorner) {
+  if (Number.isInteger(item.expected_index) && item.expected_index >= 0) {
+    return `#${item.expected_index}`;
+  }
+  const numberKey = normalizeProblemNumberKey(item.problem_number);
+  if (!numberKey) return '';
+  return badgeCorner ? `${numberKey}|${badgeCorner}` : numberKey;
+}
+
+function expandAnswerRange(problemNumber, expectedNumbers, expectedIndex, raw) {
   const range = parseProblemNumberRange(problemNumber);
-  if (!range || expectedNumbers.length === 0) return [];
+  if (!range) return [];
+  if (expectedIndex && expectedIndex.all.length > 0) {
+    return expandBadgeRange(range, expectedIndex, raw).map((candidate) => ({
+      number: candidate.number,
+      index: candidate.index,
+    }));
+  }
+  if (expectedNumbers.length === 0) return [];
   const out = [];
   for (const expected of expectedNumbers) {
     const n = parseSingleProblemNumber(expected);
     if (n == null || n < range.from || n > range.to) continue;
-    out.push(expected);
+    out.push({ number: expected, index: -1 });
   }
   return out;
-}
-
-function parseProblemNumberRange(input) {
-  const match = String(input || '')
-    .trim()
-    .match(/^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$/);
-  if (!match) return null;
-  const from = Number(match[1]);
-  const to = Number(match[2]);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return null;
-  return { from, to };
-}
-
-function parseSingleProblemNumber(input) {
-  const text = String(input || '').trim();
-  if (!/^\d+$/.test(text)) return null;
-  const n = Number(text);
-  return Number.isFinite(n) ? n : null;
-}
-
-function normalizeProblemNumberKey(input) {
-  const text = String(input || '').trim();
-  if (!text) return '';
-  const range = parseProblemNumberRange(text);
-  if (range) return `${range.from}-${range.to}`;
-  const compact = text.replace(/\s+/g, '');
-  // "2-1"(따름 문제), "109-2"(블록 접두어), "개념확인105", "예제1" 처럼 숫자
-  // 앞뒤에 의미 있는 조각이 붙는 번호는 통째로 키에 남긴다. 첫 숫자만 남기면
-  // "2-1"→"2", "109-1"/"109-2"→"109" 이 돼서 서로 다른 문항이 같은 키가 되고,
-  // 중복 제거 단계에서 뒤에 온 정답이 통째로 버려진다.
-  if (
-    /^\d+(?:[-\u2013\u2014~]\d+)+$/.test(compact) ||
-    /^[가-힣]+\d/.test(compact)
-  ) {
-    return compact
-      .replace(/[\u2013\u2014~]/g, '-')
-      .replace(/\d+/g, (digits) => String(Number(digits)));
-  }
-  const match = compact.match(/\d+/);
-  if (!match) return compact;
-  const n = Number(match[0]);
-  return Number.isFinite(n) ? `${n}` : compact;
 }
 
 function parseBbox4(arr) {

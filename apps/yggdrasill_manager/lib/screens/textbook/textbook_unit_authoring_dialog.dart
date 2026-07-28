@@ -841,6 +841,8 @@ class _TextbookUnitAuthoringDialogState
           state.pageResults
             ..clear()
             ..addAll(_pageRowsFromSavedCrops(entry.value, focus));
+          // 서버에서 읽어 온 것이지 이번에 올린 게 아니다.
+          state.dirty = false;
           state.phase = '저장된 영역 ${entry.value.length}건';
           state.error = null;
         }
@@ -1711,6 +1713,12 @@ class _TextbookUnitAuthoringDialogState
     if (doc == null) return;
     final state = _ensureSubState(focus);
     if (state.running) return;
+    final savedStageStatus = _isWonriRowFocus(focus)
+        ? _wonriRowStageStatus(focus)
+        : _stageStatusBySub[_stateKeyFor(focus)];
+    final hadSavedExtraction =
+        (state.uploadResult?.rows ?? const <dynamic>[]).isNotEmpty ||
+            ((savedStageStatus?.bodyTotal ?? 0) > 0);
     final expectedStartNumber = await _expectedStartNumberForFocus(focus);
     // Wipe prior manual edits for this sub before re-analysing — once the
     // VLM items change index the old keys can silently point at the wrong
@@ -1730,6 +1738,7 @@ class _TextbookUnitAuthoringDialogState
       state.phase = '페이지 렌더링/분석 중...';
       state.error = null;
       state.uploadResult = null;
+      state.resetBeforeUpload = hadSavedExtraction;
       _selectedProblemKey = null;
     });
 
@@ -1821,10 +1830,11 @@ class _TextbookUnitAuthoringDialogState
         },
       );
       if (!mounted) return;
-      if (_seriesKey == 'wonri') _applyScopeGuards(focus);
+      if (_currentSeries().hasSubUnitRows) _applyScopeGuards(focus);
       final typeGroupError = _requiredTypeGroupError(focus, state);
       setState(() {
         state.running = false;
+        state.dirty = true;
         state.error = finalProgress.lastError ?? typeGroupError;
         state.phase = finalProgress.failed > 0
             ? '일부 실패'
@@ -1948,10 +1958,11 @@ class _TextbookUnitAuthoringDialogState
         },
       );
       if (!mounted) return;
-      if (_seriesKey == 'wonri') _applyScopeGuards(focus);
+      if (_currentSeries().hasSubUnitRows) _applyScopeGuards(focus);
       final typeGroupError = _requiredTypeGroupError(focus, state);
       setState(() {
         state.running = false;
+        state.dirty = true;
         state.error = finalProgress.lastError ?? typeGroupError;
         state.phase = finalProgress.failed > 0
             ? '재분석 일부 실패'
@@ -1977,6 +1988,8 @@ class _TextbookUnitAuthoringDialogState
       final row = _wonriRowFor(focus);
       if (row == null || row.isExercise) return;
       guarded = _guardWonriRowsBeforeConceptDrillHeader(state.pageResults);
+    } else if (_seriesKey == 'gaeyu') {
+      guarded = _guardGaeyuExtraPracticeContinuation(state.pageResults);
     } else {
       // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
       if (focus.subKey != 'A') return;
@@ -2038,6 +2051,85 @@ class _TextbookUnitAuthoringDialogState
         const <TextbookVlmItem>[],
         row.items.length,
         reason: 'wonri_before_concept_drill_header_filtered',
+      ));
+    }
+    return out;
+  }
+
+  /// 개념+유형 "한 번 더 연습"(F) 오인식 되돌리기.
+  ///
+  /// 한 번 더 연습은 상단에 초록색 코너 배지를 달고 자기 지면을 차지하며,
+  /// 번호가 **1번부터** 다시 시작한다. 반면 쏙쏙 개념 익히기 문항 옆에 붙는
+  /// 초록색 "한번더 +1" 배지는 같은 번호를 잇는 쌍둥이 문항 표시일 뿐이다.
+  /// 코너 배지가 없는 쏙쏙 이어지는 지면(예: 6~10번)에 이 배지가 하나라도
+  /// 있으면 모델이 지면 전체를 F 로 넘겨 버리는데, 그러면 정답 파일의
+  /// "쏙쏙 개념 익히기" 박스와 매칭이 어긋나고 같은 문항이 C/F 양쪽에 남는다.
+  ///
+  /// 그래서 번호가 1이 아니라 직전 쏙쏙 번호에서 그대로 이어지면 쏙쏙으로
+  /// 되돌린다. 진짜 한 번 더 연습 지면은 1번부터라 여기 걸리지 않는다.
+  List<_PageAnalysisRow> _guardGaeyuExtraPracticeContinuation(
+    List<_PageAnalysisRow> rows,
+  ) {
+    int? printedNumber(TextbookVlmItem item) {
+      final digits = RegExp(r'\d+').firstMatch(item.number);
+      return digits == null ? null : int.tryParse(digits[0]!);
+    }
+
+    final order = rows.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    final reclassified = <int>{};
+    int? lastStepNumber;
+    for (final row in order) {
+      final categories = [
+        for (final item in row.items) _wonriCategoryOfItem(item, row.section),
+      ];
+      final extraNumbers = <int>[];
+      final stepNumbers = <int>[];
+      for (var i = 0; i < row.items.length; i += 1) {
+        final number = printedNumber(row.items[i]);
+        if (number == null) continue;
+        if (categories[i] == 'extra_practice') extraNumbers.add(number);
+        if (categories[i] == 'step_drill') stepNumbers.add(number);
+      }
+      final continues = extraNumbers.isNotEmpty &&
+          lastStepNumber != null &&
+          extraNumbers.reduce((a, b) => a < b ? a : b) == lastStepNumber + 1;
+      if (continues) {
+        reclassified.add(row.rawPage);
+        stepNumbers.addAll(extraNumbers);
+      }
+      for (final number in stepNumbers) {
+        if (lastStepNumber == null || number > lastStepNumber) {
+          lastStepNumber = number;
+        }
+      }
+    }
+    if (reclassified.isEmpty) return rows;
+
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      if (!reclassified.contains(row.rawPage)) {
+        out.add(row);
+        continue;
+      }
+      var moved = 0;
+      final items = <TextbookVlmItem>[];
+      for (final item in row.items) {
+        if (_wonriCategoryOfItem(item, row.section) == 'extra_practice') {
+          moved += 1;
+          items.add(item.withCategory('step_drill'));
+        } else {
+          items.add(item);
+        }
+      }
+      out.add(_PageAnalysisRow.success(
+        rawPage: row.rawPage,
+        displayPage: row.displayPage,
+        section: row.section == 'extra_practice' ? 'step_drill' : row.section,
+        pageKind: row.pageKind,
+        conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
+        notes: _appendGuardNote(row.notes, 'gaeyu_extra_practice_kept=$moved'),
+        items: items,
       ));
     }
     return out;
@@ -2329,6 +2421,38 @@ class _TextbookUnitAuthoringDialogState
     return total;
   }
 
+  Future<void> _resetSavedExtractionBeforeUpload(
+    _SubFocus focus,
+    _SubRunState state,
+  ) async {
+    if (!state.resetBeforeUpload) return;
+    final scope = _stageScopePayload(focus);
+    setState(() {
+      state.phase = '기존 추출 문서·정답·해설 초기화 중...';
+      state.error = null;
+    });
+    final result = await _pdfService.deleteStageData(
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      gradeLabel: widget.gradeLabel,
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      subKey: focus.subKey,
+      subIndex: (scope['sub_index'] as num?)?.toInt() ?? 0,
+      stage: 'body',
+      scopeKind: scope['scope_kind']?.toString(),
+      unitRowIndex: (scope['unit_row_index'] as num?)?.toInt(),
+      bodyStartPage: (scope['body_start_page'] as num?)?.toInt(),
+      bodyEndPage: (scope['body_end_page'] as num?)?.toInt(),
+    );
+    if (result.warnings.isNotEmpty) {
+      debugPrint('[textbook-reextract-reset] warnings: ${result.warnings}');
+    }
+    state.resetBeforeUpload = false;
+    state.uploadResult = null;
+    await _loadStageStatuses();
+  }
+
   Future<void> _uploadFocused(_SubFocus focus) async {
     final state = _ensureSubState(focus);
     if (state.running || state.uploading) return;
@@ -2336,6 +2460,17 @@ class _TextbookUnitAuthoringDialogState
     final typeGroupError = _requiredTypeGroupError(focus, state);
     if (typeGroupError != null) {
       _toast(typeGroupError, error: true);
+      return;
+    }
+    try {
+      await _resetSavedExtractionBeforeUpload(focus, state);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        state.error = '$e';
+        state.phase = '기존 추출 초기화 실패';
+      });
+      _toast('기존 추출 초기화 실패: $e', error: true);
       return;
     }
     if (_isWonriRowFocus(focus)) {
@@ -2415,6 +2550,7 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         state.uploading = false;
+        state.dirty = false;
         state.uploadResult = result;
         state.phase = '영역 저장 완료 · ${result.upserted}/${items.length}건';
       });
@@ -2610,41 +2746,77 @@ class _TextbookUnitAuthoringDialogState
         upserted += result.upserted;
         allRows.addAll(result.rows);
       }
-      final analyzedRawPages =
-          pageRows.map((row) => row.rawPage).where((page) => page > 0);
-      for (final subKey in subKeys) {
-        deletedStale += await _cropUploader.syncCropScope(
-          academyId: widget.academyId,
-          bookId: widget.bookId,
-          gradeLabel: widget.gradeLabel,
-          bigOrder: focus.bigIndex,
-          midOrder: focus.midIndex,
-          subKey: subKey,
-          subIndex: _conceptPerSubUnitKeys.contains(subKey) ? wonriIndex : 0,
-          rawPages: analyzedRawPages,
-          keepProblemNumbers:
-              (itemsBySubKey[subKey] ?? const <TextbookCropUploadItem>[])
-                  .map((item) => item.problemNumber),
-        );
-      }
+      // 여기까지 왔으면 영역은 이미 서버에 들어갔다. 아래 범위 정리는 뒷정리라
+      // 실패하더라도 저장 결과를 버리면 안 된다. 예전에는 정리 단계의 예외가
+      // uploadResult 를 비워서, 다 저장해 놓고도 "영역 저장 실패" 로 보였다.
       if (!mounted) return;
-      final skippedNote =
-          skippedNoCategory > 0 ? ' · 카테고리 미상 $skippedNoCategory건 제외' : '';
-      final deletedNote = deletedStale > 0 ? ' · 기존 오인식 $deletedStale건 삭제' : '';
       setState(() {
         state.uploading = false;
+        state.dirty = false;
         state.uploadResult = TextbookCropBatchResult(
           upserted: upserted,
           bucket: 'textbook-crops',
           rows: allRows,
         );
-        state.phase =
-            '영역 저장 완료 · $upserted/$totalItems건$skippedNote$deletedNote';
+      });
+
+      final analyzedRawPages =
+          pageRows.map((row) => row.rawPage).where((page) => page > 0);
+      final protectedNumbers = <String>[];
+      String? syncError;
+      for (final subKey in subKeys) {
+        try {
+          final sync = await _cropUploader.syncCropScope(
+            academyId: widget.academyId,
+            bookId: widget.bookId,
+            gradeLabel: widget.gradeLabel,
+            bigOrder: focus.bigIndex,
+            midOrder: focus.midIndex,
+            subKey: subKey,
+            subIndex: _conceptPerSubUnitKeys.contains(subKey) ? wonriIndex : 0,
+            rawPages: analyzedRawPages,
+            keepProblemNumbers:
+                (itemsBySubKey[subKey] ?? const <TextbookCropUploadItem>[])
+                    .map((item) => item.problemNumber),
+          );
+          deletedStale += sync.deleted;
+          protectedNumbers.addAll(sync.protectedNumbers);
+        } catch (e) {
+          syncError ??= '$e';
+        }
+      }
+      if (!mounted) return;
+      final skippedNote =
+          skippedNoCategory > 0 ? ' · 카테고리 미상 $skippedNoCategory건 제외' : '';
+      final deletedNote = deletedStale > 0 ? ' · 기존 오인식 $deletedStale건 삭제' : '';
+      final protectedNote = protectedNumbers.isEmpty
+          ? ''
+          : ' · 문제은행 연결 ${protectedNumbers.length}건 남김';
+      setState(() {
+        state.error = syncError;
+        state.phase = '영역 저장 완료 · $upserted/$totalItems건'
+            '$skippedNote$deletedNote$protectedNote';
       });
       _toast(
         '${_subFocusLabel(focus)} 영역 $upserted건 저장'
         '${deletedStale > 0 ? ' · 오인식 $deletedStale건 삭제' : ''}',
       );
+      if (protectedNumbers.isNotEmpty) {
+        // 재분류로 옛 crop 이 필요 없어졌는데 이미 문제은행 문항이 붙어 있는
+        // 경우다. 문항을 말없이 지울 수는 없으니 어떤 번호인지 알려준다.
+        final preview = protectedNumbers.take(8).join(', ');
+        final more = protectedNumbers.length > 8
+            ? ' 외 ${protectedNumbers.length - 8}건'
+            : '';
+        _toast(
+          '옛 분류로 남은 $preview$more 은(는) 이미 문제은행에 올라가 있어 지우지 '
+          '않았습니다. 문제은행에서 삭제한 뒤 다시 저장하세요.',
+          error: true,
+        );
+      }
+      if (syncError != null) {
+        _toast('범위 정리 실패(영역 저장은 완료): $syncError', error: true);
+      }
       unawaited(_loadStageStatuses());
 
       // 특강(E) 크롭이 새로 저장됐으면 정규화 특강 소단원을 재동기화한다.
@@ -2671,10 +2843,14 @@ class _TextbookUnitAuthoringDialogState
       }
     } catch (e) {
       if (!mounted) return;
+      // 영역이 이미 올라간 뒤라면 뒤따르는 본문 정답·풀이 추출이 실패해도
+      // 저장을 되돌리지 않는다. 여기서 phase 를 실패로 덮으면 다음 단계가
+      // 저장이 안 된 줄 알고 멈춘다.
+      final saved = (state.uploadResult?.rows ?? const []).isNotEmpty;
       setState(() {
         state.uploading = false;
         state.error = '$e';
-        state.phase = '영역 저장 실패';
+        if (!saved) state.phase = '영역 저장 실패';
       });
     }
   }
@@ -3127,10 +3303,18 @@ class _TextbookUnitAuthoringDialogState
 
   Future<void> _saveTargetsAndOpenStage(List<_SubFocus> targets) async {
     if (targets.isEmpty) return;
+    var saved = 0;
+    var reused = 0;
     for (final focus in targets) {
       final state = _ensureSubState(focus);
       final hasRows = (state.uploadResult?.rows ?? const []).isNotEmpty;
-      if (hasRows) continue;
+      // 이번에 분석·수정한 게 없고 서버 결과가 이미 있으면 그대로 쓴다.
+      // dirty 를 안 보고 hasRows 만 보면, 다이얼로그를 열 때 복원한 옛 크롭
+      // 때문에 방금 다시 분석한 결과를 올리지 않고 넘어가 버린다.
+      if (hasRows && !state.dirty) {
+        reused += 1;
+        continue;
+      }
       if (_totalRegionsFor(state, focus) == 0) {
         _toast('${_subFocusLabel(focus)} 분석된 문항 영역이 없습니다', error: true);
         return;
@@ -3142,14 +3326,23 @@ class _TextbookUnitAuthoringDialogState
         _batchStatus = '${_subFocusLabel(focus)} · 다음 단계 진입 전 영역 저장 중...';
       });
       await _uploadFocused(focus);
-      if ((state.uploadResult?.rows ?? const []).isEmpty) {
-        _toast('${_subFocusLabel(focus)} 영역 저장 실패', error: true);
+      if ((state.uploadResult?.rows ?? const []).isEmpty || state.dirty) {
+        _toast(
+          '${_subFocusLabel(focus)} 영역 저장 실패'
+          '${state.error == null ? '' : ' · ${state.error}'}',
+          error: true,
+        );
         return;
       }
+      saved += 1;
     }
     if (!mounted) return;
     setState(() {
-      _batchStatus = '영역 저장 완료 · 정답 VLM 단계로 이동합니다';
+      _batchStatus = saved > 0
+          ? '영역 저장 $saved개'
+              '${reused > 0 ? ' · 저장돼 있던 $reused개는 그대로 사용' : ''}'
+              ' · 정답 VLM 단계로 이동합니다'
+          : '저장된 영역 $reused개를 그대로 사용해 정답 VLM 단계로 이동합니다';
     });
     _openStageDialogForTargets(targets);
   }
@@ -3168,9 +3361,8 @@ class _TextbookUnitAuthoringDialogState
       }
       allSeeds.addAll(seeds);
       if (_isWonriRowFocus(focus)) {
-        // 개념원리: 소단원 하나가 카테고리 스코프(A/C/D) 여러 개로 전개된다.
-        // 필수유형(B)은 본문 체이닝으로 정답·풀이가 이미 저장돼 제외.
-        for (final scope in _wonriStageScopesFor(focus)) {
+        // 개념서: 소단원 하나가 카테고리 스코프 여러 개로 전개된다.
+        for (final scope in _wonriStageScopesFor(focus, seeds)) {
           // A/C/D는 sub_key를 중단원 전체가 공유한다. 실제 소단원 행까지
           // 포함해야 뒤 소단원의 정답·해설 범위가 중복으로 버려지지 않는다.
           final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}/'
@@ -3182,11 +3374,6 @@ class _TextbookUnitAuthoringDialogState
         final scope = _stageScopeFor(focus);
         final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}';
         if (scopeKeys.add(key)) scopes.add(scope);
-      }
-      if (_runProblemExtractionAfterStage1) {
-        unawaited(_startPdfOnlyExtractForFocus(focus).catchError((Object e) {
-          debugPrint('[textbook-pb-extract] start failed: $e');
-        }));
       }
     }
     if (scopes.isEmpty) {
@@ -3210,21 +3397,37 @@ class _TextbookUnitAuthoringDialogState
         answerEndPage: scopes.first.answerEndPage,
         solutionStartPage: scopes.first.solutionStartPage,
         solutionEndPage: scopes.first.solutionEndPage,
+        onStartProblemExtraction: !_runProblemExtractionAfterStage1
+            ? null
+            : () async {
+                for (final focus in targets) {
+                  await _startPdfOnlyExtractForFocus(focus);
+                }
+                unawaited(_loadPbExtractRuns());
+              },
       );
     });
   }
 
-  /// 개념원리 소단원 포커스 → 정답·해설 단계 스코프 목록.
-  /// 업로드된 카테고리 중 A(익히기)/C(확인체크)/D(연습문제)만 전개하고,
+  /// 개념서 소단원 포커스 → 정답·해설 단계 스코프 목록.
+  ///
   /// 정답·해설 시작 페이지는 **소단원 행**에서 입력한 하나의 값을 공유한다
   /// (쎈은 소단원=A/B/C 이지만 개념서는 소단원 안에 카테고리가 섞여 있어
-  /// 소단원 단위로 한 번만 입력받는다). B(필수유형)는 본문 '풀이' 체이닝으로
-  /// 정답·풀이가 저장돼 답지/해설 단계가 필요 없다.
-  List<TextbookAuthoringStageScope> _wonriStageScopesFor(_SubFocus focus) {
-    final state = _subStates[_stateKeyFor(focus)];
+  /// 소단원 단위로 한 번만 입력받는다).
+  ///
+  /// 어떤 슬롯을 펼칠지는 [seeds] 로 정한다. 시드는 본문 '풀이' 체이닝이
+  /// 담당하는 문항(개념원리 필수유형·특강, 개념+유형 쓱쓱 예제)을 이미
+  /// 걸러낸 목록이라, 슬롯 이름을 고정 나열하지 않아도 된다. 개념+유형의
+  /// 쓱쓱(E)처럼 한 슬롯 안에 본문 문항(예제)과 답지 문항(유제·연습해 보자)이
+  /// 섞여 있는 경우까지 이 방식이라야 맞는다.
+  List<TextbookAuthoringStageScope> _wonriStageScopesFor(
+    _SubFocus focus,
+    List<TextbookAuthoringStageCropSeed> seeds,
+  ) {
     final present = <String>{
-      for (final r in state?.uploadResult?.rows ?? const [])
-        '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
+      for (final seed in seeds)
+        if (_conceptSubKeyByCategory[seed.section] != null)
+          _conceptSubKeyByCategory[seed.section]!,
     };
     final row = _wonriRowFor(focus);
     if (row == null) return const <TextbookAuthoringStageScope>[];
@@ -3240,8 +3443,9 @@ class _TextbookUnitAuthoringDialogState
     final rowIndex = _wonriRowIndex(focus);
     final bodyStart = _positiveInt(row.startCtrl.text);
     final bodyEnd = _positiveInt(row.endCtrl.text);
+    final subKeys = _conceptCategoryBySubKey.keys.toList()..sort();
     return [
-      for (final subKey in const ['A', 'C', 'D'])
+      for (final subKey in subKeys)
         if (present.contains(subKey))
           TextbookAuthoringStageScope(
             bigOrder: focus.bigIndex,
@@ -3529,6 +3733,8 @@ class _TextbookUnitAuthoringDialogState
                   onMinimize:
                       _backgroundWorkerAvailable ? _minimizeToBackground : null,
                   onStageChanged: () => unawaited(_loadStageStatuses()),
+                  onStartProblemExtraction:
+                      _embeddedStage!.onStartProblemExtraction,
                 ),
         ),
       ),
@@ -4535,6 +4741,7 @@ class _TextbookUnitAuthoringDialogState
     );
     if (ok != true) return;
     try {
+      final scope = _stageScopePayload(focus);
       final result = await _pdfService.deleteStageData(
         academyId: widget.academyId,
         bookId: widget.bookId,
@@ -4542,7 +4749,12 @@ class _TextbookUnitAuthoringDialogState
         bigOrder: focus.bigIndex,
         midOrder: focus.midIndex,
         subKey: focus.subKey,
+        subIndex: (scope['sub_index'] as num?)?.toInt() ?? 0,
         stage: stage,
+        scopeKind: scope['scope_kind']?.toString(),
+        unitRowIndex: (scope['unit_row_index'] as num?)?.toInt(),
+        bodyStartPage: (scope['body_start_page'] as num?)?.toInt(),
+        bodyEndPage: (scope['body_end_page'] as num?)?.toInt(),
       );
       if (!mounted) return;
       if (stage == 'body') {
@@ -5354,6 +5566,7 @@ class _TextbookUnitAuthoringDialogState
         break;
     }
     edits[key] = <int>[ymin, xmin, ymax, xmax];
+    state.dirty = true;
     if (mounted) setState(() {});
   }
 
@@ -6149,6 +6362,7 @@ class _EmbeddedStageArgs {
     this.answerEndPage,
     this.solutionStartPage,
     this.solutionEndPage,
+    this.onStartProblemExtraction,
   });
 
   final int bigOrder;
@@ -6162,6 +6376,7 @@ class _EmbeddedStageArgs {
   final int? answerEndPage;
   final int? solutionStartPage;
   final int? solutionEndPage;
+  final Future<void> Function()? onStartProblemExtraction;
 }
 
 class _SubRunState {
@@ -6173,6 +6388,18 @@ class _SubRunState {
   RangeProgress? progress;
   final List<_PageAnalysisRow> pageResults = <_PageAnalysisRow>[];
   TextbookCropBatchResult? uploadResult;
+
+  /// 지금 화면에 있는 분석 결과가 아직 서버에 안 올라갔는지.
+  ///
+  /// [uploadResult] 는 다이얼로그를 열 때 **서버에 저장돼 있던 크롭**으로도
+  /// 채워진다. 그래서 "결과가 있으니 저장은 끝났다" 로 판단하면, 다시 분석한
+  /// 내용을 올리지 않고 옛 데이터로 다음 단계에 넘어가면서 저장했다고 말하게
+  /// 된다. 분석·수정이 있었는지는 이 플래그로만 판단한다.
+  bool dirty = false;
+
+  /// 저장된 추출을 불러온 뒤 다시 분석했다면, 새 크롭을 올리기 전에 해당
+  /// 소단원의 옛 문제은행 문서·정답·해설·크롭을 전부 지워야 한다.
+  bool resetBeforeUpload = false;
 }
 
 class _ResolvedContentGroup {

@@ -499,6 +499,8 @@ class BackfillRunner {
             'attendance_notification': intToBool(r['attendance_notification']),
             'departure_notification': intToBool(r['departure_notification']),
             'lateness_notification': intToBool(r['lateness_notification']),
+            'payment_channel': r['payment_channel'] ?? 'card',
+            'payment_note': r['payment_note'],
           }..removeWhere((k, v) => v == null);
         }).toList();
         await supa

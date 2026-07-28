@@ -538,6 +538,24 @@ class TextbookVlmItem {
   /// not return one or rejected it.
   final List<int>? itemRegion;
 
+  /// 카테고리만 바꾼 사본. 지면 판독 뒤 규칙으로 코너를 되돌릴 때 쓴다.
+  TextbookVlmItem withCategory(String category) => TextbookVlmItem(
+        number: number,
+        label: label,
+        category: category,
+        isImportant: isImportant,
+        isSetHeader: isSetHeader,
+        setFrom: setFrom,
+        setTo: setTo,
+        contentGroupKind: contentGroupKind,
+        contentGroupLabel: contentGroupLabel,
+        contentGroupTitle: contentGroupTitle,
+        contentGroupOrder: contentGroupOrder,
+        column: column,
+        bbox: bbox,
+        itemRegion: itemRegion,
+      );
+
   factory TextbookVlmItem.fromMap(Map<String, dynamic> map) {
     int? asIntN(dynamic v) {
       if (v == null) return null;

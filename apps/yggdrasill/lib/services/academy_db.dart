@@ -307,6 +307,8 @@ class AcademyDbService {
             attendance_notification INTEGER DEFAULT 0,
             departure_notification INTEGER DEFAULT 0,
             lateness_notification INTEGER DEFAULT 0,
+            payment_channel TEXT DEFAULT 'card',
+            payment_note TEXT,
             created_at INTEGER,
             updated_at INTEGER,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
@@ -1271,6 +1273,8 @@ class AcademyDbService {
               attendance_notification INTEGER DEFAULT 0,
               departure_notification INTEGER DEFAULT 0,
               lateness_notification INTEGER DEFAULT 0,
+              payment_channel TEXT DEFAULT 'card',
+              payment_note TEXT,
               created_at INTEGER,
               updated_at INTEGER,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
@@ -3834,6 +3838,8 @@ class AcademyDbService {
             attendance_notification INTEGER DEFAULT 0,
             departure_notification INTEGER DEFAULT 0,
             lateness_notification INTEGER DEFAULT 0,
+            payment_channel TEXT DEFAULT 'card',
+            payment_note TEXT,
             created_at INTEGER,
             updated_at INTEGER,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
@@ -3843,6 +3849,17 @@ class AcademyDbService {
         print('[DEBUG] student_payment_info 테이블 생성 완료');
       } else {
         print('[DEBUG] student_payment_info 테이블이 이미 존재함');
+        final cols = await dbClient.rawQuery(
+            "PRAGMA table_info(student_payment_info)");
+        final names = cols.map((c) => (c['name'] as String?) ?? '').toSet();
+        if (!names.contains('payment_channel')) {
+          await dbClient.execute(
+              "ALTER TABLE student_payment_info ADD COLUMN payment_channel TEXT DEFAULT 'card'");
+        }
+        if (!names.contains('payment_note')) {
+          await dbClient.execute(
+              "ALTER TABLE student_payment_info ADD COLUMN payment_note TEXT");
+        }
       }
     } catch (e) {
       print('[ERROR] student_payment_info 테이블 확인/생성 중 오류: $e');

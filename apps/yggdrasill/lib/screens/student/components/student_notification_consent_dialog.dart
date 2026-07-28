@@ -304,6 +304,8 @@ class _StudentNotificationConsentDialogState
         'attendance_notification': paymentInfo.attendanceNotification,
         'departure_notification': paymentInfo.departureNotification,
         'lateness_notification': paymentInfo.latenessNotification,
+        'payment_channel': paymentInfo.paymentChannel,
+        'payment_note': paymentInfo.paymentNote,
       };
       if (paymentInfo.id != null && paymentInfo.id!.isNotEmpty) {
         payload['id'] = paymentInfo.id;

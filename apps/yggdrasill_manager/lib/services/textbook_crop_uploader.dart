@@ -105,6 +105,23 @@ class TextbookCropBatchResult {
   final List<Map<String, dynamic>> rows;
 }
 
+/// 재분석 뒤 범위를 맞추고 남은 결과.
+///
+/// [protectedNumbers] 는 "옛 분류로 저장돼 있고 이미 문제은행 문항까지 만들어진"
+/// 문항들이다. 서버가 일부러 지우지 않는다. 저장 자체는 성공한 것이므로 실패로
+/// 다루지 않고, 사람이 문제은행에서 정리하도록 그대로 올려 보낸다.
+class TextbookCropSyncResult {
+  const TextbookCropSyncResult({
+    required this.deleted,
+    required this.protectedNumbers,
+  });
+
+  final int deleted;
+  final List<String> protectedNumbers;
+
+  int get protectedCount => protectedNumbers.length;
+}
+
 class TextbookCropUploader {
   TextbookCropUploader({
     http.Client? httpClient,
@@ -252,7 +269,7 @@ class TextbookCropUploader {
     );
   }
 
-  Future<int> syncCropScope({
+  Future<TextbookCropSyncResult> syncCropScope({
     required String academyId,
     required String bookId,
     required String gradeLabel,
@@ -264,7 +281,12 @@ class TextbookCropUploader {
     required Iterable<String> keepProblemNumbers,
   }) async {
     final pages = rawPages.where((page) => page > 0).toSet().toList()..sort();
-    if (pages.isEmpty) return 0;
+    if (pages.isEmpty) {
+      return const TextbookCropSyncResult(
+        deleted: 0,
+        protectedNumbers: <String>[],
+      );
+    }
     final res = await _http.post(
       _uri('/textbook/crops/sync-scope'),
       headers: _headers(),
@@ -294,13 +316,16 @@ class TextbookCropUploader {
     if (json['ok'] != true) {
       throw Exception('textbook_crops_sync_error: ${json['error']}');
     }
-    final protected = _asInt(json['protected']) ?? 0;
-    if (protected > 0) {
-      throw Exception(
-        'textbook_crops_sync_protected: 연결된 문제은행 문항 $protected건은 자동 삭제하지 않았습니다.',
-      );
-    }
-    return _asInt(json['deleted']) ?? 0;
+    final rawProtected = json['protected_numbers'];
+    final protectedNumbers = <String>[
+      if (rawProtected is List)
+        for (final value in rawProtected)
+          if ('$value'.trim().isNotEmpty) '$value'.trim(),
+    ];
+    return TextbookCropSyncResult(
+      deleted: _asInt(json['deleted']) ?? 0,
+      protectedNumbers: protectedNumbers,
+    );
   }
 
   Map<String, dynamic> _itemToMap(

@@ -15,15 +15,19 @@ import 'utility_glass_dialog_shell.dart';
 
 const Color _pmPanelBg = Color(0xFF10171A);
 const Color _pmCardBg = Color(0xFF15171C);
+/// 공용 카드리스트 배경 (다크 #121212 / 라이트 #F1F1F1)
+const Color _pmListCardBgDark = Color(0xFF121212);
+const Color _pmListCardBgLight = Color(0xFFF1F1F1);
 const Color _pmBorder = Color(0xFF223131);
 const Color _pmText = Color(0xFFEAF2F2);
 const Color _pmTextSub = Color(0xFF9FB3B3);
 const Color _pmAccent = Color(0xFF33A373);
 const Color _pmDanger = Color(0xFFF04747);
 
-const double _paymentDialogMaxWidth = 1180.0 * 1.3 * 0.6;
-const double _paymentDialogMaxHeight = 720.0;
-const double _paymentDialogFallbackWidth = 1176.0 * 1.3 * 0.6;
+const double _paymentDialogMaxWidth = 1180.0 * 1.3 * 0.68;
+const double _paymentDialogMaxHeight = 840.0;
+const double _paymentDialogFallbackWidth = 1176.0 * 1.3 * 0.68;
+const double _paymentCardMainAxisExtent = 112.0;
 
 class _PaymentItem {
   final StudentWithInfo studentWithInfo;
@@ -559,9 +563,9 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   }
 
   Widget _buildSummaryBar(YggDialogColors dlg) {
-    const summaryFontSize = 13.0;
-    const labelWidth = 28.0;
-    const countWidth = 28.0;
+    const summaryFontSize = 16.0;
+    const labelWidth = 36.0;
+    const countWidth = 32.0;
     final labelStyle = TextStyle(
       color: dlg.textSub,
       fontSize: summaryFontSize,
@@ -617,48 +621,41 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
       );
     }
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: dlg.cardBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: dlg.cardBorder),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            Text('요약', style: labelStyle),
-            const SizedBox(width: 12),
-            metric('미납', _unpaidStudents.length, _pmDanger),
-            dot(),
-            metric('예정', _upcomingStudents.length, const Color(0xFF1976D2)),
-            dot(),
-            metric('완료', _paidInRangeStudents.length, kDlgAccent),
-            const Spacer(),
-            Text(
-              '납부 ${_paidInRangeStudents.length}/${_totalCount}',
-              style: TextStyle(
-                color: dlg.textSub,
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-              ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text('요약', style: labelStyle),
+          const SizedBox(width: 12),
+          metric('미납', _unpaidStudents.length, _pmDanger),
+          dot(),
+          metric('예정', _upcomingStudents.length, const Color(0xFF1976D2)),
+          dot(),
+          metric('완료', _paidInRangeStudents.length, kDlgAccent),
+          const Spacer(),
+          Text(
+            '납부 ${_paidInRangeStudents.length}/${_totalCount}',
+            style: TextStyle(
+              color: dlg.textSub,
+              fontSize: summaryFontSize,
+              fontWeight: FontWeight.w800,
             ),
-            const SizedBox(width: 12),
-            OutlinedButton.icon(
-              onPressed: _paidInRangeStudents.isEmpty ? null : _showPaidStudentsList,
-              icon: const Icon(Icons.list_alt_rounded, size: 18),
-              label: const Text('완료 명단'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: dlg.textSub,
-                side: BorderSide(color: dlg.border),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton.icon(
+            onPressed: _paidInRangeStudents.isEmpty ? null : _showPaidStudentsList,
+            icon: const Icon(Icons.list_alt_rounded, size: 18),
+            label: const Text('완료 명단', style: TextStyle(fontSize: 16)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: dlg.textSub,
+              side: BorderSide(color: dlg.border),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -717,17 +714,19 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                       style: TextStyle(color: dlg.hint, fontSize: 13),
                     ),
                   )
-                : Scrollbar(
-                    thumbVisibility: true,
-                    controller: scrollController,
+                : ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      scrollbars: false,
+                    ),
                     child: GridView.builder(
                       controller: scrollController,
                       primary: false,
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        mainAxisExtent: 68,
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 10,
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 1,
+                        mainAxisExtent: _paymentCardMainAxisExtent,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
                       ),
                       itemCount: items.length,
                       itemBuilder: (context, index) {
@@ -885,8 +884,16 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
   Widget build(BuildContext context) {
     final dlg = YggDialogColors.of(context);
     final student = widget.studentWithInfo.student;
+    final paymentInfo =
+        DataManager.instance.getStudentPaymentInfo(student.id);
+    final channelLabel =
+        PaymentChannel.displayName(paymentInfo?.paymentChannel);
+    final noteText = (paymentInfo?.paymentNote ?? '').trim();
 
     final due = widget.paymentDate;
+    final cardBg = Theme.of(context).brightness == Brightness.light
+        ? _pmListCardBgLight
+        : _pmListCardBgDark;
     final borderColor = widget.isOverdue
         ? _pmDanger.withOpacity(_isHovered ? 0.9 : 0.55)
         : (_isHovered ? kDlgAccent : dlg.border);
@@ -903,9 +910,9 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
           onTap: _processing ? null : () => _handlePaymentTap(context),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
             decoration: BoxDecoration(
-              color: dlg.fieldBg,
+              color: cardBg,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: borderColor, width: 2),
             ),
@@ -921,42 +928,45 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
                         student.name,
                         style: TextStyle(
                           color: dlg.text,
-                          fontSize: 15,
+                          fontSize: 20,
                           fontWeight: FontWeight.w800,
+                          height: 1.15,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     Text(
                       '${due.month}/${due.day}',
                       style: TextStyle(
                         color: dlg.textSub,
-                        fontSize: 13,
+                        fontSize: 16,
                         fontWeight: FontWeight.w800,
+                        height: 1.15,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 5),
                 Row(
                   children: [
                     Text(
                       '${widget.cycle}회차',
                       style: TextStyle(
                         color: dlg.textSub,
-                        fontSize: 12,
+                        fontSize: 16,
                         fontWeight: FontWeight.w700,
+                        height: 1.15,
                       ),
                     ),
                     const Spacer(),
                     if (_processing)
                       const Padding(
-                        padding: EdgeInsets.only(right: 6),
+                        padding: EdgeInsets.only(right: 8),
                         child: SizedBox(
-                          width: 14,
-                          height: 14,
+                          width: 16,
+                          height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: kDlgAccent),
                         ),
                       ),
@@ -964,8 +974,38 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
                       widget.isOverdue ? '미납' : '예정',
                       style: TextStyle(
                         color: (widget.isOverdue ? _pmDanger : dlg.textSub).withOpacity(0.95),
-                        fontSize: 12,
+                        fontSize: 16,
                         fontWeight: FontWeight.w800,
+                        height: 1.15,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    Text(
+                      channelLabel,
+                      style: TextStyle(
+                        color: dlg.textSub,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        height: 1.15,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        noteText.isEmpty ? '' : noteText,
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          color: dlg.textSub.withOpacity(0.9),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          height: 1.15,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],

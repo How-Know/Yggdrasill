@@ -2497,6 +2497,8 @@ class DataManager {
           'registration_date': paymentInfo.registrationDate.toIso8601String(),
           'payment_method': paymentInfo.paymentMethod,
           'tuition_fee': paymentInfo.tuitionFee,
+          'payment_channel': paymentInfo.paymentChannel,
+          'payment_note': paymentInfo.paymentNote,
         }, onConflict: 'student_id');
         await Supabase.instance.client.rpc('init_first_due', params: {
           'p_student_id': paymentInfo.studentId,
@@ -7289,7 +7291,7 @@ class DataManager {
               .select(
                   'id,student_id,registration_date,payment_method,tuition_fee,lateness_threshold,'
                   'schedule_notification,attendance_notification,departure_notification,lateness_notification,'
-                  'created_at,updated_at')
+                  'payment_channel,payment_note,created_at,updated_at')
               .eq('academy_id', academyId);
           _studentPaymentInfos = (rows as List)
               .map((m) => StudentPaymentInfo(
@@ -7310,6 +7312,9 @@ class DataManager {
                         (m['departure_notification'] as bool?) ?? false,
                     latenessNotification:
                         (m['lateness_notification'] as bool?) ?? false,
+                    paymentChannel:
+                        PaymentChannel.normalize(m['payment_channel'] as String?),
+                    paymentNote: m['payment_note'] as String?,
                     createdAt:
                         DateTime.tryParse((m['created_at'] as String?) ?? '') ??
                             DateTime.now(),
@@ -7387,6 +7392,8 @@ class DataManager {
             'attendance_notification': paymentInfo.attendanceNotification,
             'departure_notification': paymentInfo.departureNotification,
             'lateness_notification': paymentInfo.latenessNotification,
+            'payment_channel': paymentInfo.paymentChannel,
+            'payment_note': paymentInfo.paymentNote,
           }, onConflict: 'student_id');
           await Supabase.instance.client.rpc('init_first_due', params: {
             'p_student_id': paymentInfo.studentId,
@@ -7414,6 +7421,8 @@ class DataManager {
             'attendance_notification': paymentInfo.attendanceNotification,
             'departure_notification': paymentInfo.departureNotification,
             'lateness_notification': paymentInfo.latenessNotification,
+            'payment_channel': paymentInfo.paymentChannel,
+            'payment_note': paymentInfo.paymentNote,
           }, onConflict: 'student_id');
         } catch (_) {}
       }
@@ -7437,17 +7446,18 @@ class DataManager {
           .indexWhere((info) => info.studentId == paymentInfo.studentId);
       if (index != -1) {
         _studentPaymentInfos[index] = updatedPaymentInfo;
-        studentPaymentInfosNotifier.value =
-            List.unmodifiable(_studentPaymentInfos);
+      } else {
+        _studentPaymentInfos.add(updatedPaymentInfo);
       }
+      studentPaymentInfosNotifier.value =
+          List.unmodifiable(_studentPaymentInfos);
 
       print('[DEBUG] 학생 결제 정보 업데이트 완료: ${paymentInfo.studentId}');
-      if (TagPresetService.dualWrite) {
+      if (TagPresetService.preferSupabaseRead || TagPresetService.dualWrite) {
         try {
           final academyId = await TenantService.instance.getActiveAcademyId() ??
               await TenantService.instance.ensureActiveAcademy();
-          await Supabase.instance.client.from('student_payment_info').upsert({
-            'id': updatedPaymentInfo.id,
+          final payload = <String, dynamic>{
             'academy_id': academyId,
             'student_id': updatedPaymentInfo.studentId,
             'registration_date':
@@ -7460,8 +7470,20 @@ class DataManager {
                 updatedPaymentInfo.attendanceNotification,
             'departure_notification': updatedPaymentInfo.departureNotification,
             'lateness_notification': updatedPaymentInfo.latenessNotification,
-          }, onConflict: 'student_id');
-        } catch (_) {}
+            'payment_channel': updatedPaymentInfo.paymentChannel,
+            'payment_note': updatedPaymentInfo.paymentNote,
+          };
+          if (updatedPaymentInfo.id != null &&
+              updatedPaymentInfo.id!.isNotEmpty) {
+            payload['id'] = updatedPaymentInfo.id;
+          }
+          await Supabase.instance.client
+              .from('student_payment_info')
+              .upsert(payload, onConflict: 'student_id');
+        } catch (e, st) {
+          print('[SUPA][student_payment_info upsert(update)] $e\n$st');
+          if (TagPresetService.preferSupabaseRead) rethrow;
+        }
       }
     } catch (e) {
       print('[ERROR] 학생 결제 정보 업데이트 실패: $e');

@@ -72,6 +72,8 @@ import {
   detectSolutionRefsOnPage,
   normalizeSolutionRefsResult,
 } from './textbook/vlm_solution_refs_client.js';
+import { logVlmUsage } from './textbook/vlm_usage_log.js';
+import { normalizeProblemNumberKey } from './textbook/problem_number_key.js';
 import {
   parseTocPages,
   normalizeTocResult,
@@ -6818,6 +6820,11 @@ async function handleTextbookVlmDetectProblems(body, res) {
       (String(item?.content_group_label || '').trim() ||
         String(item?.content_group_title || '').trim()),
   );
+  logVlmUsage('detect', result.usageMetadata, {
+    page: rawPage,
+    items: normalized.items.length,
+    elapsed: `${result.elapsedMs}ms`,
+  });
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
@@ -7512,7 +7519,12 @@ async function handleTextbookCropsSyncScope(body, res) {
   const deletable = stale.filter(
     (row) => !String(row?.pb_question_uid || '').trim(),
   );
-  const protectedRows = stale.length - deletable.length;
+  // 문제은행 문항까지 만들어진 crop 은 지우지 않는다. 어떤 번호가 남았는지
+  // 알려줘야 사람이 문제은행에서 정리할 수 있다.
+  const protectedNumbers = stale
+    .filter((row) => String(row?.pb_question_uid || '').trim())
+    .map((row) => String(row?.problem_number || '').trim())
+    .filter(Boolean);
   if (deletable.length > 0) {
     const { error: deleteError } = await supa
       .from('textbook_problem_crops')
@@ -7530,8 +7542,43 @@ async function handleTextbookCropsSyncScope(body, res) {
   sendJson(res, 200, {
     ok: true,
     deleted: deletable.length,
-    protected: protectedRows,
+    protected: protectedNumbers.length,
+    protected_numbers: protectedNumbers,
   });
+}
+
+// expected_numbers can be either ["0001","12"] or
+// [{problem_number:"0001", corner:"필수 문제", page:107}, ...].
+//
+// 개념+유형은 코너(필수 문제 / 쏙쏙 / 한번 더 연습 / 탄탄 / 쓱쓱)마다 번호가
+// 1번부터 다시 시작하고 답지도 코너별 박스로 인쇄된다. 번호 문자열만 넘기면
+// 같은 "1" 이 어느 박스의 1번인지 모델도, 결과를 받는 앱도 고를 수 없으므로
+// 코너 이름과 본문 페이지를 프롬프트까지 그대로 들고 간다.
+//
+// `position` 은 앱이 보낸 배열에서의 위치다. 아래에서 번호가 빈 항목을
+// 걸러내므로 이 값을 붙여 두지 않으면 결과에 실어 보내는 expected_index 가
+// 앱의 목록과 어긋난다.
+function parseTextbookExpectedEntries(input) {
+  const raw = Array.isArray(input) ? input : [];
+  return raw
+    .map((v, position) => {
+      if (v == null) return null;
+      if (typeof v === 'string') {
+        return { number: v.trim(), corner: '', page: 0, position };
+      }
+      if (typeof v !== 'object') return null;
+      const page = Number.parseInt(
+        String(v.page ?? v.display_page ?? v.body_page ?? ''),
+        10,
+      );
+      return {
+        number: String(v.problem_number || v.number || '').trim(),
+        corner: String(v.corner || v.item_name || '').trim(),
+        page: Number.isFinite(page) && page > 0 ? page : 0,
+        position,
+      };
+    })
+    .filter((e) => e && e.number.length > 0);
 }
 
 async function handleTextbookVlmExtractAnswers(body, res) {
@@ -7571,33 +7618,7 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   const bookId = String(body?.book_id || '').trim();
   const gradeLabel = String(body?.grade_label || '').trim();
 
-  // expected_numbers can be either ["0001","12"] or [{problem_number:"0001", crop_id:"..."}, ...]
-  //
-  // 개념+유형은 코너(필수 문제 / 쏙쏙 / 한번 더 연습 / 탄탄 / 쓱쓱)마다 번호가
-  // 1번부터 다시 시작하고 답지도 코너별 박스로 인쇄된다. 번호 문자열만 넘기면
-  // 같은 "1" 이 어느 박스의 1번인지 모델이 고를 수 없으므로, 객체 형태로 오는
-  // 코너 이름과 본문 페이지를 프롬프트까지 그대로 들고 간다.
-  const expectedRaw = Array.isArray(body?.expected_numbers)
-    ? body.expected_numbers
-    : [];
-  const expectedEntries = expectedRaw
-    .map((v) => {
-      if (v == null) return null;
-      if (typeof v === 'string') {
-        return { number: v.trim(), corner: '', page: 0 };
-      }
-      if (typeof v !== 'object') return null;
-      const page = Number.parseInt(
-        String(v.page ?? v.display_page ?? v.body_page ?? ''),
-        10,
-      );
-      return {
-        number: String(v.problem_number || v.number || '').trim(),
-        corner: String(v.corner || v.item_name || '').trim(),
-        page: Number.isFinite(page) && page > 0 ? page : 0,
-      };
-    })
-    .filter((e) => e && e.number.length > 0);
+  const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
   const expectedNumbers = expectedEntries.map((e) => e.number);
 
   const displayPage = rawPage;
@@ -7631,6 +7652,13 @@ async function handleTextbookVlmExtractAnswers(body, res) {
 
   const normalized = normalizeAnswerResult(result.parsedJson, {
     expectedNumbers,
+    expectedEntries,
+  });
+  logVlmUsage('answers', result.usageMetadata, {
+    page: rawPage,
+    expected: expectedEntries.length,
+    items: normalized.items.length,
+    elapsed: `${result.elapsedMs}ms`,
   });
   sendJson(res, 200, {
     ok: true,
@@ -7684,18 +7712,9 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
   const bookId = String(body?.book_id || '').trim();
   const gradeLabel = String(body?.grade_label || '').trim();
 
-  const expectedRaw = Array.isArray(body?.expected_numbers)
-    ? body.expected_numbers
-    : [];
-  const expectedNumbers = expectedRaw
-    .map((v) => {
-      if (v == null) return '';
-      if (typeof v === 'string') return v.trim();
-      if (typeof v === 'object')
-        return String(v.problem_number || v.number || '').trim();
-      return '';
-    })
-    .filter((s) => s.length > 0);
+  // 답지와 같은 이유로 개념+유형은 코너·본문 페이지까지 들고 간다.
+  const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
+  const expectedNumbers = expectedEntries.map((e) => e.number);
 
   const displayPage = rawPage;
   const pageOffset = 0;
@@ -7710,6 +7729,8 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
       displayPage,
       pageOffset,
       expectedNumbers,
+      expectedEntries,
+      series: String(body?.series || '').trim().toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
@@ -7726,6 +7747,13 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
 
   const normalized = normalizeSolutionRefsResult(result.parsedJson, {
     expectedNumbers,
+    expectedEntries,
+  });
+  logVlmUsage('solution_refs', result.usageMetadata, {
+    page: rawPage,
+    expected: expectedEntries.length,
+    items: normalized.items.length,
+    elapsed: `${result.elapsedMs}ms`,
   });
   sendJson(res, 200, {
     ok: true,
@@ -7809,9 +7837,9 @@ function normalizeTextbookAnswerValue(input) {
     .trim();
 }
 
+// 번호 정규화 규칙은 답지·해설·문제은행 추출과 한 곳에서 공유한다.
 function textbookProblemNumberKey(value) {
-  const n = Number.parseInt(String(value ?? '').trim(), 10);
-  return Number.isFinite(n) && n > 0 ? String(n) : '';
+  return normalizeProblemNumberKey(value);
 }
 
 function parseTextbookAnswerPartsFromText(value) {
@@ -8922,18 +8950,106 @@ async function deleteTextbookPdfOnlyDocumentsForScope({
     return 0;
   }
   const ids = (docs || []).map((d) => String(d?.id || '').trim()).filter(Boolean);
-  if (ids.length === 0) return 0;
+  return deleteTextbookDocumentsByIds({ academyId, ids, warnings });
+}
+
+async function deleteTextbookDocumentsByIds({ academyId, ids, warnings }) {
+  const documentIds = Array.from(
+    new Set((ids || []).map((id) => String(id || '').trim()).filter(isUuid)),
+  );
+  if (documentIds.length === 0) return 0;
   const { data: deleted, error: delErr } = await supa
     .from('pb_documents')
     .delete()
     .eq('academy_id', academyId)
-    .in('id', ids)
+    .in('id', documentIds)
     .select('id');
-  if (delErr) {
-    warnings.push(`pb_documents_delete: ${delErr.message || delErr}`);
+  if (!delErr) {
+    return Array.isArray(deleted) ? deleted.length : documentIds.length;
+  }
+
+  // 큰 문서는 cascade 한 번이 statement timeout에 걸릴 수 있다. 문항을
+  // 하나씩 먼저 지운 뒤 문서를 지우면 같은 데이터를 작은 트랜잭션으로 정리한다.
+  warnings.push(`pb_documents_bulk_delete_retry: ${delErr.message || delErr}`);
+  let removed = 0;
+  for (const documentId of documentIds) {
+    // eslint-disable-next-line no-await-in-loop
+    const { data: questions, error: qLookupErr } = await supa
+      .from('pb_questions')
+      .select('id')
+      .eq('document_id', documentId);
+    if (qLookupErr) {
+      warnings.push(`pb_questions_lookup:${documentId}: ${qLookupErr.message || qLookupErr}`);
+      continue;
+    }
+    let questionDeleteFailed = false;
+    for (const question of questions || []) {
+      const questionId = String(question?.id || '').trim();
+      if (!questionId) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const { error: qDeleteErr } = await supa
+        .from('pb_questions')
+        .delete()
+        .eq('id', questionId);
+      if (qDeleteErr) {
+        warnings.push(`pb_question_delete:${questionId}: ${qDeleteErr.message || qDeleteErr}`);
+        questionDeleteFailed = true;
+        break;
+      }
+    }
+    if (questionDeleteFailed) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const { data: oneDeleted, error: oneDeleteErr } = await supa
+      .from('pb_documents')
+      .delete()
+      .eq('academy_id', academyId)
+      .eq('id', documentId)
+      .select('id');
+    if (oneDeleteErr) {
+      warnings.push(`pb_document_delete:${documentId}: ${oneDeleteErr.message || oneDeleteErr}`);
+      continue;
+    }
+    removed += Array.isArray(oneDeleted) ? oneDeleted.length : 1;
+  }
+  return removed;
+}
+
+async function deleteTextbookDocumentsForPageRange({
+  academyId,
+  bookId,
+  gradeLabel,
+  scope,
+  warnings,
+}) {
+  const { data: docs, error: docErr } = await supa
+    .from('pb_documents')
+    .select('id,meta')
+    .eq('academy_id', academyId)
+    .contains('meta', {
+      textbook_scope: {
+        book_id: bookId,
+        grade_label: gradeLabel,
+        big_order: scope.big_order,
+        mid_order: scope.mid_order,
+      },
+    });
+  if (docErr) {
+    warnings.push(`pb_documents_range_lookup: ${docErr.message || docErr}`);
     return 0;
   }
-  return Array.isArray(deleted) ? deleted.length : ids.length;
+  const from = scope.body_start_page;
+  const to = scope.body_end_page;
+  const ids = (docs || [])
+    .filter((doc) => {
+      const textbookScope = doc?.meta?.textbook_scope || {};
+      const docFrom = Number(textbookScope.raw_page_from);
+      const docTo = Number(textbookScope.raw_page_to);
+      return Number.isFinite(docFrom) && Number.isFinite(docTo) &&
+        docFrom <= to && docTo >= from;
+    })
+    .map((doc) => String(doc?.id || '').trim())
+    .filter(Boolean);
+  return deleteTextbookDocumentsByIds({ academyId, ids, warnings });
 }
 
 async function handleTextbookStageDelete(body, res) {
@@ -8962,23 +9078,35 @@ async function handleTextbookStageDelete(body, res) {
   };
   const warnings = [];
   try {
-    const { data: crops, error: cropErr } = await supa
+    const isPageRangeScope =
+      scope.scope_kind === 'wonri_sub_unit' &&
+      Number.isFinite(scope.body_start_page) &&
+      Number.isFinite(scope.body_end_page);
+    let cropQuery = supa
       .from('textbook_problem_crops')
       .select('id,storage_bucket,storage_key,big_order,mid_order,sub_key')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
       .eq('big_order', scope.big_order)
-      .eq('mid_order', scope.mid_order)
-      .eq('sub_key', scope.sub_key)
-      .eq('sub_index', scope.sub_index);
+      .eq('mid_order', scope.mid_order);
+    if (isPageRangeScope) {
+      cropQuery = cropQuery
+        .gte('raw_page', scope.body_start_page)
+        .lte('raw_page', scope.body_end_page);
+    } else {
+      cropQuery = cropQuery
+        .eq('sub_key', scope.sub_key)
+        .eq('sub_index', scope.sub_index);
+    }
+    const { data: crops, error: cropErr } = await cropQuery;
     if (cropErr) throw new Error(`stage_delete_crops_lookup_failed: ${cropErr.message || cropErr}`);
     const cropRows = Array.isArray(crops) ? crops : [];
     const affectedSubKeys = Array.from(
       new Set(cropRows.map((r) => String(r?.sub_key || '').trim()).filter(Boolean)),
     );
     const expectedSubKey = String(scope.sub_key || '').trim();
-    if (affectedSubKeys.some((k) => k !== expectedSubKey)) {
+    if (!isPageRangeScope && affectedSubKeys.some((k) => k !== expectedSubKey)) {
       sendJson(res, 409, {
         ok: false,
         error: 'stage_delete_scope_mismatch',
@@ -8990,7 +9118,7 @@ async function handleTextbookStageDelete(body, res) {
       return;
     }
     const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
-    if (cropIds.length === 0) {
+    if (cropIds.length === 0 && !isPageRangeScope) {
       sendJson(res, 200, {
         ok: true,
         stage,
@@ -9002,7 +9130,7 @@ async function handleTextbookStageDelete(body, res) {
       return;
     }
 
-    if (stage === 'body' || stage === 'answer') {
+    if (cropIds.length > 0 && (stage === 'body' || stage === 'answer')) {
       const { data: answers } = await supa
         .from('textbook_problem_answers')
         .select('answer_image_bucket,answer_image_path')
@@ -9026,7 +9154,10 @@ async function handleTextbookStageDelete(body, res) {
       }
     }
 
-    if (stage === 'body' || stage === 'answer' || stage === 'solution') {
+    if (
+      cropIds.length > 0 &&
+      (stage === 'body' || stage === 'answer' || stage === 'solution')
+    ) {
       const { data: deletedRefs, error: refErr } = await supa
         .from('textbook_problem_solution_refs')
         .delete()
@@ -9036,7 +9167,7 @@ async function handleTextbookStageDelete(body, res) {
       removed.solution_refs = Array.isArray(deletedRefs) ? deletedRefs.length : 0;
     }
 
-    if (stage === 'body' || stage === 'answer') {
+    if (cropIds.length > 0 && (stage === 'body' || stage === 'answer')) {
       const { data: deletedAnswers, error: ansErr } = await supa
         .from('textbook_problem_answers')
         .delete()
@@ -9059,33 +9190,51 @@ async function handleTextbookStageDelete(body, res) {
         // eslint-disable-next-line no-await-in-loop
         removed.crop_images += await removeStoragePaths(bucket, paths, warnings, 'textbook-crops');
       }
-      removed.pb_documents = await deleteTextbookPdfOnlyDocumentsForScope({
-        academyId,
-        bookId,
-        gradeLabel,
-        scope,
-        warnings,
-      });
-      const { data: deletedRuns, error: runDelErr } = await supa
+      removed.pb_documents = isPageRangeScope
+        ? await deleteTextbookDocumentsForPageRange({
+            academyId,
+            bookId,
+            gradeLabel,
+            scope,
+            warnings,
+          })
+        : await deleteTextbookPdfOnlyDocumentsForScope({
+            academyId,
+            bookId,
+            gradeLabel,
+            scope,
+            warnings,
+          });
+      let runDeleteQuery = supa
         .from('textbook_pb_extract_runs')
         .delete()
         .eq('academy_id', academyId)
         .eq('book_id', bookId)
         .eq('grade_label', gradeLabel)
         .eq('big_order', scope.big_order)
-        .eq('mid_order', scope.mid_order)
-        .eq('sub_key', scope.sub_key)
-        .eq('sub_index', scope.sub_index)
-        .select('id');
+        .eq('mid_order', scope.mid_order);
+      if (isPageRangeScope) {
+        runDeleteQuery = runDeleteQuery
+          .lte('raw_page_from', scope.body_end_page)
+          .gte('raw_page_to', scope.body_start_page);
+      } else {
+        runDeleteQuery = runDeleteQuery
+          .eq('sub_key', scope.sub_key)
+          .eq('sub_index', scope.sub_index);
+      }
+      const { data: deletedRuns, error: runDelErr } =
+        await runDeleteQuery.select('id');
       if (runDelErr) warnings.push(`textbook_pb_extract_runs_delete: ${runDelErr.message || runDelErr}`);
       removed.pb_extract_runs = Array.isArray(deletedRuns) ? deletedRuns.length : 0;
-      const { data: deletedCrops, error: cropDelErr } = await supa
-        .from('textbook_problem_crops')
-        .delete()
-        .in('id', cropIds)
-        .select('id');
-      if (cropDelErr) throw new Error(`crops_delete_failed: ${cropDelErr.message || cropDelErr}`);
-      removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
+      if (cropIds.length > 0) {
+        const { data: deletedCrops, error: cropDelErr } = await supa
+          .from('textbook_problem_crops')
+          .delete()
+          .in('id', cropIds)
+          .select('id');
+        if (cropDelErr) throw new Error(`crops_delete_failed: ${cropDelErr.message || cropDelErr}`);
+        removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
+      }
     }
 
     sendJson(res, 200, {
@@ -9272,6 +9421,8 @@ async function handleHandwritingReview(body, res) {
   }
 }
 
+const ACCESS_LOG_ENABLED = String(process.env.PB_API_ACCESS_LOG || '') === '1';
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -9285,6 +9436,15 @@ async function handler(req, res) {
 
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const method = req.method || 'GET';
+
+  if (ACCESS_LOG_ENABLED && url.pathname !== '/health') {
+    const startedAt = Date.now();
+    res.once('finish', () => {
+      console.log(
+        `[pb-api][access] ${method} ${url.pathname}${url.search} -> ${res.statusCode} (${Date.now() - startedAt}ms)`,
+      );
+    });
+  }
 
   try {
     if (method === 'GET' && url.pathname === '/health') {
