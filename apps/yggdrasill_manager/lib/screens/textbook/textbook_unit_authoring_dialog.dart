@@ -1605,6 +1605,38 @@ class _TextbookUnitAuthoringDialogState
     return item.itemRegion;
   }
 
+  List<int>? _effectiveNumberBbox(
+    TextbookVlmItem item,
+    List<int>? itemRegion,
+  ) {
+    final bbox = item.bbox;
+    if (_seriesKey != 'gaeyu' ||
+        bbox == null ||
+        bbox.length != 4 ||
+        itemRegion == null ||
+        itemRegion.length != 4) {
+      return bbox;
+    }
+    final byMax = bbox[2];
+    final bxMin = bbox[1];
+    final bxMax = bbox[3];
+    final ryMin = itemRegion[0];
+    final rxMin = itemRegion[1];
+    final bboxIsAboveBody = byMax < ryMin - 2;
+    final bboxIsInBodyColumn = bxMin >= rxMin - 4 && bxMax > rxMin;
+    if (!bboxIsAboveBody || !bboxIsInBodyColumn) return bbox;
+
+    final number = item.number.trim();
+    final width = RegExp(r'[가-힣]').hasMatch(number)
+        ? 54
+        : (number.length * 11).clamp(30, 50);
+    final right = (rxMin - 7).clamp(0, 1000);
+    final left = (right - width).clamp(0, 1000);
+    final top = ryMin.clamp(0, 1000);
+    final bottom = (ryMin + 22).clamp(top + 1, 1000);
+    return <int>[top, left, bottom, right];
+  }
+
   Future<String?> _expectedStartNumberForFocus(_SubFocus focus) async {
     // 4자리 연속 번호(0001~)는 쎈/RPM A 파트 전용 개념이다.
     if (focus.subKey != 'A' || _seriesKey == 'wonri') return null;
@@ -2512,7 +2544,7 @@ class _TextbookUnitAuthoringDialogState
           contentGroupTitle: group.title,
           contentGroupOrder: group.order,
           columnIndex: vlm.column,
-          bbox1k: vlm.bbox,
+          bbox1k: _effectiveNumberBbox(vlm, region),
           itemRegion1k: region,
         ));
       }
@@ -2695,7 +2727,7 @@ class _TextbookUnitAuthoringDialogState
               contentGroupTitle: group.title,
               contentGroupOrder: group.order,
               columnIndex: vlm.column,
-              bbox1k: vlm.bbox,
+              bbox1k: _effectiveNumberBbox(vlm, region),
               itemRegion1k: region,
             ));
       }
@@ -5407,7 +5439,13 @@ class _TextbookUnitAuthoringDialogState
     // Bottom pass: number bboxes (for context)
     for (var i = 0; i < row.items.length; i += 1) {
       final item = row.items[i];
-      final bbox = item.bbox;
+      final region = _effectiveItemRegion(
+        focus: focus,
+        rawPage: pageNumber,
+        orderIndex: i,
+        item: item,
+      );
+      final bbox = _effectiveNumberBbox(item, region);
       if (bbox == null || bbox.length != 4) continue;
       final rect = _bboxToRect(bbox, pageSize);
       if (rect == null) continue;

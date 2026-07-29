@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -8,13 +8,12 @@ import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../widgets/student_page_title.dart';
-import 'textbook_solve_screen.dart';
 
-/// 과제 그룹 목록 + 상세(수행/제출) 화면.
+/// 과제 그룹 목록 화면.
 ///
 /// phase 모델(M5와 동일):
 ///   1 대기 → 탭하면 수행 시작
-///   2 수행 → 상세에서 일시정지/제출
+///   2 수행 → 미니바에서 일시정지/제출
 ///   3 제출 → 확인 대기 (조작 없음)
 ///   4 확인 → 탭하면 대기로 복귀
 class HomeworkScreen extends StatefulWidget {
@@ -30,7 +29,6 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   Map<String, String> _coverByBookKey = const {};
   String? _error;
   bool _busy = false;
-  String? _selectedGroupId;
   Timer? _ticker;
   /// 확인(phase 4) 진입 스낵바용 — 이전 phase 스냅샷.
   final Map<String, int> _phaseByGroupId = {};
@@ -93,9 +91,6 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         _coverByBookKey = covers;
       }
       _error = null;
-      if (_selectedGroupId == null && groups.isNotEmpty) {
-        _selectedGroupId = groups.first.groupId;
-      }
     });
   }
 
@@ -263,7 +258,6 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   }
 
   void _onGroupTap(HomeworkGroup group) {
-    setState(() => _selectedGroupId = group.groupId);
     HomeworkSession.instance.preferGroup(group.groupId);
     if (_busy || group.isHomeworkOnly) return;
 
@@ -313,35 +307,39 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     }
   }
 
-  HomeworkGroup? _detailGroup(List<HomeworkGroup> groups) {
-    final runningId = HomeworkSession.instance.runningGroupId;
-    if (runningId != null) {
-      for (final group in groups) {
-        if (group.groupId == runningId) return group;
-      }
-    }
-    for (final group in groups) {
-      if (group.groupId == _selectedGroupId) return group;
-    }
-    return groups.isEmpty ? null : groups.first;
+  Widget _groupCardFor(HomeworkGroup group) {
+    return ListenableBuilder(
+      listenable: HomeworkSession.instance,
+      builder: (context, _) => _GroupCard(
+        group: group,
+        coverRef: _coverRefFor(group),
+        showEqualizer:
+            HomeworkSession.instance.isRunningGroup(group.groupId),
+        // 제출됨 → 흰 원형 로딩, 대기중 → 초록 체크
+        coverBadge: group.phase == 4
+            ? _CoverBadge.waiting
+            : (group.phase == 3 ? _CoverBadge.submitted : null),
+        onTap: () => _onGroupTap(group),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final groups = _groups;
-    final Widget body;
+    final Widget listBody;
     if (groups == null) {
-      body = Center(
+      listBody = Center(
         child: _error == null
             ? const YggLoadingIndicator(size: 32)
             : Text(_error!, textAlign: TextAlign.center),
       );
     } else if (groups.isEmpty) {
-      body = RefreshIndicator(
+      listBody = RefreshIndicator(
         onRefresh: _refresh,
         child: ListView(
           children: const [
-            SizedBox(height: 160),
+            SizedBox(height: 120),
             Center(
               child: Text(
                 '오늘은 등록된 과제가 없어요.',
@@ -352,55 +350,49 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         ),
       );
     } else {
-      body = LayoutBuilder(
-        builder: (context, constraints) {
-          final detail = _detailGroup(groups);
-          final detailWidth =
-              ((constraints.maxWidth - 68) / 3).clamp(280.0, 380.0);
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: _refresh,
-                  child: GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 14, 112),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 560,
-                      mainAxisExtent: 152,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 10,
-                    ),
-                    itemCount: groups.length,
-                        itemBuilder: (context, i) => ListenableBuilder(
-                          listenable: HomeworkSession.instance,
-                          builder: (context, _) => _GroupCard(
-                            group: groups[i],
-                            coverRef: _coverRefFor(groups[i]),
-                            showEqualizer: HomeworkSession.instance
-                                .isRunningGroup(groups[i].groupId),
-                            coverBadge: groups[i].phase == 4
-                                ? '대기중'
-                                : (groups[i].phase == 3 ? '제출됨' : null),
-                            onTap: () => _onGroupTap(groups[i]),
-                          ),
-                        ),
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: detailWidth,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(0, 8, 20, 112),
-                  child: _HomeworkDetailPanel(group: detail!),
-                ),
+      final priority = groups.take(2).toList(growable: false);
+      final waiting = groups.length > 2
+          ? groups.sublist(2)
+          : const <HomeworkGroup>[];
+      listBody = RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
+          children: [
+            const _HomeworkSectionHeader(title: '우선 과제'),
+            _HomeworkHorizontalRow(
+              children: [
+                for (final group in priority) _groupCardFor(group),
+              ],
+            ),
+            if (waiting.isNotEmpty) ...[
+              // 카드 줄 ↔ 다음 섹션 타이틀 = 18 + 타이틀 top 10 = 28
+              const SizedBox(height: 18),
+              const _HomeworkSectionHeader(title: '대기 과제'),
+              _HomeworkHorizontalRow(
+                children: [
+                  for (final group in waiting) _groupCardFor(group),
+                ],
               ),
             ],
-          );
-        },
+          ],
+        ),
       );
     }
+
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 20, 20, 0),
+          child: _TodayHomeworkProgressCard(),
+        ),
+        // 진행률 카드 아래는 시각적으로 더 벌어 보이게 넉넉히 둔다.
+        // (카드 그림자·큰 % 숫자 때문에 숫자상 28이어도 좁아 보였음)
+        const SizedBox(height: 36),
+        Expanded(child: listBody),
+      ],
+    );
 
     return StudentCollapsingTitlePage(
       title: '과제',
@@ -426,6 +418,199 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   }
 }
 
+/// 스크린샷 스타일 섹션 제목: 굵은 제목 + 회색 chevron.
+class _HomeworkSectionHeader extends StatelessWidget {
+  const _HomeworkSectionHeader({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final chevron = theme.colorScheme.onSurface.withValues(alpha: 0.35);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 10, 20, 8),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+              height: 1.15,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(width: 2),
+          Icon(
+            Icons.chevron_right_rounded,
+            size: 28,
+            color: chevron,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 과제 카드를 한 줄에 가로로 나란히 배치한다.
+///
+/// 카드 너비는 화면 가용폭의 70.4%(이전 넓은 카드 88%의 80%)로 전부 동일.
+/// 두 장이 한 화면에 안 들어가면 가로 스크롤한다.
+class _HomeworkHorizontalRow extends StatelessWidget {
+  const _HomeworkHorizontalRow({required this.children});
+
+  final List<Widget> children;
+
+  static const double _cardHeight = 152;
+  static const double _gap = 12;
+  /// 이전 스크롤 카드폭 비율(0.88)에서 20% 축소.
+  static const double _cardWidthFactor = 0.88 * 0.8;
+
+  @override
+  Widget build(BuildContext context) {
+    if (children.isEmpty) return const SizedBox.shrink();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final available = constraints.maxWidth - 40; // 좌우 패딩 20
+        final cardWidth = available * _cardWidthFactor;
+        final n = children.length;
+
+        final row = Row(
+          children: [
+            for (var i = 0; i < n; i += 1) ...[
+              if (i > 0) const SizedBox(width: _gap),
+              SizedBox(
+                width: cardWidth,
+                height: _cardHeight,
+                child: children[i],
+              ),
+            ],
+          ],
+        );
+
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: row,
+        );
+      },
+    );
+  }
+}
+
+/// 오늘 과제 완료율 카드 — 수치/문구는 목업. 실제 집계 로직은 아직 없음.
+class _TodayHomeworkProgressCard extends StatelessWidget {
+  const _TodayHomeworkProgressCard();
+
+  // 목업 값. 집계가 붙으면 이 상수 자리를 인자로 바꾸면 된다.
+  static const int _percent = 84;
+  static const String _subtitle = '오늘 과제 5개 중 4개 완료';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark
+        ? theme.colorScheme.surfaceContainerHigh
+        : Colors.white;
+    final text = theme.colorScheme.onSurface;
+    final subText = theme.colorScheme.onSurface.withValues(alpha: 0.55);
+    final track = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : const Color(0xFFE5E5EA);
+    final fill = isDark
+        ? Colors.white.withValues(alpha: 0.78)
+        : const Color(0xFF3A3A3C);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: isDark
+            ? null
+            : const [
+                BoxShadow(
+                  color: Color(0x14000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 6),
+                ),
+              ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 16, 18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '$_percent',
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            fontSize: 44,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -1.2,
+                            height: 1.0,
+                            color: text,
+                          ),
+                        ),
+                        TextSpan(
+                          text: '%',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            height: 1.0,
+                            color: text,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.info_outline_rounded,
+                  size: 22,
+                  color: subText,
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+                color: subText,
+                height: 1.25,
+              ),
+            ),
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: _percent / 100,
+                minHeight: 14,
+                backgroundColor: track,
+                valueColor: AlwaysStoppedAnimation<Color>(fill),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _CoverBadge { submitted, waiting }
+
 class _GroupCard extends StatelessWidget {
   const _GroupCard({
     required this.group,
@@ -438,7 +623,7 @@ class _GroupCard extends StatelessWidget {
   final HomeworkGroup group;
   final String? coverRef;
   final bool showEqualizer;
-  final String? coverBadge;
+  final _CoverBadge? coverBadge;
   final VoidCallback onTap;
 
   static const double _coverSize = 126.72; // 105.6 * 1.2
@@ -470,7 +655,7 @@ class _GroupCard extends StatelessWidget {
                 isPrint: group.isPrintSource,
                 coverRef: hasNetworkCover ? coverRef : null,
                 showEqualizer: showEqualizer,
-                badgeLabel: coverBadge,
+                badge: coverBadge,
                 bookLabel: group.sourceLabel,
                 courseLabel: group.courseLabel,
               ),
@@ -485,7 +670,7 @@ class _GroupCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleLarge?.copyWith(
-                        fontSize: 22,
+                        fontSize: 26,
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.2,
                         color: dlg.text,
@@ -507,6 +692,17 @@ class _GroupCard extends StatelessWidget {
                   ],
                 ),
               ),
+              // 기능은 아직 없음 — 자리만 잡아 둔다.
+              IconButton(
+                tooltip: '더보기',
+                onPressed: () {},
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  Icons.more_horiz_rounded,
+                  size: 28,
+                  color: dlg.text,
+                ),
+              ),
             ],
           ),
         ),
@@ -523,7 +719,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
     required this.isPrint,
     required this.coverRef,
     this.showEqualizer = false,
-    this.badgeLabel,
+    this.badge,
     this.bookLabel = '',
     this.courseLabel = '',
   });
@@ -533,14 +729,14 @@ class _HomeworkCoverThumb extends StatelessWidget {
   final bool isPrint;
   final String? coverRef;
   final bool showEqualizer;
-  final String? badgeLabel;
+  final _CoverBadge? badge;
   final String bookLabel;
   final String courseLabel;
 
   @override
   Widget build(BuildContext context) {
     final fallback = isPrint ? Colors.white : const Color(0xFF2E7D32);
-    final hasBadge = badgeLabel != null && badgeLabel!.isNotEmpty;
+    final hasBadge = badge != null;
     final book = bookLabel.trim();
     final course = courseLabel.trim();
     final hasMeta = book.isNotEmpty || course.isNotEmpty;
@@ -606,18 +802,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
                 const Center(child: _CoverEqualizer()),
               ] else if (hasBadge) ...[
                 const ColoredBox(color: Color(0x66000000)),
-                Center(
-                  child: Text(
-                    badgeLabel!,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.2,
-                      height: 1,
-                    ),
-                  ),
-                ),
+                Center(child: _CoverBadgeIcon(badge: badge!)),
               ] else if (hasMeta) ...[
                 // 하단 비네팅 — 여러 스톱으로 경계가 덜 보이게.
                 const DecoratedBox(
@@ -651,7 +836,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 17,
+                            fontSize: 18,
                             fontWeight: FontWeight.w800,
                             height: 1.05,
                             letterSpacing: -0.35,
@@ -666,7 +851,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Color(0xFFD8D8DE),
-                            fontSize: 17,
+                            fontSize: 18,
                             fontWeight: FontWeight.w500,
                             height: 1.05,
                             letterSpacing: -0.35,
@@ -684,6 +869,42 @@ class _HomeworkCoverThumb extends StatelessWidget {
   }
 }
 
+/// 표지 배지: 제출됨=흰 원형 로딩, 대기중=초록 체크.
+class _CoverBadgeIcon extends StatelessWidget {
+  const _CoverBadgeIcon({required this.badge});
+
+  final _CoverBadge badge;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (badge) {
+      case _CoverBadge.submitted:
+        return const SizedBox(
+          width: 42,
+          height: 42,
+          child: CircularProgressIndicator(
+            strokeWidth: 5.5,
+            color: Colors.white,
+            strokeCap: StrokeCap.round,
+          ),
+        );
+      case _CoverBadge.waiting:
+        // Icon 위젯은 stroke 굵기를 못 바꿔서, 같은 글리프를 두껍게 그린다.
+        return Text(
+          String.fromCharCode(Icons.check_rounded.codePoint),
+          style: TextStyle(
+            fontFamily: Icons.check_rounded.fontFamily,
+            package: Icons.check_rounded.fontPackage,
+            fontSize: 52,
+            fontWeight: FontWeight.w900,
+            color: YggGlassTokens.confirmActionColor,
+            height: 1,
+          ),
+        );
+    }
+  }
+}
+
 /// 수행 중 표지 위 작은 이퀄라이저 바.
 class _CoverEqualizer extends StatefulWidget {
   const _CoverEqualizer();
@@ -696,7 +917,7 @@ class _CoverEqualizerState extends State<_CoverEqualizer>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
-  static const _phases = <double>[0.0, 0.35, 0.7, 0.15, 0.55, 0.9, 0.25];
+  static const _phases = <double>[0.0, 0.35, 0.7, 0.15, 0.55];
 
   @override
   void initState() {
@@ -719,14 +940,14 @@ class _CoverEqualizerState extends State<_CoverEqualizer>
       animation: _controller,
       builder: (context, _) {
         return SizedBox(
-          width: 36,
-          height: 28,
+          width: 44,
+          height: 30,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               for (var i = 0; i < _phases.length; i++) ...[
-                if (i > 0) const SizedBox(width: 2.2),
+                if (i > 0) const SizedBox(width: 3.2),
                 _EqualizerBar(
                   progress: (_controller.value + _phases[i]) % 1.0,
                 ),
@@ -748,248 +969,16 @@ class _EqualizerBar extends StatelessWidget {
   Widget build(BuildContext context) {
     // 가운데를 기준으로 위·아래로 대칭 확장.
     final t = (progress < 0.5 ? progress : 1 - progress) * 2;
-    final height = 5.0 + t * 20.0;
+    final height = 6.0 + t * 22.0;
     return Align(
       alignment: Alignment.center,
       child: Container(
-        width: 2.8,
+        width: 5.0,
         height: height,
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(99),
         ),
-      ),
-    );
-  }
-}
-
-/// 상세 시트: 자식 과제 목록 + (마이그레이션 교재 과제면) 문항 풀기 진입.
-class _HomeworkDetailPanel extends StatefulWidget {
-  const _HomeworkDetailPanel({required this.group});
-
-  final HomeworkGroup group;
-
-  @override
-  State<_HomeworkDetailPanel> createState() => _HomeworkDetailPanelState();
-}
-
-class _HomeworkDetailPanelState extends State<_HomeworkDetailPanel> {
-  HomeworkGroup get group => widget.group;
-
-  HomeworkMastery? _mastery;
-  bool _launching = false;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_loadMastery());
-  }
-
-  Future<void> _loadMastery() async {
-    try {
-      final mastery =
-          await StudentApi.instance.homeworkMastery(group.groupId);
-      if (mounted) setState(() => _mastery = mastery);
-    } catch (_) {
-      if (mounted) setState(() => _mastery = HomeworkMastery.none);
-    }
-  }
-
-  /// 배정 문항만 풀도록 범위를 좁혀 풀이 화면을 연다.
-  Future<void> _openSolve() async {
-    if (_launching) return;
-    setState(() => _launching = true);
-    try {
-      final problems =
-          await StudentApi.instance.listHomeworkProblems(group.groupId);
-      if (!mounted) return;
-      if (problems.isEmpty) {
-        TopGlassSnackBar.show(
-          context,
-          message: '이 과제에는 풀 수 있는 문항 정보가 없어요.',
-          icon: Icons.info_outline_rounded,
-        );
-        return;
-      }
-
-      final bookId = problems.first.bookId;
-      final gradeLabel = problems.first.gradeLabel;
-      final books = await TextbookApi.instance.listTextbooks();
-      if (!mounted) return;
-      StudentTextbook? found;
-      for (final b in books) {
-        if (b.bookId == bookId && b.gradeLabel == gradeLabel) {
-          found = b;
-          break;
-        }
-      }
-      final book = found;
-      if (book == null) {
-        TopGlassSnackBar.show(
-          context,
-          message: '교재를 찾지 못했어요.',
-          icon: Icons.error_outline_rounded,
-        );
-        return;
-      }
-
-      // 이미 통과한 문항은 다시 내지 않는다 (오답만 재출제).
-      final pending = problems.where((p) => !p.passed).toList(growable: false);
-      final target = pending.isEmpty ? problems : pending;
-
-      final scope = HomeworkSolveScope(
-        groupId: group.groupId,
-        title: group.title,
-        cropIds: {for (final p in target) p.cropId},
-        rawPages: {
-          for (final p in target)
-            if (p.rawPage != null) p.rawPage!,
-        },
-      );
-
-      await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => TextbookSolveScreen(book: book, homework: scope),
-        ),
-      );
-      if (mounted) unawaited(_loadMastery());
-    } catch (_) {
-      if (mounted) {
-        TopGlassSnackBar.show(
-          context,
-          message: '문항을 불러오지 못했어요.',
-          icon: Icons.wifi_off_rounded,
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _launching = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final mastery = _mastery;
-    final problemBased = mastery?.problemBased ?? false;
-    return YggGroupedCard(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            group.title.isEmpty ? '(제목 없음)' : group.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          if (group.pageSummary.isNotEmpty) ...[
-            const SizedBox(height: 7),
-            Text(
-              group.pageSummary,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.hintColor,
-              ),
-            ),
-          ],
-          if (problemBased) ...[
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Icon(
-                  mastery!.mastered
-                      ? Icons.verified_rounded
-                      : Icons.checklist_rounded,
-                  size: 18,
-                  color: mastery.mastered
-                      ? YggGlassTokens.confirmActionColor
-                      : theme.hintColor,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '문항 ${mastery.passed}/${mastery.total} 통과',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: mastery.mastered
-                        ? YggGlassTokens.confirmActionColor
-                        : theme.hintColor,
-                  ),
-                ),
-                const Spacer(),
-                FilledButton.icon(
-                  onPressed:
-                      _launching || mastery.mastered ? null : _openSolve,
-                  icon: _launching
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.edit_note_rounded, size: 18),
-                  label: Text(mastery.mastered ? '통과' : '풀기'),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 16),
-          const Divider(height: 1),
-          const SizedBox(height: 8),
-          Expanded(
-            child: group.children.isEmpty
-                ? Center(
-                    child: Text(
-                      '세부 항목이 없어요.',
-                      style: TextStyle(color: theme.hintColor),
-                    ),
-                  )
-                : ListView.separated(
-                    itemCount: group.children.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, i) {
-                      final child = group.children[i];
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        leading: Icon(
-                          child.phase >= 3
-                              ? Icons.check_circle_rounded
-                              : Icons.radio_button_unchecked_rounded,
-                          color: child.phase >= 3
-                              ? YggGlassTokens.confirmActionColor
-                              : const Color(0xFF9FB3B3),
-                          size: 22,
-                        ),
-                        title: Text(
-                          child.title,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        subtitle: child.memo.isNotEmpty
-                            ? Text(
-                                child.memo,
-                                style: TextStyle(
-                                  color: theme.hintColor,
-                                  fontSize: 12.5,
-                                ),
-                              )
-                            : null,
-                        trailing: child.page.isNotEmpty
-                            ? Text(
-                                'p.${child.page}',
-                                style: TextStyle(
-                                  color: theme.hintColor,
-                                  fontSize: 13,
-                                ),
-                              )
-                            : null,
-                      );
-                    },
-                  ),
-          ),
-        ],
       ),
     );
   }

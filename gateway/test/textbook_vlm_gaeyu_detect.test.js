@@ -102,6 +102,61 @@ test('개념+유형 따름 문제는 하이픈 번호를 그대로 유지한다'
   assert.ok(result.items.every((item) => item.is_set_header === false));
 });
 
+test('개념+유형 대표 문항은 모델이 세트 헤더라 해도 일반 크롭으로 남긴다', () => {
+  const result = detect([
+    {
+      number: '1',
+      category: 'essential_problem',
+      is_set_header: true,
+      set_range: { from: 1, to: 2 },
+    },
+    { number: '1-1', category: 'essential_problem' },
+    { number: '1-2', category: 'essential_problem' },
+  ]);
+
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['1', '1-1', '1-2'],
+  );
+  assert.equal(result.items[0].is_set_header, false);
+  assert.equal(result.items[0].set_range, null);
+});
+
+test('대표 필수 문제 번호가 본문 위 빈칸에 잡히면 왼쪽 같은 높이로 교정한다', () => {
+  const result = detect([
+    {
+      number: '1',
+      category: 'essential_problem',
+      bbox: [393, 276, 414, 358],
+      item_region: [421, 276, 552, 921],
+    },
+    {
+      number: '1-1',
+      category: 'essential_problem',
+      bbox: [589, 276, 606, 314],
+      item_region: [589, 276, 660, 921],
+    },
+    {
+      number: '2',
+      category: 'essential_problem',
+      bbox: [483, 248, 500, 269],
+      item_region: [484, 278, 584, 922],
+    },
+    {
+      number: '8',
+      category: 'unit_drill',
+      bbox: [300, 105, 322, 150],
+      item_region: [329, 105, 538, 471],
+    },
+  ]);
+
+  assert.deepEqual(result.items[0].bbox, [421, 239, 443, 269]);
+  assert.deepEqual(result.items[1].bbox, [589, 276, 606, 314]);
+  assert.deepEqual(result.items[2].bbox, [483, 248, 500, 269]);
+  assert.deepEqual(result.items[3].bbox, [329, 68, 351, 98]);
+  assert.match(result.notes, /gaeyu_number_bbox_repaired=2/);
+});
+
 test('개념+유형 쓱쓱 서술형은 갈래 접두어로 번호 충돌을 피한다', () => {
   const result = detect([
     { number: '1', category: 'descriptive', label: '예제 1' },

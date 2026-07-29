@@ -27,6 +27,12 @@ class HomeworkItem {
   String? page;
   int? count;
   int? timeLimitMinutes;
+
+  /// 권장 소요시간(분). 출제 시 확정값 (자동 제안을 사람이 수정했을 수 있음).
+  int? recommendedMinutes;
+
+  /// 출제 시점 자동 계산 권장시간(분). [recommendedMinutes] 와의 차이 = 사람의 교정.
+  int? recommendedMinutesAuto;
   String? pbPresetId;
   String? memo;
   String? content;
@@ -74,6 +80,8 @@ class HomeworkItem {
     this.page,
     this.count,
     this.timeLimitMinutes,
+    this.recommendedMinutes,
+    this.recommendedMinutesAuto,
     this.pbPresetId,
     this.memo,
     this.content,
@@ -349,11 +357,14 @@ class HomeworkStore {
   bool _supportsPbPresetIdColumn = true;
   bool _supportsTestOriginFlowIdColumn = true;
   bool _supportsPreDoneColumns = true;
+  bool _supportsRecommendedMinutesColumns = true;
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
   String? _rtAcademyId;
   final Map<String, Timer> _rtReloadDebounce = {};
+  final Set<String> _rtReloadSuppressedStudentIds = <String>{};
+  final Set<String> _rtReloadPendingStudentIds = <String>{};
   Timer? _rtFallbackPollTimer;
   DateTime? _rtPollCursorUtc;
   bool _rtPollInFlight = false;
@@ -389,6 +400,12 @@ class HomeworkStore {
   bool _isMissingTimeLimitColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('time_limit_minutes') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingRecommendedMinutesColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('recommended_minutes') &&
         (message.contains('does not exist') || message.contains('42703'));
   }
 
@@ -787,6 +804,54 @@ class HomeworkStore {
       return baseRows;
     }
 
+    Future<List<Map<String, dynamic>>> attachRecommendedMinutes(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      if (!_supportsRecommendedMinutesColumns) return baseRows;
+      try {
+        final ids = <String>[];
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, Map<String, dynamic>>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
+          );
+          final raw = await supa
+              .from('homework_items')
+              .select('id,recommended_minutes,recommended_minutes_auto')
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            byId[id] = row;
+          }
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          final src = byId[id];
+          if (src == null) continue;
+          row['recommended_minutes'] = src['recommended_minutes'];
+          row['recommended_minutes_auto'] = src['recommended_minutes_auto'];
+        }
+      } catch (e) {
+        if (_isMissingRecommendedMinutesColumnError(e)) {
+          _supportsRecommendedMinutesColumns = false;
+          return baseRows;
+        }
+        rethrow;
+      }
+      return baseRows;
+    }
+
     Future<List<Map<String, dynamic>>> attachOptionalColumns(
       List<Map<String, dynamic>> baseRows,
     ) async {
@@ -820,6 +885,11 @@ class HomeworkStore {
         rows = await attachPreDoneColumns(rows);
       } catch (e) {
         debugPrint('[HW] attachPreDoneColumns skipped: $e');
+      }
+      try {
+        rows = await attachRecommendedMinutes(rows);
+      } catch (e) {
+        debugPrint('[HW] attachRecommendedMinutes skipped: $e');
       }
       return rows;
     }
@@ -1106,6 +1176,10 @@ class HomeworkStore {
       count: _parseIntOpt(r['count']),
       timeLimitMinutes:
           _normalizePositiveInt(_parseIntOpt(r['time_limit_minutes'])),
+      recommendedMinutes:
+          _normalizePositiveInt(_parseIntOpt(r['recommended_minutes'])),
+      recommendedMinutesAuto:
+          _normalizePositiveInt(_parseIntOpt(r['recommended_minutes_auto'])),
       pbPresetId: _parseTrimmedTextOpt(r['pb_preset_id']),
       memo: (r['memo'] as String?)?.trim(),
       content: (r['content'] as String?)?.trim(),
@@ -2071,6 +2145,10 @@ class HomeworkStore {
   void _scheduleRealtimeReload(String studentId) {
     final sid = studentId.trim();
     if (sid.isEmpty) return;
+    if (_rtReloadSuppressedStudentIds.contains(sid)) {
+      _rtReloadPendingStudentIds.add(sid);
+      return;
+    }
     _rtReloadDebounce[sid]?.cancel();
     _rtReloadDebounce[sid] = Timer(const Duration(milliseconds: 120), () {
       _rtReloadDebounce.remove(sid);
@@ -2156,10 +2234,14 @@ class HomeworkStore {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
-            unawaited(_reloadGroupsForStudentByAcademy(
-              academyId: targetAcademyId,
-              studentId: sid,
-            ));
+            if (_rtReloadSuppressedStudentIds.contains(sid)) {
+              _scheduleRealtimeReload(sid);
+            } else {
+              unawaited(_reloadGroupsForStudentByAcademy(
+                academyId: targetAcademyId,
+                studentId: sid,
+              ));
+            }
           },
         )
         ..onPostgresChanges(
@@ -2173,10 +2255,14 @@ class HomeworkStore {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
-            unawaited(_reloadGroupsForStudentByAcademy(
-              academyId: targetAcademyId,
-              studentId: sid,
-            ));
+            if (_rtReloadSuppressedStudentIds.contains(sid)) {
+              _scheduleRealtimeReload(sid);
+            } else {
+              unawaited(_reloadGroupsForStudentByAcademy(
+                academyId: targetAcademyId,
+                studentId: sid,
+              ));
+            }
           },
         )
         ..onPostgresChanges(
@@ -2314,6 +2400,16 @@ class HomeworkStore {
         'page': it.page,
         'count': it.count,
         'time_limit_minutes': _normalizePositiveInt(it.timeLimitMinutes),
+        if (_supportsRecommendedMinutesColumns) ...<String, dynamic>{
+          // null 로 덮어쓰지 않는다. 단계 갱신 중 로컬 유실이 서버 값을 지우면
+          // 진행 중 권장시간이 사라진다.
+          if (_normalizePositiveInt(it.recommendedMinutes) != null)
+            'recommended_minutes':
+                _normalizePositiveInt(it.recommendedMinutes),
+          if (_normalizePositiveInt(it.recommendedMinutesAuto) != null)
+            'recommended_minutes_auto':
+                _normalizePositiveInt(it.recommendedMinutesAuto),
+        },
         if (_supportsPbPresetIdColumn)
           'pb_preset_id': _uuidOrNull(it.pbPresetId),
         if (it.memo != null) 'memo': it.memo,
@@ -2428,6 +2524,12 @@ class HomeworkStore {
       await _reloadStudent(studentId);
       throw StateError('CONFLICT_HOMEWORK_VERSION');
     } catch (e, st) {
+      if (_supportsRecommendedMinutesColumns &&
+          _isMissingRecommendedMinutesColumnError(e)) {
+        _supportsRecommendedMinutesColumns = false;
+        await _upsertItem(studentId, it);
+        return;
+      }
       if (_supportsPbPresetIdColumn && _isMissingPbPresetIdColumnError(e)) {
         _supportsPbPresetIdColumn = false;
         await _upsertItem(studentId, it);
@@ -2677,9 +2779,11 @@ class HomeworkStore {
               'problem_count': count,
             });
           }
-        } else if (startPage != null &&
-            endPage != null &&
-            endPage >= startPage) {
+        }
+        // 문항이 있는 페이지뿐 아니라 선택 범위의 개념 페이지도 보존한다.
+        // 기존 else-if 구조에서는 pageCounts가 하나라도 있으면 범위 내 0문항
+        // 페이지가 저장되지 않아 그룹 카드의 페이지 합집합에서 사라졌다.
+        if (startPage != null && endPage != null && endPage >= startPage) {
           for (int p = startPage; p <= endPage; p++) {
             if (!seenPages.add(p)) continue;
             pageRows.add({
@@ -2689,7 +2793,7 @@ class HomeworkStore {
               'book_id': bookId,
               'grade_label': gradeLabel,
               'page_number': p,
-              'problem_count': 1,
+              'problem_count': 0,
             });
           }
         }
@@ -2966,8 +3070,8 @@ class HomeworkStore {
           if (!_isMissingSourceStageColumnError(e)) rethrow;
           await supa.from('homework_item_problems').insert(
                 rows
-                    .map((row) => Map<String, dynamic>.from(row)
-                      ..remove('source_stage'))
+                    .map((row) =>
+                        Map<String, dynamic>.from(row)..remove('source_stage'))
                     .toList(growable: false),
               );
         }
@@ -3031,6 +3135,8 @@ class HomeworkStore {
     String? page,
     int? count,
     int? timeLimitMinutes,
+    int? recommendedMinutes,
+    int? recommendedMinutesAuto,
     String? pbPresetId,
     String? memo,
     String? content,
@@ -3069,6 +3175,8 @@ class HomeworkStore {
       page: page,
       count: count,
       timeLimitMinutes: _normalizePositiveInt(timeLimitMinutes),
+      recommendedMinutes: _normalizePositiveInt(recommendedMinutes),
+      recommendedMinutesAuto: _normalizePositiveInt(recommendedMinutesAuto),
       pbPresetId: (pbPresetId ?? '').trim().isEmpty ? null : pbPresetId!.trim(),
       memo: memo,
       content: content,
@@ -3126,6 +3234,11 @@ class HomeworkStore {
       'page': item.page ?? '',
       'count': item.count,
       'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
+      if (_normalizePositiveInt(item.recommendedMinutes) != null)
+        'recommended_minutes': _normalizePositiveInt(item.recommendedMinutes),
+      if (_normalizePositiveInt(item.recommendedMinutesAuto) != null)
+        'recommended_minutes_auto':
+            _normalizePositiveInt(item.recommendedMinutesAuto),
       'pb_preset_id': _uuidOrNull(item.pbPresetId),
       if (item.memo != null) 'memo': item.memo,
       'content': item.content ?? '',
@@ -5216,6 +5329,8 @@ class HomeworkStore {
     String? page,
     int? count,
     int? timeLimitMinutes,
+    int? recommendedMinutes,
+    int? recommendedMinutesAuto,
     String? testOriginFlowId,
     String? pbPresetId,
     String? type,
@@ -5234,6 +5349,7 @@ class HomeworkStore {
     bool deferReload = false,
     bool deferBump = false,
     bool localOnly = false,
+    Future<void>? persistenceBarrier,
   }) async {
     final cleanedGroupId = groupId.trim();
     if (cleanedGroupId.isEmpty) return null;
@@ -5279,6 +5395,9 @@ class HomeworkStore {
     final int? resolvedCount = (count != null && count > 0) ? count : null;
     final int? resolvedTimeLimit = _normalizePositiveInt(timeLimitMinutes) ??
         _normalizePositiveInt(template?.timeLimitMinutes);
+    final int? resolvedRecommended = _normalizePositiveInt(recommendedMinutes);
+    final int? resolvedRecommendedAuto =
+        _normalizePositiveInt(recommendedMinutesAuto);
     final String? resolvedTestOriginFlowId =
         (testOriginFlowId ?? '').trim().isNotEmpty
             ? testOriginFlowId!.trim()
@@ -5354,6 +5473,8 @@ class HomeworkStore {
       page: resolvedPage.isEmpty ? template?.page : resolvedPage,
       count: resolvedCount,
       timeLimitMinutes: resolvedTimeLimit,
+      recommendedMinutes: resolvedRecommended,
+      recommendedMinutesAuto: resolvedRecommendedAuto,
       pbPresetId: resolvedPbPresetId,
       memo: resolvedMemo.isEmpty ? template?.memo : resolvedMemo,
       content: resolvedContent.isEmpty ? template?.content : resolvedContent,
@@ -5410,6 +5531,9 @@ class HomeworkStore {
     }
 
     Future<void> persistToServer() async {
+      if (persistenceBarrier != null) {
+        await persistenceBarrier;
+      }
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
@@ -5430,6 +5554,11 @@ class HomeworkStore {
         'page': item.page,
         'count': item.count,
         'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
+        if (_supportsRecommendedMinutesColumns) ...<String, dynamic>{
+          'recommended_minutes': _normalizePositiveInt(item.recommendedMinutes),
+          'recommended_minutes_auto':
+              _normalizePositiveInt(item.recommendedMinutesAuto),
+        },
         if (_supportsPbPresetIdColumn)
           'pb_preset_id': _uuidOrNull(item.pbPresetId),
         if (item.memo != null) 'memo': item.memo,
@@ -5509,6 +5638,18 @@ class HomeworkStore {
       await persistToServer();
       return item.id;
     } catch (e, st) {
+      if (_supportsRecommendedMinutesColumns &&
+          _isMissingRecommendedMinutesColumnError(e)) {
+        _supportsRecommendedMinutesColumns = false;
+        try {
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_RECOMMENDED_ERROR] $retryError\n$retrySt',
+          );
+        }
+      }
       if (_supportsPbPresetIdColumn && _isMissingPbPresetIdColumnError(e)) {
         _supportsPbPresetIdColumn = false;
         try {
@@ -5733,13 +5874,19 @@ class HomeworkStore {
     studentGroups.add(group);
     studentGroups.sort(_compareGroupByOrder);
 
+    final suppressRealtimeReload = !reserveAssignments;
+    if (suppressRealtimeReload) {
+      _rtReloadSuppressedStudentIds.add(studentId);
+      _rtReloadDebounce.remove(studentId)?.cancel();
+    }
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
 
+      Future<void> groupPersistence = Future<void>.value();
       if (!reserveAssignments) {
-        await supa.from('homework_groups').insert({
+        groupPersistence = supa.from('homework_groups').insert({
           'id': groupId,
           'academy_id': academyId,
           'student_id': studentId,
@@ -5752,13 +5899,27 @@ class HomeworkStore {
           'created_at': now.toUtc().toIso8601String(),
           'updated_at': now.toUtc().toIso8601String(),
           'version': 1,
-        });
+        }).then<void>((_) {});
       }
 
+      final createFutures = <Future<String?>>[];
+      // 항목 하나가 여러 테이블 쓰기를 수행하므로 완전 병렬화하면 Supabase
+      // 게이트웨이에 순간적으로 수십 개 요청이 몰린다. 세 개 lane으로 제한한다.
+      final persistenceLanes = List<Future<void>>.generate(
+        3,
+        (_) => Future<void>.value(),
+      );
       final createdIds = <String>[];
       for (int idx = 0; idx < normalized.length; idx++) {
         final entry = normalized[idx];
-        final createdId = await addWaitingItemToGroup(
+        final laneIndex = idx % persistenceLanes.length;
+        final itemPersistenceBarrier = reserveAssignments
+            ? null
+            : Future.wait<void>([
+                groupPersistence,
+                persistenceLanes[laneIndex],
+              ]);
+        final createFuture = addWaitingItemToGroup(
           studentId: studentId,
           groupId: groupId,
           title: asText(entry['title']),
@@ -5768,6 +5929,9 @@ class HomeworkStore {
           page: asText(entry['page']),
           count: asPositiveInt(entry['count']),
           timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
+          recommendedMinutes: asPositiveInt(entry['recommendedMinutes']),
+          recommendedMinutesAuto:
+              asPositiveInt(entry['recommendedMinutesAuto']),
           pbPresetId: asNullableText(entry['pbPresetId']),
           type: asText(entry['type']),
           memo: asText(entry['memo']),
@@ -5786,13 +5950,24 @@ class HomeworkStore {
           deferReload: true,
           deferBump: true,
           localOnly: reserveAssignments,
+          persistenceBarrier: itemPersistenceBarrier,
         );
+        createFutures.add(createFuture);
+        if (!reserveAssignments) {
+          persistenceLanes[laneIndex] =
+              createFuture.then<void>((_) {}, onError: (_) {});
+        }
+      }
+      // 모든 로컬 하위과제/링크를 먼저 만든 뒤 한 번만 렌더링한다.
+      // 서버 저장은 그룹 생성 이후 제한된 동시성으로 진행한다.
+      if (!reserveAssignments) {
+        _bump();
+      }
+      final createdResults = await Future.wait(createFutures);
+      for (final createdId in createdResults) {
         if (createdId != null && createdId.isNotEmpty) {
           createdIds.add(createdId);
         }
-      }
-      if (createdIds.isNotEmpty && !reserveAssignments) {
-        _bump();
       }
 
       final createdBeforeReload = <HomeworkItem>[];
@@ -5842,17 +6017,23 @@ class HomeworkStore {
         return createdItems;
       }
 
-      await _reloadStudent(studentId);
-      final createdItems = <HomeworkItem>[];
-      for (final id in createdIds) {
-        final item = getById(studentId, id);
-        if (item != null) createdItems.add(item);
-      }
-      return createdItems;
+      // 서버 저장 결과는 각 로컬 item에 이미 반영되었다. 여기서 다시 전체 조회하면
+      // 낙관적으로 완성된 단일 그룹 카드가 중간 서버 상태로 교체되어 깜빡인다.
+      return createdBeforeReload;
     } catch (e, st) {
       print('[HW][createGroupWithWaitingItems][ERROR] $e\n$st');
       await _reloadStudent(studentId);
       return const <HomeworkItem>[];
+    } finally {
+      if (suppressRealtimeReload) {
+        // Supabase realtime 이벤트가 응답보다 조금 늦게 도착할 수 있으므로 짧은
+        // 유예 동안 이번 쓰기에서 발생한 이벤트를 흡수한다.
+        Timer(const Duration(milliseconds: 700), () {
+          _rtReloadSuppressedStudentIds.remove(studentId);
+          _rtReloadPendingStudentIds.remove(studentId);
+          _rtReloadDebounce.remove(studentId)?.cancel();
+        });
+      }
     }
   }
 
@@ -5864,6 +6045,7 @@ class HomeworkStore {
     try {
       final oldCodes = <String, String>{};
       final oldMappings = <String, List<Map<String, dynamic>>>{};
+      final oldRecommended = <String, ({int? minutes, int? minutesAuto})>{};
       for (final old in _byStudentId[studentId] ?? <HomeworkItem>[]) {
         final c = (old.assignmentCode ?? '').trim();
         if (c.isNotEmpty) oldCodes[old.id] = c;
@@ -5872,6 +6054,13 @@ class HomeworkStore {
           oldMappings[old.id] = mappings
               .map((e) => Map<String, dynamic>.from(e))
               .toList(growable: false);
+        }
+        if ((old.recommendedMinutes ?? 0) > 0 ||
+            (old.recommendedMinutesAuto ?? 0) > 0) {
+          oldRecommended[old.id] = (
+            minutes: old.recommendedMinutes,
+            minutesAuto: old.recommendedMinutesAuto,
+          );
         }
       }
 
@@ -5889,6 +6078,8 @@ class HomeworkStore {
       }
 
       final recoveredCodes = <String, String>{};
+      final recoveredRecommended =
+          <String, ({int? minutes, int? minutesAuto})>{};
       for (final item in list) {
         if ((item.assignmentCode ?? '').trim().isEmpty &&
             oldCodes.containsKey(item.id)) {
@@ -5904,6 +6095,28 @@ class HomeworkStore {
         if ((item.unitMappings == null || item.unitMappings!.isEmpty) &&
             oldMappings.containsKey(item.id)) {
           item.unitMappings = oldMappings[item.id];
+        }
+        // attachRecommendedMinutes 실패/누락 시에도 진행 중 권장시간이
+        // 사라지지 않도록 직전 로컬 값을 복원한다.
+        final prevRecommended = oldRecommended[item.id];
+        if (prevRecommended != null) {
+          var restored = false;
+          if ((item.recommendedMinutes ?? 0) <= 0 &&
+              (prevRecommended.minutes ?? 0) > 0) {
+            item.recommendedMinutes = prevRecommended.minutes;
+            restored = true;
+          }
+          if ((item.recommendedMinutesAuto ?? 0) <= 0 &&
+              (prevRecommended.minutesAuto ?? 0) > 0) {
+            item.recommendedMinutesAuto = prevRecommended.minutesAuto;
+            restored = true;
+          }
+          if (restored) {
+            recoveredRecommended[item.id] = (
+              minutes: item.recommendedMinutes,
+              minutesAuto: item.recommendedMinutesAuto,
+            );
+          }
         }
       }
 
@@ -5926,9 +6139,46 @@ class HomeworkStore {
         studentId: studentId,
         recoveredCodesByItemId: recoveredCodes,
       );
+      _syncRecoveredRecommendedMinutesToServer(
+        recoveredByItemId: recoveredRecommended,
+      );
       _consumeMarkedAutoCompleteForWaitingItems(studentId);
       _bump();
     } catch (_) {}
+  }
+
+  void _syncRecoveredRecommendedMinutesToServer({
+    required Map<String, ({int? minutes, int? minutesAuto})> recoveredByItemId,
+  }) {
+    if (!_supportsRecommendedMinutesColumns || recoveredByItemId.isEmpty) {
+      return;
+    }
+    for (final entry in recoveredByItemId.entries) {
+      final itemId = entry.key.trim();
+      if (itemId.isEmpty) continue;
+      final minutes = _normalizePositiveInt(entry.value.minutes);
+      final minutesAuto = _normalizePositiveInt(entry.value.minutesAuto);
+      if (minutes == null && minutesAuto == null) continue;
+      unawaited(() async {
+        try {
+          final payload = <String, dynamic>{
+            if (minutes != null) 'recommended_minutes': minutes,
+            if (minutesAuto != null) 'recommended_minutes_auto': minutesAuto,
+          };
+          await Supabase.instance.client
+              .from('homework_items')
+              .update(payload)
+              .eq('id', itemId);
+        } catch (e) {
+          if (_isMissingRecommendedMinutesColumnError(e)) {
+            _supportsRecommendedMinutesColumns = false;
+          }
+          debugPrint(
+            '[HW][_syncRecoveredRecommendedMinutes] skipped $itemId: $e',
+          );
+        }
+      }());
+    }
   }
 
   /// `homework_item_pages` → unitMappings.pageCounts 복원.
@@ -5968,10 +6218,8 @@ class HomeworkStore {
           final page = _parseIntOpt(row['page_number']);
           if (itemId.isEmpty || page == null || page <= 0) continue;
           final count = _parseIntOpt(row['problem_count']) ?? 0;
-          pageCountsByItem
-              .putIfAbsent(itemId, () => <String, int>{})['$page'] = count > 0
-              ? count
-              : 1;
+          pageCountsByItem.putIfAbsent(itemId, () => <String, int>{})['$page'] =
+              count < 0 ? 0 : count;
         }
       }
     } catch (e, st) {
@@ -6058,9 +6306,13 @@ class HomeworkStore {
         if (current == canonical) continue;
         child.assignmentCode = canonical;
         try {
-          await supa.from('homework_items').update({
-            'assignment_code': canonical,
-          }).eq('id', child.id).eq('academy_id', academyId);
+          await supa
+              .from('homework_items')
+              .update({
+                'assignment_code': canonical,
+              })
+              .eq('id', child.id)
+              .eq('academy_id', academyId);
         } catch (e) {
           if (_isMissingAssignmentCodeColumnError(e)) {
             _supportsAssignmentCodeColumn = false;

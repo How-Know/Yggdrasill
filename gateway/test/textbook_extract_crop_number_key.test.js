@@ -5,6 +5,7 @@ import {
   alignUniquePrefixedQuestionNumbers,
   expectedQuestionNumbersForInput,
   fetchTextbookCropPages,
+  normalizeIndependentSetPayloadQuestions,
   selectExpectedQuestions,
 } from '../src/problem_bank/extract_engines/vlm/runner.js';
 import { normalizeProblemNumberKey } from '../src/textbook/problem_number_key.js';
@@ -172,6 +173,36 @@ test('개념+유형 프롬프트가 번호 규칙과 코너를 설명한다', ()
     textbookScope: { series: 'ssen', sub_key: 'B', big_order: 0, mid_order: 0 },
   });
   assert.equal(/개념\+유형 교재 전용 규칙/.test(other), false);
+});
+
+test('개념+유형의 번호 없는 소문항 묶음은 종속형 세트로 고정한다', () => {
+  const rows = normalizeIndependentSetPayloadQuestions(
+    [{
+      question_number: '1',
+      is_set_question: true,
+      set_type: 'independent_set',
+      sub_questions: [
+        { label: '(1)', text: '첫째 물음' },
+        { label: '(2)', text: '둘째 물음' },
+      ],
+    }],
+    {
+      series: 'gaeyu',
+      book_id: 'book',
+      grade_label: '1-2',
+      big_order: 2,
+      mid_order: 0,
+      sub_key: 'B',
+      sub_index: 1,
+    },
+  );
+
+  assert.equal(rows[0].set_type, 'dependent_set');
+  assert.equal(rows[0].meta.set_model.set_type, 'dependent_set');
+  assert.equal(
+    rows[0].meta.set_model.delivery_policy,
+    'bundled_dependent_subquestions',
+  );
 });
 
 test('키 정규화 규칙', () => {

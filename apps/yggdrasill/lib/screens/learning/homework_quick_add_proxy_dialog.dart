@@ -10,6 +10,7 @@ import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
 import '../../services/homework_test_grading_result_service.dart';
+import '../../services/homework_time_defaults_service.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/student_textbook_active_store.dart';
 import '../../services/tenant_service.dart';
@@ -87,6 +88,7 @@ class HomeworkQuickAddProxyDialogState
   List<_LinkedTextbook> _allLinkedTextbooks = const <_LinkedTextbook>[];
   Map<String, bool> _textbookActiveOverrides = const <String, bool>{};
   String? _selectedLinkedBookKey;
+
   /// 선택 교재 payload `series` (`ssen` / `rpm` / `wonri` …).
   String? _linkedBookSeriesKey;
   List<_BigUnitSelectionNode> _units = const <_BigUnitSelectionNode>[];
@@ -307,6 +309,12 @@ class HomeworkQuickAddProxyDialogState
     }
     _initNaesinFilterDefaults();
     unawaited(_loadAllFlowLinkedBooks());
+    // 권장시간 단가 미리 로드 (없으면 권장시간 표시가 조용히 꺼진다).
+    unawaited(
+      HomeworkTimeDefaultsService.instance.ensureLoaded().then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
   }
 
   @override
@@ -381,7 +389,8 @@ class HomeworkQuickAddProxyDialogState
   ];
 
   /// 라벨 → `homework_item_problems.source_stage` 코드.
-  static const Map<String, String> _migratedProblemStageCodes = <String, String>{
+  static const Map<String, String> _migratedProblemStageCodes =
+      <String, String>{
     '원본': 'original',
     '1단계': 'variant1',
     '2단계': 'variant2',
@@ -1844,9 +1853,8 @@ class HomeworkQuickAddProxyDialogState
     // enrich로 uid가 채워져도 draft 매핑이 따라가도록 explorer 기준으로 재구성.
     if (!controller.loading && controller.data.units.isNotEmpty) {
       final prevCount = _problemRegions.length;
-      final prevUid = _problemRegions.isEmpty
-          ? ''
-          : _problemRegions.first.pbQuestionUid;
+      final prevUid =
+          _problemRegions.isEmpty ? '' : _problemRegions.first.pbQuestionUid;
       _rebuildProblemRegionsFromExplorer();
       regionsTouched = prevCount != _problemRegions.length ||
           prevUid !=
@@ -2493,6 +2501,17 @@ class HomeworkQuickAddProxyDialogState
         lower.contains('rpm');
   }
 
+  bool _isGaeyuLinkedBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
+    if (series == 'gaeyu') return true;
+    final compact =
+        book.bookName.trim().replaceAll(RegExp(r'[\s+]'), '').toLowerCase();
+    return compact.contains('개념유형') ||
+        compact.contains('개념플러스유형') ||
+        compact.contains('gaeyu');
+  }
+
   /// 쎈·RPM 공통: A/B/C 문제집 (하위과제=유형명, 그룹=중단원+단계).
   bool _isSsenLikeLinkedBook(_LinkedTextbook? book) =>
       _isSsenLinkedBook(book) || _isRpmLinkedBook(book);
@@ -2503,6 +2522,75 @@ class HomeworkQuickAddProxyDialogState
     final name = book.bookName.trim();
     final compact = name.replaceAll(RegExp(r'\s+'), '');
     return compact.contains('수력충전');
+  }
+
+  /// 권장시간 단가 조회용 시리즈 키 (payload series 우선, 없으면 이름 추론).
+  String _recommendedTimeSeriesKey(_LinkedTextbook? book) {
+    final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
+    if (series.isNotEmpty) return series;
+    if (_isSsenLinkedBook(book)) return 'ssen';
+    if (_isRpmLinkedBook(book)) return 'rpm';
+    if (_isGaeyuLinkedBook(book)) return 'gaeyu';
+    if (_isWonriLinkedBook(book)) return 'wonri';
+    if (_isSuryeokLinkedBook(book)) return 'suryeok';
+    return '';
+  }
+
+  /// 문항 단위 선택(이관 교재)의 권장시간(분). 단가 미설정이면 null.
+  int? _estimateRecommendedMinutesForRegions(
+    _LinkedTextbook book,
+    List<_TextbookProblemRegion> regions,
+  ) {
+    final series = _recommendedTimeSeriesKey(book);
+    final counts = <String, int>{};
+    var uncategorized = 0;
+    for (final region in regions) {
+      if (region.isSetHeader) continue;
+      final key = HomeworkTimeDefaultsService.categoryKeyFor(
+        seriesKey: series,
+        label: region.label,
+        section: region.section,
+        isWonri: region.isWonri,
+        subKey: region.subKey,
+      );
+      if (key.isEmpty) {
+        uncategorized++;
+      } else {
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+    }
+    return HomeworkTimeDefaultsService.instance.estimateMinutes(
+      seriesKey: series,
+      schoolLevelKey: HomeworkTimeDefaultsService.schoolLevelKeyForGradeLabel(
+        book.gradeLabel,
+      ),
+      categoryCounts: counts,
+      uncategorizedCount: uncategorized,
+    );
+  }
+
+  /// 문항 분류 없이 문항수/페이지수만 아는 경우의 권장시간(분).
+  int? _estimateRecommendedMinutesForCount(
+    _LinkedTextbook? book, {
+    int? count,
+    String? pageText,
+  }) {
+    final series = _recommendedTimeSeriesKey(book);
+    int? pageCount;
+    if ((count == null || count <= 0) &&
+        pageText != null &&
+        pageText.trim().isNotEmpty) {
+      final pages = _pagesFromRawPageText(pageText);
+      pageCount = pages.isEmpty ? null : pages.length;
+    }
+    return HomeworkTimeDefaultsService.instance.estimateMinutes(
+      seriesKey: series,
+      schoolLevelKey: HomeworkTimeDefaultsService.schoolLevelKeyForGradeLabel(
+        book?.gradeLabel ?? '',
+      ),
+      uncategorizedCount: (count != null && count > 0) ? count : 0,
+      pageCount: pageCount,
+    );
   }
 
   String? _ssenStageLetter(String? raw) {
@@ -2625,8 +2713,7 @@ class HomeworkQuickAddProxyDialogState
           final displaySubKey =
               '${m['displaySubKey'] ?? m['display_sub_key'] ?? ''}'.trim();
           final midName = '${m['midName'] ?? m['mid_name'] ?? ''}'.trim();
-          final smallName =
-              '${m['smallName'] ?? m['small_name'] ?? ''}'.trim();
+          final smallName = '${m['smallName'] ?? m['small_name'] ?? ''}'.trim();
           if (bigOrder == null || midOrder == null) continue;
           final midKey = '$bigOrder|$midOrder';
           midKeys.add(midKey);
@@ -2644,10 +2731,8 @@ class HomeworkQuickAddProxyDialogState
       }
       if (smallKeys.isEmpty) {
         // 매핑이 없으면 제목 집합으로 폴백
-        final titles = items
-            .map((e) => e.title.trim())
-            .where((e) => e.isNotEmpty)
-            .toSet();
+        final titles =
+            items.map((e) => e.title.trim()).where((e) => e.isNotEmpty).toSet();
         if (titles.length == 1) return _truncateTitle(titles.first, 25);
         return '그룹 과제';
       }
@@ -2760,8 +2845,7 @@ class HomeworkQuickAddProxyDialogState
       }
 
       for (final key in touched) {
-        assignedCountBySmallKey[key] =
-            (assignedCountBySmallKey[key] ?? 0) + 1;
+        assignedCountBySmallKey[key] = (assignedCountBySmallKey[key] ?? 0) + 1;
         if (!isCompleted) continue;
         completedCountBySmallKey[key] =
             (completedCountBySmallKey[key] ?? 0) + 1;
@@ -4184,7 +4268,8 @@ class HomeworkQuickAddProxyDialogState
   ) {
     if (regions.isEmpty) return null;
     final first = regions.first;
-    final bySub = smallNodes['${first.bigOrder}|${first.midOrder}|${first.subKey}'];
+    final bySub =
+        smallNodes['${first.bigOrder}|${first.midOrder}|${first.subKey}'];
     if (bySub != null) return bySub;
 
     final smallName = first.smallName.trim();
@@ -4315,9 +4400,7 @@ class HomeworkQuickAddProxyDialogState
         : (isSsenLike
             ? (typeTitle.isNotEmpty
                 ? typeTitle
-                : (groupLabels.isNotEmpty
-                    ? groupLabels.join(', ')
-                    : smallName))
+                : (groupLabels.isNotEmpty ? groupLabels.join(', ') : smallName))
             : (isWonri
                 ? (wonriTypeName.isNotEmpty
                     ? wonriTypeName
@@ -4337,6 +4420,7 @@ class HomeworkQuickAddProxyDialogState
       sourceUnitPath: sourceUnitPath,
       unitMappings: <Map<String, dynamic>>[mapping],
       draftKey: draftKey,
+      recommendedMinutes: _estimateRecommendedMinutesForRegions(book, regions),
     );
   }
 
@@ -4351,6 +4435,7 @@ class HomeworkQuickAddProxyDialogState
     required String sourceUnitPath,
     required List<Map<String, dynamic>> unitMappings,
     String? draftKey,
+    int? recommendedMinutes,
   }) {
     final testMode = _isCurrentHomeworkTypeTest();
     final timeLimitMinutes =
@@ -4359,6 +4444,13 @@ class HomeworkQuickAddProxyDialogState
     final color = _colorForType(type);
     final content = '${_bookMetaText(book)}\n$pathSummary';
     final normalizedPage = _normalizePageTextCompact(page);
+    // 문항 분류 기반 계산값이 없으면 문항수/페이지수로 폴백.
+    final resolvedRecommended = recommendedMinutes ??
+        _estimateRecommendedMinutesForCount(
+          book,
+          count: _parsePositiveIntText(count),
+          pageText: normalizedPage,
+        );
     return _DraftGroupItem(
       key: draftKey ?? 'draft_${_draftGroupItemSeq++}',
       type: type,
@@ -4384,6 +4476,8 @@ class HomeworkQuickAddProxyDialogState
       sourceUnitPath: sourceUnitPath,
       unitMappings: unitMappings,
       timeLimitMinutes: timeLimitMinutes,
+      recommendedMinutes: resolvedRecommended,
+      recommendedMinutesAuto: resolvedRecommended,
       testMode: testMode,
       testOriginFlowId: testMode ? _currentTestOriginFlowId() : null,
     );
@@ -4498,10 +4592,9 @@ class HomeworkQuickAddProxyDialogState
         for (final mid in big.middles) {
           if (midOrder is num && mid.orderIndex != midOrder.toInt()) continue;
           for (final small in mid.smalls) {
-            final subKeyMatched =
-                subKey.isNotEmpty && small.subKey == subKey;
-            final smallOrderMatched = smallOrder is num &&
-                small.orderIndex == smallOrder.toInt();
+            final subKeyMatched = subKey.isNotEmpty && small.subKey == subKey;
+            final smallOrderMatched =
+                smallOrder is num && small.orderIndex == smallOrder.toInt();
             if (!subKeyMatched && !smallOrderMatched) continue;
             if (pages.isEmpty) {
               small.selected = false;
@@ -4915,6 +5008,19 @@ class HomeworkQuickAddProxyDialogState
     final sourceUnitPath = selectedBook == null
         ? null
         : (useRangeDraft ? rangeTask?.sourceUnitPath : null);
+    final int? recommendedMinutes = () {
+      if (useRangeDraft && _rangePickerMode == 'type') {
+        final regions = _selectedProblemRegions();
+        if (regions.isNotEmpty) {
+          return _estimateRecommendedMinutesForRegions(selectedBook, regions);
+        }
+      }
+      return _estimateRecommendedMinutesForCount(
+        selectedBook,
+        count: _parsePositiveIntText(count),
+        pageText: page,
+      );
+    }();
     return _DraftGroupItem(
       key: 'draft_${_draftGroupItemSeq++}',
       type: type,
@@ -4938,6 +5044,8 @@ class HomeworkQuickAddProxyDialogState
       sourceUnitPath: sourceUnitPath,
       unitMappings: unitMappings,
       timeLimitMinutes: timeLimitMinutes,
+      recommendedMinutes: recommendedMinutes,
+      recommendedMinutesAuto: recommendedMinutes,
       testMode: testMode,
       testOriginFlowId: testMode ? _currentTestOriginFlowId() : null,
     );
@@ -5085,6 +5193,9 @@ class HomeworkQuickAddProxyDialogState
     final countController = ImeAwareTextEditingController(text: source.count);
     final timeLimitController = ImeAwareTextEditingController(
       text: source.timeLimitMinutes?.toString() ?? '',
+    );
+    final recommendedController = ImeAwareTextEditingController(
+      text: source.recommendedMinutes?.toString() ?? '',
     );
     final memoController = ImeAwareTextEditingController(text: source.memo);
     final contentController =
@@ -5238,6 +5349,24 @@ class HomeworkQuickAddProxyDialogState
                       ],
                       const SizedBox(height: 10),
                       TextField(
+                        controller: recommendedController,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        decoration: _inputDecoration(
+                          '권장시간(분)',
+                          hint: source.recommendedMinutesAuto != null
+                              ? '자동 제안 ${source.recommendedMinutesAuto}분'
+                              : '예: 30',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
                         controller: memoController,
                         minLines: 2,
                         maxLines: 4,
@@ -5282,6 +5411,8 @@ class HomeworkQuickAddProxyDialogState
       final page = _normalizePageTextCompact(pageController.text);
       final count = countController.text.trim();
       final timeLimitMinutes = _parsePositiveIntText(timeLimitController.text);
+      final recommendedMinutes =
+          _parsePositiveIntText(recommendedController.text);
       final memo = memoController.text.trim();
       final content = contentController.text.trim();
       final resolvedType = isLinkedTextbookDraft
@@ -5306,6 +5437,7 @@ class HomeworkQuickAddProxyDialogState
         splitParts: _defaultSplitParts,
         timeLimitMinutes:
             (source.testMode || isNaesinDraft) ? timeLimitMinutes : null,
+        recommendedMinutes: recommendedMinutes,
         testMode: source.testMode || isNaesinDraft,
       );
       final otherPages = _draftUsedPages(excludingDraftKey: source.key);
@@ -5329,6 +5461,7 @@ class HomeworkQuickAddProxyDialogState
       pageController.dispose();
       countController.dispose();
       timeLimitController.dispose();
+      recommendedController.dispose();
       memoController.dispose();
       contentController.dispose();
     }
@@ -5432,7 +5565,22 @@ class HomeworkQuickAddProxyDialogState
         ),
       );
     }
-    return ReorderableListView.builder(
+    final rawRecommendedMinutes = _draftGroupItems.fold<int>(
+      0,
+      (sum, item) => sum + (item.recommendedMinutes ?? 0),
+    );
+    final alphaIncludedItemCount = _draftGroupItems
+        .where((item) => (item.recommendedMinutesAuto ?? 0) > 0)
+        .length;
+    // 각 하위과제 계산값에 α가 포함되어 있지만, 하나의 그룹 과제 합계에서는
+    // 준비·이동·채점·검사 α를 한 번만 센다.
+    final totalRecommendedMinutes = math.max(
+      0,
+      rawRecommendedMinutes -
+          math.max(0, alphaIncludedItemCount - 1) *
+              HomeworkTimeDefaultsService.initialAlphaMinutes,
+    );
+    final listView = ReorderableListView.builder(
       buildDefaultDragHandles: false,
       itemCount: _draftGroupItems.length,
       onReorder: _autoSubtaskMode ? (_, __) {} : _reorderDraftGroupItems,
@@ -5447,8 +5595,12 @@ class HomeworkQuickAddProxyDialogState
             item.timeLimitMinutes != null && item.timeLimitMinutes! > 0
                 ? ' · ${item.timeLimitMinutes}분'
                 : '';
+        final recommendedText =
+            item.recommendedMinutes != null && item.recommendedMinutes! > 0
+                ? ' · 권장 ${item.recommendedMinutes}분'
+                : '';
         final summaryLine =
-            '${item.type} · ${count.isEmpty ? '-문항' : '${count}문항'}$limitText';
+            '${item.type} · ${count.isEmpty ? '-문항' : '${count}문항'}$limitText$recommendedText';
         return Container(
           key: ValueKey('draft_group_item_${item.key}'),
           margin: const EdgeInsets.only(bottom: 8),
@@ -5620,6 +5772,32 @@ class HomeworkQuickAddProxyDialogState
         );
       },
     );
+    if (totalRecommendedMinutes <= 0) return listView;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+          child: Text(
+            '권장시간 합계 ${_formatMinutesLabel(totalRecommendedMinutes)}',
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: UtilityGlassDialogTokens.iconColor.withValues(alpha: 0.7),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        Expanded(child: listView),
+      ],
+    );
+  }
+
+  String _formatMinutesLabel(int minutes) {
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    if (h <= 0) return '$m분';
+    return m == 0 ? '$h시간' : '$h시간 $m분';
   }
 
   Widget _buildGroupSettingsRow() {
@@ -5931,7 +6109,8 @@ class HomeworkQuickAddProxyDialogState
   }
 
   Widget _buildBookRangeHeader(_LinkedTextbook book) {
-    final title = book.bookName.trim().isEmpty ? '(이름 없음)' : book.bookName.trim();
+    final title =
+        book.bookName.trim().isEmpty ? '(이름 없음)' : book.bookName.trim();
     final grade = book.gradeLabel.trim();
     final subtitle = grade.isEmpty ? null : grade;
     final canGoBack = !_isChildAddMode;
@@ -6053,8 +6232,7 @@ class HomeworkQuickAddProxyDialogState
         child: SizedBox(
           height: actionHeight,
           child: OutlinedButton(
-            onPressed: () =>
-                _showDialogSnackBar('추가할 내신 셀을 클릭하면 하위 과제로 담깁니다.'),
+            onPressed: () => _showDialogSnackBar('추가할 내신 셀을 클릭하면 하위 과제로 담깁니다.'),
             style: OutlinedButton.styleFrom(
               foregroundColor: kDlgText,
               side: const BorderSide(color: kDlgBorder),
@@ -7183,6 +7361,11 @@ class HomeworkQuickAddProxyDialogState
       final title = inputTitle.isEmpty ? '교재 과제' : inputTitle;
       final bookMeta = _bookMetaText(selectedBook);
       content = content.isEmpty ? bookMeta : '$bookMeta\n$content';
+      final recommendedMinutes = _estimateRecommendedMinutesForCount(
+        selectedBook,
+        count: _parsePositiveIntText(count),
+        pageText: page,
+      );
       Navigator.pop(context, {
         'studentId': widget.studentId,
         'flowId': _flowId,
@@ -7201,6 +7384,10 @@ class HomeworkQuickAddProxyDialogState
         ),
         'color': _colorForType(linkedType),
         if (timeLimitMinutes != null) 'timeLimitMinutes': timeLimitMinutes,
+        if (recommendedMinutes != null) ...{
+          'recommendedMinutes': recommendedMinutes,
+          'recommendedMinutesAuto': recommendedMinutes,
+        },
         if (testMode) 'testMode': true,
         if (testMode && (_currentTestOriginFlowId() ?? '').isNotEmpty)
           'testOriginFlowId': _currentTestOriginFlowId(),
@@ -7287,6 +7474,20 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
 
+    final int? mergedRecommendedMinutes = () {
+      if (_rangePickerMode == 'type') {
+        final regions = _selectedProblemRegions();
+        if (regions.isNotEmpty) {
+          return _estimateRecommendedMinutesForRegions(selectedBook, regions);
+        }
+      }
+      return _estimateRecommendedMinutesForCount(
+        selectedBook,
+        count: _parsePositiveIntText(mergedTask.count),
+        pageText: mergedTask.page,
+      );
+    }();
+
     Navigator.pop(context, {
       'studentId': widget.studentId,
       'flowId': _flowId,
@@ -7305,6 +7506,10 @@ class HomeworkQuickAddProxyDialogState
       ),
       'color': _colorForType(linkedType),
       if (timeLimitMinutes != null) 'timeLimitMinutes': timeLimitMinutes,
+      if (mergedRecommendedMinutes != null) ...{
+        'recommendedMinutes': mergedRecommendedMinutes,
+        'recommendedMinutesAuto': mergedRecommendedMinutes,
+      },
       if (testMode) 'testMode': true,
       if (testMode && (_currentTestOriginFlowId() ?? '').isNotEmpty)
         'testOriginFlowId': _currentTestOriginFlowId(),
@@ -8597,8 +8802,8 @@ class HomeworkQuickAddProxyDialogState
           _useCustomSource || (!_autoSubtaskMode && _detailsPanelExpanded);
       final sectionTitle = _useCustomSource ? '사용자화 과제' : '하위 과제 정보';
       final canToggleDetails = showDetailEditors && !_useCustomSource;
-      final showAutoCheckbox = !_useCustomSource &&
-          (hasBookSelection || showNaesinPanel);
+      final showAutoCheckbox =
+          !_useCustomSource && (hasBookSelection || showNaesinPanel);
       final header = Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         child: Row(
@@ -9038,6 +9243,12 @@ class _DraftGroupItem {
   final Color color;
   final int splitParts;
   final int? timeLimitMinutes;
+
+  /// 권장 소요시간(분). 자동 제안을 사람이 수정했을 수 있는 확정값.
+  final int? recommendedMinutes;
+
+  /// 출제 시점 자동 계산 권장시간(분). 수정 여부 비교/통계용 원본.
+  final int? recommendedMinutesAuto;
   final bool testMode;
   final String? testOriginFlowId;
   final String? pbPresetId;
@@ -9062,6 +9273,8 @@ class _DraftGroupItem {
     required this.color,
     required this.splitParts,
     this.timeLimitMinutes,
+    this.recommendedMinutes,
+    this.recommendedMinutesAuto,
     this.testMode = false,
     this.testOriginFlowId,
     this.pbPresetId,
@@ -9086,6 +9299,8 @@ class _DraftGroupItem {
     Color? color,
     int? splitParts,
     Object? timeLimitMinutes = _unset,
+    Object? recommendedMinutes = _unset,
+    Object? recommendedMinutesAuto = _unset,
     bool? testMode,
     Object? testOriginFlowId = _unset,
     Object? pbPresetId = _unset,
@@ -9112,6 +9327,12 @@ class _DraftGroupItem {
       timeLimitMinutes: identical(timeLimitMinutes, _unset)
           ? this.timeLimitMinutes
           : timeLimitMinutes as int?,
+      recommendedMinutes: identical(recommendedMinutes, _unset)
+          ? this.recommendedMinutes
+          : recommendedMinutes as int?,
+      recommendedMinutesAuto: identical(recommendedMinutesAuto, _unset)
+          ? this.recommendedMinutesAuto
+          : recommendedMinutesAuto as int?,
       testMode: testMode ?? this.testMode,
       testOriginFlowId: identical(testOriginFlowId, _unset)
           ? this.testOriginFlowId
@@ -9141,6 +9362,10 @@ class _DraftGroupItem {
       'splitParts': splitParts.clamp(1, 4).toInt(),
       if (timeLimitMinutes != null && timeLimitMinutes! > 0)
         'timeLimitMinutes': timeLimitMinutes,
+      if (recommendedMinutes != null && recommendedMinutes! > 0)
+        'recommendedMinutes': recommendedMinutes,
+      if (recommendedMinutesAuto != null && recommendedMinutesAuto! > 0)
+        'recommendedMinutesAuto': recommendedMinutesAuto,
       if (testMode) 'testMode': true,
       if (testOriginFlowId != null && testOriginFlowId!.trim().isNotEmpty)
         'testOriginFlowId': testOriginFlowId!.trim(),

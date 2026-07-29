@@ -29,6 +29,9 @@ class TextbookStageBatchService {
 
   static const int _vlmLongEdgePx = 1500;
   static const int _answerImageLongEdgePx = 3000;
+  static const Duration _pdfCacheMaxAge = Duration(days: 7);
+  static final Map<String, Future<File>> _pdfDownloadsInFlight =
+      <String, Future<File>>{};
 
   final TextbookPdfService _pdfService;
   final TextbookVlmAnswerService _answerService;
@@ -153,17 +156,91 @@ class TextbookStageBatchService {
     );
     if (target.url.isEmpty) throw Exception('${kind}_pdf_url_empty');
     final tempDir = await getTemporaryDirectory();
+    final cacheDir =
+        Directory(p.join(tempDir.path, 'yggdrasill_textbook_pdf_cache'));
+    await cacheDir.create(recursive: true);
+    await _prunePdfCache(cacheDir);
+
     final safeBook = bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-    final file = File(p.join(
-      tempDir.path,
-      '${tempPrefix}_${safeBook}_${gradeLabel}_${DateTime.now().microsecondsSinceEpoch}.pdf',
-    ));
+    final safeGrade = gradeLabel.replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_');
+    final rawIdentity = (target.contentHash ?? '').trim().isNotEmpty
+        ? target.contentHash!.trim()
+        : 'size_${target.fileSizeBytes ?? 0}';
+    final safeIdentity = rawIdentity.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    final cacheKey = '${tempPrefix}_${safeBook}_${safeGrade}_$safeIdentity';
+    final file = File(p.join(cacheDir.path, '$cacheKey.pdf'));
+
+    if (await _isValidCachedPdf(file, target.fileSizeBytes)) {
+      return PdfDocument.openFile(file.path);
+    }
+
+    final pending = _pdfDownloadsInFlight[cacheKey];
+    if (pending != null) {
+      final cached = await pending;
+      return PdfDocument.openFile(cached.path);
+    }
+
+    final download = _downloadPdfToCache(
+      target: target,
+      destination: file,
+      kind: kind,
+    );
+    _pdfDownloadsInFlight[cacheKey] = download;
+    try {
+      final cached = await download;
+      return PdfDocument.openFile(cached.path);
+    } finally {
+      _pdfDownloadsInFlight.remove(cacheKey);
+    }
+  }
+
+  Future<bool> _isValidCachedPdf(File file, int? expectedSize) async {
+    if (!await file.exists()) return false;
+    final length = await file.length();
+    if (length <= 0) return false;
+    return expectedSize == null || expectedSize <= 0 || length == expectedSize;
+  }
+
+  Future<File> _downloadPdfToCache({
+    required TextbookDownloadTarget target,
+    required File destination,
+    required String kind,
+  }) async {
     final res = await _http.get(Uri.parse(target.url));
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('${kind}_pdf_download_failed(${res.statusCode})');
     }
-    await file.writeAsBytes(res.bodyBytes, flush: true);
-    return PdfDocument.openFile(file.path);
+    final expectedSize = target.fileSizeBytes;
+    if (expectedSize != null &&
+        expectedSize > 0 &&
+        res.bodyBytes.length != expectedSize) {
+      throw Exception(
+        '${kind}_pdf_size_mismatch(${res.bodyBytes.length}/$expectedSize)',
+      );
+    }
+    final partial = File(
+      '${destination.path}.${DateTime.now().microsecondsSinceEpoch}.part',
+    );
+    await partial.writeAsBytes(res.bodyBytes, flush: true);
+    if (await destination.exists()) {
+      await destination.delete();
+    }
+    return partial.rename(destination.path);
+  }
+
+  Future<void> _prunePdfCache(Directory cacheDir) async {
+    final cutoff = DateTime.now().subtract(_pdfCacheMaxAge);
+    try {
+      await for (final entity in cacheDir.list()) {
+        if (entity is! File || !entity.path.endsWith('.pdf')) continue;
+        final stat = await entity.stat();
+        if (stat.modified.isBefore(cutoff)) {
+          await entity.delete();
+        }
+      }
+    } catch (_) {
+      // 캐시 정리 실패는 추출을 막지 않는다.
+    }
   }
 
   Future<_SavedWithMissing> _runAnswers({
@@ -395,7 +472,45 @@ class TextbookStageBatchService {
           expectedDetails: batch.entries,
           seriesKey: seriesKey,
         );
-        for (final item in result.items) {
+        String itemSection(TextbookVlmSolutionRefItem item) {
+          final index = item.expectedIndex;
+          if (index >= 0 && index < targets.length) {
+            return targets[index].crop.section;
+          }
+          return RegExp(r'^(예제|유제|연습)').hasMatch(item.problemNumber)
+              ? 'descriptive'
+              : '';
+        }
+
+        final sections = <String>{
+          for (final target in targets) target.crop.section
+        };
+        final reported = <(String, String)>[
+          for (final item in result.items)
+            (item.problemNumber.trim(), itemSection(item)),
+        ];
+        final sectionsToVerify = <String>{};
+        if (seriesKey == 'gaeyu' && sections.length > 1) {
+          for (var position = 0; position < targets.length; position += 1) {
+            if (hits.containsKey(position)) continue;
+            final target = targets[position];
+            final number = target.crop.problemNumber.trim();
+            if (reported.any((one) =>
+                one.$1 == number &&
+                one.$2.isNotEmpty &&
+                one.$2 != target.crop.section)) {
+              sectionsToVerify.add(target.crop.section);
+            }
+          }
+          if (reported.any((one) => one.$2 == 'descriptive')) {
+            sectionsToVerify.add('descriptive');
+          }
+        }
+        final pageItems = sectionsToVerify.isNotEmpty
+            ? result.items
+                .where((item) => !sectionsToVerify.contains(itemSection(item)))
+            : result.items;
+        for (final item in pageItems) {
           final matched = batch.resolve(
             detectedNumber: item.problemNumber,
             expectedIndex: item.expectedIndex,
@@ -409,6 +524,46 @@ class TextbookStageBatchService {
                 displayPage: result.displayPage,
               ),
             );
+          }
+        }
+        for (final section in sectionsToVerify) {
+          final sectionPositions = <int>[
+            for (var i = 0; i < targets.length; i += 1)
+              if (!hits.containsKey(i) && targets[i].crop.section == section) i,
+          ];
+          if (sectionPositions.isEmpty) continue;
+          final sectionBatch = TextbookExpectedAnswerBatch(
+            positions: sectionPositions,
+            entries: <TextbookExpectedAnswer>[
+              for (final position in sectionPositions)
+                targets[position].expected,
+            ],
+          );
+          final verified = await _solutionRefService.detectOnPage(
+            imageBytes: png,
+            rawPage: page,
+            academyId: academyId,
+            bookId: bookId,
+            gradeLabel: gradeLabel,
+            expectedNumbers: sectionBatch.numbers,
+            expectedDetails: sectionBatch.entries,
+            seriesKey: seriesKey,
+          );
+          for (final item in verified.items) {
+            final matched = sectionBatch.resolve(
+              detectedNumber: item.problemNumber,
+              expectedIndex: item.expectedIndex,
+            );
+            for (final position in matched) {
+              hits.putIfAbsent(
+                position,
+                () => _SolutionRefWithPage(
+                  item: item,
+                  rawPage: verified.rawPage,
+                  displayPage: verified.displayPage,
+                ),
+              );
+            }
           }
         }
       } catch (_) {

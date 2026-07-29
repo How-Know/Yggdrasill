@@ -77,9 +77,20 @@ export function buildExpectedIndex(expectedEntries, normalizeKey) {
       page: Number.isFinite(page) && page > 0 ? page : 0,
     };
     all.push(candidate);
-    const bucket = byKey.get(key);
-    if (bucket) bucket.push(candidate);
-    else byKey.set(key, [candidate]);
+    const keys = new Set([key]);
+    // 쏙쏙은 앱에서 블록 충돌 방지를 위해 "11-1"처럼 본문 페이지를 번호
+    // 앞에 붙인다. 답지에는 P.11 배지 아래 "1"로 인쇄되므로, 기대 항목의
+    // page와 접두어가 같을 때만 로컬 번호 "1"도 별칭으로 색인한다.
+    const pagePrefix = number.match(/^(\d+)-(.+)$/);
+    if (candidate.page && Number(pagePrefix?.[1]) === candidate.page) {
+      const localKey = normalizeKey(pagePrefix[2]);
+      if (localKey) keys.add(localKey);
+    }
+    for (const indexedKey of keys) {
+      const bucket = byKey.get(indexedKey);
+      if (bucket) bucket.push(candidate);
+      else byKey.set(indexedKey, [candidate]);
+    }
   });
   return { byKey, all };
 }

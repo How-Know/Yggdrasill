@@ -19,6 +19,7 @@ class HomeworkNowPlayingBar extends StatelessWidget {
     this.width,
     required this.onPlayPause,
     required this.onSubmit,
+    this.onExpand,
   });
 
   final HomeworkGroup group;
@@ -33,6 +34,9 @@ class HomeworkNowPlayingBar extends StatelessWidget {
   final double? width;
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
+
+  /// 표지·제목 영역 탭 → 전체 과제 시트.
+  final VoidCallback? onExpand;
 
   static const double height = 64;
   static const double _coverSize = 44;
@@ -95,42 +99,55 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    _Cover(
-                      size: coverSize,
-                      radius: coverRadius,
-                      isPrint: group.isPrintSource,
-                      coverRef: hasCover ? coverRef : null,
-                    ),
-                    SizedBox(width: (inline ? 10.0 : 12.0) * s),
                     Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: (inline ? 14.0 : 15.0) * s,
-                              fontWeight: FontWeight.w700,
-                              color: titleColor,
-                              height: 1.15,
-                            ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: onExpand,
+                          borderRadius: BorderRadius.circular(12 * s),
+                          child: Row(
+                            children: [
+                              _Cover(
+                                size: coverSize,
+                                radius: coverRadius,
+                                isPrint: group.isPrintSource,
+                                coverRef: hasCover ? coverRef : null,
+                              ),
+                              SizedBox(width: (inline ? 10.0 : 12.0) * s),
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: (inline ? 14.0 : 15.0) * s,
+                                        fontWeight: FontWeight.w700,
+                                        color: titleColor,
+                                        height: 1.15,
+                                      ),
+                                    ),
+                                    SizedBox(height: 2 * s),
+                                    Text(
+                                      subtitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: (inline ? 11.5 : 12.5) * s,
+                                        fontWeight: FontWeight.w500,
+                                        color: subColor,
+                                        height: 1.15,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                          SizedBox(height: 2 * s),
-                          Text(
-                            subtitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: (inline ? 11.5 : 12.5) * s,
-                              fontWeight: FontWeight.w500,
-                              color: subColor,
-                              height: 1.15,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                     SizedBox(width: 2 * s),

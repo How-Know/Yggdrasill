@@ -2256,6 +2256,7 @@ class _MainScreenState extends State<MainScreen>
     _uiAnimController.dispose();
     _animLogTimer?.cancel();
     unawaited(M5QuestionRequestStore.instance.stop());
+    unawaited(KioskNoticePrintService.instance.stop());
     super.dispose();
   }
 
@@ -5810,6 +5811,9 @@ extension on _MainScreenState {
             page: (entry['page'] as String?)?.trim(),
             count: _parsePositiveInt(entry['count']),
             timeLimitMinutes: _parsePositiveInt(entry['timeLimitMinutes']),
+            recommendedMinutes: _parsePositiveInt(entry['recommendedMinutes']),
+            recommendedMinutesAuto:
+                _parsePositiveInt(entry['recommendedMinutesAuto']),
             content: (entry['content'] as String?)?.trim(),
             bookId: (entry['bookId'] as String?)?.trim(),
             gradeLabel: (entry['gradeLabel'] as String?)?.trim(),

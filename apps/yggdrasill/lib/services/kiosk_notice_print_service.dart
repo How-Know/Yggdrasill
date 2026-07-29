@@ -1,4 +1,6 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../widgets/homework_assign_dialog.dart'
     show buildDefaultHomeworkAssignSelection, printHomeworkTodoSheet;
@@ -22,6 +24,7 @@ class KioskNoticePrintService {
 
   RealtimeChannel? _channel;
   String? _academyId;
+  String? _workerId;
   final Set<String> _handled = <String>{};
 
   Future<void> start(String academyId) async {
@@ -29,6 +32,7 @@ class KioskNoticePrintService {
     await stop();
     _academyId = academyId;
     try {
+      _workerId = await _ensureWorkerId();
       final chan = Supabase.instance.client
           .channel('kiosk_notice_print:$academyId')
           .onPostgresChanges(
@@ -79,8 +83,29 @@ class KioskNoticePrintService {
 
       _handled.add(id);
       // ignore: discarded_futures
-      _process(id, m);
+      _claimAndProcess(id, m);
     } catch (_) {}
+  }
+
+  Future<void> _claimAndProcess(
+    String attendanceId,
+    Map<String, dynamic> m,
+  ) async {
+    final workerId = _workerId;
+    if (workerId == null) return;
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'kiosk_notice_print_claim',
+        params: {
+          'p_attendance_id': attendanceId,
+          'p_worker_id': workerId,
+        },
+      );
+      if (result is! Map || result['claimed'] != true) return;
+      await _process(attendanceId, m);
+    } catch (_) {
+      _handled.remove(attendanceId);
+    }
   }
 
   Future<void> _process(String attendanceId, Map<String, dynamic> m) async {
@@ -153,9 +178,18 @@ class KioskNoticePrintService {
 
       await _writeDone(attendanceId);
     } catch (e) {
-      _handled.remove(attendanceId); // 실패 시 재시도 여지
       await _writeError(attendanceId, e.toString());
     }
+  }
+
+  Future<String> _ensureWorkerId() async {
+    const key = 'kiosk_notice_print_worker_id';
+    final prefs = await SharedPreferences.getInstance();
+    final saved = (prefs.getString(key) ?? '').trim();
+    if (saved.isNotEmpty) return saved;
+    final created = 'pc:${const Uuid().v4()}';
+    await prefs.setString(key, created);
+    return created;
   }
 
   String _studentName(String studentId) {
@@ -169,21 +203,33 @@ class KioskNoticePrintService {
   }
 
   Future<void> _writeDone(String attendanceId) async {
+    final workerId = _workerId;
+    if (workerId == null) return;
     try {
-      await Supabase.instance.client.from('attendance_records').update({
-        'notice_printed_at': DateTime.now().toUtc().toIso8601String(),
-        'notice_print_error': null,
-      }).eq('id', attendanceId);
+      await Supabase.instance.client.rpc(
+        'kiosk_notice_print_complete',
+        params: {
+          'p_attendance_id': attendanceId,
+          'p_worker_id': workerId,
+        },
+      );
     } catch (_) {}
   }
 
   Future<void> _writeError(String attendanceId, String message) async {
+    final workerId = _workerId;
+    if (workerId == null) return;
     try {
       final trimmed =
           message.length > 500 ? message.substring(0, 500) : message;
-      await Supabase.instance.client
-          .from('attendance_records')
-          .update({'notice_print_error': trimmed}).eq('id', attendanceId);
+      await Supabase.instance.client.rpc(
+        'kiosk_notice_print_fail',
+        params: {
+          'p_attendance_id': attendanceId,
+          'p_worker_id': workerId,
+          'p_error': trimmed,
+        },
+      );
     } catch (_) {}
   }
 }

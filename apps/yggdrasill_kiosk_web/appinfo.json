@@ -1,10 +1,10 @@
 {
   "id": "com.howknow.yggdrasill.kioskweb",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "vendor": "How-Know",
   "type": "web",
   "main": "index.html",
-  "title": "Yggdrasill 출석",
+  "title": "출석체크",
   "icon": "icon.png",
   "largeIcon": "icon.png",
   "bgColor": "#ffffff",

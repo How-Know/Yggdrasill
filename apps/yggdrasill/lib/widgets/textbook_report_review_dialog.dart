@@ -3,13 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../services/answer_render_image_cache.dart';
+import '../services/learning_problem_bank_service.dart';
 import '../services/student_textbook_report_service.dart';
 import 'dialog_tokens.dart';
+import 'latex_text_renderer.dart';
 
 /// 학생 교재 문항 신고 검토 다이얼로그.
 ///
-/// 좌측 신고 목록, 우측에 신고 문항 본문을 학생 앱과 동일한 렌더
-/// (단일 문항 PDF, 없으면 원본 교재 crop)로 보여주고 인정/반려를 판정한다.
+/// 좌측 신고 목록, 우측에 신고 문항·정답을 학생 앱과 동일한 렌더로
+/// 보여주고 인정/반려를 판정한다.
 Future<void> showTextbookReportReviewDialog(BuildContext context) {
   return showDialog<void>(
     context: context,
@@ -34,6 +37,7 @@ class _TextbookReportReviewDialogState
   bool _resolving = false;
 
   final Map<String, Future<TextbookReportQuestionView>> _viewCache = {};
+  final Map<String, Future<TextbookReportAnswerView>> _answerCache = {};
 
   @override
   void initState() {
@@ -45,6 +49,8 @@ class _TextbookReportReviewDialogState
     setState(() {
       _reports = null;
       _error = null;
+      _viewCache.clear();
+      _answerCache.clear();
     });
     try {
       final reports = await StudentTextbookReportService.instance
@@ -68,6 +74,15 @@ class _TextbookReportReviewDialogState
     return _viewCache.putIfAbsent(
       report.id,
       () => StudentTextbookReportService.instance.resolveQuestionView(report),
+    );
+  }
+
+  Future<TextbookReportAnswerView> _answerView(
+    StudentTextbookReport report,
+  ) {
+    return _answerCache.putIfAbsent(
+      report.id,
+      () => StudentTextbookReportService.instance.resolveAnswerView(report),
     );
   }
 
@@ -396,6 +411,89 @@ class _TextbookReportReviewDialogState
         ),
         const SizedBox(height: 10),
         Expanded(
+          flex: 3,
+          child: _labeledPane(
+            label: '문항',
+            child: FutureBuilder<TextbookReportQuestionView>(
+              future: _questionView(report),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const _ReportLoading();
+                }
+                final view = snapshot.data;
+                if (snapshot.hasError || view == null) {
+                  return const Center(
+                    child: Text('문항을 불러오지 못했습니다.'),
+                  );
+                }
+                if (view.isReady && view.pdfUrl != null) {
+                  return _ReportRenderedPdfPage(
+                    key: ValueKey<String>('ready|${view.pdfUrl}'),
+                    uri: Uri.parse(view.pdfUrl!),
+                  );
+                }
+                if (view.isFallback &&
+                    view.bodyPdfUrl != null &&
+                    view.rawPage != null) {
+                  return _ReportCroppedPdfPage(
+                    key: ValueKey<String>(
+                      'fallback|${view.bodyPdfUrl}|${view.rawPage}',
+                    ),
+                    uri: Uri.parse(view.bodyPdfUrl!),
+                    pageNumber: view.rawPage!,
+                    itemRegion1k: view.itemRegion1k,
+                  );
+                }
+                return const Center(
+                  child: Text('이 문항의 렌더를 찾지 못했습니다.'),
+                );
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Expanded(
+          flex: 2,
+          child: _labeledPane(
+            label: '정답',
+            child: FutureBuilder<TextbookReportAnswerView>(
+              future: _answerView(report),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const _ReportLoading();
+                }
+                final view = snapshot.data;
+                if (snapshot.hasError || view == null) {
+                  return const Center(
+                    child: Text('정답을 불러오지 못했습니다.'),
+                  );
+                }
+                return _ReportAnswerPane(
+                  key: ValueKey<String>('answer|${report.id}|${view.status}'),
+                  view: view,
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _labeledPane({required String label, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: kDlgTextSub,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Expanded(
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -403,54 +501,177 @@ class _TextbookReportReviewDialogState
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: FutureBuilder<TextbookReportQuestionView>(
-                future: _questionView(report),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const Center(
-                      child: SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.4,
-                          valueColor: AlwaysStoppedAnimation<Color>(kDlgAccent),
-                        ),
-                      ),
-                    );
-                  }
-                  final view = snapshot.data;
-                  if (snapshot.hasError || view == null) {
-                    return const Center(
-                      child: Text('문항을 불러오지 못했습니다.'),
-                    );
-                  }
-                  if (view.isReady && view.pdfUrl != null) {
-                    return _ReportRenderedPdfPage(
-                      key: ValueKey<String>('ready|${view.pdfUrl}'),
-                      uri: Uri.parse(view.pdfUrl!),
-                    );
-                  }
-                  if (view.isFallback &&
-                      view.bodyPdfUrl != null &&
-                      view.rawPage != null) {
-                    return _ReportCroppedPdfPage(
-                      key: ValueKey<String>(
-                        'fallback|${view.bodyPdfUrl}|${view.rawPage}',
-                      ),
-                      uri: Uri.parse(view.bodyPdfUrl!),
-                      pageNumber: view.rawPage!,
-                      itemRegion1k: view.itemRegion1k,
-                    );
-                  }
-                  return const Center(
-                    child: Text('이 문항의 렌더를 찾지 못했습니다.'),
-                  );
-                },
-              ),
+              child: child,
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ReportLoading extends StatelessWidget {
+  const _ReportLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: SizedBox(
+        width: 22,
+        height: 22,
+        child: CircularProgressIndicator(
+          strokeWidth: 2.4,
+          valueColor: AlwaysStoppedAnimation<Color>(kDlgAccent),
+        ),
+      ),
+    );
+  }
+}
+
+/// 신고 검토용 정답 표시.
+class _ReportAnswerPane extends StatelessWidget {
+  const _ReportAnswerPane({super.key, required this.view});
+
+  final TextbookReportAnswerView view;
+
+  static const Color _ink = Color(0xFF1A1F24);
+
+  @override
+  Widget build(BuildContext context) {
+    if (!view.hasContent) {
+      return const Center(
+        child: Text(
+          '등록된 정답이 없습니다.',
+          style: TextStyle(color: Color(0xFF66707A)),
+        ),
+      );
+    }
+    if (view.status == 'render' && view.renders.isNotEmpty) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < view.renders.length; i++) ...[
+              if (i > 0) const SizedBox(height: 10),
+              _answerRenderImage(view.renders[i]),
+            ],
+          ],
+        ),
+      );
+    }
+    if (view.status == 'image' && (view.imageUrl ?? '').isNotEmpty) {
+      final width = (view.imageWidthPx ?? 0).toDouble();
+      final height = (view.imageHeightPx ?? 0).toDouble();
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Image(
+            image: AnswerRenderImageProvider(view.imageUrl!),
+            width: width > 0 ? width : null,
+            height: height > 0 ? height.clamp(24, 220) : null,
+            fit: BoxFit.contain,
+            alignment: Alignment.centerLeft,
+            filterQuality: FilterQuality.high,
+            errorBuilder: (_, __, ___) => _textFallback(view.answerText),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _textFallback(view.answerText),
+      ),
+    );
+  }
+
+  Widget _answerRenderImage(LearningProblemAnswerRender render) {
+    final ratio = render.pixelRatio <= 0 ? 7.0 : render.pixelRatio;
+    final displayWidth = render.displayWidthDp != null &&
+            render.displayWidthDp!.isFinite &&
+            render.displayWidthDp! > 0
+        ? render.displayWidthDp!
+        : (render.width > 0 ? render.width / ratio : 120.0);
+    final displayHeight = render.displayHeightDp != null &&
+            render.displayHeightDp!.isFinite &&
+            render.displayHeightDp! > 0
+        ? render.displayHeightDp!
+        : (render.height > 0 ? render.height / ratio : 38.0);
+    final tint = render.styleVersion == kUnifiedAnswerRenderStyleVersionV11 &&
+            render.transparent
+        ? _ink
+        : null;
+    final label = _partLabel(render.key);
+    final image = Image(
+      image: AnswerRenderImageProvider(render.url),
+      width: displayWidth,
+      height: displayHeight,
+      fit: BoxFit.contain,
+      alignment: Alignment.centerLeft,
+      filterQuality: FilterQuality.high,
+      color: tint,
+      colorBlendMode: tint != null ? BlendMode.srcIn : null,
+      errorBuilder: (_, __, ___) => _textFallback(view.answerText),
+    );
+    if (label.isEmpty) return image;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 34,
+          child: Text(
+            label,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: _ink,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(child: image),
+      ],
+    );
+  }
+
+  String _partLabel(String key) {
+    final hashIdx = key.indexOf('#');
+    if (hashIdx < 0) return '';
+    return key.substring(hashIdx + 1);
+  }
+
+  Widget _textFallback(String answer) {
+    final text = answer.trim().isEmpty ? '-' : answer.trim();
+    if (view.answerKind == 'objective') {
+      return Text(
+        text,
+        style: const TextStyle(
+          color: _ink,
+          fontSize: 28,
+          fontWeight: FontWeight.w900,
+          height: 1.2,
+        ),
+      );
+    }
+    return LatexTextRenderer(
+      text,
+      textAlign: TextAlign.left,
+      overflow: TextOverflow.visible,
+      softWrap: true,
+      enableDisplayMath: false,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      inlineMathScale: 0.9,
+      style: const TextStyle(
+        color: _ink,
+        fontFamily: 'ChosunNm',
+        fontWeight: FontWeight.w700,
+        fontSize: 22,
+        height: 1.2,
+      ),
     );
   }
 }

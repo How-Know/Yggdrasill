@@ -31,6 +31,10 @@ function compact(v) {
 
 const TEXTBOOK_ANSWER_IMAGE_BUCKET = 'textbook-answer-images';
 const PDF_FIGURE_BUCKET = 'problem-previews';
+const SOURCE_PDF_CACHE_DIR = path.join(os.tmpdir(), 'yggdrasill-vlm-pdf-cache');
+const SOURCE_PDF_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const sourcePdfDownloadsInFlight = new Map();
+let sourcePdfCachePrunePromise = null;
 const ANSWER_IMAGE_MARKER_RE = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\]|\[\[PB_ANSWER_FIG_[^\]]+\]\])/i;
 const TEXTBOOK_VLM_CHUNK_MAX_PAGES = Math.max(
   1,
@@ -52,6 +56,84 @@ function problemNumberKey(v) {
 
 function stableShortHash(value) {
   return createHash('sha1').update(String(value || '')).digest('hex').slice(0, 12);
+}
+
+async function pruneSourcePdfCache() {
+  const cutoff = Date.now() - SOURCE_PDF_CACHE_MAX_AGE_MS;
+  await fs.promises.mkdir(SOURCE_PDF_CACHE_DIR, { recursive: true });
+  const entries = await fs.promises.readdir(SOURCE_PDF_CACHE_DIR, {
+    withFileTypes: true,
+  });
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.pdf'))
+      .map(async (entry) => {
+        const filePath = path.join(SOURCE_PDF_CACHE_DIR, entry.name);
+        try {
+          const stat = await fs.promises.stat(filePath);
+          if (stat.mtimeMs < cutoff) await fs.promises.unlink(filePath);
+        } catch (_) {
+          // 다른 실행이 교체/삭제한 캐시는 무시한다.
+        }
+      }),
+  );
+}
+
+async function downloadSourcePdf({ supa, bucket, objectPath, sha256, sizeBytes, log }) {
+  const normalizedHash = compact(sha256).toLowerCase();
+  const expectedSize = Number(sizeBytes) > 0 ? Number(sizeBytes) : null;
+  // 해시 없는 구데이터는 같은 경로의 파일 교체를 감지할 수 없으므로 캐시하지 않는다.
+  if (!/^[a-f0-9]{64}$/.test(normalizedHash)) {
+    const { data, error } = await supa.storage.from(bucket).download(objectPath);
+    if (error || !data) {
+      throw new Error(`vlm_pdf_download_failed:${error?.message || 'no_data'}`);
+    }
+    return Buffer.from(await data.arrayBuffer());
+  }
+
+  await fs.promises.mkdir(SOURCE_PDF_CACHE_DIR, { recursive: true });
+  sourcePdfCachePrunePromise ??= pruneSourcePdfCache().catch(() => {});
+  await sourcePdfCachePrunePromise;
+
+  const cachePath = path.join(SOURCE_PDF_CACHE_DIR, `${normalizedHash}.pdf`);
+  try {
+    const stat = await fs.promises.stat(cachePath);
+    if (stat.size > 0 && (expectedSize == null || stat.size === expectedSize)) {
+      log?.('pdf_cache_hit', { bucket, object_path: objectPath, size_bytes: stat.size });
+      return fs.promises.readFile(cachePath);
+    }
+  } catch (_) {
+    // 캐시 미존재.
+  }
+
+  let pending = sourcePdfDownloadsInFlight.get(normalizedHash);
+  if (!pending) {
+    pending = (async () => {
+      const { data, error } = await supa.storage.from(bucket).download(objectPath);
+      if (error || !data) {
+        throw new Error(`vlm_pdf_download_failed:${error?.message || 'no_data'}`);
+      }
+      const buffer = Buffer.from(await data.arrayBuffer());
+      if (expectedSize != null && buffer.length !== expectedSize) {
+        throw new Error(`vlm_pdf_size_mismatch:${buffer.length}/${expectedSize}`);
+      }
+      const partialPath = `${cachePath}.${randomUUID()}.part`;
+      await fs.promises.writeFile(partialPath, buffer);
+      await fs.promises.rename(partialPath, cachePath);
+      log?.('pdf_cache_store', {
+        bucket,
+        object_path: objectPath,
+        size_bytes: buffer.length,
+      });
+      return buffer;
+    })();
+    sourcePdfDownloadsInFlight.set(normalizedHash, pending);
+  }
+  try {
+    return await pending;
+  } finally {
+    sourcePdfDownloadsInFlight.delete(normalizedHash);
+  }
 }
 
 function parseBbox1k(raw) {
@@ -286,6 +368,44 @@ function normalizeIndependentSetPayloadQuestions(
   setHeaderRanges = [],
 ) {
   const rows = Array.isArray(payloadQuestions) ? payloadQuestions : [];
+  const series = compact(textbookScope?.series).toLowerCase();
+  if (series === 'gaeyu') {
+    const scopeKey = [
+      textbookScope?.book_id || textbookScope?.bookId || '',
+      textbookScope?.grade_label || textbookScope?.gradeLabel || '',
+      textbookScope?.big_order ?? textbookScope?.bigOrder ?? '',
+      textbookScope?.mid_order ?? textbookScope?.midOrder ?? '',
+      textbookScope?.sub_key || textbookScope?.subKey || '',
+      textbookScope?.sub_index ?? textbookScope?.subIndex ?? '',
+    ].join(':');
+    for (const row of rows) {
+      const subs = Array.isArray(row?.sub_questions) ? row.sub_questions : [];
+      if (row?.is_set_question !== true && subs.length < 2) continue;
+      const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+      const prevSet =
+        prevMeta.set_model && typeof prevMeta.set_model === 'object'
+          ? prevMeta.set_model
+          : {};
+      row.is_set_question = true;
+      row.set_type = 'dependent_set';
+      row.meta = {
+        ...prevMeta,
+        is_set_question: true,
+        set_model: {
+          ...prevSet,
+          version: 1,
+          set_type: 'dependent_set',
+          set_key:
+            compact(prevSet.set_key || prevSet.setKey) ||
+            `gaeyu:${stableShortHash(`${scopeKey}:${row.question_number || ''}`)}`,
+          item_label: String(row.question_number || '').trim(),
+          delivery_policy: 'bundled_dependent_subquestions',
+          source: 'gaeyu_parent_with_subquestions',
+        },
+      };
+    }
+    return rows;
+  }
   const isBasicDrill = textbookSubKey(textbookScope) === 'A';
   if (!isBasicDrill || rows.length < 1) return rows;
 
@@ -1575,14 +1695,14 @@ export async function runVlmExtraction({
     throw new Error('vlm_pdf_path_empty');
   }
 
-  const { data: fileData, error: dlErr } = await supa.storage
-    .from(pdfBucket)
-    .download(pdfPath);
-  if (dlErr || !fileData) {
-    throw new Error(`vlm_pdf_download_failed:${dlErr?.message || 'no_data'}`);
-  }
-  const pdfArrayBuf = await fileData.arrayBuffer();
-  const originalPdfBuffer = Buffer.from(pdfArrayBuf);
+  const originalPdfBuffer = await downloadSourcePdf({
+    supa,
+    bucket: pdfBucket,
+    objectPath: pdfPath,
+    sha256: doc.source_pdf_sha256,
+    sizeBytes: doc.source_pdf_size_bytes,
+    log,
+  });
   if (!originalPdfBuffer.length) {
     throw new Error('vlm_pdf_buffer_empty');
   }
@@ -1862,6 +1982,7 @@ export {
   expectedQuestionNumbersForInput,
   fetchTextbookAnswerSidecars,
   fetchTextbookCropPages,
+  normalizeIndependentSetPayloadQuestions,
   normalizedTextbookSubIndex,
   selectExpectedQuestions,
 };

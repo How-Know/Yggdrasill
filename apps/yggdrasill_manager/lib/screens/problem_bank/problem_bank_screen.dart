@@ -3616,7 +3616,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
-  Future<void> _deleteCurrentDocumentQuestions() async {
+  Future<void> _deleteCheckedQuestions() async {
     if (_isDeletingCurrentQuestions || _isSavingQuestionChanges) return;
     final academyId = _academyId;
     final doc = _activeDocument;
@@ -3624,13 +3624,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('선택된 문서가 없습니다.', error: true);
       return;
     }
+    final targets = _questions
+        .where((question) => question.isChecked)
+        .toList(growable: false);
+    if (targets.isEmpty) {
+      _showSnack('삭제할 문항을 먼저 체크해주세요.', error: true);
+      return;
+    }
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             backgroundColor: _panel,
-            title: const Text('이번 문항 삭제', style: TextStyle(color: _text)),
+            title: const Text('체크 문항 삭제', style: TextStyle(color: _text)),
             content: Text(
-              '${doc.sourceFilename} 문서의 추출 문항을 모두 삭제합니다.\n'
+              '${doc.sourceFilename} 문서에서 체크한 ${targets.length}개 문항만 삭제합니다.\n'
               '이 작업은 되돌릴 수 없습니다.',
               style: const TextStyle(color: _textSub, fontSize: 13),
             ),
@@ -3656,20 +3663,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _isDeletingCurrentQuestions = true;
     });
     try {
-      await _service.deleteQuestionsForDocument(
+      await _service.deleteQuestionsByIds(
         academyId: academyId,
         documentId: doc.id,
+        questionIds: targets.map((question) => question.id).toList(),
       );
       if (!mounted) return;
-      setState(() {
-        _questions = <ProblemBankQuestion>[];
-        _dirtyQuestionIds.clear();
-        _questionPreviewUrls.clear();
-        _scoreDrafts.clear();
-        _hasExtracted = false;
-        _needsPublish = false;
-      });
-      _showSnack('이번 문항을 모두 삭제했습니다.');
+      _showSnack('체크한 ${targets.length}개 문항을 삭제했습니다.');
       await _loadDocumentContext(doc.id);
     } catch (e) {
       _showSnack('문항 삭제 실패: $e', error: true);
@@ -14407,11 +14407,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
-                onPressed: _questions.isEmpty ||
+                onPressed: _checkedCount == 0 ||
                         _isSavingQuestionChanges ||
                         _isDeletingCurrentQuestions
                     ? null
-                    : () => unawaited(_deleteCurrentDocumentQuestions()),
+                    : () => unawaited(_deleteCheckedQuestions()),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFDE6A73),
                   side: const BorderSide(color: Color(0xFFDE6A73)),
@@ -14426,7 +14426,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       )
                     : const Icon(Icons.delete_outline, size: 16),
-                label: const Text('이번 문항 삭제'),
+                label: const Text('체크 문항 삭제'),
               ),
               const SizedBox(width: 8),
               OutlinedButton(

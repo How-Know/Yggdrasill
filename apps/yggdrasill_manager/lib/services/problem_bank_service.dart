@@ -2547,7 +2547,8 @@ class ProblemBankService {
     String? reviewNote,
     Map<String, dynamic>? aiAssessment,
   }) async {
-    final result = await _client.rpc('staff_review_handwriting_sample', params: {
+    final result =
+        await _client.rpc('staff_review_handwriting_sample', params: {
       'p_sample_id': sampleId.trim(),
       'p_status': status.trim(),
       'p_review_note': reviewNote,
@@ -2615,8 +2616,7 @@ class ProblemBankService {
     String? teacherVerdict,
     String? reviewNote,
   }) async {
-    final result =
-        await _client.rpc('staff_review_grading_equiv_log', params: {
+    final result = await _client.rpc('staff_review_grading_equiv_log', params: {
       'p_log_id': logId.trim(),
       'p_status': status.trim(),
       'p_teacher_verdict': teacherVerdict,
@@ -2739,6 +2739,27 @@ class ProblemBankService {
         .delete()
         .eq('academy_id', academyId)
         .eq('document_id', documentId);
+  }
+
+  Future<void> deleteQuestionsByIds({
+    required String academyId,
+    required String documentId,
+    required List<String> questionIds,
+  }) async {
+    final ids = questionIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    for (var offset = 0; offset < ids.length; offset += 200) {
+      final end = math.min(offset + 200, ids.length);
+      await _client
+          .from('pb_questions')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('document_id', documentId)
+          .inFilter('id', ids.sublist(offset, end));
+    }
   }
 
   Future<void> deleteDocument({

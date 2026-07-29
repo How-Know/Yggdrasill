@@ -22,6 +22,7 @@ const state = {
   setupMode: false,
   setupStage: 'first',
   setupFirstPin: '',
+  pendingCheckout: null,
   pin: '',
   submitting: false,
   pollTimer: null,
@@ -508,7 +509,10 @@ function clearSelection() {
   state.setupMode = false;
   state.setupStage = 'first';
   state.setupFirstPin = '';
+  state.pendingCheckout = null;
+  state.submitting = false;
   state.pin = '';
+  $('noticeChoiceOverlay').classList.add('hidden');
   $('pinPanel').classList.add('hidden');
   renderStudents();
 }
@@ -533,9 +537,6 @@ function showPinPanel(feedback, isOk) {
       : 'PIN을 입력하면 등원기록이 됩니다.';
     guide.classList.toggle('checkout', state.checkoutMode);
   }
-  const showNotice = state.checkoutMode && !state.setupMode;
-  $('noticePrintRow').classList.toggle('hidden', !showNotice);
-  if (showNotice) $('noticePrintCheck').checked = true;
   updatePinDots();
   const fb = $('pinFeedback');
   fb.textContent = feedback || '';
@@ -593,11 +594,18 @@ async function submitPin() {
   }
 
   const wasCheckout = state.checkoutMode;
-  const printNotice = wasCheckout && $('noticePrintCheck').checked;
+  if (wasCheckout) {
+    state.pendingCheckout = { student, pin: state.pin };
+    state.pin = '';
+    state.submitting = true;
+    updatePinDots();
+    clearTimeout(idleTimer);
+    $('noticeChoiceOverlay').classList.remove('hidden');
+    return;
+  }
+
   state.submitting = true;
-  const result = wasCheckout
-    ? await checkOut(student, state.pin, printNotice)
-    : await checkIn(student, state.pin);
+  const result = await checkIn(student, state.pin);
   state.submitting = false;
   state.pin = '';
   updatePinDots();
@@ -612,9 +620,20 @@ async function submitPin() {
   }
 
   finishSubmit(result);
+}
+
+async function resolveNoticeChoice(printNotice) {
+  const pending = state.pendingCheckout;
+  if (!pending) return;
+  state.pendingCheckout = null;
+  $('noticeChoiceOverlay').classList.add('hidden');
+
+  const result = await checkOut(pending.student, pending.pin, printNotice);
+  state.submitting = false;
+  finishSubmit(result);
 
   // 하원 + 알림장 인쇄 요청 → PC 인쇄 진행 상태 폴링
-  if (wasCheckout && result.success && printNotice && result.printRequested && result.attendanceId) {
+  if (result.success && printNotice && result.printRequested && result.attendanceId) {
     startNoticePrintPolling(result.attendanceId);
   }
 }
@@ -876,6 +895,8 @@ window.addEventListener('DOMContentLoaded', () => {
   $('searchClose').addEventListener('click', closeSearch);
   $('searchInput').addEventListener('input', onSearchInput);
   $('searchOverlay').addEventListener('click', (e) => { if (e.target.id === 'searchOverlay') closeSearch(); });
+  $('noticePrintYes').addEventListener('click', () => resolveNoticeChoice(true));
+  $('noticePrintNo').addEventListener('click', () => resolveNoticeChoice(false));
   $('printClose').addEventListener('click', hidePrintOverlay);
   // 사용자 상호작용이 있으면 유휴 타이머 리셋 (시트/검색이 열린 동안에만 동작)
   ['pointerdown', 'keydown', 'touchstart', 'touchmove', 'wheel', 'scroll']

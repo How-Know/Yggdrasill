@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Yggdrasill 출석</title>
+  <title>출석체크</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -56,15 +56,6 @@
       <div id="pinPanel" class="pin-panel hidden">
         <div id="pinTitle" class="pin-title"></div>
         <div id="pinGuide" class="pin-guide"></div>
-        <label id="noticePrintRow" class="notice-print-row hidden">
-          <input type="checkbox" id="noticePrintCheck" checked />
-          <span class="notice-print-box" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><polyline points="4,13 9.5,18.5 20,6"
-              fill="none" stroke="currentColor" stroke-width="3"
-              stroke-linecap="square" stroke-linejoin="miter" /></svg>
-          </span>
-          <span class="notice-print-label">알림장 인쇄</span>
-        </label>
         <div id="pinDots" class="pin-dots"></div>
         <div id="pinFeedback" class="pin-feedback"></div>
         <div id="keypad" class="keypad"></div>
@@ -86,6 +77,23 @@
           <button id="searchClose" type="button" class="close-btn dark" aria-label="닫기">&#10005;</button>
         </div>
         <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <!-- 하원 시 알림장 선택 다이얼로그 -->
+    <div id="noticeChoiceOverlay" class="overlay hidden" role="dialog"
+         aria-modal="true" aria-labelledby="noticeChoiceTitle">
+      <div class="notice-choice-dialog">
+        <div id="noticeChoiceTitle" class="notice-choice-title">알림장이 필요한가요?</div>
+        <div class="notice-choice-msg">선택하면 하원 처리가 완료됩니다.</div>
+        <div class="notice-choice-actions">
+          <button id="noticePrintYes" type="button" class="notice-choice-primary">
+            알림장 인쇄 후 하원
+          </button>
+          <button id="noticePrintNo" type="button" class="notice-choice-secondary">
+            인쇄 없이 하원
+          </button>
+        </div>
       </div>
     </div>
 

@@ -17,6 +17,7 @@ import '../services/homework_store.dart';
 import '../services/homework_departure_draft_service.dart';
 import '../services/homework_batch_confirm_service.dart';
 import '../services/homework_test_grading_result_service.dart';
+import '../services/homework_time_defaults_service.dart';
 import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/learning_problem_bank_service.dart';
@@ -8009,9 +8010,12 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
       child: Align(
         alignment: Alignment.centerLeft,
         widthFactor: reveal,
-        child: Container(
+        child: AnimatedContainer(
+          duration: _homeworkChipExpandDuration,
+          curve: _homeworkChipExpandCurve,
           width: _homeworkDraftExtensionWidth,
           height: height,
+          clipBehavior: Clip.hardEdge,
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: groupedCardBackground,
@@ -10390,12 +10394,15 @@ class _HomeworkCardTheme {
 
 const double _homeworkChipCollapsedHeight = 160.0;
 const double _homeworkChipExpandedHeight = 238.0;
+const Duration _homeworkChipExpandDuration = Duration(milliseconds: 170);
+const Curve _homeworkChipExpandCurve = Curves.easeOutCubic;
 double _homeworkGroupExpandedHeightForChildCount(int childCount) {
   if (childCount <= 0) return _homeworkChipExpandedHeight;
   // 상단 정보와 하위 리스트를 충분히 분리하고,
   // 하위 과제 수에 비례해 카드 높이가 늘어나도록 계산한다.
-  const double groupSectionHeaderHeight = 58;
-  const double perChildRowHeight = 102;
+  const double groupSectionHeaderHeight = 46;
+  // 하위 과제 사이 여백(+8,+8) 반영
+  const double perChildRowHeight = 118;
   final double overflowSafetyPadding =
       childCount >= 7 ? 18 : (childCount >= 5 ? 12 : (childCount >= 3 ? 8 : 4));
   return _homeworkChipExpandedHeight +
@@ -10931,9 +10938,11 @@ Widget _buildHomeworkChipWithReorderHandle({
   required int index,
   bool enableReorderDrag = true,
 }) {
-  if (!enableReorderDrag) return chipVisual;
+  // 펼침 때 위젯 트리를 바꾸면 카드가 통째로 교체된 것처럼 깜빡인다.
+  // 항상 같은 구조로 두고 enabled 만 토글한다.
   return ReorderableDelayedDragStartListener(
     index: index,
+    enabled: enableReorderDrag,
     child: chipVisual,
   );
 }
@@ -11206,8 +11215,8 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
         },
         child: AnimatedContainer(
           key: ValueKey('reserved_group_card_${studentId}_${group.groupKey}'),
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
+          duration: _homeworkChipExpandDuration,
+          curve: _homeworkChipExpandCurve,
           constraints: BoxConstraints(
             minHeight:
                 isExpanded ? expandedReservedHeight : collapsedReservedHeight,
@@ -11958,7 +11967,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               homeworkDraftEditor != null && homeworkDraftReveal > 0,
           isExpanded: groupExpanded,
           groupChildren: children,
-          chipHeightOverride: chipH,
           isPendingConfirm: groupPendingSelected,
           isCompleteCheckbox: groupPendingComplete,
           onGroupChildPageTap: (child) {
@@ -15315,6 +15323,21 @@ Widget _buildFlowChip(
   );
 }
 
+String _formatRecommendedMinutesCompact(int minutes) {
+  final safeMinutes = math.max(0, minutes);
+  final hours = safeMinutes ~/ 60;
+  final remain = safeMinutes % 60;
+  if (hours <= 0) return '${remain}분';
+  if (remain == 0) return '${hours}시간';
+  return '${hours}시간 $remain분';
+}
+
+int _homeworkRecommendedMinutesOf(HomeworkItem item) {
+  final confirmed = item.recommendedMinutes ?? 0;
+  if (confirmed > 0) return confirmed;
+  return item.recommendedMinutesAuto ?? 0;
+}
+
 Widget _buildHomeworkChipVisual(
   BuildContext context,
   String studentId,
@@ -15330,7 +15353,6 @@ Widget _buildHomeworkChipVisual(
   bool attachRightExtension = false,
   bool isExpanded = false,
   List<HomeworkItem> groupChildren = const <HomeworkItem>[],
-  double? chipHeightOverride,
   HomeworkAssignmentCycleMeta? cycleMeta,
   bool isPendingConfirm = false,
   bool isCompleteCheckbox = false,
@@ -15358,8 +15380,6 @@ Widget _buildHomeworkChipVisual(
   final TextStyle secondaryRowStyle = cardTheme.secondaryRowStyle;
   const double leftPad = 24;
   const double rightPad = 24;
-  final double chipHeight = chipHeightOverride ??
-      (isExpanded ? _homeworkChipExpandedHeight : _homeworkChipCollapsedHeight);
   const double borderWMax = 3.0;
 
   final groupedCardBackground = FabTabBarTokens.previewAcademyPanelStyleFor(
@@ -15428,8 +15448,6 @@ Widget _buildHomeworkChipVisual(
     return resolveSplitCount(safeCount, splitParts, splitRound).toString();
   }();
   final String line4PageText = 'p.${page.isNotEmpty ? page : '-'}';
-  final String line4TotalCountText =
-      '총 ${displayCount.isNotEmpty ? displayCount : '-'}문항';
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
@@ -15474,6 +15492,27 @@ Widget _buildHomeworkChipVisual(
   final double fixedWidth = ClassContentScreen._studentColumnContentWidth;
   final double maxRowW = fixedWidth - leftPad - rightPad;
   final bool hasGroupChildren = groupChildren.isNotEmpty;
+  final recommendedSources =
+      hasGroupChildren ? groupChildren : <HomeworkItem>[hw];
+  final int rawRecommendedMinutes = recommendedSources.fold<int>(
+    0,
+    (sum, item) => sum + math.max(0, _homeworkRecommendedMinutesOf(item)),
+  );
+  final int alphaIncludedItemCount = recommendedSources
+      .where((item) => _homeworkRecommendedMinutesOf(item) > 0)
+      .length;
+  // 하위과제 각각의 스냅샷에는 α가 들어 있지만, 홈의 그룹 과제 권장시간은
+  // 순수시간 합 + α 1회로 표시한다.
+  final int totalRecommendedMinutes = math.max(
+    0,
+    rawRecommendedMinutes -
+        math.max(0, alphaIncludedItemCount - 1) *
+            HomeworkTimeDefaultsService.initialAlphaMinutes,
+  );
+  final bool hasRecommendedTime = totalRecommendedMinutes > 0;
+  final String durationWithRecommendedText = hasRecommendedTime
+      ? '$durationText / (${_formatRecommendedMinutesCompact(totalRecommendedMinutes)})'
+      : durationText;
   final bool isTestCard = hasGroupChildren
       ? groupChildren.any(_isTestHomeworkItem)
       : _isTestHomeworkItem(hw);
@@ -15767,11 +15806,10 @@ Widget _buildHomeworkChipVisual(
     ),
   );
 
-  final List<Widget> columnChildren;
-  if (isExpanded) {
-    final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
+  // 접힌 카드 얼굴은 유지하고, 펼침 전용 영역만 heightFactor 로 드러낸다.
+  final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
 
-    String groupChildLabel(HomeworkItem child) {
+  String groupChildLabel(HomeworkItem child) {
       final title = child.title.trim();
       if (title.isNotEmpty) return title;
       final pageRaw = (child.page ?? '').trim();
@@ -15967,203 +16005,140 @@ Widget _buildHomeworkChipVisual(
       );
     }
 
-    columnChildren = [
-      row1,
-      const SizedBox(height: 19),
-      row2,
-      const SizedBox(height: 7),
-      ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                line4PageText,
-                style: secondaryRowStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              line4TotalCountText,
-              style: secondaryRowStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 6),
-      ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Row(
-          children: [
-            Text(
-              '시작 $startedAtText',
-              style: secondaryRowStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              progressText,
-              style: secondaryRowStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const Spacer(),
-            Text(
-              '총 $durationText',
-              style: secondaryRowStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 6),
-      ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                line5Left,
-                style: secondaryRowStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 10),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 220),
-              child: Text(
-                line5Right,
-                style: secondaryRowStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 6),
-      ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Row(
-          children: [
-            buildTypeLabelCell(),
-            const SizedBox(width: 10),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 220),
-              child: Text(
-                assignmentCodeText,
-                style: secondaryRowStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ],
-        ),
-      ),
-      if (hasGroupChildren) ...[
-        const SizedBox(height: 16),
-        Container(
-          width: maxRowW,
-          height: 1,
-          color: cardTheme.dividerStrongColor,
-        ),
-        const SizedBox(height: 12),
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxRowW),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '그룹 과제 ${groupChildren.length}개',
-                  style: secondaryRowStyle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (onInfoTap != null)
-                GestureDetector(
-                  onTap: onInfoTap,
-                  behavior: HitTestBehavior.opaque,
-                  child: const SizedBox(
-                    width: 34,
-                    height: 34,
-                    child: Icon(
-                      Icons.info_outline_rounded,
-                      size: 24,
-                      color: Color(0xFF9FB3B3),
-                    ),
-                  ),
-                ),
-              if (onInfoTap != null && onGroupChildAddTap != null)
-                const SizedBox(width: 4),
-              if (onGroupChildAddTap != null)
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onGroupChildAddTap,
-                  child: const SizedBox(
-                    width: 34,
-                    height: 34,
-                    child: Icon(
-                      Icons.add_rounded,
-                      size: 24,
-                      color: Color(0xFF9FE3C6),
-                    ),
-                  ),
-                ),
-            ],
+  final List<Widget> expandPanelChildren = [
+    const SizedBox(height: 10),
+    ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxRowW),
+      child: Row(
+        children: [
+          Text(
+            '시작 $startedAtText',
+            style: secondaryRowStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-        ),
-        const SizedBox(height: 8),
-        for (int i = 0; i < visibleGroupChildren; i++) ...[
-          buildGroupChildRow(groupChildren[i], i),
-          if (i != visibleGroupChildren - 1) ...[
-            const SizedBox(height: 10),
-            Container(
-              width: maxRowW,
-              height: 1.3,
-              color: cardTheme.dividerColor,
-            ),
-            const SizedBox(height: 10),
-          ],
-          const SizedBox(height: 6),
+          const SizedBox(width: 8),
+          Text(
+            progressText,
+            style: secondaryRowStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const Spacer(),
+          Text(
+            durationWithRecommendedText,
+            style: secondaryRowStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+          ),
         ],
+      ),
+    ),
+    const SizedBox(height: 6),
+    ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxRowW),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              line5Left,
+              style: secondaryRowStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(
+              line5Right,
+              style: secondaryRowStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
+    ),
+    if (hasGroupChildren) ...[
+      const SizedBox(height: 16),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '하위 과제 ${groupChildren.length}개',
+                style: secondaryRowStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (onInfoTap != null)
+              GestureDetector(
+                onTap: onInfoTap,
+                behavior: HitTestBehavior.opaque,
+                child: const SizedBox(
+                  width: 34,
+                  height: 34,
+                  child: Icon(
+                    Icons.info_outline_rounded,
+                    size: 24,
+                    color: Color(0xFF9FB3B3),
+                  ),
+                ),
+              ),
+            if (onInfoTap != null && onGroupChildAddTap != null)
+              const SizedBox(width: 4),
+            if (onGroupChildAddTap != null)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onGroupChildAddTap,
+                child: const SizedBox(
+                  width: 34,
+                  height: 34,
+                  child: Icon(
+                    Icons.add_rounded,
+                    size: 24,
+                    color: Color(0xFF9FE3C6),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      for (int i = 0; i < visibleGroupChildren; i++) ...[
+        buildGroupChildRow(groupChildren[i], i),
+        if (i != visibleGroupChildren - 1) ...[
+          const SizedBox(height: 26),
+          Container(
+            width: maxRowW,
+            height: 1.3,
+            color: cardTheme.dividerColor,
+          ),
+          const SizedBox(height: 26),
+        ],
+        const SizedBox(height: 6),
       ],
-    ];
-  } else {
-    columnChildren = [
-      row1,
-      const SizedBox(height: 19),
-      row2,
-      const SizedBox(height: 7),
-      collapsedRow3,
-      const SizedBox(height: 6),
-      collapsedRow4,
-    ];
-  }
+    ],
+  ];
 
-  Widget chipInner = Container(
-    height: chipHeight,
+  final BorderRadius chipRadius = attachRightExtension
+      ? const BorderRadius.only(
+          topLeft: Radius.circular(12),
+          bottomLeft: Radius.circular(12),
+        )
+      : BorderRadius.circular(12);
+
+  Widget chipInner = _HomeworkExpandingCard(
+    expanded: isExpanded,
     padding: const EdgeInsets.fromLTRB(leftPad, 14, rightPad, 14),
-    alignment: Alignment.topLeft,
     decoration: BoxDecoration(
       color: groupedCardBackground,
-      borderRadius: attachRightExtension
-          ? const BorderRadius.only(
-              topLeft: Radius.circular(12),
-              bottomLeft: Radius.circular(12),
-            )
-          : BorderRadius.circular(12),
+      borderRadius: chipRadius,
       border: border,
       boxShadow: [
         if (!visualRunning && visualPhase == 4)
@@ -16174,13 +16149,23 @@ Widget _buildHomeworkChipVisual(
           ),
       ],
     ),
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: columnChildren,
-      ),
+    header: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row1,
+        const SizedBox(height: 19),
+        row2,
+        const SizedBox(height: 7),
+        collapsedRow3,
+        const SizedBox(height: 6),
+        collapsedRow4,
+      ],
+    ),
+    panel: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: expandPanelChildren,
     ),
   );
 
@@ -16263,6 +16248,49 @@ Widget _buildHomeworkChipVisual(
   }
 
   return SizedBox(width: fixedWidth, child: chipInner);
+}
+
+/// 카드(테두리·배경) 자체가 커지며 펼쳐지게 한다.
+/// heightFactor 롤 공개 대신 AnimatedSize 로 박스 높이를 보간한다.
+class _HomeworkExpandingCard extends StatelessWidget {
+  const _HomeworkExpandingCard({
+    required this.expanded,
+    required this.padding,
+    required this.decoration,
+    required this.header,
+    required this.panel,
+  });
+
+  final bool expanded;
+  final EdgeInsetsGeometry padding;
+  final Decoration decoration;
+  final Widget header;
+  final Widget panel;
+
+  @override
+  Widget build(BuildContext context) {
+    // decoration 을 바깥에 두어 테두리·배경이 높이와 함께 늘어나게 한다.
+    return Container(
+      clipBehavior: Clip.hardEdge,
+      padding: padding,
+      alignment: Alignment.topLeft,
+      decoration: decoration,
+      child: AnimatedSize(
+        duration: _homeworkChipExpandDuration,
+        curve: _homeworkChipExpandCurve,
+        alignment: Alignment.topCenter,
+        clipBehavior: Clip.hardEdge,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            header,
+            if (expanded) panel,
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _HomeworkDraftRevealClipper extends CustomClipper<Rect> {

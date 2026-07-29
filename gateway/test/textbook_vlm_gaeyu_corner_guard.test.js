@@ -77,6 +77,45 @@ test('a range badge covers every page it spans', () => {
   assert.equal(out.items.length, 10);
 });
 
+test('page-prefixed 쏙쏙 numbers match local numbers inside the answer box', () => {
+  const expectedEntries = [
+    { number: '11-1', corner: 쏙쏙, page: 11, position: 4 },
+    { number: '15-1', corner: 쏙쏙, page: 15, position: 9 },
+  ];
+  const answer = normalizeAnswerResult(
+    {
+      items: [{
+        problem_number: '1',
+        kind: 'subjective',
+        answer_text: '정답',
+        source_corner: 쏙쏙,
+        source_page: 11,
+      }],
+    },
+    {
+      expectedNumbers: expectedEntries.map((entry) => entry.number),
+      expectedEntries,
+    },
+  );
+  const solution = normalizeSolutionRefsResult(
+    {
+      items: [{
+        problem_number: '1',
+        number_region: [100, 100, 120, 140],
+        source_corner: 쏙쏙,
+        source_page: 15,
+      }],
+    },
+    {
+      expectedNumbers: expectedEntries.map((entry) => entry.number),
+      expectedEntries,
+    },
+  );
+
+  assert.equal(answer.items[0].expected_index, 4);
+  assert.equal(solution.items[0].expected_index, 9);
+});
+
 test('a page outside the badge range is still dropped', () => {
   const out = normalizeAnswerResult(
     {
@@ -400,6 +439,24 @@ test('concept-plus prompts carry the corner table and badge echo fields', () => 
     assert.match(prompt, /배지=P\.109/);
     assert.match(prompt, /source_page/);
   }
+});
+
+test('concept-plus solution prompt carries answer-table continuation rules', () => {
+  const prompt = buildDetectSolutionRefsPrompt({
+    rawPage: 51,
+    expectedNumbers: ['1', '유제1', '연습1'],
+    expectedEntries: [
+      { number: '1', corner: '탄탄 단원 다지기', page: 127 },
+      { number: '유제1', corner: '쓱쓱 서술형 완성하기', page: 130 },
+      { number: '연습1', corner: '쓱쓱 서술형 완성하기', page: 131 },
+    ],
+    series: 'gaeyu',
+  });
+
+  assert.match(prompt, /정답 요약표 자체.*해설 본문이 아니므로/s);
+  assert.match(prompt, /다음 단.*다음 페이지/s);
+  assert.match(prompt, /쏙쏙 1~4.*탄탄 1~9/s);
+  assert.match(prompt, /따라 해보자\/유제\/연습해 보자/);
 });
 
 test('other series keep the plain prompt', () => {

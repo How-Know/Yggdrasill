@@ -5032,6 +5032,8 @@ async function processOneJob(job) {
         'source_pdf_storage_bucket',
         'source_pdf_storage_path',
         'source_pdf_filename',
+        'source_pdf_sha256',
+        'source_pdf_size_bytes',
         'meta',
         'curriculum_code',
         'source_type_code',

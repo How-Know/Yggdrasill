@@ -94,8 +94,20 @@ class HomeworkGroup {
   }
 
   /// 3행: 페이지 · 문항수 (예: `p.10-12 · 12문항`)
+  ///
+  /// 서버 `page_summary` 우선. 비어 있으면 하위과제 page(이미 item_pages 로
+  /// 채워진 값 포함)를 이어 붙여 학습앱과 같이 보이게 한다.
   String get pageCountLine {
-    final page = pageSummary.trim();
+    var page = pageSummary.trim();
+    if (page.isEmpty) {
+      final fromChildren = <String>[
+        for (final child in children)
+          if (child.page.trim().isNotEmpty) child.page.trim(),
+      ];
+      if (fromChildren.isNotEmpty) {
+        page = fromChildren.toSet().join(',');
+      }
+    }
     final pagePart = page.isEmpty ? '' : 'p.$page';
     final countPart = totalCount > 0 ? '$totalCount문항' : '';
     if (pagePart.isEmpty && countPart.isEmpty) return '';

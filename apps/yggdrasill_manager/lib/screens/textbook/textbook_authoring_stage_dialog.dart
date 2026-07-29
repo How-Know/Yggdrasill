@@ -1374,7 +1374,49 @@ class _TextbookAuthoringStageDialogState
             expectedNumbers: batch.numbers,
             expectedDetails: batch.entries,
           );
-          for (final it in res.items) {
+          String itemSection(TextbookVlmSolutionRefItem item) {
+            final index = item.expectedIndex;
+            if (index >= 0 && index < order.length) {
+              return targets[order[index]].crop.section;
+            }
+            return RegExp(r'^(예제|유제|연습)').hasMatch(item.problemNumber)
+                ? 'descriptive'
+                : '';
+          }
+
+          final sections = <String>{
+            for (final position in order) targets[position].crop.section,
+          };
+          final reported = <(String, String)>[
+            for (final item in res.items)
+              (item.problemNumber.trim(), itemSection(item)),
+          ];
+          final sectionsToVerify = <String>{};
+          if (widget.seriesKey == 'gaeyu' && sections.length > 1) {
+            // 같은 페이지에서 쏙쏙 1~4 다음 탄탄 정답표와 1~9 풀이가
+            // 시작되면 혼합 호출은 앞 코너 번호만 반환할 때가 있다. 반환 번호와
+            // 겹치는 다른 코너가 남아 있으면 그 코너 전체를 단독 재검증한다.
+            for (final position in order) {
+              final target = targets[position];
+              final number = target.crop.problemNumber.trim();
+              if (reported.any((one) =>
+                  one.$1 == number &&
+                  one.$2.isNotEmpty &&
+                  one.$2 != target.crop.section)) {
+                sectionsToVerify.add(target.crop.section);
+              }
+            }
+            // 상세 풀이 뒤에 다음 코너의 정답표만 붙은 경우를 걸러낸다.
+            // 쓱쓱은 단독 호출에서도 실제 풀이가 보여야만 채택한다.
+            if (reported.any((one) => one.$2 == 'descriptive')) {
+              sectionsToVerify.add('descriptive');
+            }
+          }
+          final pageItems = sectionsToVerify.isNotEmpty
+              ? res.items.where(
+                  (item) => !sectionsToVerify.contains(itemSection(item)))
+              : res.items;
+          for (final it in pageItems) {
             final matched = batch.resolve(
               detectedNumber: it.problemNumber,
               expectedIndex: it.expectedIndex,
@@ -1386,6 +1428,41 @@ class _TextbookAuthoringStageDialogState
                 rawPage: res.rawPage,
                 displayPage: res.displayPage,
               );
+            }
+          }
+          for (final section in sectionsToVerify) {
+            final sectionOrder = <int>[
+              for (final position in order)
+                if (pending.contains(position) &&
+                    targets[position].crop.section == section)
+                  position,
+            ];
+            if (sectionOrder.isEmpty) continue;
+            final sectionBatch = TextbookExpectedAnswerBatch(
+              positions: sectionOrder,
+              entries: <TextbookExpectedAnswer>[
+                for (final position in sectionOrder) targets[position].expected,
+              ],
+            );
+            final verified = await _detectSolutionRefsOnPage(
+              imageBytes: png,
+              page: page,
+              expectedNumbers: sectionBatch.numbers,
+              expectedDetails: sectionBatch.entries,
+            );
+            for (final it in verified.items) {
+              final matched = sectionBatch.resolve(
+                detectedNumber: it.problemNumber,
+                expectedIndex: it.expectedIndex,
+              );
+              for (final position in matched) {
+                if (!pending.remove(position)) continue;
+                hits[position] = _SolutionRefWithPage(
+                  item: it,
+                  rawPage: verified.rawPage,
+                  displayPage: verified.displayPage,
+                );
+              }
             }
           }
         } catch (e) {

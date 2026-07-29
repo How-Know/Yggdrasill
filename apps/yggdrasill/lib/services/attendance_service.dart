@@ -303,6 +303,7 @@ class AttendanceService {
             return null;
           }
         }
+
         DateTime? parseTsOpt(String k) {
           final v = m[k] as String?;
           if (v == null || v.isEmpty) return null;
@@ -362,11 +363,14 @@ class AttendanceService {
       );
     } catch (e, st) {
       print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
-      _attendanceRecords = [];
       if (_sideDebug) {
-        print('[ATT][loadAttendanceRecords][error] publish empty');
+        print(
+          '[ATT][loadAttendanceRecords][error] '
+          'cached=${_attendanceRecords.length} records retained',
+        );
       }
-      attendanceRecordsNotifier.value = [];
+      // 522/524 같은 일시적 게이트웨이 장애가 기존 출석 화면까지 비우지 않게
+      // 마지막으로 성공한 메모리 데이터를 유지한다.
     }
   }
 
@@ -1639,8 +1643,9 @@ class AttendanceService {
             await TenantService.instance.ensureActiveAcademy();
     final supa = Supabase.instance.client;
     final classDtUtc = _utcMinute(record.classDateTime);
-    final bool effectivePresent =
-        record.isPresent || record.arrivalTime != null || record.departureTime != null;
+    final bool effectivePresent = record.isPresent ||
+        record.arrivalTime != null ||
+        record.departureTime != null;
     final row = {
       'id': record.id,
       'academy_id': academyId,
@@ -1812,8 +1817,9 @@ class AttendanceService {
   Future<void> updateAttendanceRecord(AttendanceRecord record) async {
     final supa = Supabase.instance.client;
     if (record.id != null) {
-      final bool effectivePresent =
-          record.isPresent || record.arrivalTime != null || record.departureTime != null;
+      final bool effectivePresent = record.isPresent ||
+          record.arrivalTime != null ||
+          record.departureTime != null;
       final row = {
         'student_id': record.studentId,
         'occurrence_id': record.occurrenceId,
@@ -3524,7 +3530,8 @@ class AttendanceService {
               toInclusiveLocal.year,
               toInclusiveLocal.month,
               toInclusiveLocal.day,
-            ).add(const Duration(days: 1))
+            )
+              .add(const Duration(days: 1))
               .subtract(const Duration(microseconds: 1));
     } else {
       anchor = DateTime(today.year, today.month, today.day);
@@ -4541,7 +4548,8 @@ class AttendanceService {
           if (sid.isNotEmpty) return sid;
         }
 
-        final resolvedByBlock = (_resolveSetId(ov.studentId, original) ?? '').trim();
+        final resolvedByBlock =
+            (_resolveSetId(ov.studentId, original) ?? '').trim();
         if (resolvedByBlock.isNotEmpty) return resolvedByBlock;
 
         final dayIdx = original.weekday - 1;

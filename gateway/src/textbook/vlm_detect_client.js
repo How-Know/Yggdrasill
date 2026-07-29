@@ -334,7 +334,12 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       : printedNumber;
     if (!number) continue;
     const inferredSetRange = parseBasicDrillRange(number, series === 'rpm');
-    const isSet = Boolean(raw.is_set_header) || Boolean(inferredSetRange);
+    // 개념+유형은 대표 번호 하나 아래 (1), (2)가 붙는 구조다. 이 소문항에는
+    // 독립 번호가 없으므로 Stage 1 범위 헤더로 저장하면 대표 문항까지 추출
+    // 대상에서 빠진다. 세트 여부는 문제은행 추출 단계에서 종속형으로 정한다.
+    const isSet = isGaeyu
+      ? false
+      : Boolean(raw.is_set_header) || Boolean(inferredSetRange);
     let setRange = null;
     if (raw.set_range && typeof raw.set_range === 'object') {
       const from = Number(raw.set_range.from);
@@ -346,6 +351,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     if (!setRange && inferredSetRange) {
       setRange = inferredSetRange;
     }
+    if (isGaeyu) setRange = null;
     const colRaw = raw.column;
     const column =
       colRaw === 1 || colRaw === 2 ? colRaw : colRaw == null ? null : null;
@@ -436,6 +442,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   backfillMissingItemRegions(out);
   backfillBasicDrillItemRegions(out, series);
   backfillMissingBboxes(out);
+  repairGaeyuNumberBboxes(out, series);
   validateBasicDrillItems(out, series);
   annotateExpectedBasicDrillStart(out, opts?.expectedStartNumber);
   return out;
@@ -1026,6 +1033,60 @@ function backfillMissingBboxes(result) {
   }
   if (filled > 0) {
     const suffix = `synthesized_bbox=${filled}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+}
+
+// 개념+유형의 문항 번호는 코너와 관계없이 본문 왼쪽에 있고 본문 첫 줄과 같은
+// 높이다. 모델이 이를 "본문 위 번호" 레이아웃으로 오해해 bbox를 item_region
+// 바로 위 빈 공간에 놓는 경우가 있다.
+//
+// 이미 같은 줄 왼쪽에 잡힌 bbox는 건드리지 않는다.
+function repairGaeyuNumberBboxes(result, series) {
+  if (series !== 'gaeyu' || !Array.isArray(result?.items)) return;
+  let repaired = 0;
+  for (const item of result.items) {
+    if (
+      !String(item?.number || '').trim() ||
+      !Array.isArray(item?.bbox) ||
+      !Array.isArray(item?.item_region)
+    ) {
+      continue;
+    }
+    const [byMin, bxMin, byMax, bxMax] = item.bbox.map((v) => Number(v));
+    const [ryMin, rxMin, ryMax] = item.item_region.map((v) => Number(v));
+    if (
+      ![byMin, bxMin, byMax, bxMax, ryMin, rxMin, ryMax].every((v) =>
+        Number.isFinite(v),
+      )
+    ) {
+      continue;
+    }
+
+    const gapAbove = ryMin - byMax;
+    const bboxStartsInsideBodyColumn = bxMin >= rxMin - 4;
+    const bboxOverlapsBodyColumn = bxMax > rxMin;
+    const looksLikeWrongTopBbox =
+      gapAbove >= 0 &&
+      gapAbove <= 40 &&
+      bboxStartsInsideBodyColumn &&
+      bboxOverlapsBodyColumn;
+    if (!looksLikeWrongTopBbox) continue;
+
+    const number = String(item.number || '').trim();
+    const right = clamp01k(rxMin - 7);
+    const width = /[가-힣]/.test(number)
+      ? 54
+      : Math.min(50, Math.max(30, number.length * 11));
+    const left = clamp01k(right - width);
+    const top = clamp01k(ryMin);
+    const bottom = clamp01k(Math.min(ryMax, ryMin + 22));
+    if (left >= right || top >= bottom) continue;
+    item.bbox = [top, left, bottom, right];
+    repaired += 1;
+  }
+  if (repaired > 0) {
+    const suffix = `gaeyu_number_bbox_repaired=${repaired}`;
     result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
   }
 }

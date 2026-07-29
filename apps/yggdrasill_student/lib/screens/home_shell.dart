@@ -8,6 +8,7 @@ import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/student_shell_chrome.dart';
 import '../widgets/homework_now_playing_bar.dart';
+import '../widgets/homework_now_playing_sheet.dart';
 import '../widgets/student_bottom_nav_bar.dart';
 import 'homework_screen.dart';
 import 'profile_screen.dart';
@@ -24,6 +25,8 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   int _index = 0;
   bool _searchExpanded = false;
+  /// 미니바 확장 전체화면. 탭바·미니바보다 아래 레이어에 깔린다.
+  bool _nowPlayingExpanded = false;
 
   @override
   void initState() {
@@ -74,6 +77,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     final session = HomeworkSession.instance;
     final group = session.active;
     final wasRunning = group != null && session.isRunningGroup(group.groupId);
+    _collapseNowPlaying();
     await session.dismissMiniBar();
     if (!mounted || !wasRunning) return;
     TopGlassSnackBar.show(
@@ -83,14 +87,36 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     );
   }
 
+  void _expandNowPlaying() {
+    if (_nowPlayingExpanded) return;
+    setState(() {
+      _searchExpanded = false;
+      _nowPlayingExpanded = true;
+    });
+  }
+
+  void _collapseNowPlaying() {
+    if (!_nowPlayingExpanded) return;
+    setState(() => _nowPlayingExpanded = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final surface = context.yggSurfaceBase;
     final active = HomeworkSession.instance.active;
     final sessionBusy = HomeworkSession.instance.busy;
     final scrollCompact = StudentShellChrome.instance.compact;
-    // 미니바 있을 때만 1줄 배치. 검색 펼치면 미니바를 위로.
-    final oneLineChrome = scrollCompact && !_searchExpanded && active != null;
+    // 미니바 있을 때만 1줄 배치. 확장 시트에서는 항상 1줄(탭·미니바·검색).
+    // 검색 펼치면 미니바를 위로.
+    final oneLineChrome = active != null &&
+        !_searchExpanded &&
+        (scrollCompact || _nowPlayingExpanded);
+    // 활성 과제가 없어지면 확장 화면도 함께 닫는다.
+    if (active == null && _nowPlayingExpanded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _collapseNowPlaying();
+      });
+    }
 
     return Scaffold(
       backgroundColor: surface,
@@ -105,6 +131,15 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
               ProfileScreen(),
             ],
           ),
+          // 전체화면 확장 — 탭바·미니바보다 아래에 깔려 크롬이 위로 남는다.
+          if (_nowPlayingExpanded && active != null)
+            Positioned.fill(
+              child: HomeworkNowPlayingExpanded(
+                onClose: _collapseNowPlaying,
+                onPlayPause: () => unawaited(handleNowPlayingPlayPause()),
+                onSubmit: () => unawaited(handleNowPlayingSubmit()),
+              ),
+            ),
           Positioned(
             left: StudentBottomNavTokens.horizontalInset,
             right: StudentBottomNavTokens.horizontalInset,
@@ -123,6 +158,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
               onSearchExpandedChanged: _setSearchExpanded,
               onPlayPause: handleNowPlayingPlayPause,
               onSubmit: handleNowPlayingSubmit,
+              onExpandNowPlaying: _expandNowPlaying,
               onDismissMiniBar: () => unawaited(_dismissMiniBar()),
             ),
           ),
@@ -148,6 +184,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
     required this.onSearchExpandedChanged,
     required this.onPlayPause,
     required this.onSubmit,
+    required this.onExpandNowPlaying,
     required this.onDismissMiniBar,
   });
 
@@ -165,6 +202,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
   final ValueChanged<bool> onSearchExpandedChanged;
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
+  final VoidCallback onExpandNowPlaying;
   final VoidCallback onDismissMiniBar;
 
   @override
@@ -327,6 +365,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
                     width: npW,
                     onPlayPause: onPlayPause,
                     onSubmit: onSubmit,
+                    onExpand: onExpandNowPlaying,
                   ),
                 ),
               ),
