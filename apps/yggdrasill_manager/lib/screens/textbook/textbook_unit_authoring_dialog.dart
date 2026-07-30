@@ -919,6 +919,27 @@ class _TextbookUnitAuthoringDialogState
     return out;
   }
 
+  /// 저장된 crop 의 problem_number 에서 **지면에 인쇄된 번호**를 되돌린다.
+  ///
+  /// 개념+유형 쏙쏙(C)·한 번 더 연습(F)은 한 소단원에 블록이 여러 번 나와서
+  /// 저장할 때 번호 앞에 본문 페이지를 붙인다("10-1"). 복원 때 그 값을 그대로
+  /// 인쇄 번호 자리에 넣으면 다시 저장·시드를 만들 때 접두어가 한 번 더 붙어
+  /// "10-10-1" 이 된다. 그러면 업로드 행과 키가 어긋나 시드가 통째로 비고,
+  /// 그 코너는 정답·해설 단계 스코프에서 사라진다 (소단원이 1/3 완료로 멈춤).
+  String _printedNumberFromSavedCrop(Map<String, dynamic> row, String subKey) {
+    final number = '${row['problem_number'] ?? ''}'.trim();
+    if (_seriesKey != 'gaeyu') return number;
+    if (!_kGaeyuBlockScopedKeys.contains(subKey.toUpperCase())) return number;
+    final match = RegExp(r'^(\d+)-(.+)$').firstMatch(number);
+    if (match == null) return number;
+    final page = int.tryParse('${row['display_page'] ?? ''}') ??
+        int.tryParse('${row['raw_page'] ?? ''}');
+    // 접두어가 이 문항의 지면과 같을 때만 벗긴다. 그래야 진짜 하이픈 번호를
+    // 실수로 자르지 않는다.
+    if (page == null || int.tryParse(match.group(1)!) != page) return number;
+    return match.group(2)!;
+  }
+
   TextbookVlmItem _vlmItemFromSavedCrop(
     Map<String, dynamic> row,
     String subKey,
@@ -931,7 +952,7 @@ class _TextbookUnitAuthoringDialogState
             ? 'none'
             : rawKind;
     return TextbookVlmItem.fromMap(<String, dynamic>{
-      'number': row['problem_number'],
+      'number': _printedNumberFromSavedCrop(row, subKey),
       // 개념원리는 난이도(label)가 비어 있고 문항이름(item_name)에 값이 있다.
       // 복원 시 문항이름을 라벨 자리에 실어 뱃지/재저장이 그대로 동작하게 한다.
       'label': _seriesKey == 'wonri'
@@ -2021,7 +2042,11 @@ class _TextbookUnitAuthoringDialogState
       if (row == null || row.isExercise) return;
       guarded = _guardWonriRowsBeforeConceptDrillHeader(state.pageResults);
     } else if (_seriesKey == 'gaeyu') {
-      guarded = _guardGaeyuExtraPracticeContinuation(state.pageResults);
+      guarded = _guardGaeyuStepNumberRewind(
+        _guardGaeyuStepOrder(
+          _guardGaeyuExtraPracticeContinuation(state.pageResults),
+        ),
+      );
     } else {
       // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
       if (focus.subKey != 'A') return;
@@ -2162,6 +2187,171 @@ class _TextbookUnitAuthoringDialogState
         conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
         notes: _appendGuardNote(row.notes, 'gaeyu_extra_practice_kept=$moved'),
         items: items,
+      ));
+    }
+    return out;
+  }
+
+  /// 개념+유형 STEP 코너는 한 중단원 안에서 STEP1 → STEP2 → STEP3 순서로만
+  /// 진행한다. 중단원이 끝나기 전에 STEP2 뒤로 STEP1 이 다시 오는 일은 없다.
+  ///
+  /// 탄탄 단원 다지기는 세 쪽까지 이어지는데, 마지막 쪽은 코너 배지가 다시
+  /// 인쇄되지 않아 모델이 쏙쏙 개념 익히기로 되돌리곤 한다. 그러면 그 쪽 문항만
+  /// sub_key 가 C 로 갈려서 번호에 본문 페이지 접두어가 붙고, 정답·해설의
+  /// "탄탄" 박스와 매칭이 어긋난다.
+  ///
+  /// 앞 지면에서 이미 확인된 STEP 단계보다 낮은 STEP 은 그 단계로 되돌린다.
+  /// 다음 중단원은 분석 범위가 달라 서로 영향을 주지 않는다.
+  List<_PageAnalysisRow> _guardGaeyuStepOrder(List<_PageAnalysisRow> rows) {
+    const stepRanks = <String, int>{
+      'step_drill': 1,
+      'unit_drill': 2,
+      'descriptive': 3,
+    };
+    final categoryByRank = <int, String>{
+      for (final entry in stepRanks.entries) entry.value: entry.key,
+    };
+
+    final order = rows.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    // 지면마다 "앞 지면까지 확인된 최고 STEP 단계"를 기록한다. 같은 지면 안의
+    // 순서로는 판단하지 않는다 (한 쪽에 두 코너가 걸치면 모델이 주는 순서가
+    // 지면 순서와 다를 수 있다).
+    final floorByPage = <int, int>{};
+    var reached = 0;
+    for (final row in order) {
+      floorByPage[row.rawPage] = reached;
+      var pageMax = stepRanks[row.section] ?? 0;
+      for (final item in row.items) {
+        final rank = stepRanks[_wonriCategoryOfItem(item, row.section)] ?? 0;
+        if (rank > pageMax) pageMax = rank;
+      }
+      if (pageMax > reached) reached = pageMax;
+    }
+
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      final floor = row.ok ? (floorByPage[row.rawPage] ?? 0) : 0;
+      if (floor <= 0) {
+        out.add(row);
+        continue;
+      }
+      final promotedTo = categoryByRank[floor]!;
+      var promoted = 0;
+      final items = <TextbookVlmItem>[];
+      for (final item in row.items) {
+        final category = _wonriCategoryOfItem(item, row.section);
+        final rank = stepRanks[category] ?? 0;
+        if (rank > 0 && rank < floor) {
+          promoted += 1;
+          items.add(item.withCategory(promotedTo));
+        } else {
+          items.add(item);
+        }
+      }
+      final sectionRank = stepRanks[row.section] ?? 0;
+      final section =
+          sectionRank > 0 && sectionRank < floor ? promotedTo : row.section;
+      if (promoted == 0 && section == row.section) {
+        out.add(row);
+        continue;
+      }
+      out.add(_PageAnalysisRow.success(
+        rawPage: row.rawPage,
+        displayPage: row.displayPage,
+        section: section,
+        pageKind: row.pageKind,
+        conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
+        notes: _appendGuardNote(
+          row.notes,
+          'gaeyu_step_order_promoted=$promoted->$promotedTo',
+        ),
+        items: items,
+      ));
+    }
+    return out;
+  }
+
+  /// 개념+유형 쏙쏙·탄탄의 번호가 **뒤로 돌아간** 문항을 걷어낸다.
+  ///
+  /// 이어지는 지면에는 코너 배지가 다시 인쇄되지 않아 모델이 앞 코너를
+  /// 이어받는다. 이때 지면 상단의 크림색 개념 정리 카드(굵은 개념 번호 +
+  /// 명사구 제목)를 그 코너의 문항으로 올리는 오인식이 난다. 실제로 83쪽
+  /// 쏙쏙이 1~5번으로 끝난 뒤 84쪽 개념 카드의 "2" 가 쏙쏙 2번으로 붙었다.
+  ///
+  /// 코너가 이어지는 동안 번호는 반드시 커진다. 그래서 직전 지면까지의 최대
+  /// 번호 이하로 내려가는 번호는 문항 번호가 아니다.
+  ///
+  /// 단, 한 소단원 범위(예: 101~110쪽) 안에 쏙쏙 블록이 여러 번 나오고 블록마다
+  /// 번호가 1번부터 다시 시작한다. 그래서 1번이 보이는 지면은 **새 블록**으로
+  /// 보고 기준선을 0 으로 되돌린다. 이 처리가 없으면 새 블록의 2~5번이 앞
+  /// 블록의 최대 번호 이하라는 이유로 통째로 지워진다.
+  List<_PageAnalysisRow> _guardGaeyuStepNumberRewind(
+    List<_PageAnalysisRow> rows,
+  ) {
+    // 필수 문제도 한 소단원 안에서 1번부터 끝번호까지 이어진다. 105쪽 개념 카드의
+    // "4" 가 필수 문제 7·8 사이에 끼어든 사고가 있어 같이 추적한다. 따름 문제
+    // ("7-1")는 앞자리가 대표 번호와 같아 판정에 영향을 주지 않는다.
+    const tracked = <String>{'step_drill', 'unit_drill', 'essential_problem'};
+
+    int? printedNumber(TextbookVlmItem item) {
+      final digits = RegExp(r'^\s*(\d+)').firstMatch(item.number);
+      return digits == null ? null : int.tryParse(digits[1]!);
+    }
+
+    final order = rows.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    final droppedByPage = <int, Set<int>>{};
+    final maxByCategory = <String, int>{};
+    for (final row in order) {
+      // 지면 단위로 판단한다. 한 지면 안에서 모델이 주는 순서는 지면 순서와
+      // 다를 수 있으므로 항목끼리 비교하지 않고, 지면 전체의 기준선 하나와만
+      // 비교한다.
+      final numbersByCategory = <String, Map<int, int>>{};
+      for (var i = 0; i < row.items.length; i += 1) {
+        final category = _wonriCategoryOfItem(row.items[i], row.section);
+        if (!tracked.contains(category)) continue;
+        final number = printedNumber(row.items[i]);
+        if (number == null) continue;
+        (numbersByCategory[category] ??= <int, int>{})[i] = number;
+      }
+      for (final entry in numbersByCategory.entries) {
+        // 1번이 있으면 코너 배지가 다시 인쇄된 새 블록이다. 앞 블록의 최대
+        // 번호를 기준으로 삼으면 새 블록의 2~5번이 통째로 지워진다.
+        final restarted = entry.value.values.contains(1);
+        final baseline = restarted ? 0 : (maxByCategory[entry.key] ?? 0);
+        var pageMax = 0;
+        for (final one in entry.value.entries) {
+          if (one.value > baseline) {
+            if (one.value > pageMax) pageMax = one.value;
+          } else {
+            (droppedByPage[row.rawPage] ??= <int>{}).add(one.key);
+          }
+        }
+        if (pageMax <= 0) continue;
+        final seen = maxByCategory[entry.key];
+        maxByCategory[entry.key] =
+            restarted || seen == null || pageMax > seen ? pageMax : seen;
+      }
+    }
+    if (droppedByPage.isEmpty) return rows;
+
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      final dropped = droppedByPage[row.rawPage];
+      if (dropped == null || dropped.isEmpty) {
+        out.add(row);
+        continue;
+      }
+      final kept = <TextbookVlmItem>[
+        for (var i = 0; i < row.items.length; i += 1)
+          if (!dropped.contains(i)) row.items[i],
+      ];
+      out.add(_rowWithGuardedItems(
+        row,
+        kept,
+        dropped.length,
+        reason: 'gaeyu_step_number_rewind_filtered',
       ));
     }
     return out;
@@ -2655,7 +2845,11 @@ class _TextbookUnitAuthoringDialogState
     String printedNumber,
   ) {
     final prefix = prefixes['$subKey|$rawPage|$itemIndex'];
-    return prefix == null ? printedNumber : '$prefix-$printedNumber';
+    if (prefix == null) return printedNumber;
+    // 이미 같은 접두어가 붙어 있으면 그대로 둔다 (복원된 번호를 두 번 접두어
+    // 붙여 "10-10-1" 로 만들지 않기 위한 방어선).
+    if (printedNumber.startsWith('$prefix-')) return printedNumber;
+    return '$prefix-$printedNumber';
   }
 
   /// 개념원리 단일 패스 저장 — 소단원 분석 결과의 문항을 category 별로

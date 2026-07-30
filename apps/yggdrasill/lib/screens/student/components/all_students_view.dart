@@ -16,6 +16,7 @@ import '../../../models/attendance_record.dart';
 import '../../../models/payment_record.dart';
 import '../../../models/session_override.dart';
 import '../../../widgets/student_card.dart';
+import '../../../widgets/student_profile_avatar.dart';
 import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
 import '../student_profile_page.dart';
@@ -2434,17 +2435,11 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              CircleAvatar(
+              StudentProfileAvatar(
+                student: student,
                 radius: 28,
-                backgroundColor:
+                fallbackColor:
                     student.groupInfo?.color ?? const Color(0xFF2C3A3A),
-                child: Text(
-                  student.name.characters.take(2).join(),
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold),
-                ),
               ),
               const SizedBox(width: 16),
               Expanded(

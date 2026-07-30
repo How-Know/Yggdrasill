@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_config.dart';
+import 'student_avatar_session.dart';
 
 /// 과제 그룹 (m5_list_homework_groups와 동일 형태).
 class HomeworkGroup {
@@ -282,6 +284,10 @@ class StudentInfo {
     required this.startHour,
     required this.startMinute,
     required this.duration,
+    this.avatarKind,
+    this.avatarUrl,
+    this.avatarEmoji,
+    this.avatarMonogramStyle,
   });
 
   final String name;
@@ -290,6 +296,10 @@ class StudentInfo {
   final int? startHour;
   final int? startMinute;
   final int? duration;
+  final String? avatarKind;
+  final String? avatarUrl;
+  final String? avatarEmoji;
+  final int? avatarMonogramStyle;
 }
 
 class AcademyBranding {
@@ -347,6 +357,141 @@ class TodayAttendance {
   final DateTime? arrival;
   final DateTime? departure;
   final DateTime? classDateTime;
+}
+
+/// 출결(출석) 점수 — 학습앱 스탯과 동일 규칙(서버 계산).
+class AttendanceScoreInfo {
+  const AttendanceScoreInfo({
+    required this.score100,
+    required this.rank,
+    required this.cohortSize,
+    required this.topPercent,
+    this.insufficientEvidence = false,
+  });
+
+  final double score100;
+  final int rank;
+  final int cohortSize;
+  final double topPercent;
+  final bool insufficientEvidence;
+
+  int get scoreRounded => score100.round().clamp(0, 100);
+
+  String get subtitle {
+    if (cohortSize <= 0 || rank <= 0) {
+      return '학원 순위 데이터가 부족해요';
+    }
+    return '상위 ${topPercent.toStringAsFixed(1)}% · $rank등';
+  }
+
+  static AttendanceScoreInfo? fromRow(Map<String, dynamic>? row) {
+    if (row == null) return null;
+    final score = (row['score100'] as num?)?.toDouble();
+    final rank = (row['rank'] as num?)?.toInt();
+    final cohort = (row['cohort_size'] as num?)?.toInt();
+    final top = (row['top_percent'] as num?)?.toDouble();
+    if (score == null || rank == null || cohort == null || top == null) {
+      return null;
+    }
+    return AttendanceScoreInfo(
+      score100: score,
+      rank: rank,
+      cohortSize: cohort,
+      topPercent: top,
+      insufficientEvidence: row['insufficient_evidence'] == true,
+    );
+  }
+}
+
+/// 오늘 제출·완료된 과제 그룹 (진행률 상세 카드용).
+class TodayCompletedHomework {
+  const TodayCompletedHomework({
+    required this.groupId,
+    required this.title,
+    required this.pageSummary,
+    required this.totalCount,
+    required this.accumulatedSec,
+    required this.bookId,
+    required this.gradeLabel,
+    required this.type,
+    required this.content,
+    this.finishedAt,
+  });
+
+  final String groupId;
+  final String title;
+  final String pageSummary;
+  final int totalCount;
+  final int accumulatedSec;
+  final String bookId;
+  final String gradeLabel;
+  final String type;
+  final String content;
+  final DateTime? finishedAt;
+
+  bool get isPrintSource {
+    final t = type.trim();
+    return t == '출력물' || t == '프린트';
+  }
+
+  String get sourceLabel {
+    final fromContent = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)')
+        .firstMatch(content)
+        ?.group(1)
+        ?.trim();
+    if (fromContent != null && fromContent.isNotEmpty) return fromContent;
+    final t = type.trim();
+    return t.isNotEmpty ? t : '';
+  }
+
+  String get courseLabel {
+    final fromContent = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)')
+        .firstMatch(content)
+        ?.group(1)
+        ?.trim();
+    if (fromContent != null && fromContent.isNotEmpty) return fromContent;
+    return gradeLabel.trim();
+  }
+
+  /// `p.10-12 · 12문항`
+  String get pageCountLine {
+    final page = pageSummary.trim();
+    final pagePart = page.isEmpty ? '' : 'p.$page';
+    final countPart = totalCount > 0 ? '$totalCount문항' : '';
+    if (pagePart.isEmpty && countPart.isEmpty) return '-';
+    if (pagePart.isEmpty) return countPart;
+    if (countPart.isEmpty) return pagePart;
+    return '$pagePart · $countPart';
+  }
+
+  /// `1시간 23분` / `45분` / `-`
+  String get durationLine {
+    final sec = accumulatedSec < 0 ? 0 : accumulatedSec;
+    if (sec <= 0) return '-';
+    final totalMin = (sec / 60).floor();
+    final hours = totalMin ~/ 60;
+    final minutes = totalMin % 60;
+    if (hours > 0 && minutes > 0) return '$hours시간 $minutes분';
+    if (hours > 0) return '$hours시간';
+    return '$minutes분';
+  }
+
+  static TodayCompletedHomework fromRow(Map<String, dynamic> row) {
+    return TodayCompletedHomework(
+      groupId: '${row['group_id'] ?? ''}',
+      title: (row['group_title'] as String?)?.trim() ?? '',
+      pageSummary: (row['page_summary'] as String?) ?? '',
+      totalCount: (row['total_count'] as num?)?.toInt() ?? 0,
+      accumulatedSec: (row['accumulated_sec'] as num?)?.toInt() ?? 0,
+      bookId: (row['book_id'] as String?)?.trim() ?? '',
+      gradeLabel: (row['grade_label'] as String?)?.trim() ?? '',
+      type: (row['type'] as String?)?.trim() ?? '',
+      content: (row['content'] as String?) ?? '',
+      finishedAt: row['finished_at'] != null
+          ? DateTime.tryParse(row['finished_at'] as String)
+          : null,
+    );
+  }
 }
 
 /// Supabase 직접 통신 API. 모든 호출은 로그인된 학생 세션 기준(RPC가 본인 검증).
@@ -530,14 +675,64 @@ class StudentApi {
     final rows = await _client.rpc('student_get_info') as List<dynamic>;
     if (rows.isEmpty) return null;
     final row = rows.first as Map<String, dynamic>;
-    return StudentInfo(
+    final info = StudentInfo(
       name: (row['name'] as String?) ?? '',
       school: (row['school'] as String?) ?? '',
       grade: (row['grade'] as num?)?.toInt(),
       startHour: (row['start_hour'] as num?)?.toInt(),
       startMinute: (row['start_minute'] as num?)?.toInt(),
       duration: (row['duration'] as num?)?.toInt(),
+      avatarKind: row['avatar_kind'] as String?,
+      avatarUrl: row['avatar_url'] as String?,
+      avatarEmoji: row['avatar_emoji'] as String?,
+      avatarMonogramStyle: (row['avatar_monogram_style'] as num?)?.toInt(),
     );
+    StudentAvatarSession.instance.hydrateFromServer(
+      kindRaw: info.avatarKind,
+      url: info.avatarUrl,
+      emojiValue: info.avatarEmoji,
+      monogramStyle: info.avatarMonogramStyle,
+    );
+    return info;
+  }
+
+  Future<String> uploadAvatarPhoto(
+    Uint8List bytes, {
+    String contentType = 'image/jpeg',
+  }) async {
+    final id = await identity();
+    if (id == null) {
+      throw StateError('no student identity');
+    }
+    final ext = contentType.contains('png')
+        ? 'png'
+        : contentType.contains('webp')
+            ? 'webp'
+            : 'jpg';
+    final path = '${id.academyId}/${id.studentId}/avatar.$ext';
+    await _client.storage.from('student-avatars').uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(
+            upsert: true,
+            contentType: contentType,
+          ),
+        );
+    return _client.storage.from('student-avatars').getPublicUrl(path);
+  }
+
+  Future<void> setAvatar({
+    required String kind,
+    String? url,
+    String? emoji,
+    int? monogramStyle,
+  }) async {
+    await _client.rpc('student_set_avatar', params: {
+      'p_kind': kind,
+      'p_url': url,
+      'p_emoji': emoji,
+      'p_monogram_style': monogramStyle,
+    });
   }
 
   /// Realtime 필터용 본인 academy/student.
@@ -549,6 +744,26 @@ class StudentApi {
     final studentId = (row['student_id'] as String?)?.trim() ?? '';
     if (academyId.isEmpty || studentId.isEmpty) return null;
     return (academyId: academyId, studentId: studentId);
+  }
+
+  /// 출결 점수 + 학원 내 상위 퍼센트.
+  Future<AttendanceScoreInfo?> getAttendanceScore() async {
+    final rows =
+        await _client.rpc('student_get_attendance_score_v1') as List<dynamic>;
+    if (rows.isEmpty) return null;
+    return AttendanceScoreInfo.fromRow(
+      Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
+  /// 오늘 제출·완료한 과제 그룹 (상세 카드 리스트용).
+  Future<List<TodayCompletedHomework>> listTodayCompletedHomework() async {
+    final rows = await _client.rpc('student_list_today_completed_homework_v1')
+        as List<dynamic>;
+    return rows
+        .whereType<Map<String, dynamic>>()
+        .map(TodayCompletedHomework.fromRow)
+        .toList(growable: false);
   }
 
   /// 과제 그룹 목록 (메인 + 하원숙제 + 플래그 병합).

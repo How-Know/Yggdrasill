@@ -22,6 +22,7 @@ import '../../widgets/swipe_action_reveal.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/latex_text_renderer.dart';
+import '../../widgets/student_profile_avatar.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentProfilePage extends StatefulWidget {
@@ -145,17 +146,11 @@ class _StudentProfileHeader extends StatelessWidget {
                         padding: EdgeInsets.zero,
                       ),
                     ),
-                    CircleAvatar(
+                    StudentProfileAvatar(
+                      student: student,
                       radius: 20,
-                      backgroundColor:
+                      fallbackColor:
                           student.groupInfo?.color ?? const Color(0xFF2C3A3A),
-                      child: Text(
-                        student.name.characters.take(1).toString(),
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold),
-                      ),
                     ),
                     const SizedBox(width: 16),
                     Text(
@@ -525,16 +520,22 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     final weightedLate = _asDouble(scoreMap['weightedLate']);
     final weightedAbsent = _asDouble(scoreMap['weightedAbsent']);
     final eventCount = _asInt(scoreMap['eventCount']) ?? 0;
+    final pastPlannedAbsent = _asInt(scoreMap['pastPlannedAbsentCount']) ?? 0;
     final halfLifeDays = _asDouble(scoreMap['halfLifeDays']);
-    final priorRatio = _asDouble(scoreMap['priorRatio']);
-    final smoothingK = _asDouble(scoreMap['smoothingK']);
     final thresholdMinutes = _asInt(scoreMap['latenessThresholdMinutes']) ?? 10;
-    final makeupCountThisMonth = _asInt(scoreMap['makeupCountThisMonth']) ?? 0;
-    final monthClassCount = _asInt(scoreMap['monthClassCount']) ?? 0;
-    final makeupRatioThisMonth = _asDouble(scoreMap['makeupRatioThisMonth']);
+    final makeupCount = _asInt(scoreMap['makeupCount']) ?? 0;
+    final absenceRate = _asDouble(scoreMap['absenceRate']);
+    final makeupRate = _asDouble(scoreMap['makeupRate']);
+    final lateRate = _asDouble(scoreMap['lateRate']);
+    final absencePenalty = _asDouble(scoreMap['absencePenalty']);
     final makeupPenalty = _asDouble(scoreMap['makeupPenalty']);
-    final score100BeforeMakeup = _asDouble(scoreMap['score100BeforeMakeup']);
-    final score100AfterMakeup = _asDouble(scoreMap['score100AfterMakeup']);
+    final latePenalty = _asDouble(scoreMap['latePenalty']);
+    final absenceBand = _asInt(scoreMap['absenceBand']) ?? 0;
+    final insufficientEvidence = scoreMap['insufficientEvidence'] == true;
+    final evidenceWeight = _asDouble(scoreMap['evidenceWeight']);
+    final requiredEvidenceWeight =
+        _asDouble(scoreMap['requiredEvidenceWeight']);
+    final weeklyParticipation = _asDouble(scoreMap['weeklyParticipation']);
     final rank = _asInt(scoreMap['rank']);
     final cohortSize = _asInt(scoreMap['cohortSize']) ?? 0;
     final topPercent = _asDouble(scoreMap['topPercent']);
@@ -574,7 +575,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     ),
                     SizedBox(height: 4),
                     Text(
-                      '최근 기록일수록 더 크게 반영되고, 수업량/재원기간 편향을 비율+스무딩으로 완화합니다.',
+                      '결석을 가장 크게, 보강을 그다음, 지각을 가장 약하게 반영합니다.',
                       style: TextStyle(
                           color: kDlgTextSub, fontSize: 12.5, height: 1.35),
                     ),
@@ -627,23 +628,32 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
           ),
           const SizedBox(height: 10),
           Text(
-            '기준: 반감기 ${halfLifeDays.toStringAsFixed(0)}일 · prior ${(priorRatio * 100).toStringAsFixed(0)}점 · k=${smoothingK.toStringAsFixed(0)} · 지각 기준 ${thresholdMinutes}분',
+            '기준: 반감기 ${halfLifeDays.toStringAsFixed(0)}일 · 지각 기준 ${thresholdMinutes}분 · 결석 구간 ${String.fromCharCode(65 + absenceBand)}',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
           const SizedBox(height: 4),
           Text(
-            '반영 이벤트 ${eventCount}건 · 미반영 예정 ${pendingIgnored}건',
+            '반영 이벤트 ${eventCount}건 · 과거 미기록→결석 ${pastPlannedAbsent}건 · 미반영 예정 ${pendingIgnored}건',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          Text(
+            '학습 참여량: 최근 28일 주당 평균 ${weeklyParticipation.toStringAsFixed(1)}회',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
           const SizedBox(height: 6),
           Text(
-            '보강: 이번달 ${makeupCountThisMonth}회 / 월수업 ${monthClassCount}회 (${(makeupRatioThisMonth * 100).toStringAsFixed(1)}%)',
+            '비율: 결석 ${(absenceRate * 100).toStringAsFixed(1)}% · 보강 ${(makeupRate * 100).toStringAsFixed(1)}% (${makeupCount}회) · 지각 ${(lateRate * 100).toStringAsFixed(1)}%',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
           Text(
-            '보강 반영: ${score100BeforeMakeup.toStringAsFixed(1)}점 -> ${score100AfterMakeup.toStringAsFixed(1)}점 (감점 ${(makeupPenalty * 100).toStringAsFixed(1)}점)',
+            '감점: 결석 ${absencePenalty.toStringAsFixed(1)} · 보강 ${makeupPenalty.toStringAsFixed(1)} · 지각 ${latePenalty.toStringAsFixed(1)}',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
+          if (insufficientEvidence)
+            Text(
+              '표본 부족: 가중 유효 수업 ${evidenceWeight.toStringAsFixed(1)} / ${requiredEvidenceWeight.toStringAsFixed(0)}회 · 학원 평균으로 보정',
+              style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+            ),
           const SizedBox(height: 6),
           Text(
             (rank != null && cohortSize > 0)

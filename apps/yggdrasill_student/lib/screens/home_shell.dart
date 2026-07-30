@@ -25,8 +25,10 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   int _index = 0;
   bool _searchExpanded = false;
-  /// 미니바 확장 전체화면. 탭바·미니바보다 아래 레이어에 깔린다.
-  bool _nowPlayingExpanded = false;
+  /// 확장 시트가 Stack에 올라가 있는지 (슬라이드 아웃 중에도 true).
+  bool _nowPlayingSheetMounted = false;
+  /// 확장 중 1줄 크롬 강제. 닫기 시작과 동시에 false → 스크롤 축소와 같은 애니.
+  bool _nowPlayingForceOneLine = false;
 
   @override
   void initState() {
@@ -35,6 +37,8 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     StudentShellChrome.instance.addListener(_onChromeChanged);
     // Realtime + 1.2s 폴백 (학습앱과 동일 패턴).
     unawaited(HomeworkSession.instance.startSync());
+    // 서버 아바타 → 세션 hydrate (계정 버튼/시트에 즉시 반영).
+    unawaited(StudentApi.instance.getInfo());
   }
 
   @override
@@ -77,7 +81,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     final session = HomeworkSession.instance;
     final group = session.active;
     final wasRunning = group != null && session.isRunningGroup(group.groupId);
-    _collapseNowPlaying();
+    _unmountNowPlayingSheet();
     await session.dismissMiniBar();
     if (!mounted || !wasRunning) return;
     TopGlassSnackBar.show(
@@ -88,16 +92,26 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   }
 
   void _expandNowPlaying() {
-    if (_nowPlayingExpanded) return;
+    if (_nowPlayingSheetMounted) return;
+    if (_searchExpanded) _setSearchExpanded(false);
     setState(() {
-      _searchExpanded = false;
-      _nowPlayingExpanded = true;
+      _nowPlayingSheetMounted = true;
+      _nowPlayingForceOneLine = true;
     });
   }
 
-  void _collapseNowPlaying() {
-    if (!_nowPlayingExpanded) return;
-    setState(() => _nowPlayingExpanded = false);
+  /// 시트 닫기 시작 — 1줄 강제 해제해서 탭바가 스크롤 때처럼 펼쳐진다.
+  void _beginCollapseNowPlaying() {
+    if (!_nowPlayingForceOneLine) return;
+    setState(() => _nowPlayingForceOneLine = false);
+  }
+
+  void _unmountNowPlayingSheet() {
+    if (!_nowPlayingSheetMounted && !_nowPlayingForceOneLine) return;
+    setState(() {
+      _nowPlayingSheetMounted = false;
+      _nowPlayingForceOneLine = false;
+    });
   }
 
   @override
@@ -106,17 +120,11 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     final active = HomeworkSession.instance.active;
     final sessionBusy = HomeworkSession.instance.busy;
     final scrollCompact = StudentShellChrome.instance.compact;
-    // 미니바 있을 때만 1줄 배치. 확장 시트에서는 항상 1줄(탭·미니바·검색).
-    // 검색 펼치면 미니바를 위로.
+    // 미니바 있을 때만 1줄 배치. 확장 시트에서는 열림 동안 1줄 강제.
+    // 검색 펼치면 미니바를 위로. 닫기 시작 시 강제 해제 → 크롬 애니와 동기.
     final oneLineChrome = active != null &&
         !_searchExpanded &&
-        (scrollCompact || _nowPlayingExpanded);
-    // 활성 과제가 없어지면 확장 화면도 함께 닫는다.
-    if (active == null && _nowPlayingExpanded) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _collapseNowPlaying();
-      });
-    }
+        (scrollCompact || _nowPlayingForceOneLine);
 
     return Scaffold(
       backgroundColor: surface,
@@ -132,10 +140,12 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
             ],
           ),
           // 전체화면 확장 — 탭바·미니바보다 아래에 깔려 크롬이 위로 남는다.
-          if (_nowPlayingExpanded && active != null)
+          // 닫힘 슬라이드가 끝날 때까지 유지한다.
+          if (_nowPlayingSheetMounted)
             Positioned.fill(
               child: HomeworkNowPlayingExpanded(
-                onClose: _collapseNowPlaying,
+                onCloseBegin: _beginCollapseNowPlaying,
+                onClose: _unmountNowPlayingSheet,
                 onPlayPause: () => unawaited(handleNowPlayingPlayPause()),
                 onSubmit: () => unawaited(handleNowPlayingSubmit()),
               ),

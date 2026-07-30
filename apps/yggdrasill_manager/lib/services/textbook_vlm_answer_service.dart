@@ -55,8 +55,7 @@ class TextbookExpectedAnswerBatch {
 
   bool get isEmpty => entries.isEmpty;
 
-  List<String> get numbers =>
-      <String>[for (final e in entries) e.number];
+  List<String> get numbers => <String>[for (final e in entries) e.number];
 
   /// 결과 항목 하나가 가리키는 전체 목록 위치.
   ///
@@ -105,6 +104,35 @@ const Map<String, String> _kConceptPlusAnswerCorners = <String, String>{
 bool textbookAnswerNeedsCorner(String seriesKey) =>
     seriesKey.trim().toLowerCase() == 'gaeyu';
 
+/// 번호가 블록마다 1번부터 다시 시작하는 코너. 앱은 이 코너의 크롭에만
+/// 본문 페이지를 접두어로 붙여 저장한다("14-1").
+const Set<String> _kConceptPlusBlockScopedSections = <String>{
+  'step_drill',
+  'extra_practice',
+};
+
+/// 답지·해설에 **인쇄된 대로**의 번호로 되돌린다.
+///
+/// 쏙쏙·한번 더 연습은 블록마다 번호가 1번부터 다시 시작해서 앱이 본문
+/// 페이지를 접두어로 붙여 "14-1" 로 저장한다. 하지만 답지에는 P.14 배지
+/// 아래 "1" 로 인쇄돼 있다. 접두어를 붙인 채로 물어보면 모델이 "14-1 은
+/// 이 지면에 없다" 며 그 박스를 통째로 건너뛴다(쏙쏙 6문항이 매번 빈 채로
+/// 남았다). 어느 박스인지는 코너와 [bodyPage] 로 따로 알려주므로 번호는
+/// 인쇄된 로컬 번호만 보낸다. 크롭 연결은 번호가 아니라 기대 목록의
+/// 위치(expected_index)로 되짚으므로 접두어를 떼도 안전하다.
+String _conceptPlusPrintedNumber({
+  required String number,
+  required String section,
+  int? bodyPage,
+}) {
+  if (bodyPage == null) return number;
+  if (!_kConceptPlusBlockScopedSections.contains(section.trim())) return number;
+  final matched = RegExp(r'^(\d+)-(\d+)$').firstMatch(number.trim());
+  if (matched == null) return number;
+  if (int.tryParse(matched.group(1)!) != bodyPage) return number;
+  return matched.group(2)!;
+}
+
 /// 크롭 한 건을 답지 조회용 기대 문항으로 바꾼다.
 TextbookExpectedAnswer textbookExpectedAnswerFor({
   required String seriesKey,
@@ -115,10 +143,15 @@ TextbookExpectedAnswer textbookExpectedAnswerFor({
   if (!textbookAnswerNeedsCorner(seriesKey)) {
     return TextbookExpectedAnswer(number: problemNumber);
   }
+  final bodyPage = displayPage != null && displayPage > 0 ? displayPage : null;
   return TextbookExpectedAnswer(
-    number: problemNumber,
+    number: _conceptPlusPrintedNumber(
+      number: problemNumber,
+      section: section,
+      bodyPage: bodyPage,
+    ),
     corner: _kConceptPlusAnswerCorners[section.trim()] ?? '',
-    bodyPage: displayPage != null && displayPage > 0 ? displayPage : null,
+    bodyPage: bodyPage,
   );
 }
 

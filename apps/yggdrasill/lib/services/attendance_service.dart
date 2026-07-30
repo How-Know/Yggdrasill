@@ -1901,44 +1901,39 @@ class AttendanceService {
     return _attendanceRecords.where((r) => r.studentId == studentId).toList();
   }
 
-  /// 출석 점수 1단계 계산기 (읽기 전용)
+  /// 출석 점수 계산기 (읽기 전용, v4: 결석 > 보강 > 지각)
   ///
-  /// - 이벤트 점수: 출석 1.0, 지각 0.6, 결석 0.0
   /// - 시간 감쇠: 반감기(기본 28일)
-  /// - 비율 점수: sum(w*score)/sum(w)
-  /// - 스무딩: prior(기본 0.9), k(기본 8)
-  /// - 최종 점수: 0~100
-  /// - 보강 페널티:
-  ///   - 월 1회 이하는 0
-  ///   - 월 2회 이상은 점진 반영
-  ///   - 월 수업 대비 보강 비율 50% 이상은 강한 반영
+  /// - 결석 페널티: 결석률 * 140점 (최대 70점)
+  /// - 보강 페널티: 보강률 * 40점 (최대 20점)
+  /// - 지각 페널티: 지각률 * 10점 (최대 10점)
+  /// - 최종 점수: 100 - 세 페널티
+  ///
+  /// 포함/제외:
+  /// - 포함: 실제 출석/지각, 명시 결석, **오늘 이전 순수 planned 미기록(결석 간주)**
+  /// - 제외: 미래·오늘 순수 planned 미처리
   ///
   /// 반환 맵:
-  /// - score100, rawRatio, smoothedRatio
-  /// - score100BeforeMakeup, score100AfterMakeup
+  /// - score100
+  /// - absenceRate, makeupRate, lateRate, absenceBand
+  /// - absencePenalty, makeupPenalty, latePenalty
   /// - weightedPresent/weightedLate/weightedAbsent/totalWeight
   /// - eventCount, presentCount, lateCount, absentCount, pendingIgnoredCount
-  /// - makeupCountThisMonth, monthClassCount, makeupRatioThisMonth, makeupPenalty
-  /// - halfLifeDays, priorRatio, smoothingK, latenessThresholdMinutes
+  /// - pastPlannedAbsentCount (과거 planned→결석 반영 건수)
+  /// - makeupCount, weightedMakeup, insufficientEvidence
+  /// - halfLifeDays, latenessThresholdMinutes
   Map<String, dynamic> calculateAttendanceScore({
     required String studentId,
     DateTime? nowRef,
     double halfLifeDays = 28,
-    double presentScore = 1.0,
-    double lateScore = 0.6,
-    double absentScore = 0.0,
-    double priorRatio = 0.9,
-    double smoothingK = 8.0,
   }) {
     final sid = studentId.trim();
     final now = (nowRef ?? DateTime.now()).toLocal();
+    final DateTime today = DateTime(now.year, now.month, now.day);
     final int threshold = _d.getLatenessThresholdMinutes(sid);
     final double safeHalfLife = halfLifeDays <= 0 ? 28.0 : halfLifeDays;
-    final double safeK = smoothingK < 0 ? 0 : smoothingK;
     const double ln2 = 0.6931471805599453;
-    final DateTime monthRef = _monthKey(now);
 
-    double weightedNumerator = 0;
     double weightedDenominator = 0;
     double weightedPresent = 0;
     double weightedLate = 0;
@@ -1947,38 +1942,14 @@ class AttendanceService {
     int presentCount = 0;
     int lateCount = 0;
     int absentCount = 0;
+    int pastPlannedAbsentCount = 0;
     int pendingIgnoredCount = 0;
-    final Set<String> monthClassKeys = <String>{};
-
-    double calcMakeupPenalty({
-      required int makeupCount,
-      required double makeupRatio,
-    }) {
-      if (makeupCount <= 1) return 0.0;
-      final double safeRatio = makeupRatio.clamp(0.0, 2.0).toDouble();
-      if (safeRatio < 0.5) {
-        final double countFactor =
-            ((makeupCount - 1) / 4).clamp(0.0, 1.0).toDouble();
-        final double ratioFactor = (safeRatio / 0.5).clamp(0.0, 1.0).toDouble();
-        final double blend = math.max(countFactor, ratioFactor);
-        return (0.08 * (0.25 + (0.75 * blend))).clamp(0.0, 0.08).toDouble();
-      }
-      final double highRatioFactor =
-          ((safeRatio - 0.5) / 0.5).clamp(0.0, 1.0).toDouble();
-      final double highCountFactor =
-          ((makeupCount - 2) / 4).clamp(0.0, 1.0).toDouble();
-      final double highBlend = math.max(highRatioFactor, highCountFactor);
-      return (0.08 + (0.17 * highBlend)).clamp(0.08, 0.25).toDouble();
-    }
+    int recent28SessionCount = 0;
 
     for (final r in _attendanceRecords) {
       if (r.studentId != sid) continue;
       final classDt = r.classDateTime.toLocal();
       if (classDt.isAfter(now)) continue;
-      if (_monthKey(classDt) == monthRef) {
-        final setKey = (r.setId ?? '').trim();
-        monthClassKeys.add('$setKey|${_minuteKey(classDt)}');
-      }
 
       final double daysAgo =
           now.difference(classDt).inMinutes.toDouble() / (24 * 60);
@@ -1993,10 +1964,9 @@ class AttendanceService {
             arrival.isAfter(
               classDt.add(Duration(minutes: threshold)),
             );
-        final double eventScore = isLate ? lateScore : presentScore;
-        weightedNumerator += weight * eventScore;
         weightedDenominator += weight;
         eventCount += 1;
+        if (daysAgo <= 28) recent28SessionCount += 1;
         if (isLate) {
           lateCount += 1;
           weightedLate += weight;
@@ -2007,32 +1977,29 @@ class AttendanceService {
         continue;
       }
 
-      final bool explicitAbsent = !r.isPlanned &&
-          !r.isPresent &&
-          r.arrivalTime == null &&
-          r.departureTime == null;
-      if (explicitAbsent) {
-        weightedNumerator += weight * absentScore;
+      final bool noAttendanceMarks =
+          !r.isPresent && r.arrivalTime == null && r.departureTime == null;
+      final bool explicitAbsent = !r.isPlanned && noAttendanceMarks;
+      // UI(judgeAttendanceResult)와 동일: 오늘 이전 순수 planned 미기록 = 결석
+      final DateTime classDay =
+          DateTime(classDt.year, classDt.month, classDt.day);
+      final bool pastPlannedAbsent =
+          r.isPlanned && noAttendanceMarks && classDay.isBefore(today);
+      if (explicitAbsent || pastPlannedAbsent) {
         weightedDenominator += weight;
         eventCount += 1;
+        if (daysAgo <= 28) recent28SessionCount += 1;
         absentCount += 1;
         weightedAbsent += weight;
+        if (pastPlannedAbsent) pastPlannedAbsentCount += 1;
       } else {
-        // planned 미처리 건(미래/미기록 등)은 1단계 점수에서 제외한다.
+        // 오늘·미래 planned 미처리 건은 점수에서 제외한다.
         pendingIgnoredCount += 1;
       }
     }
 
-    final double rawRatio = weightedDenominator > 0
-        ? (weightedNumerator / weightedDenominator)
-        : priorRatio;
-    final double smoothedRatio = (weightedDenominator + safeK) > 0
-        ? ((weightedDenominator * rawRatio) + (safeK * priorRatio)) /
-            (weightedDenominator + safeK)
-        : priorRatio;
-    final int monthClassCount = monthClassKeys.length;
-
-    int makeupCountThisMonth = 0;
+    double weightedMakeup = 0;
+    int makeupCount = 0;
     for (final ov in _d.getSessionOverrides()) {
       if (ov.studentId != sid) continue;
       if (ov.overrideType != OverrideType.replace) continue;
@@ -2040,45 +2007,76 @@ class AttendanceService {
       if (ov.status != OverrideStatus.completed) continue;
       final rep = ov.replacementClassDateTime?.toLocal();
       if (rep == null || rep.isAfter(now)) continue;
-      if (_monthKey(rep) != monthRef) continue;
-      makeupCountThisMonth += 1;
+      final double daysAgo =
+          now.difference(rep).inMinutes.toDouble() / (24 * 60);
+      final double weight = math.exp(-ln2 * (daysAgo / safeHalfLife));
+      if (!weight.isFinite || weight <= 0) continue;
+      weightedMakeup += weight;
+      makeupCount += 1;
     }
-    final double makeupRatioThisMonth =
-        makeupCountThisMonth / math.max(monthClassCount, 1);
-    final double makeupPenalty = calcMakeupPenalty(
-      makeupCount: makeupCountThisMonth,
-      makeupRatio: makeupRatioThisMonth,
-    );
 
-    final double score100BeforeMakeup =
-        (smoothedRatio.clamp(0.0, 1.0) as double) * 100.0;
-    final double finalRatio =
-        (smoothedRatio - makeupPenalty).clamp(0.0, 1.0).toDouble();
-    final double score100AfterMakeup = finalRatio * 100.0;
-    final double score100 = score100AfterMakeup;
+    final double attendedWeight = weightedPresent + weightedLate;
+    final double absenceRate = weightedDenominator > 0
+        ? (weightedAbsent / weightedDenominator).clamp(0.0, 1.0).toDouble()
+        : 0.0;
+    final double makeupRate = weightedDenominator > 0
+        ? (weightedMakeup / weightedDenominator).clamp(0.0, 1.0).toDouble()
+        : 0.0;
+    final double lateRate = attendedWeight > 0
+        ? (weightedLate / attendedWeight).clamp(0.0, 1.0).toDouble()
+        : 0.0;
+
+    final double absencePenalty =
+        (absenceRate * 70.0 * 2.0).clamp(0.0, 70.0).toDouble();
+    final double makeupPenalty =
+        (makeupRate * 20.0 * 2.0).clamp(0.0, 20.0).toDouble();
+    final double latePenalty = (lateRate * 10.0).clamp(0.0, 10.0).toDouble();
+    final double score100 =
+        (100.0 - absencePenalty - makeupPenalty - latePenalty)
+            .clamp(0.0, 100.0)
+            .toDouble();
+
+    int absenceBand;
+    if (absenceRate < 0.05) {
+      absenceBand = 0;
+    } else if (absenceRate < 0.10) {
+      absenceBand = 1;
+    } else if (absenceRate < 0.20) {
+      absenceBand = 2;
+    } else if (absenceRate < 0.30) {
+      absenceBand = 3;
+    } else {
+      absenceBand = 4;
+    }
 
     return <String, dynamic>{
       'score100': score100,
-      'rawRatio': rawRatio,
-      'smoothedRatio': smoothedRatio,
-      'score100BeforeMakeup': score100BeforeMakeup,
-      'score100AfterMakeup': score100AfterMakeup,
+      'score100AfterMakeup': score100,
+      'absenceRate': absenceRate,
+      'makeupRate': makeupRate,
+      'lateRate': lateRate,
+      'absenceBand': absenceBand,
+      'absencePenalty': absencePenalty,
+      'makeupPenalty': makeupPenalty,
+      'latePenalty': latePenalty,
       'weightedPresent': weightedPresent,
       'weightedLate': weightedLate,
       'weightedAbsent': weightedAbsent,
+      'weightedMakeup': weightedMakeup,
       'totalWeight': weightedDenominator,
       'eventCount': eventCount,
       'presentCount': presentCount,
       'lateCount': lateCount,
       'absentCount': absentCount,
+      'pastPlannedAbsentCount': pastPlannedAbsentCount,
       'pendingIgnoredCount': pendingIgnoredCount,
-      'makeupCountThisMonth': makeupCountThisMonth,
-      'monthClassCount': monthClassCount,
-      'makeupRatioThisMonth': makeupRatioThisMonth,
-      'makeupPenalty': makeupPenalty,
+      'makeupCount': makeupCount,
+      'recent28SessionCount': recent28SessionCount,
+      'weeklyParticipation': recent28SessionCount / 4.0,
+      'insufficientEvidence': weightedDenominator < 8.0,
+      'evidenceWeight': weightedDenominator,
+      'requiredEvidenceWeight': 8.0,
       'halfLifeDays': safeHalfLife,
-      'priorRatio': priorRatio,
-      'smoothingK': safeK,
       'latenessThresholdMinutes': threshold,
     };
   }

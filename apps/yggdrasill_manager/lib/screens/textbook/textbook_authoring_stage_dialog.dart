@@ -1398,7 +1398,9 @@ class _TextbookAuthoringStageDialogState
             // 겹치는 다른 코너가 남아 있으면 그 코너 전체를 단독 재검증한다.
             for (final position in order) {
               final target = targets[position];
-              final number = target.crop.problemNumber.trim();
+              // 모델은 우리가 보낸 기대 번호(쏙쏙은 인쇄된 로컬 번호)를
+              // 돌려주므로, 크롭에 저장된 접두어 번호와 비교하면 안 된다.
+              final number = target.expected.number.trim();
               if (reported.any((one) =>
                   one.$1 == number &&
                   one.$2.isNotEmpty &&

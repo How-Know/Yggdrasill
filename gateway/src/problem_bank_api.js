@@ -7660,6 +7660,30 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     items: normalized.items.length,
     elapsed: `${result.elapsedMs}ms`,
   });
+  // 개념+유형은 코너·배지 삼중 대조라 한 건이라도 비면 원인 추적이 필요하다.
+  if (
+    String(body?.series || '').trim().toLowerCase() === 'gaeyu' &&
+    normalized.items.length < expectedEntries.length
+  ) {
+    const want = expectedEntries
+      .map((e) => `${e.number}@${e.corner || '-'}/P.${e.page || '-'}`)
+      .join(' ');
+    const got = (Array.isArray(result.parsedJson?.items)
+      ? result.parsedJson.items
+      : []
+    )
+      .map(
+        (it) =>
+          `${it?.problem_number}@${it?.source_corner || '-'}/P.${
+            it?.source_page || '-'
+          }`,
+      )
+      .join(' ');
+    console.log(
+      `[answers-gap] page=${rawPage} want=[${want}] raw=[${got}] ` +
+        `notes="${String(result.parsedJson?.notes || '').slice(0, 300)}"`,
+    );
+  }
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,

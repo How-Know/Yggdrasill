@@ -18,3 +18,4 @@ export 'src/widgets/utility_glass_dialog_shell.dart';
 export 'src/widgets/ygg_glass_surface.dart';
 export 'src/widgets/ygg_grouped_layout.dart';
 export 'src/widgets/solid_capsule_action_bar.dart';
+export 'src/widgets/ygg_glass_option_menu.dart';

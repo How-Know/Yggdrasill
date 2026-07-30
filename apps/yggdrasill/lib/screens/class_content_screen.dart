@@ -47,6 +47,7 @@ import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
 import '../widgets/fab_style_home_screen_header.dart';
+import '../widgets/attendance_rank_dialog.dart';
 import '../services/student_textbook_report_service.dart';
 import '../widgets/textbook_report_review_dialog.dart';
 import '../utils/homework_page_text.dart';
@@ -781,6 +782,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         showAnchorDateHint: !isAttendanceAnchorToday(anchorDate),
         trailing: [
           if (!_isGradingMode) ...[
+            Tooltip(
+              message: '출석 순위',
+              child: FabStyleActionButton(
+                size: 48,
+                icon: Icons.leaderboard_rounded,
+                onPressed: () => unawaited(showAttendanceRankDialog(context)),
+              ),
+            ),
+            const SizedBox(width: 8),
             Tooltip(
               message: 'M5 바인딩 이력',
               child: FabStyleActionButton(
@@ -10400,9 +10410,10 @@ double _homeworkGroupExpandedHeightForChildCount(int childCount) {
   if (childCount <= 0) return _homeworkChipExpandedHeight;
   // 상단 정보와 하위 리스트를 충분히 분리하고,
   // 하위 과제 수에 비례해 카드 높이가 늘어나도록 계산한다.
-  const double groupSectionHeaderHeight = 46;
-  // 하위 과제 사이 여백(+8,+8) 반영
-  const double perChildRowHeight = 118;
+  // 펼침 요약 4줄 + 하위과제 목록 전 여백
+  const double groupSectionHeaderHeight = 100;
+  // 하위 과제 사이 여백(+8,+8), 메모 줄 제거 반영
+  const double perChildRowHeight = 96;
   final double overflowSafetyPadding =
       childCount >= 7 ? 18 : (childCount >= 5 ? 12 : (childCount >= 3 ? 8 : 4));
   return _homeworkChipExpandedHeight +
@@ -11707,6 +11718,15 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final double chipH = groupExpanded
         ? _homeworkGroupExpandedHeightForChildCount(children.length)
         : _homeworkChipCollapsedHeight;
+    final int maxAssignmentRepeatIndex = () {
+      var maxRepeat = 1;
+      for (final child in children) {
+        final meta = assignmentCycleMetaByItem[child.id];
+        final repeat = meta?.repeatIndex ?? 0;
+        if (repeat > maxRepeat) maxRepeat = repeat;
+      }
+      return maxRepeat;
+    }();
     final groupFlowId = (group.flowId ?? summary.flowId ?? '').trim();
     final groupFlowName = flowNames[groupFlowId] ?? '';
     final int groupAssignmentCount = children.fold<int>(
@@ -11967,20 +11987,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               homeworkDraftEditor != null && homeworkDraftReveal > 0,
           isExpanded: groupExpanded,
           groupChildren: children,
+          maxAssignmentRepeatIndex: maxAssignmentRepeatIndex,
           isPendingConfirm: groupPendingSelected,
           isCompleteCheckbox: groupPendingComplete,
           onGroupChildPageTap: (child) {
             unawaited(
               _showGroupChildPageEditDialog(
-                context: context,
-                studentId: studentId,
-                child: child,
-              ),
-            );
-          },
-          onGroupChildMemoTap: (child) {
-            unawaited(
-              _showGroupChildMemoEditDialog(
                 context: context,
                 studentId: studentId,
                 child: child,
@@ -15332,6 +15344,11 @@ String _formatRecommendedMinutesCompact(int minutes) {
   return '${hours}시간 $remain분';
 }
 
+String _formatKoreanDurationMs(int totalMs) {
+  final totalMinutes = math.max(0, totalMs) ~/ 60000;
+  return _formatRecommendedMinutesCompact(totalMinutes);
+}
+
 int _homeworkRecommendedMinutesOf(HomeworkItem item) {
   final confirmed = item.recommendedMinutes ?? 0;
   if (confirmed > 0) return confirmed;
@@ -15354,13 +15371,13 @@ Widget _buildHomeworkChipVisual(
   bool isExpanded = false,
   List<HomeworkItem> groupChildren = const <HomeworkItem>[],
   HomeworkAssignmentCycleMeta? cycleMeta,
+  int? maxAssignmentRepeatIndex,
   bool isPendingConfirm = false,
   bool isCompleteCheckbox = false,
   VoidCallback? onInfoTap,
   VoidCallback? onTypeTap,
   VoidCallback? onGroupTitleTap,
   void Function(HomeworkItem child)? onGroupChildPageTap,
-  void Function(HomeworkItem child)? onGroupChildMemoTap,
   VoidCallback? onGroupChildAddTap,
   Future<void> Function(HomeworkItem dragged, HomeworkItem target)?
       onGroupChildDropBefore,
@@ -15458,7 +15475,6 @@ Widget _buildHomeworkChipVisual(
       visualPhase == 1 && cycleProgressMs > 0 && hw.firstStartedAt != null;
   final int cycleProgressMsForDisplay =
       (visualPhase == 1 && !isPausedWaiting) ? 0 : cycleProgressMs;
-  final String durationText = _formatDurationMs(totalMs);
   final String startedAtText =
       hw.firstStartedAt == null ? '-' : _formatShortTime(hw.firstStartedAt!);
   final String rawTypeText =
@@ -15470,13 +15486,8 @@ Widget _buildHomeworkChipVisual(
           ? '${hw.createdAt!.month.toString().padLeft(2, '0')}.${hw.createdAt!.day.toString().padLeft(2, '0')}'
           : '-');
 
-  final String line5Left = '검사 ${hw.checkCount}회 · 숙제 ${homeworkCount}회';
-  final String repeatCycleText = '${repeatIndex}회차';
-  final String splitCycleText =
-      splitParts > 1 ? '${splitParts}분할 ${splitRound}차' : '';
-  final String line5Right = splitCycleText.isEmpty
-      ? repeatCycleText
-      : '$repeatCycleText · $splitCycleText';
+  final int displayRepeatIndex =
+      (maxAssignmentRepeatIndex ?? repeatIndex).clamp(1, 1 << 30);
   // 그룹 과제는 하위과제 공통 1개 코드만 표시한다.
   final String assignmentCodeText = () {
     final sources = groupChildren.isNotEmpty ? groupChildren : [hw];
@@ -15509,17 +15520,14 @@ Widget _buildHomeworkChipVisual(
         math.max(0, alphaIncludedItemCount - 1) *
             HomeworkTimeDefaultsService.initialAlphaMinutes,
   );
-  final bool hasRecommendedTime = totalRecommendedMinutes > 0;
-  final String durationWithRecommendedText = hasRecommendedTime
-      ? '$durationText / (${_formatRecommendedMinutesCompact(totalRecommendedMinutes)})'
-      : durationText;
+  final String recommendedTimeText = totalRecommendedMinutes > 0
+      ? _formatRecommendedMinutesCompact(totalRecommendedMinutes)
+      : '-';
   final bool isTestCard = hasGroupChildren
       ? groupChildren.any(_isTestHomeworkItem)
       : _isTestHomeworkItem(hw);
   final int progressMsForDisplay =
       isTestCard ? totalMs : cycleProgressMsForDisplay;
-  final int progressMinutes =
-      progressMsForDisplay <= 0 ? 0 : (progressMsForDisplay ~/ 60000);
   final int? testLimitMinutes = isTestCard
       ? () {
           if (hasGroupChildren) {
@@ -15596,7 +15604,6 @@ Widget _buildHomeworkChipVisual(
     }
     return '$rawTypeText · 테스트 종료';
   }();
-  final String progressText = '진행 ${progressMinutes}분';
   final String? flowChipOverrideText = showRunningRemaining
       ? '남은 ${remainingMinutes}분'
       : (showRunningExtraTime
@@ -15834,12 +15841,7 @@ Widget _buildHomeworkChipVisual(
       if (page == '-' && count == '-') return '-';
       if (page == '-') return count;
       if (count == '-') return page;
-      return '$page · $count';
-    }
-
-    String groupChildMemoLabel(HomeworkItem child) {
-      final memo = (child.memo ?? '').trim();
-      return memo.isEmpty ? '-' : memo;
+      return '$page $count';
     }
 
     Widget buildGroupChildRow(HomeworkItem child, int index) {
@@ -15849,18 +15851,20 @@ Widget _buildHomeworkChipVisual(
           child.phase == 1 &&
           !childHasAssignment;
       final bool canTapPage = onGroupChildPageTap != null;
-      final bool canTapMemo = onGroupChildMemoTap != null;
 
       Widget buildRowCore({
         required bool enablePageTap,
-        required bool enableMemoTap,
       }) {
+        final pageCountStyle = secondaryRowStyle.copyWith(
+          decoration:
+              enablePageTap ? TextDecoration.underline : TextDecoration.none,
+        );
         return ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxRowW),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -15884,40 +15888,13 @@ Widget _buildHomeworkChipVisual(
                   onTap: enablePageTap
                       ? () => onGroupChildPageTap?.call(child)
                       : null,
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text(
-                      groupChildPageCountLabel(child),
-                      style: secondaryRowStyle.copyWith(
-                        decoration: enablePageTap
-                            ? TextDecoration.underline
-                            : TextDecoration.none,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 3),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: enableMemoTap
-                      ? () => onGroupChildMemoTap?.call(child)
-                      : null,
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text(
-                      groupChildMemoLabel(child),
-                      style: secondaryRowStyle.copyWith(
-                        decoration: enableMemoTap
-                            ? TextDecoration.underline
-                            : TextDecoration.none,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                    ),
+                  child: Text(
+                    // 2번째 줄: 페이지 → 문항수, 오른쪽 끝에 붙임
+                    groupChildPageCountLabel(child),
+                    style: pageCountStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
                   ),
                 ),
               ],
@@ -15928,7 +15905,6 @@ Widget _buildHomeworkChipVisual(
 
       final baseRow = buildRowCore(
         enablePageTap: canTapPage,
-        enableMemoTap: canTapMemo,
       );
 
       Widget rowContent = baseRow;
@@ -15949,7 +15925,7 @@ Widget _buildHomeworkChipVisual(
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: cardTheme.dragFeedbackBorder),
                 ),
-                child: buildRowCore(enablePageTap: false, enableMemoTap: false),
+                child: buildRowCore(enablePageTap: false),
               ),
             ),
           ),
@@ -15957,7 +15933,6 @@ Widget _buildHomeworkChipVisual(
             opacity: 0.32,
             child: buildRowCore(
               enablePageTap: canTapPage,
-              enableMemoTap: canTapMemo,
             ),
           ),
           child: baseRow,
@@ -16005,111 +15980,58 @@ Widget _buildHomeworkChipVisual(
       );
     }
 
-  final List<Widget> expandPanelChildren = [
-    const SizedBox(height: 10),
-    ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxRowW),
-      child: Row(
-        children: [
-          Text(
-            '시작 $startedAtText',
-            style: secondaryRowStyle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            progressText,
-            style: secondaryRowStyle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const Spacer(),
-          Text(
-            durationWithRecommendedText,
-            style: secondaryRowStyle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.right,
-          ),
-        ],
-      ),
-    ),
-    const SizedBox(height: 6),
-    ConstrainedBox(
+  // 2~3번째 줄 간격(7)을 하위과제 요약 줄까지 동일하게 쓴다.
+  const double expandLineGap = 7;
+
+  Widget expandPairRow(String left, String right) {
+    // 2단 분할이 아니라, 왼쪽 텍스트 + 오른쪽 끝 붙임.
+    return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxRowW),
       child: Row(
         children: [
           Expanded(
             child: Text(
-              line5Left,
+              left,
               style: secondaryRowStyle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 10),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 220),
-            child: Text(
-              line5Right,
-              style: secondaryRowStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-            ),
+          const SizedBox(width: 8),
+          Text(
+            right,
+            style: secondaryRowStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
+    );
+  }
+
+  final List<Widget> expandPanelChildren = [
+    const SizedBox(height: expandLineGap),
+    expandPairRow(
+      '$startedAtText 시작',
+      '${_formatKoreanDurationMs(progressMsForDisplay)}째',
+    ),
+    const SizedBox(height: expandLineGap),
+    expandPairRow(
+      '총 ${_formatKoreanDurationMs(totalMs)}',
+      '권장 $recommendedTimeText',
+    ),
+    const SizedBox(height: expandLineGap),
+    expandPairRow(
+      '검사 ${hw.checkCount}회',
+      '숙제 ${homeworkCount}회',
     ),
     if (hasGroupChildren) ...[
-      const SizedBox(height: 16),
-      ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                '하위 과제 ${groupChildren.length}개',
-                style: secondaryRowStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (onInfoTap != null)
-              GestureDetector(
-                onTap: onInfoTap,
-                behavior: HitTestBehavior.opaque,
-                child: const SizedBox(
-                  width: 34,
-                  height: 34,
-                  child: Icon(
-                    Icons.info_outline_rounded,
-                    size: 24,
-                    color: Color(0xFF9FB3B3),
-                  ),
-                ),
-              ),
-            if (onInfoTap != null && onGroupChildAddTap != null)
-              const SizedBox(width: 4),
-            if (onGroupChildAddTap != null)
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: onGroupChildAddTap,
-                child: const SizedBox(
-                  width: 34,
-                  height: 34,
-                  child: Icon(
-                    Icons.add_rounded,
-                    size: 24,
-                    color: Color(0xFF9FE3C6),
-                  ),
-                ),
-              ),
-          ],
-        ),
+      const SizedBox(height: expandLineGap),
+      expandPairRow(
+        '하위과제 ${groupChildren.length}개',
+        '${displayRepeatIndex}회차',
       ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 24),
       for (int i = 0; i < visibleGroupChildren; i++) ...[
         buildGroupChildRow(groupChildren[i], i),
         if (i != visibleGroupChildren - 1) ...[
@@ -16158,11 +16080,17 @@ Widget _buildHomeworkChipVisual(
         row2,
         const SizedBox(height: 7),
         collapsedRow3,
+      ],
+    ),
+    collapsedBody: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         const SizedBox(height: 6),
         collapsedRow4,
       ],
     ),
-    panel: Column(
+    expandedBody: Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: expandPanelChildren,
@@ -16258,14 +16186,16 @@ class _HomeworkExpandingCard extends StatelessWidget {
     required this.padding,
     required this.decoration,
     required this.header,
-    required this.panel,
+    required this.collapsedBody,
+    required this.expandedBody,
   });
 
   final bool expanded;
   final EdgeInsetsGeometry padding;
   final Decoration decoration;
   final Widget header;
-  final Widget panel;
+  final Widget collapsedBody;
+  final Widget expandedBody;
 
   @override
   Widget build(BuildContext context) {
@@ -16285,7 +16215,7 @@ class _HomeworkExpandingCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             header,
-            if (expanded) panel,
+            if (expanded) expandedBody else collapsedBody,
           ],
         ),
       ),

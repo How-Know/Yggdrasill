@@ -13,6 +13,11 @@ class Student {
   final String? phoneNumber;
   final String? parentPhoneNumber;
   final String? groupId;
+  /// photo | emoji | monogram
+  final String? avatarKind;
+  final String? avatarUrl;
+  final String? avatarEmoji;
+  final int? avatarMonogramStyle;
 
   Student({
     required this.id,
@@ -24,6 +29,10 @@ class Student {
     this.phoneNumber,
     this.parentPhoneNumber,
     this.groupId,
+    this.avatarKind,
+    this.avatarUrl,
+    this.avatarEmoji,
+    this.avatarMonogramStyle,
   });
 
   Student copyWith({
@@ -36,6 +45,10 @@ class Student {
     String? phoneNumber,
     String? parentPhoneNumber,
     String? groupId,
+    String? avatarKind,
+    String? avatarUrl,
+    String? avatarEmoji,
+    int? avatarMonogramStyle,
     bool clearGroupInfo = false,
     bool clearGroupId = false,
   }) {
@@ -49,6 +62,10 @@ class Student {
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       groupId: clearGroupId ? null : (groupId ?? this.groupId),
+      avatarKind: avatarKind ?? this.avatarKind,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      avatarEmoji: avatarEmoji ?? this.avatarEmoji,
+      avatarMonogramStyle: avatarMonogramStyle ?? this.avatarMonogramStyle,
     );
   }
 
@@ -64,6 +81,10 @@ class Student {
 
       groupId: row['group_id'] as String?,
       groupInfo: null,
+      avatarKind: row['avatar_kind'] as String?,
+      avatarUrl: row['avatar_url'] as String?,
+      avatarEmoji: row['avatar_emoji'] as String?,
+      avatarMonogramStyle: (row['avatar_monogram_style'] as num?)?.toInt(),
     );
   }
 

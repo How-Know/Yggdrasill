@@ -1,4 +1,5 @@
 ﻿import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../widgets/student_page_title.dart';
+import '../widgets/student_progress_summary_card.dart';
 
 /// 과제 그룹 목록 화면.
 ///
@@ -229,6 +231,20 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     }
   }
 
+  Future<void> _openAddHomework() async {
+    if (_busy) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _AddHomeworkSheet(
+        onDescriptiveWriting: () {
+          Navigator.of(ctx).pop();
+          unawaited(_addDescriptiveWriting());
+        },
+      ),
+    );
+  }
+
   Future<void> _addDescriptiveWriting() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -327,26 +343,28 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   @override
   Widget build(BuildContext context) {
     final groups = _groups;
-    final Widget listBody;
+    // 진행률 카드 확장 시 아래 목록을 밀어내며 같은 ListView 스크롤을 쓴다.
+    final children = <Widget>[
+      // 교재 풀기 탭과 동일 좌우 여백(24) → 진행률 카드 너비 통일.
+      Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+        child: _TodayHomeworkProgressSection(
+          coverByBookKey: _coverByBookKey,
+        ),
+      ),
+      // 진행률 카드 아래는 시각적으로 더 벌어 보이게 넉넉히 둔다.
+      const SizedBox(height: 36),
+    ];
+
     if (groups == null) {
-      listBody = Center(
-        child: _error == null
-            ? const YggLoadingIndicator(size: 32)
-            : Text(_error!, textAlign: TextAlign.center),
-      );
-    } else if (groups.isEmpty) {
-      listBody = RefreshIndicator(
-        onRefresh: _refresh,
-        child: ListView(
-          children: const [
-            SizedBox(height: 120),
-            Center(
-              child: Text(
-                '오늘은 등록된 과제가 없어요.',
-                style: TextStyle(fontSize: 16),
-              ),
-            ),
-          ],
+      children.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 48),
+          child: Center(
+            child: _error == null
+                ? const YggLoadingIndicator(size: 32)
+                : Text(_error!, textAlign: TextAlign.center),
+          ),
         ),
       );
     } else {
@@ -354,63 +372,61 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       final waiting = groups.length > 2
           ? groups.sublist(2)
           : const <HomeworkGroup>[];
-      listBody = RefreshIndicator(
-        onRefresh: _refresh,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
-          children: [
-            const _HomeworkSectionHeader(title: '우선 과제'),
-            _HomeworkHorizontalRow(
-              children: [
-                for (final group in priority) _groupCardFor(group),
-              ],
-            ),
-            if (waiting.isNotEmpty) ...[
-              // 카드 줄 ↔ 다음 섹션 타이틀 = 18 + 타이틀 top 10 = 28
-              const SizedBox(height: 18),
-              const _HomeworkSectionHeader(title: '대기 과제'),
-              _HomeworkHorizontalRow(
-                children: [
-                  for (final group in waiting) _groupCardFor(group),
-                ],
+      children.addAll([
+        const _HomeworkSectionHeader(title: '우선 과제'),
+        if (priority.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 8, 20, 4),
+            child: Text(
+              '우선 과제가 없어요.',
+              style: TextStyle(
+                fontSize: 15,
+                color: Theme.of(context)
+                    .colorScheme
+                    .onSurface
+                    .withValues(alpha: 0.45),
               ),
+            ),
+          )
+        else
+          _HomeworkHorizontalRow(
+            children: [
+              for (final group in priority) _groupCardFor(group),
             ],
+          ),
+        // 카드 줄 ↔ 다음 섹션 타이틀 = 18 + 타이틀 top 10 = 28
+        const SizedBox(height: 18),
+        const _HomeworkSectionHeader(title: '대기 과제'),
+        // 2줄 지그재그 + 세 번째 줄에 과제 추가 카드.
+        _HomeworkZigzagRow(
+          children: [
+            for (final group in waiting) _groupCardFor(group),
           ],
+          trailingThirdRow: _AddHomeworkCard(
+            enabled: !_busy,
+            onTap: _openAddHomework,
+          ),
         ),
-      );
+      ]);
     }
-
-    final body = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(20, 20, 20, 0),
-          child: _TodayHomeworkProgressCard(),
-        ),
-        // 진행률 카드 아래는 시각적으로 더 벌어 보이게 넉넉히 둔다.
-        // (카드 그림자·큰 % 숫자 때문에 숫자상 28이어도 좁아 보였음)
-        const SizedBox(height: 36),
-        Expanded(child: listBody),
-      ],
-    );
 
     return StudentCollapsingTitlePage(
       title: '과제',
       onRefresh: _refresh,
-      actions: [
-        IconButton(
-          tooltip: '서술형 쓰기 추가',
-          onPressed: _busy ? null : _addDescriptiveWriting,
-          icon: const Icon(Icons.edit_note_rounded, size: 28),
-        ),
-      ],
       bodyBuilder: (context, topInset, bottomInset) {
         return Padding(
           padding: EdgeInsets.only(top: topInset),
           child: MediaQuery.removePadding(
             context: context,
             removeTop: true,
-            child: body,
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
+                children: children,
+              ),
+            ),
           ),
         );
       },
@@ -435,7 +451,7 @@ class _HomeworkSectionHeader extends StatelessWidget {
           Text(
             title,
             style: theme.textTheme.headlineSmall?.copyWith(
-              fontSize: 26,
+              fontSize: 28,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.4,
               height: 1.15,
@@ -445,7 +461,7 @@ class _HomeworkSectionHeader extends StatelessWidget {
           const SizedBox(width: 2),
           Icon(
             Icons.chevron_right_rounded,
-            size: 28,
+            size: 30,
             color: chevron,
           ),
         ],
@@ -500,13 +516,496 @@ class _HomeworkHorizontalRow extends StatelessWidget {
   }
 }
 
-/// 오늘 과제 완료율 카드 — 수치/문구는 목업. 실제 집계 로직은 아직 없음.
-class _TodayHomeworkProgressCard extends StatelessWidget {
-  const _TodayHomeworkProgressCard();
+/// 대기 과제 — 2줄 열 우선 지그재그 + 선택적 세 번째 줄(과제 추가).
+///
+/// ```
+/// [0] [2] [4] …
+/// [1] [3] [5] …
+/// [+]          ← trailingThirdRow
+/// ```
+class _HomeworkZigzagRow extends StatelessWidget {
+  const _HomeworkZigzagRow({
+    required this.children,
+    this.trailingThirdRow,
+  });
 
-  // 목업 값. 집계가 붙으면 이 상수 자리를 인자로 바꾸면 된다.
+  final List<Widget> children;
+  final Widget? trailingThirdRow;
+
+  static const double _cardHeight = 152;
+  static const double _gap = 12;
+  static const double _cardWidthFactor = 0.88 * 0.8;
+  /// 과제카드 표지와 동일 (_GroupCard._coverSize / 좌측 패딩).
+  static const double _coverSize = 126.72;
+  static const double _coverInset = 6;
+
+  @override
+  Widget build(BuildContext context) {
+    if (children.isEmpty && trailingThirdRow == null) {
+      return const SizedBox.shrink();
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final available = constraints.maxWidth - 40;
+        final cardWidth = available * _cardWidthFactor;
+        final columnCount =
+            children.isEmpty ? 0 : (children.length + 1) ~/ 2;
+
+        Widget cardAt(int index) {
+          return SizedBox(
+            width: cardWidth,
+            height: _cardHeight,
+            child: children[index],
+          );
+        }
+
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (columnCount > 0)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var col = 0; col < columnCount; col++) ...[
+                      if (col > 0) const SizedBox(width: _gap),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          cardAt(col * 2),
+                          if (col * 2 + 1 < children.length) ...[
+                            const SizedBox(height: _gap),
+                            cardAt(col * 2 + 1),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              if (trailingThirdRow != null) ...[
+                if (columnCount > 0) const SizedBox(height: _gap),
+                // 표지 썸네일과 같은 크기·왼쪽 정렬.
+                // 상단 8 = _GroupCard 세로 패딩과 동일 → 1·2줄 간격과 시각적으로 맞춤.
+                Padding(
+                  padding: const EdgeInsets.only(left: _coverInset, top: 8),
+                  child: SizedBox(
+                    width: _coverSize,
+                    height: _coverSize,
+                    child: trailingThirdRow,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 교재탭 `_AddTextbookCard`와 같은 점선 슬롯 — 과제카드 표지 크기.
+class _AddHomeworkCard extends StatelessWidget {
+  const _AddHomeworkCard({
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final VoidCallback onTap;
+  final bool enabled;
+
+  /// _GroupCard._coverRadius 와 동일.
+  static const double _radius = 18.48;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.28)
+        : Colors.black.withValues(alpha: 0.22);
+    final fg = isDark ? Colors.white70 : Colors.black54;
+
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: BorderRadius.circular(_radius),
+          child: CustomPaint(
+            painter: _DashedRRectPainter(
+              color: borderColor,
+              radius: _radius,
+            ),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.add_rounded, size: 32, color: fg),
+                  const SizedBox(height: 4),
+                  Text(
+                    '과제 추가',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DashedRRectPainter extends CustomPainter {
+  const _DashedRRectPainter({
+    required this.color,
+    required this.radius,
+  });
+
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(1, 1, size.width - 2, size.height - 2),
+      Radius.circular(radius),
+    );
+    final path = Path()..addRRect(rrect);
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      const dash = 7.0;
+      const gap = 5.0;
+      while (distance < metric.length) {
+        final next = math.min(distance + dash, metric.length);
+        canvas.drawPath(metric.extractPath(distance, next), paint);
+        distance = next + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedRRectPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.radius != radius;
+}
+
+/// 과제 추가 옵션 시트 — 지금은 서술형만 동작.
+class _AddHomeworkSheet extends StatelessWidget {
+  const _AddHomeworkSheet({required this.onDescriptiveWriting});
+
+  final VoidCallback onDescriptiveWriting;
+
+  static const double _sheetRadius = 28;
+  static const double _groupRadius = 22;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final card = isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final text = isDark ? Colors.white : Colors.black;
+    final sub = text.withValues(alpha: 0.45);
+    final divider = text.withValues(alpha: 0.08);
+
+    Widget option({
+      required String title,
+      required String subtitle,
+      required IconData icon,
+      required BorderRadius inkRadius,
+      VoidCallback? onTap,
+    }) {
+      final enabled = onTap != null;
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: inkRadius,
+          child: Opacity(
+            opacity: enabled ? 1 : 0.4,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              child: Row(
+                children: [
+                  Icon(icon, size: 26, color: text),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: text,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: sub,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: sub,
+                    size: 22,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    const topInk = BorderRadius.vertical(
+      top: Radius.circular(_groupRadius),
+    );
+    const bottomInk = BorderRadius.vertical(
+      bottom: Radius.circular(_groupRadius),
+    );
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(_sheetRadius),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 14, 12, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '과제 추가',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: text,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: card,
+                    borderRadius: BorderRadius.circular(_groupRadius),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(_groupRadius),
+                    child: Column(
+                      children: [
+                        option(
+                          title: '서술형 쓰기',
+                          subtitle: '빈 서술형 쓰기 과제를 바로 만들어요',
+                          icon: Icons.edit_note_rounded,
+                          inkRadius: topInk,
+                          onTap: onDescriptiveWriting,
+                        ),
+                        Divider(
+                          height: 1,
+                          indent: 18,
+                          endIndent: 18,
+                          color: divider,
+                        ),
+                        option(
+                          title: '교재 과제',
+                          subtitle: '곧 추가될 예정이에요',
+                          icon: Icons.menu_book_rounded,
+                          inkRadius: BorderRadius.zero,
+                        ),
+                        Divider(
+                          height: 1,
+                          indent: 18,
+                          endIndent: 18,
+                          color: divider,
+                        ),
+                        option(
+                          title: '프린트 과제',
+                          subtitle: '곧 추가될 예정이에요',
+                          icon: Icons.description_outlined,
+                          inkRadius: bottomInk,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 오늘 과제 완료율 요약 + (탭 시) iOS 배터리 스타일 상세 카드.
+class _TodayHomeworkProgressSection extends StatefulWidget {
+  const _TodayHomeworkProgressSection({required this.coverByBookKey});
+
+  final Map<String, String> coverByBookKey;
+
+  @override
+  State<_TodayHomeworkProgressSection> createState() =>
+      _TodayHomeworkProgressSectionState();
+}
+
+class _TodayHomeworkProgressSectionState
+    extends State<_TodayHomeworkProgressSection> {
+  // 요약 카드 수치는 아직 목업. 상세 리스트만 실데이터.
   static const int _percent = 84;
+  static const int _averagePercent = 72;
   static const String _subtitle = '오늘 과제 5개 중 4개 완료';
+
+  bool _expanded = false;
+  List<TodayCompletedHomework>? _completed;
+  bool _loadingCompleted = false;
+  String? _completedError;
+
+  Future<void> _toggle() async {
+    final next = !_expanded;
+    setState(() => _expanded = next);
+    if (next) await _ensureCompletedLoaded();
+  }
+
+  Future<void> _ensureCompletedLoaded({bool force = false}) async {
+    if (!force && (_completed != null || _loadingCompleted)) return;
+    setState(() {
+      _loadingCompleted = true;
+      _completedError = null;
+    });
+    try {
+      final rows = await StudentApi.instance.listTodayCompletedHomework();
+      if (!mounted) return;
+      setState(() {
+        _completed = rows;
+        _loadingCompleted = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _completedError = '완료 과제를 불러오지 못했어요.';
+        _loadingCompleted = false;
+      });
+    }
+  }
+
+  String? _coverRefFor(TodayCompletedHomework item) {
+    if (item.bookId.isEmpty) return null;
+    return widget.coverByBookKey['${item.bookId}|${item.gradeLabel}'] ??
+        widget.coverByBookKey[item.bookId];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        StudentProgressSummaryCard(
+          percent: _percent,
+          subtitle: _subtitle,
+          onTap: () => unawaited(_toggle()),
+          showInfoIcon: true,
+          infoFilled: _expanded,
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeInOutCubic,
+          alignment: Alignment.topCenter,
+          child: _expanded
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 28),
+                    Text(
+                      '일일 수행률',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: -0.2,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withValues(alpha: 0.55),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _TodayHomeworkDetailCard(
+                      todayPercent: _percent,
+                      averagePercent: _averagePercent,
+                      completed: _completed,
+                      loadingCompleted: _loadingCompleted,
+                      completedError: _completedError,
+                      coverRefFor: _coverRefFor,
+                      onRetryCompleted: () =>
+                          unawaited(_ensureCompletedLoaded(force: true)),
+                    ),
+                  ],
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+}
+
+/// iOS 배터리 사용량 상세 레이아웃. 차트는 목업, 완료 리스트는 실데이터.
+class _TodayHomeworkDetailCard extends StatelessWidget {
+  const _TodayHomeworkDetailCard({
+    required this.todayPercent,
+    required this.averagePercent,
+    required this.completed,
+    required this.loadingCompleted,
+    required this.completedError,
+    required this.coverRefFor,
+    required this.onRetryCompleted,
+  });
+
+  final int todayPercent;
+  final int averagePercent;
+  final List<TodayCompletedHomework>? completed;
+  final bool loadingCompleted;
+  final String? completedError;
+  final String? Function(TodayCompletedHomework item) coverRefFor;
+  final VoidCallback onRetryCompleted;
+
+  /// 최근 14일 (마지막이 오늘) — 간격 축소로 더 많은 막대 표시.
+  static const _weekLabels = [
+    '수', '목', '금', '토', '일', '월', '화',
+    '수', '목', '금', '토', '일', '월', '화',
+  ];
+  static const _weekValues = [
+    0.42, 0.55, 0.48, 0.30, 0.22, 0.60, 0.58,
+    0.55, 0.62, 0.48, 0.70, 0.58, 0.66, 0.84,
+  ];
+
+  static const _iosBlue = Color(0xFF007AFF);
+  /// 상단 요약 카드와 동일.
+  static const _cardRadius = 22.0;
 
   @override
   Widget build(BuildContext context) {
@@ -516,94 +1015,515 @@ class _TodayHomeworkProgressCard extends StatelessWidget {
         ? theme.colorScheme.surfaceContainerHigh
         : Colors.white;
     final text = theme.colorScheme.onSurface;
-    final subText = theme.colorScheme.onSurface.withValues(alpha: 0.55);
-    final track = isDark
+    final subText = theme.colorScheme.onSurface.withValues(alpha: 0.45);
+    final divider = isDark
         ? Colors.white.withValues(alpha: 0.12)
+        : const Color(0xFFC6C6C8);
+    final track = isDark
+        ? Colors.white.withValues(alpha: 0.10)
         : const Color(0xFFE5E5EA);
-    final fill = isDark
-        ? Colors.white.withValues(alpha: 0.78)
-        : const Color(0xFF3A3A3C);
+    final barIdle = isDark
+        ? Colors.white.withValues(alpha: 0.28)
+        : const Color(0xFFAEAEB2);
+    final todayIndex = _weekValues.length - 1;
 
     return DecoratedBox(
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: isDark
-            ? null
-            : const [
-                BoxShadow(
-                  color: Color(0x14000000),
-                  blurRadius: 18,
-                  offset: Offset(0, 6),
-                ),
-              ],
+        borderRadius: BorderRadius.circular(_cardRadius),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 16, 18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text.rich(
-                    TextSpan(
-                      children: [
-                        TextSpan(
-                          text: '$_percent',
-                          style: theme.textTheme.displaySmall?.copyWith(
-                            fontSize: 44,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -1.2,
-                            height: 1.0,
-                            color: text,
+                Text(
+                  '오늘 오후 5:00까지 과제 수행률이 평소와 비슷합니다.',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.2,
+                    height: 1.35,
+                    color: text,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // 라벨 위 / 큰 숫자 아래 — 두 열
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '평균',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w400,
+                              color: subText,
+                            ),
                           ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$averagePercent%',
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w400,
+                              letterSpacing: -0.6,
+                              height: 1.05,
+                              color: subText,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '오늘',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w400,
+                              color: _iosBlue,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$todayPercent%',
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w400,
+                              letterSpacing: -0.6,
+                              height: 1.05,
+                              color: _iosBlue,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 168,
+                  child: _HomeworkWeekBarChart(
+                    labels: _weekLabels,
+                    values: _weekValues,
+                    average: averagePercent / 100,
+                    todayIndex: todayIndex,
+                    trackColor: track,
+                    barIdle: barIdle,
+                    accent: _iosBlue,
+                    labelColor: subText,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // 범례 (원형 도트)
+                Row(
+                  children: [
+                    _ChartLegendDot(color: track, border: barIdle),
+                    const SizedBox(width: 6),
+                    Text(
+                      '하루 종일',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w400,
+                        color: subText,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    const _ChartLegendDot(color: Color(0xFF8E8E93)),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        '오후 5:00까지 일일 수행률',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                          color: text.withValues(alpha: 0.75),
                         ),
-                        TextSpan(
-                          text: '%',
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                            height: 1.0,
-                            color: text,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, thickness: 0.33, color: divider),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
+            child: Text(
+              '완료한 과제',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.2,
+                color: text,
+              ),
+            ),
+          ),
+          if (loadingCompleted && completed == null)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(child: YggLoadingIndicator(size: 28)),
+            )
+          else if (completedError != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+              child: Column(
+                children: [
+                  Text(
+                    completedError!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: subText),
+                  ),
+                  TextButton(
+                    onPressed: onRetryCompleted,
+                    child: const Text('다시 시도'),
+                  ),
+                ],
+              ),
+            )
+          else if (completed == null || completed!.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              child: Text(
+                '오늘 완료한 과제가 없어요.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 17, color: subText),
+              ),
+            )
+          else
+            for (var i = 0; i < completed!.length; i++) ...[
+              if (i > 0)
+                Padding(
+                  // 16(패딩) + 86.4(표지) + 18.2(간격)
+                  padding: const EdgeInsets.only(left: 120.6),
+                  child: Divider(height: 1, thickness: 0.33, color: divider),
+                ),
+              _HomeworkDetailListTile(
+                item: completed![i],
+                coverRef: coverRefFor(completed![i]),
+                text: text,
+                subText: subText,
+              ),
+            ],
+          Padding(
+            padding: const EdgeInsets.only(left: 16),
+            child: Divider(height: 1, thickness: 0.33, color: divider),
+          ),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {},
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(_cardRadius),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 18, 12, 18),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '모든 과제 기록 보기',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w400,
+                          color: text,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 24,
+                      color: subText.withValues(alpha: 0.8),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartLegendDot extends StatelessWidget {
+  const _ChartLegendDot({required this.color, this.border});
+
+  final Color color;
+  final Color? border;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: border == null
+            ? null
+            : Border.all(color: border!, width: 0.8),
+      ),
+    );
+  }
+}
+
+class _HomeworkWeekBarChart extends StatelessWidget {
+  const _HomeworkWeekBarChart({
+    required this.labels,
+    required this.values,
+    required this.average,
+    required this.todayIndex,
+    required this.trackColor,
+    required this.barIdle,
+    required this.accent,
+    required this.labelColor,
+  });
+
+  final List<String> labels;
+  final List<double> values;
+  final double average;
+  final int todayIndex;
+  final Color trackColor;
+  final Color barIdle;
+  final Color accent;
+  final Color labelColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const labelH = 20.0;
+        // 평균 라벨 자리
+        const avgLabelW = 28.0;
+        final chartH = constraints.maxHeight - labelH;
+        final barsW = constraints.maxWidth - avgLabelW;
+
+        return Column(
+          children: [
+            SizedBox(
+              height: chartH,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: barsW,
+                    child: Stack(
+                      children: [
+                        // 각 막대: 밝은 트랙 + 채움
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (var i = 0; i < values.length; i++) ...[
+                              if (i > 0) const SizedBox(width: 2),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.bottomCenter,
+                                  // 슬롯 대비 막대 굵기 (간격 축소와 함께 더 많은 일수 수용).
+                                  child: FractionallySizedBox(
+                                    widthFactor: 0.70,
+                                    child: Stack(
+                                      alignment: Alignment.bottomCenter,
+                                      children: [
+                                        Container(
+                                          decoration: BoxDecoration(
+                                            color: trackColor,
+                                            borderRadius:
+                                                BorderRadius.circular(3),
+                                          ),
+                                        ),
+                                        FractionallySizedBox(
+                                          heightFactor:
+                                              values[i].clamp(0.04, 1.0),
+                                          widthFactor: 1,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: i == todayIndex
+                                                  ? accent
+                                                  : barIdle,
+                                              borderRadius:
+                                                  BorderRadius.circular(3),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        // 평균 실선
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: chartH * average.clamp(0.0, 1.0),
+                          child: Container(
+                            height: 1,
+                            color: labelColor.withValues(alpha: 0.65),
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
-                Icon(
-                  Icons.info_outline_rounded,
-                  size: 22,
-                  color: subText,
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              _subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
-                color: subText,
-                height: 1.25,
+                  SizedBox(
+                    width: avgLabelW,
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          left: 4,
+                          bottom: chartH * average.clamp(0.0, 1.0) - 7,
+                          child: Text(
+                            '평균',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w400,
+                              color: labelColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 14),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(999),
-              child: LinearProgressIndicator(
-                value: _percent / 100,
-                minHeight: 14,
-                backgroundColor: track,
-                valueColor: AlwaysStoppedAnimation<Color>(fill),
+            SizedBox(
+              height: labelH,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: barsW,
+                    child: Row(
+                      children: [
+                        for (var i = 0; i < labels.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 2),
+                          Expanded(
+                            child: Text(
+                              labels[i],
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w400,
+                                color: labelColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: avgLabelW),
+                ],
               ),
             ),
           ],
-        ),
+        );
+      },
+    );
+  }
+}
+
+class _HomeworkDetailListTile extends StatelessWidget {
+  const _HomeworkDetailListTile({
+    required this.item,
+    required this.coverRef,
+    required this.text,
+    required this.subText,
+  });
+
+  final TodayCompletedHomework item;
+  final String? coverRef;
+  final Color text;
+  final Color subText;
+
+  static const _fontSize = 20.0;
+  /// 아래 과제 리스트 표지와 같은 양식(72 → +20%).
+  static const double _coverSize = 86.4;
+  static const double _coverRadius = 12.6;
+  /// 표지↔텍스트 간격 (14 → +30%).
+  static const double _coverToTextGap = 18.2;
+  /// 텍스트 줄 간격 (4 → +30%).
+  static const double _lineGap = 5.2;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim();
+    final coverUri = Uri.tryParse(coverRef ?? '');
+    final hasNetworkCover = !item.isPrintSource &&
+        coverUri != null &&
+        (coverUri.scheme == 'http' || coverUri.scheme == 'https');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _HomeworkCoverThumb(
+            size: _coverSize,
+            radius: _coverRadius,
+            isPrint: item.isPrintSource,
+            coverRef: hasNetworkCover ? coverRef : null,
+            showEqualizer: false,
+            badge: null,
+            // 축소 표지에서는 오버레이 라벨 생략(우측 텍스트로 충분).
+            bookLabel: '',
+            courseLabel: '',
+          ),
+          const SizedBox(width: _coverToTextGap),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: _fontSize,
+                    fontWeight: FontWeight.w700,
+                    color: text,
+                    height: 1.25,
+                  ),
+                ),
+                const SizedBox(height: _lineGap),
+                Text(
+                  item.pageCountLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: _fontSize,
+                    fontWeight: FontWeight.w400,
+                    color: subText,
+                    height: 1.25,
+                  ),
+                ),
+                const SizedBox(height: _lineGap),
+                Text(
+                  item.durationLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: _fontSize,
+                    fontWeight: FontWeight.w400,
+                    color: subText,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -670,7 +1590,7 @@ class _GroupCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleLarge?.copyWith(
-                        fontSize: 26,
+                        fontSize: 20,
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.2,
                         color: dlg.text,
@@ -683,7 +1603,7 @@ class _GroupCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        fontSize: 18,
+                        fontSize: 20,
                         fontWeight: FontWeight.w500,
                         color: dlg.textSub,
                         height: 1.2,
@@ -836,7 +1756,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 18,
+                            fontSize: 20,
                             fontWeight: FontWeight.w800,
                             height: 1.05,
                             letterSpacing: -0.35,
@@ -851,7 +1771,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Color(0xFFD8D8DE),
-                            fontSize: 18,
+                            fontSize: 20,
                             fontWeight: FontWeight.w500,
                             height: 1.05,
                             letterSpacing: -0.35,

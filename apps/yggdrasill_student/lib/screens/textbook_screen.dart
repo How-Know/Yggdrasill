@@ -5,6 +5,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/textbook_api.dart';
 import '../widgets/student_page_title.dart';
+import '../widgets/student_progress_summary_card.dart';
 import 'textbook_solve_screen.dart';
 
 const double _coverA4Ratio = 1.414;
@@ -68,9 +69,23 @@ class _TextbookScreenState extends State<TextbookScreen> {
     }
   }
 
+  ({int percent, String subtitle}) _progressSummary(List<StudentTextbook>? books) {
+    if (books == null || books.isEmpty) {
+      return (percent: 0, subtitle: '등록된 교재가 없어요');
+    }
+    final total = books.fold<int>(0, (s, b) => s + b.totalProblems);
+    final done = books.fold<int>(0, (s, b) => s + b.completedCount);
+    if (total <= 0) {
+      return (percent: 0, subtitle: '교재 ${books.length}권 · 문제 집계 대기');
+    }
+    final percent = ((done * 100) / total).round().clamp(0, 100);
+    return (percent: percent, subtitle: '전체 $total문제 중 $done문제 완료');
+  }
+
   @override
   Widget build(BuildContext context) {
     final books = _books;
+    final summary = _progressSummary(books);
 
     return StudentCollapsingTitlePage(
       title: '교재 풀기',
@@ -79,8 +94,14 @@ class _TextbookScreenState extends State<TextbookScreen> {
         if (_error != null) {
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: EdgeInsets.fromLTRB(24, topInset + 40, 24, bottomInset),
+            padding: EdgeInsets.fromLTRB(24, topInset + 20, 24, bottomInset),
             children: [
+              StudentProgressSummaryCard(
+                percent: summary.percent,
+                subtitle: summary.subtitle,
+                showInfoIcon: false,
+              ),
+              const SizedBox(height: 36),
               Text(_error!, textAlign: TextAlign.center),
               const SizedBox(height: 12),
               Center(
@@ -95,8 +116,16 @@ class _TextbookScreenState extends State<TextbookScreen> {
         if (books == null) {
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: EdgeInsets.only(top: topInset + 80, bottom: bottomInset),
-            children: const [Center(child: YggLoadingIndicator())],
+            padding: EdgeInsets.fromLTRB(24, topInset + 20, 24, bottomInset),
+            children: [
+              StudentProgressSummaryCard(
+                percent: summary.percent,
+                subtitle: summary.subtitle,
+                showInfoIcon: false,
+              ),
+              const SizedBox(height: 48),
+              const Center(child: YggLoadingIndicator()),
+            ],
           );
         }
         return LayoutBuilder(
@@ -117,25 +146,36 @@ class _TextbookScreenState extends State<TextbookScreen> {
               ),
               padding: EdgeInsets.fromLTRB(
                 horizontalPadding,
-                topInset + 8,
+                topInset + 20,
                 horizontalPadding,
                 bottomInset,
               ),
-              child: Wrap(
-                spacing: _cardGap,
-                runSpacing: _cardGap,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final book in books)
-                    SizedBox(
-                      width: cardWidth,
-                      child: _BookCard(
-                        book: book,
-                        onOpen: () => _openBook(book),
+                  StudentProgressSummaryCard(
+                    percent: summary.percent,
+                    subtitle: summary.subtitle,
+                    showInfoIcon: false,
+                  ),
+                  const SizedBox(height: 36),
+                  Wrap(
+                    spacing: _cardGap,
+                    runSpacing: _cardGap,
+                    children: [
+                      for (final book in books)
+                        SizedBox(
+                          width: cardWidth,
+                          child: _BookCard(
+                            book: book,
+                            onOpen: () => _openBook(book),
+                          ),
+                        ),
+                      SizedBox(
+                        width: cardWidth,
+                        child: _AddTextbookCard(onTap: _openAddTextbook),
                       ),
-                    ),
-                  SizedBox(
-                    width: cardWidth,
-                    child: _AddTextbookCard(onTap: _openAddTextbook),
+                    ],
                   ),
                 ],
               ),
@@ -641,15 +681,16 @@ class _AddTextbookCard extends StatelessWidget {
         : Colors.black.withValues(alpha: 0.22);
     final fg = isDark ? Colors.white70 : Colors.black54;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(_cardRadius),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            AspectRatio(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 하이라이트는 커버(점선 카드)만 — 아래 메타 자리 여백은 제외.
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(_cardRadius),
+            child: AspectRatio(
               aspectRatio: 1 / _coverA4Ratio,
               child: CustomPaint(
                 painter: _DashedRRectPainter(
@@ -675,11 +716,12 @@ class _AddTextbookCard extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: _coverToMetaSpacing),
-            const SizedBox(height: _cardMetaHeight),
-          ],
+          ),
         ),
-      ),
+        // 그리드 높이만 맞추는 자리(탭/리플 없음).
+        const SizedBox(height: _coverToMetaSpacing),
+        const SizedBox(height: _cardMetaHeight),
+      ],
     );
   }
 }

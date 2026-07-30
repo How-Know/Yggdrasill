@@ -18,8 +18,8 @@ const supabase = createClient(
 let query = supabase
   .from('textbook_problem_crops')
   .select(
-    'sub_key,sub_index,raw_page,problem_number,section,item_name,' +
-      'pb_question_uid,updated_at',
+    'sub_key,sub_index,raw_page,problem_number,section,item_name,label,' +
+      'is_important,pb_question_uid,updated_at',
   )
   .eq('book_id', bookId)
   .eq('grade_label', gradeLabel)
@@ -33,6 +33,7 @@ for (const c of data ?? []) {
   console.log(
     `p${String(c.raw_page).padEnd(3)} ${c.sub_key}#${c.sub_index} ` +
       `${String(c.problem_number).padEnd(10)} ${String(c.item_name || '').padEnd(14)} ` +
+      `난이도=${String(c.label || '-').padEnd(4)}${c.is_important ? ' 중요' : '    '} ` +
       `${c.pb_question_uid ? '문항연결' : '연결없음'} ${c.updated_at.slice(5, 19)}`,
   );
 }

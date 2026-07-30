@@ -1506,7 +1506,8 @@ class DataManager {
         final supa = Supabase.instance.client;
         final rows = await supa
             .from('students')
-            .select('id,name,school,education_level,grade')
+            .select(
+                'id,name,school,education_level,grade,avatar_kind,avatar_url,avatar_emoji,avatar_monogram_style')
             .eq('academy_id', academyId);
         final supaStudents = (rows as List)
             .map((r) => Student(
@@ -1516,6 +1517,11 @@ class DataManager {
                   grade: (r['grade'] as int?) ?? 0,
                   educationLevel: EducationLevel
                       .values[(r['education_level'] as int?) ?? 0],
+                  avatarKind: r['avatar_kind'] as String?,
+                  avatarUrl: r['avatar_url'] as String?,
+                  avatarEmoji: r['avatar_emoji'] as String?,
+                  avatarMonogramStyle:
+                      (r['avatar_monogram_style'] as num?)?.toInt(),
                 ))
             .toList();
         final sbiRows = await supa
@@ -1582,6 +1588,10 @@ class DataManager {
               groupInfo: basicInfos[i].groupId != null
                   ? _groupsById[basicInfos[i].groupId]
                   : null,
+              avatarKind: supaStudents[i].avatarKind,
+              avatarUrl: supaStudents[i].avatarUrl,
+              avatarEmoji: supaStudents[i].avatarEmoji,
+              avatarMonogramStyle: supaStudents[i].avatarMonogramStyle,
             )
         ];
         _studentsWithInfo = [
@@ -6272,10 +6282,9 @@ class DataManager {
           final DateTime? paid = (paidStr != null && paidStr.isNotEmpty)
               ? DateTime.parse(paidStr)
               : null;
-          final DateTime? waived =
-              (waivedStr != null && waivedStr.isNotEmpty)
-                  ? DateTime.parse(waivedStr)
-                  : null;
+          final DateTime? waived = (waivedStr != null && waivedStr.isNotEmpty)
+              ? DateTime.parse(waivedStr)
+              : null;
           return PaymentRecord(
             id: null, // local autoincrement와 다르게 서버는 별도 UUID. 필요 시 확장
             studentId: sid,
@@ -6745,14 +6754,6 @@ class DataManager {
     DateTime? nowRef,
     bool excludePausedStudents = false,
   }) {
-    double asDouble(dynamic v) {
-      if (v == null) return 0.0;
-      if (v is double) return v;
-      if (v is num) return v.toDouble();
-      if (v is String) return double.tryParse(v) ?? 0.0;
-      return 0.0;
-    }
-
     final sid = studentId.trim();
     final base = Map<String, dynamic>.from(
       calculateAttendanceScore(studentId: sid, nowRef: nowRef),
@@ -6766,16 +6767,11 @@ class DataManager {
       return base;
     }
 
-    final List<String> cohortIds = <String>[];
-    for (final s in _studentsWithInfo) {
-      final id = s.student.id.trim();
-      if (id.isEmpty) continue;
-      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
-        continue;
-      }
-      cohortIds.add(id);
-    }
-    if (cohortIds.isEmpty) {
+    final ranked = listAttendanceScoresRanked(
+      nowRef: nowRef,
+      excludePausedStudents: excludePausedStudents,
+    );
+    if (ranked.isEmpty) {
       base.addAll(<String, dynamic>{
         'rank': null,
         'cohortSize': 0,
@@ -6784,30 +6780,14 @@ class DataManager {
       return base;
     }
 
-    final List<MapEntry<String, double>> ranked = <MapEntry<String, double>>[];
-    for (final id in cohortIds) {
-      final scoreMap = calculateAttendanceScore(studentId: id, nowRef: nowRef);
-      final score = asDouble(
-        scoreMap.containsKey('score100AfterMakeup')
-            ? scoreMap['score100AfterMakeup']
-            : scoreMap['score100'],
-      );
-      ranked.add(MapEntry<String, double>(id, score));
-    }
-    ranked.sort((a, b) {
-      final byScore = b.value.compareTo(a.value);
-      if (byScore != 0) return byScore;
-      return a.key.compareTo(b.key);
-    });
-
-    double? targetScore;
-    for (final e in ranked) {
-      if (e.key == sid) {
-        targetScore = e.value;
+    Map<String, dynamic>? target;
+    for (final row in ranked) {
+      if (row['studentId'] == sid) {
+        target = row;
         break;
       }
     }
-    if (targetScore == null) {
+    if (target == null) {
       base.addAll(<String, dynamic>{
         'rank': null,
         'cohortSize': ranked.length,
@@ -6816,22 +6796,199 @@ class DataManager {
       return base;
     }
 
-    const double eps = 1e-9;
-    final double targetScoreValue = targetScore;
-    final int higherCount =
-        ranked.where((e) => e.value > (targetScoreValue + eps)).length;
-    final int rank = higherCount + 1;
     final int cohortSize = ranked.length;
-    final double topPercent =
-        cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
-
-    base.addAll(<String, dynamic>{
-      'rank': rank,
-      'cohortSize': cohortSize,
-      'topPercent': topPercent,
-      'rankScore100': targetScoreValue,
-    });
+    base.addAll(target);
+    base['cohortSize'] = cohortSize;
     return base;
+  }
+
+  /// 재원생 전체 출석 점수 순위 목록 (한 번 계산·정렬).
+  ///
+  /// 각 항목: studentId, studentName + calculateAttendanceScore 필드
+  /// + rank, cohortSize, topPercent, rankScore100
+  List<Map<String, dynamic>> listAttendanceScoresRanked({
+    DateTime? nowRef,
+    bool excludePausedStudents = false,
+  }) {
+    double asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is double) return v;
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+
+    final List<String> cohortIds = <String>[];
+    final Map<String, String> names = <String, String>{};
+    for (final s in _studentsWithInfo) {
+      final id = s.student.id.trim();
+      if (id.isEmpty) continue;
+      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+        continue;
+      }
+      cohortIds.add(id);
+      names[id] = s.student.name;
+    }
+    if (cohortIds.isEmpty) return const <Map<String, dynamic>>[];
+
+    final List<MapEntry<String, Map<String, dynamic>>> scored =
+        <MapEntry<String, Map<String, dynamic>>>[];
+    for (final id in cohortIds) {
+      final scoreMap = Map<String, dynamic>.from(
+        calculateAttendanceScore(studentId: id, nowRef: nowRef),
+      );
+      scored.add(MapEntry<String, Map<String, dynamic>>(id, scoreMap));
+    }
+
+    int asInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v) ?? 0;
+      return 0;
+    }
+
+    double totalWeight = 0;
+    double totalAbsentWeight = 0;
+    double totalMakeupWeight = 0;
+    double totalAttendedWeight = 0;
+    double totalLateWeight = 0;
+    for (final entry in scored) {
+      final m = entry.value;
+      totalWeight += asDouble(m['totalWeight']);
+      totalAbsentWeight += asDouble(m['weightedAbsent']);
+      totalMakeupWeight += asDouble(m['weightedMakeup']);
+      totalAttendedWeight +=
+          asDouble(m['weightedPresent']) + asDouble(m['weightedLate']);
+      totalLateWeight += asDouble(m['weightedLate']);
+    }
+    final cohortAbsenceRate =
+        totalWeight > 0 ? totalAbsentWeight / totalWeight : 0.0;
+    final cohortMakeupRate =
+        totalWeight > 0 ? totalMakeupWeight / totalWeight : 0.0;
+    final cohortLateRate =
+        totalAttendedWeight > 0 ? totalLateWeight / totalAttendedWeight : 0.0;
+
+    // 가중 유효 수업 8회 미만은 부족분을 학원 평균으로 채운다.
+    // 주 1회 학생은 적은 표본만으로 100점에 고정되지 않고 계속 보정된다.
+    const double requiredEvidenceWeight = 8.0;
+    for (final entry in scored) {
+      final m = entry.value;
+      final observedWeight =
+          asDouble(m['totalWeight']).clamp(0.0, requiredEvidenceWeight);
+      if (observedWeight >= requiredEvidenceWeight) continue;
+      final priorWeight = requiredEvidenceWeight - observedWeight;
+      double adjusted(double raw, double cohort) =>
+          ((raw * observedWeight) + (cohort * priorWeight)) /
+          requiredEvidenceWeight;
+
+      final absenceRate =
+          adjusted(asDouble(m['absenceRate']), cohortAbsenceRate)
+              .clamp(0.0, 1.0)
+              .toDouble();
+      final makeupRate = adjusted(asDouble(m['makeupRate']), cohortMakeupRate)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final lateRate = adjusted(asDouble(m['lateRate']), cohortLateRate)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final absencePenalty = (absenceRate * 140.0).clamp(0.0, 70.0).toDouble();
+      final makeupPenalty = (makeupRate * 40.0).clamp(0.0, 20.0).toDouble();
+      final latePenalty = (lateRate * 10.0).clamp(0.0, 10.0).toDouble();
+      final score = (100.0 - absencePenalty - makeupPenalty - latePenalty)
+          .clamp(0.0, 100.0)
+          .toDouble();
+
+      int absenceBand;
+      if (absenceRate < 0.05) {
+        absenceBand = 0;
+      } else if (absenceRate < 0.10) {
+        absenceBand = 1;
+      } else if (absenceRate < 0.20) {
+        absenceBand = 2;
+      } else if (absenceRate < 0.30) {
+        absenceBand = 3;
+      } else {
+        absenceBand = 4;
+      }
+      m.addAll(<String, dynamic>{
+        'rawAbsenceRate': m['absenceRate'],
+        'rawMakeupRate': m['makeupRate'],
+        'rawLateRate': m['lateRate'],
+        'absenceRate': absenceRate,
+        'makeupRate': makeupRate,
+        'lateRate': lateRate,
+        'absencePenalty': absencePenalty,
+        'makeupPenalty': makeupPenalty,
+        'latePenalty': latePenalty,
+        'score100': score,
+        'score100AfterMakeup': score,
+        'absenceBand': absenceBand,
+        'evidenceAdjusted': true,
+        'evidenceWeight': observedWeight,
+        'requiredEvidenceWeight': requiredEvidenceWeight,
+        'insufficientEvidence': true,
+      });
+    }
+
+    const double eps = 1e-9;
+    int compareScoreMaps(
+      Map<String, dynamic> a,
+      Map<String, dynamic> b,
+    ) {
+      // 결석 구간을 최우선으로 두어 높은 구간은 반드시 아래에 배치한다.
+      final byAbsenceBand =
+          asInt(a['absenceBand']).compareTo(asInt(b['absenceBand']));
+      if (byAbsenceBand != 0) return byAbsenceBand;
+
+      final scoreA = asDouble(a['score100']);
+      final scoreB = asDouble(b['score100']);
+      if ((scoreA - scoreB).abs() > eps) return scoreB.compareTo(scoreA);
+
+      final makeupA = asDouble(a['makeupRate']);
+      final makeupB = asDouble(b['makeupRate']);
+      if ((makeupA - makeupB).abs() > eps) return makeupA.compareTo(makeupB);
+
+      final lateA = asDouble(a['lateRate']);
+      final lateB = asDouble(b['lateRate']);
+      if ((lateA - lateB).abs() > eps) return lateA.compareTo(lateB);
+      return 0;
+    }
+
+    scored.sort((a, b) {
+      final byMetrics = compareScoreMaps(a.value, b.value);
+      if (byMetrics != 0) return byMetrics;
+      return a.key.compareTo(b.key);
+    });
+
+    final int cohortSize = scored.length;
+    final List<Map<String, dynamic>> result = <Map<String, dynamic>>[];
+    double scoreOf(Map<String, dynamic> m) => asDouble(m['score100']);
+
+    int i = 0;
+    while (i < scored.length) {
+      int j = i + 1;
+      while (j < scored.length &&
+          compareScoreMaps(scored[i].value, scored[j].value) == 0) {
+        j += 1;
+      }
+      final int rank = i + 1;
+      final double topPercent =
+          cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
+      for (int k = i; k < j; k++) {
+        final entry = scored[k];
+        result.add(<String, dynamic>{
+          ...entry.value,
+          'studentId': entry.key,
+          'studentName': names[entry.key] ?? '',
+          'rank': rank,
+          'cohortSize': cohortSize,
+          'topPercent': topPercent,
+          'rankScore100': scoreOf(entry.value),
+        });
+      }
+      i = j;
+    }
+    return result;
   }
 
   Future<Map<String, dynamic>> calculateHomeworkScoreAsync({
@@ -7312,8 +7469,8 @@ class DataManager {
                         (m['departure_notification'] as bool?) ?? false,
                     latenessNotification:
                         (m['lateness_notification'] as bool?) ?? false,
-                    paymentChannel:
-                        PaymentChannel.normalize(m['payment_channel'] as String?),
+                    paymentChannel: PaymentChannel.normalize(
+                        m['payment_channel'] as String?),
                     paymentNote: m['payment_note'] as String?,
                     createdAt:
                         DateTime.tryParse((m['created_at'] as String?) ?? '') ??
