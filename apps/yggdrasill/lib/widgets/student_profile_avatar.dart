@@ -16,12 +16,23 @@ class StudentProfileAvatar extends StatelessWidget {
   final Color? fallbackColor;
 
   static const monogramStyles = <List<Color>>[
+    // 학생앱 StudentAvatarSession.monogramStyles 와 동일 순서 유지.
     [Color(0xFFF5C542), Color(0xFF3DCC7A)],
     [Color(0xFF7BE0C2), Color(0xFF5B8DEF)],
     [Color(0xFF34C759), Color(0xFF30D158)],
     [Color(0xFFFF8A65), Color(0xFFFF5252)],
     [Color(0xFFAB47BC), Color(0xFF5C6BC0)],
     [Color(0xFF26C6DA), Color(0xFF42A5F5)],
+    [Color(0xFFFF8A65), Color(0xFFFF6B9D)],
+    [Color(0xFF9B6DFF), Color(0xFF5B8DEF)],
+    [Color(0xFFFFD54F), Color(0xFFFFC107)],
+    [Color(0xFF4DD0E1), Color(0xFF26C6DA)],
+    [Color(0xFFA5D6A7), Color(0xFFFFB74D)],
+    [Color(0xFFF8BBD0), Color(0xFFCE93D8)],
+    [Color(0xFF1A237E), Color(0xFF283593)],
+    [Color(0xFFD4A574), Color(0xFFC49A6C)],
+    [Color(0xFF424242), Color(0xFF616161)],
+    [Color(0xFFE53935), Color(0xFFD32F2F)],
   ];
 
   static const emojiBackgrounds = <String, Color>{
@@ -34,6 +45,25 @@ class StudentProfileAvatar extends StatelessWidget {
     '🦄': Color(0xFFF8BBD0),
     '🐵': Color(0xFFBCAAA4),
   };
+
+  /// 학생앱 Fluent 저장값(`fluent:owl`) → 표시용 글리프.
+  static const _fluentGlyphs = <String, String>{
+    'owl': '🦉',
+    'fox': '🦊',
+    'panda': '🐼',
+    'tiger': '🐯',
+    'frog': '🐸',
+    'octopus': '🐙',
+    'unicorn': '🦄',
+    'monkey': '🐵',
+  };
+
+  static String _displayEmoji(String raw) {
+    final v = raw.trim();
+    if (!v.startsWith('fluent:')) return v;
+    final id = v.substring('fluent:'.length);
+    return _fluentGlyphs[id] ?? v;
+  }
 
   static String monogramLabel(String name) {
     final trimmed = name.trim();
@@ -64,7 +94,7 @@ class StudentProfileAvatar extends StatelessWidget {
     }
 
     if (kind == 'emoji') {
-      final emoji = (student.avatarEmoji ?? '').trim();
+      final emoji = _displayEmoji(student.avatarEmoji ?? '');
       if (emoji.isNotEmpty) {
         return Container(
           width: size,

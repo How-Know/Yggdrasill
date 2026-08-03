@@ -943,7 +943,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                   maxWidth: 624,
                 ),
                 padding: const EdgeInsets.only(
-                    left: 34, right: 24, top: 12, bottom: 24),
+                    left: 34, right: 24, top: 12, bottom: 0),
                 decoration: BoxDecoration(
                   color: context.yggSurfaceBase,
                   borderRadius: BorderRadius.circular(16),
@@ -1076,7 +1076,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             onTap:
                                 _hasGroupFilter ? _handleStudentAreaTap : null,
                             child: ListView(
-                              padding: const EdgeInsets.only(bottom: 90),
+                              padding: const EdgeInsets.only(
+                                bottom: FabTabBarTokens
+                                    .fabStyleScreenTabBarBottomPadding,
+                              ),
                               children: [
                                 _buildEducationLevelGroup('초등',
                                     EducationLevel.elementary, groupedByGrade),
@@ -1210,68 +1213,80 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         const SizedBox(height: 5),
                         Expanded(
                           flex: 3,
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 24),
-                            child: _detailsStudent != null
-                                ? AnimatedBuilder(
-                                    // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
-                                    // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
-                                    animation: Listenable.merge([
-                                      DataManager
-                                          .instance.sessionOverridesNotifier,
-                                      DataManager
-                                          .instance.attendanceRecordsNotifier,
-                                      DataManager
-                                          .instance.studentPaymentInfoRevision,
-                                    ]),
-                                    builder: (context, _) {
-                                      final selected = _detailsStudent!;
-                                      final flows =
-                                          _flowsForStudent(selected.student.id);
-                                      return _EmbeddedStudentDetailsCard(
-                                        studentWithInfo: selected,
-                                        flows: flows,
-                                        onRequestCourseView:
-                                            widget.onRequestCourseView,
-                                        weekOffset: _detailsWeekOffset,
-                                        onWeekOffsetChanged: (next) => setState(
-                                            () => _detailsWeekOffset = next),
-                                        onCloseDetails: () => setState(
-                                            () => _detailsStudent = null),
-                                        onRefreshAfterPauseResume: () async {
-                                          await DataManager.instance
-                                              .loadStudents();
-                                          if (!mounted) return;
-                                          setState(() {
-                                            // 상세 학생 참조를 최신 로드 결과로 갱신(없으면 유지)
-                                            final sid =
-                                                _detailsStudent?.student.id;
-                                            if (sid != null && sid.isNotEmpty) {
-                                              final idx = DataManager
-                                                  .instance.students
-                                                  .indexWhere((s) =>
-                                                      s.student.id == sid);
-                                              if (idx != -1) {
-                                                _detailsStudent = DataManager
-                                                    .instance.students[idx];
-                                              }
+                          child: _detailsStudent != null
+                              ? AnimatedBuilder(
+                                  // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
+                                  // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
+                                  // studentsRevision: 닉네임 등 students 컬럼 변경도 즉시 반영.
+                                  animation: Listenable.merge([
+                                    DataManager
+                                        .instance.sessionOverridesNotifier,
+                                    DataManager
+                                        .instance.attendanceRecordsNotifier,
+                                    DataManager
+                                        .instance.studentPaymentInfoRevision,
+                                    DataManager.instance.studentsRevision,
+                                  ]),
+                                  builder: (context, _) {
+                                    // 캐시된 선택 객체 대신 최신 로드 결과를 쓴다.
+                                    final sid = _detailsStudent!.student.id;
+                                    final fresh = _findStudentById(sid) ??
+                                        () {
+                                          final idx = DataManager
+                                              .instance.students
+                                              .indexWhere(
+                                                  (s) => s.student.id == sid);
+                                          return idx == -1
+                                              ? null
+                                              : DataManager
+                                                  .instance.students[idx];
+                                        }();
+                                    final selected = fresh ?? _detailsStudent!;
+                                    final flows =
+                                        _flowsForStudent(selected.student.id);
+                                    return _EmbeddedStudentDetailsCard(
+                                      studentWithInfo: selected,
+                                      flows: flows,
+                                      onRequestCourseView:
+                                          widget.onRequestCourseView,
+                                      weekOffset: _detailsWeekOffset,
+                                      onWeekOffsetChanged: (next) => setState(
+                                          () => _detailsWeekOffset = next),
+                                      onCloseDetails: () => setState(
+                                          () => _detailsStudent = null),
+                                      onRefreshAfterPauseResume: () async {
+                                        await DataManager.instance
+                                            .loadStudents();
+                                        if (!mounted) return;
+                                        setState(() {
+                                          // 상세 학생 참조를 최신 로드 결과로 갱신(없으면 유지)
+                                          final sid =
+                                              _detailsStudent?.student.id;
+                                          if (sid != null && sid.isNotEmpty) {
+                                            final idx = DataManager
+                                                .instance.students
+                                                .indexWhere((s) =>
+                                                    s.student.id == sid);
+                                            if (idx != -1) {
+                                              _detailsStudent = DataManager
+                                                  .instance.students[idx];
                                             }
-                                          });
-                                        },
-                                      );
-                                    },
-                                  )
-                                : Container(
-                                    decoration: BoxDecoration(
-                                      color: context.yggSurfaceBase,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                          color: const Color(0xFF223131),
-                                          width: 1.5),
-                                    ),
-                                    child: const SizedBox.shrink(),
+                                          }
+                                        });
+                                      },
+                                    );
+                                  },
+                                )
+                              : Container(
+                                  decoration: BoxDecoration(
+                                    color: context.yggSurfaceBase,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                        color: const Color(0xFF223131),
+                                        width: 1.5),
                                   ),
-                          ),
+                                  child: const SizedBox.shrink(),
+                                ),
                         ),
                       ],
                     ),
@@ -2447,7 +2462,12 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      student.name,
+                      () {
+                        final nick = (student.nickname ?? '').trim();
+                        return nick.isEmpty
+                            ? student.name
+                            : '${student.name} - $nick';
+                      }(),
                       style: const TextStyle(
                         color: Color(0xFFEAF2F2),
                         fontSize: 22,
@@ -2483,7 +2503,9 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
           const SizedBox(height: 18),
           Expanded(
             child: ListView(
-              padding: EdgeInsets.zero,
+              padding: const EdgeInsets.only(
+                bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+              ),
               children: [
                 section(
                   icon: Icons.schedule_outlined,

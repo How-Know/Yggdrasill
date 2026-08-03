@@ -58,10 +58,15 @@ import {
   DEFAULT_TEXTBOOK_DRIVER,
 } from './storage/driver.js';
 import {
+  detectItemGeometryOnPage,
   detectProblemsOnPage,
   detectRpmSetHeadersOnPage,
   classifyWonriPage,
+  mergeItemGeometry,
   normalizeDetectResult,
+  numberBboxesLookTemplated,
+  overwriteItemGeometry,
+  repairSuryeokItemRegions,
   shouldTreatWonriPageAsConcept,
 } from './textbook/vlm_detect_client.js';
 import {
@@ -69,9 +74,17 @@ import {
   normalizeAnswerResult,
 } from './textbook/vlm_answer_client.js';
 import {
+  extractAnswerLayoutOnPage,
+  normalizeAnswerLayoutResult,
+} from './textbook/vlm_answer_layout_client.js';
+import {
   detectSolutionRefsOnPage,
   normalizeSolutionRefsResult,
 } from './textbook/vlm_solution_refs_client.js';
+import {
+  detectSolutionBlocksOnPage,
+  normalizeSolutionBlocksResult,
+} from './textbook/vlm_solution_blocks_client.js';
 import { logVlmUsage } from './textbook/vlm_usage_log.js';
 import { normalizeProblemNumberKey } from './textbook/problem_number_key.js';
 import {
@@ -4001,6 +4014,9 @@ const ANSWER_RENDER_BUCKET = process.env.PB_ANSWER_RENDER_BUCKET || 'problem-pre
 const ANSWER_RENDER_EXPIRES_SEC = 60 * 60 * 24 * 7;
 const ANSWER_RENDER_STYLE_VERSION = 'answer-xelatex-v6-rightsheet-bold-hires';
 const ANSWER_RENDER_PIXEL_RATIO = 8;
+// 답지가 코너·소단원 블록으로 쪼개져 번호가 블록마다 1번부터 다시 시작하는
+// 시리즈. 기대 항목마다 코너·본문 페이지 배지를 함께 보내 대조한다.
+const ANSWER_BADGE_SERIES = new Set(['gaeyu', 'suryeok']);
 const TEXTBOOK_ANSWER_RENDER_BUCKET =
   process.env.TEXTBOOK_ANSWER_RENDER_BUCKET || 'textbook-answer-renders';
 const TEXTBOOK_ANSWER_RENDER_STYLE_VERSION = 'textbook-answer-xelatex-v2-hires';
@@ -6453,6 +6469,46 @@ const TEXTBOOK_VLM_TIMEOUT_MS = Number.parseInt(
   process.env.TEXTBOOK_VLM_TIMEOUT_MS || '120000',
   10,
 );
+// TEXTBOOK_VLM_DUMP_DIR 를 지정하면 문항 탐지 요청의 입력 이미지와 모델 원본
+// 응답을 그 폴더에 남긴다. 좌표가 틀어졌을 때 앱이 보낸 이미지 그대로를 다시
+// 돌려 보기 위한 진단용이며, 값이 없으면 아무 일도 하지 않는다.
+const TEXTBOOK_VLM_DUMP_DIR = (() => {
+  const raw = (process.env.TEXTBOOK_VLM_DUMP_DIR || '').trim();
+  return ['', '0', 'off', 'false', 'none'].includes(raw.toLowerCase()) ? '' : raw;
+})();
+
+function dumpTextbookDetectInput({
+  imageBase64,
+  rawPage,
+  gradeLabel,
+  result,
+  normalized,
+}) {
+  if (!TEXTBOOK_VLM_DUMP_DIR) return;
+  try {
+    fs.mkdirSync(TEXTBOOK_VLM_DUMP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeGrade = String(gradeLabel || 'grade').replace(/[^\w-]+/g, '_');
+    const base = path.join(
+      TEXTBOOK_VLM_DUMP_DIR,
+      `detect_${safeGrade}_p${rawPage}_${stamp}`,
+    );
+    fs.writeFileSync(`${base}.png`, Buffer.from(imageBase64, 'base64'));
+    fs.writeFileSync(
+      `${base}.json`,
+      JSON.stringify(
+        { raw: result?.parsedJson ?? null, normalized },
+        null,
+        2,
+      ),
+    );
+  } catch (err) {
+    console.warn(
+      '[textbook-vlm-detect] dump_failed',
+      compact(err?.message || err),
+    );
+  }
+}
 // 정답지/해설지는 한 페이지에 수십~수백 개 번호가 밀집해 일반 문항 탐지보다
 // 응답 생성 시간이 길다. 120초×3회 대신 180초×2회로 총 대기 상한은 유지하면서
 // 정상 응답이 완료될 시간을 확보한다.
@@ -6532,10 +6588,14 @@ async function handleTextbookVlmDetectProblems(body, res) {
     'unit_drill',
     'descriptive',
     'extra_practice',
+    // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
+    'type_problem',
+    'unit_review',
   ].includes(rawSectionHint)
     ? rawSectionHint
     : '';
-  // 교재 시리즈 (ssen | rpm | wonri). 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
+  // 교재 시리즈 (ssen | rpm | wonri | gaeyu | suryeok).
+  // 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
   const series = String(body?.series || '').trim().toLowerCase();
   const contentGroupRequired =
     sectionHint === 'type_practice' &&
@@ -6643,6 +6703,95 @@ async function handleTextbookVlmDetectProblems(body, res) {
     displayPage,
     rawPage,
   });
+  // 좌표가 틀어졌을 때 "앱이 보낸 이미지"와 "모델 원본 응답"을 그대로 떠 놓는다.
+  // 로컬에서 같은 이미지를 다시 돌려 봐야 렌더 차이인지 모델 흔들림인지 갈린다.
+  dumpTextbookDetectInput({ imageBase64, rawPage, gradeLabel, result, normalized });
+  // 문항 번호는 다 찾았는데 좌표를 빼먹은 응답이 드물게 온다. 크롭할 영역이
+  // 없으면 클라이언트가 그 지면을 실패로 처리하고 재판독해도 같은 결과가
+  // 반복되므로(예: 쓱쓱 서술형 152쪽), 좌표만 다시 물어 채운다.
+  if (
+    normalized.page_kind !== 'concept_page' &&
+    normalized.items.length > 0 &&
+    normalized.items.some(
+      (item) =>
+        !Array.isArray(item?.item_region) || item.item_region.length !== 4,
+    )
+  ) {
+    try {
+      const geometry = await detectItemGeometryOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+        series,
+        numbers: normalized.items.map((item) => item?.number),
+      });
+      const merged = mergeItemGeometry(normalized, geometry.parsedJson);
+      // 2차 판독 좌표는 정규화를 거치지 않으므로 시리즈별 좌표 보정을 다시
+      // 태운다. (수력충전은 모델이 준 영역을 번호 기준으로 다시 잡는다.)
+      if (merged > 0) repairSuryeokItemRegions(normalized, series);
+    } catch (err) {
+      // 보정에 실패해도 1차 결과는 그대로 돌려준다. 좌표가 없는 문항은
+      // 클라이언트가 재시도/실패로 처리한다.
+      console.warn(
+        '[textbook-vlm-detect] item_geometry_repair_failed',
+        JSON.stringify({
+          rawPage,
+          bookId,
+          gradeLabel,
+          message: compact(err?.message || err),
+        }),
+      );
+    }
+  }
+  // 수력충전 크롭은 번호 위치를 기준으로 잘리는데, 모델이 드물게 번호를 재지
+  // 않고 같은 크기 상자를 복사해 내놓는다. 그러면 지면 전체가 한 줄씩 밀려
+  // 크롭이 어긋나므로, 그런 낌새가 보이면 좌표만 다시 물어 갈아 끼운다.
+  if (
+    series === 'suryeok' &&
+    normalized.page_kind !== 'concept_page' &&
+    numberBboxesLookTemplated(normalized.items)
+  ) {
+    try {
+      const geometry = await detectItemGeometryOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+        series,
+        numbers: normalized.items.map((item) => item?.number),
+      });
+      // 2차 판독도 같은 식으로 찍어 왔으면 그대로 두는 편이 낫다.
+      const retryItems = geometry?.parsedJson?.items;
+      if (Array.isArray(retryItems) && !numberBboxesLookTemplated(retryItems)) {
+        const replaced = overwriteItemGeometry(normalized, geometry.parsedJson);
+        if (replaced > 0) repairSuryeokItemRegions(normalized, series);
+      } else {
+        console.warn(
+          '[textbook-vlm-detect] templated_geometry_retry_gave_up',
+          JSON.stringify({ rawPage, bookId, gradeLabel }),
+        );
+      }
+    } catch (err) {
+      console.warn(
+        '[textbook-vlm-detect] templated_geometry_retry_failed',
+        JSON.stringify({
+          rawPage,
+          bookId,
+          gradeLabel,
+          message: compact(err?.message || err),
+        }),
+      );
+    }
+  }
   // 개념원리: 문항이 감지된 페이지는 전용 2차 판독으로 페이지 종류를 확정한다.
   //   concept("개념원리 이해" 개념 페이지)이면 참조 라벨("필수 04" 등) 오인
   //   문항을 전부 버리고, 익히기/필수유형/기타 문제 페이지는 문항을 보존한다.
@@ -7581,6 +7730,17 @@ function parseTextbookExpectedEntries(input) {
     .filter((e) => e && e.number.length > 0);
 }
 
+// 이미 다 읽은 답지·해설 블록의 배지("p.10~11"). 앱이 같은 지면을 다음 블록
+// 창으로 다시 물을 때 함께 보낸다. 안 보내면 모델이 지면 맨 위 블록만 되풀이해
+// 읽어 올린다.
+function parseTextbookSkipBadges(input) {
+  const raw = Array.isArray(input) ? input : [];
+  return raw
+    .map((v) => String(v ?? '').trim())
+    .filter((v) => v.length > 0 && v.length <= 40)
+    .slice(0, 40);
+}
+
 async function handleTextbookVlmExtractAnswers(body, res) {
   const apiKey =
     (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
@@ -7620,6 +7780,7 @@ async function handleTextbookVlmExtractAnswers(body, res) {
 
   const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
   const expectedNumbers = expectedEntries.map((e) => e.number);
+  const skipBadges = parseTextbookSkipBadges(body?.skip_badges);
 
   const displayPage = rawPage;
   const pageOffset = 0;
@@ -7635,6 +7796,7 @@ async function handleTextbookVlmExtractAnswers(body, res) {
       pageOffset,
       expectedNumbers,
       expectedEntries,
+      skipBadges,
       series: String(body?.series || '').trim().toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
@@ -7660,9 +7822,10 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     items: normalized.items.length,
     elapsed: `${result.elapsedMs}ms`,
   });
-  // 개념+유형은 코너·배지 삼중 대조라 한 건이라도 비면 원인 추적이 필요하다.
+  // 개념+유형·수력충전은 코너·배지 삼중 대조라 한 건이라도 비면 원인 추적이
+  // 필요하다.
   if (
-    String(body?.series || '').trim().toLowerCase() === 'gaeyu' &&
+    ANSWER_BADGE_SERIES.has(String(body?.series || '').trim().toLowerCase()) &&
     normalized.items.length < expectedEntries.length
   ) {
     const want = expectedEntries
@@ -7695,6 +7858,66 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
+// 수력충전 빠른 정답 지면을 소단원 머리 + 번호/정답 순서로 읽는다.
+// 모델은 OCR만 하고 실제 본문 크롭과의 대응은 소단원별 기대 문항을 가진 앱이 한다.
+async function handleTextbookVlmExtractAnswerLayout(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, { ok: false, error: 'gemini_api_key_missing' });
+    return;
+  }
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, { ok: false, error: `invalid_mime_type: ${mimeType}` });
+    return;
+  }
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    return;
+  }
+
+  let result;
+  try {
+    result = await extractAnswerLayoutOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+      maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_answer_layout_failed',
+      message: compact(err?.message || err),
+    });
+    return;
+  }
+
+  const normalized = normalizeAnswerLayoutResult(result.parsedJson);
+  logVlmUsage('answer_layout', result.usageMetadata, {
+    page: rawPage,
+    entries: normalized.entries.length,
+  });
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    leading_continuation: normalized.leading_continuation,
+    entries: normalized.entries,
+    model: TEXTBOOK_VLM_MODEL,
     finish_reason: result.finishReason || '',
   });
 }
@@ -7739,6 +7962,7 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
   // 답지와 같은 이유로 개념+유형은 코너·본문 페이지까지 들고 간다.
   const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
   const expectedNumbers = expectedEntries.map((e) => e.number);
+  const skipBadges = parseTextbookSkipBadges(body?.skip_badges);
 
   const displayPage = rawPage;
   const pageOffset = 0;
@@ -7754,6 +7978,7 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
       pageOffset,
       expectedNumbers,
       expectedEntries,
+      skipBadges,
       series: String(body?.series || '').trim().toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
@@ -7791,6 +8016,98 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
     finish_reason: result.finishReason || '',
+  });
+}
+
+// 해설 지면에 실려 있는 소단원 블록 머리 목록만 먼저 읽는다 (Stage 3 준비).
+//
+// 이어지는 지면에는 블록 머리가 안 찍히기 때문에, 문항을 바로 물으면 모델이
+// 그 지면에 실제로 있는 다른 소단원 풀이를 번호만 맞춰 돌려준다. 지면마다
+// 블록 목록을 먼저 확정해 두면 어느 블록을 어느 지면에서 물을지 정해진다.
+async function handleTextbookVlmDetectSolutionBlocks(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, { ok: false, error: 'gemini_api_key_missing' });
+    return;
+  }
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, { ok: false, error: `invalid_mime_type: ${mimeType}` });
+    return;
+  }
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    return;
+  }
+
+  let result;
+  try {
+    result = await detectSolutionBlocksOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+      maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_solblocks_failed',
+      message: compact(err?.message || err),
+    });
+    return;
+  }
+
+  let normalized = normalizeSolutionBlocksResult(result.parsedJson);
+  // 머리 없는 이어짐 지면에서 모델이 "블록 없음"을 "문항 없음"으로 오해해
+  // numbers=[]를 내는 경우가 있다. 실제 p.38(15~26), p.44(10~22)가 통째로
+  // 빠졌다. 번호만 묻는 단순 프롬프트로 즉시 한 번 보완한다.
+  if (normalized.numbers.length === 0) {
+    try {
+      const fallback = await detectSolutionBlocksOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+        maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
+        numbersOnly: true,
+      });
+      const repaired = normalizeSolutionBlocksResult(fallback.parsedJson);
+      if (repaired.numbers.length > 0) {
+        normalized = repaired;
+        result = fallback;
+      }
+    } catch (err) {
+      console.warn(
+        `[solution-blocks] number-only fallback failed page=${rawPage}:`,
+        compact(err?.message || err),
+      );
+    }
+  }
+  logVlmUsage('solution_blocks', result.usageMetadata, {
+    page: rawPage,
+    blocks: normalized.blocks.length,
+    numbers: normalized.numbers.length,
+  });
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    leading_continuation: normalized.leading_continuation,
+    blocks: normalized.blocks,
+    numbers: normalized.numbers,
+    sequence: normalized.sequence,
+    model: TEXTBOOK_VLM_MODEL,
   });
 }
 
@@ -9748,6 +10065,16 @@ async function handler(req, res) {
       return;
     }
 
+    // 수력충전 빠른 정답 지면 구조 — Stage 2 결정적 매칭.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/vlm/extract-answer-layout'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmExtractAnswerLayout(body, res);
+      return;
+    }
+
     // VLM solution-reference detection — Stage 3.
     if (
       method === 'POST' &&
@@ -9755,6 +10082,16 @@ async function handler(req, res) {
     ) {
       const body = await readJson(req);
       await handleTextbookVlmDetectSolutionRefs(body, res);
+      return;
+    }
+
+    // 해설 지면의 소단원 블록 머리 목록 — Stage 3 준비.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/vlm/detect-solution-blocks'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmDetectSolutionBlocks(body, res);
       return;
     }
 

@@ -7,9 +7,11 @@
 
 import {
   buildDetectProblemsPrompt,
+  buildItemGeometryRepairPrompt,
   buildRpmSetHeaderPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
+  SURYEOK_ITEM_CATEGORIES,
   VLM_DETECT_LABELS,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
@@ -209,6 +211,107 @@ export function detectRpmSetHeadersOnPage(options) {
   });
 }
 
+/// 좌표(bbox·item_region)가 빠진 문항이 있는 지면을 좌표만 다시 물어 보정한다.
+/// 문항 목록은 1차 판독 결과를 그대로 쓴다.
+export function detectItemGeometryOnPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    includeContentGroups: false,
+    promptOverride: buildItemGeometryRepairPrompt({
+      rawPage: options?.rawPage,
+      displayPage: options?.displayPage,
+      numbers: options?.numbers || [],
+    }),
+  });
+}
+
+/// 좌표 보정 2차 판독 결과를 1차 결과에 덮어쓴다. 번호로 짝을 맞추고, 이미
+/// 좌표가 있는 문항은 건드리지 않는다. 채운 문항 수를 돌려준다.
+export function mergeItemGeometry(result, parsedJson) {
+  if (!result || !Array.isArray(result.items)) return 0;
+  const repaired = Array.isArray(parsedJson?.items) ? parsedJson.items : [];
+  if (repaired.length === 0) return 0;
+  const key = (value) => String(value ?? '').replace(/\s+/g, '').trim();
+  const byNumber = new Map();
+  for (const item of repaired) {
+    const k = key(item?.number);
+    if (k && !byNumber.has(k)) byNumber.set(k, item);
+  }
+  let filled = 0;
+  for (const item of result.items) {
+    const hasBbox = Array.isArray(item.bbox) && item.bbox.length === 4;
+    const hasRegion =
+      Array.isArray(item.item_region) && item.item_region.length === 4;
+    if (hasBbox && hasRegion) continue;
+    const hit = byNumber.get(key(item.number));
+    if (!hit) continue;
+    const bbox = parseBbox4(hit.bbox);
+    const region = parseBbox4(hit.item_region ?? hit.itemRegion);
+    if (!hasRegion && region) item.item_region = region;
+    if (!hasBbox && bbox) item.bbox = bbox;
+    if (Array.isArray(item.item_region) && item.item_region.length === 4) {
+      if (item.column == null && (hit.column === 1 || hit.column === 2)) {
+        item.column = hit.column;
+      }
+      filled += 1;
+    }
+  }
+  if (filled > 0) {
+    const suffix = `item_geometry_repaired=${filled}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+  return filled;
+}
+
+/// 번호 bbox 가 "재지 않고 찍은" 값처럼 보이는지 본다. 모델이 드물게 한 지면의
+/// 번호 상자를 같은 크기로 복사해 내놓는데, 이때 위치가 한 줄씩 밀려 크롭이
+/// 통째로 어긋난다. 수력충전 번호는 두 자리라 폭이 30 안팎이고, 세트 헤더
+/// ("02~03")만 확실히 넓으므로 폭이 전부 같으면 잰 값이 아니다.
+export function numberBboxesLookTemplated(items) {
+  const boxed = (Array.isArray(items) ? items : []).filter(
+    (item) => Array.isArray(item?.bbox) && item.bbox.length === 4,
+  );
+  if (boxed.length < 3) return false;
+  const widths = boxed.map((item) => item.bbox[3] - item.bbox[1]);
+  const heights = boxed.map((item) => item.bbox[2] - item.bbox[0]);
+  const uniform = (values) => values.every((v) => v === values[0]);
+  if (uniform(widths) && uniform(heights)) return true;
+  const plain = boxed.filter((item) => !item.is_set_header);
+  return plain.length >= 3 && plain.every((item) => item.bbox[3] - item.bbox[1] > 60);
+}
+
+/// 좌표 2차 판독 결과로 기존 좌표를 **덮어쓴다**. 1차 좌표가 통째로 틀어졌을 때
+/// 쓰며, 시리즈별 영역 보정을 다시 태울 수 있도록 보정 표시를 지운다.
+export function overwriteItemGeometry(result, parsedJson) {
+  if (!result || !Array.isArray(result.items)) return 0;
+  const repaired = Array.isArray(parsedJson?.items) ? parsedJson.items : [];
+  if (repaired.length === 0) return 0;
+  const key = (value) => String(value ?? '').replace(/\s+/g, '').trim();
+  const byNumber = new Map();
+  for (const item of repaired) {
+    const k = key(item?.number);
+    if (k && !byNumber.has(k)) byNumber.set(k, item);
+  }
+  let replaced = 0;
+  for (const item of result.items) {
+    const hit = byNumber.get(key(item.number));
+    if (!hit) continue;
+    const bbox = parseBbox4(hit.bbox);
+    if (!bbox) continue;
+    item.bbox = bbox;
+    const region = parseBbox4(hit.item_region ?? hit.itemRegion);
+    if (region) item.item_region = region;
+    if (hit.column === 1 || hit.column === 2) item.column = hit.column;
+    delete item.__suryeokRegionRepaired;
+    replaced += 1;
+  }
+  if (replaced > 0) {
+    const suffix = `item_geometry_replaced=${replaced}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+  return replaced;
+}
+
 export function classifyWonriPage(options) {
   return detectProblemsOnPage({
     ...options,
@@ -260,6 +363,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     'special_lecture',
     // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
     ...GAEYU_ITEM_CATEGORIES,
+    // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
+    ...SURYEOK_ITEM_CATEGORIES,
   ];
   const section = String(parsedJson.section || '').trim();
   out.section = [...knownSections, 'unknown'].includes(section)
@@ -286,7 +391,6 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   // "개념원리 익히기" 인쇄 문구를 확인했다고 명시한 경우에만 true.
   out.concept_drill_header_visible =
     parsedJson.concept_drill_header_visible === true;
-
   if (
     out.page_kind === 'concept_page' ||
     /\bconcept_page\b/i.test(out.notes)
@@ -300,6 +404,18 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
 
   const series = String(opts?.series || '').trim().toLowerCase();
   const isGaeyu = series === 'gaeyu';
+  const isSuryeok = series === 'suryeok';
+  // 수력충전 크롭 경계용. 유형 머리말은 문항이 아니지만, 앞 문항의 크롭이
+  // 머리말을 삼키지 않으려면 위치를 알아야 한다.
+  if (isSuryeok && Array.isArray(parsedJson.type_headers)) {
+    out.type_headers = parsedJson.type_headers
+      .map((header) => ({
+        label: String(header?.label || '').trim(),
+        title: String(header?.title || '').trim(),
+        bbox: parseBbox4(header?.bbox),
+      }))
+      .filter((header) => Array.isArray(header.bbox));
+  }
   // 개념+유형 개념확인은 번호가 인쇄돼 있지 않아 본문 인쇄 페이지를 번호로 쓴다.
   const conceptCheckPage = firstFiniteNumber(opts?.displayPage, opts?.rawPage);
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
@@ -331,9 +447,14 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
           printedNumber,
           conceptCheckPage,
         })
-      : printedNumber;
+      : isSuryeok
+        ? formatSuryeokNumber(printedNumber)
+        : printedNumber;
     if (!number) continue;
-    const inferredSetRange = parseBasicDrillRange(number, series === 'rpm');
+    const inferredSetRange = parseBasicDrillRange(
+      number,
+      series === 'rpm' || isSuryeok,
+    );
     // 개념+유형은 대표 번호 하나 아래 (1), (2)가 붙는 구조다. 이 소문항에는
     // 독립 번호가 없으므로 Stage 1 범위 헤더로 저장하면 대표 문항까지 추출
     // 대상에서 빠진다. 세트 여부는 문제은행 추출 단계에서 종속형으로 정한다.
@@ -367,7 +488,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
     const category = isGaeyu
       ? gaeyuCategory
-      : normalizeWonriCategory(raw, label, series);
+      : isSuryeok
+        ? resolveSuryeokCategory(raw, out.section)
+        : normalizeWonriCategory(raw, label, series);
     // 특강 예제는 배지에 "특강 01" 처럼 2자리 번호가 인쇄된다. 특강 개념
     // 페이지의 사각 박스 개념 번호(1, 2 같은 한 자리 수)를 모델이 특강
     // 예제로 오인하면 존재하지 않는 문항이 저장되므로 여기서 걸러낸다.
@@ -382,9 +505,13 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 유형 그룹(content_group)은 문항 단위로 판단한다.
     // 개념원리는 B 필수유형(type_example)과 E 특강(special_lecture)만,
     // 개념+유형은 B 필수 문제(essential_problem)만 유형명 그룹을 갖는다.
+    // 수력충전 개념 체크는 유형 아래 딸린 문항이 아니라 지면 끝의 마무리
+    // 확인 문항이라 유형명을 갖지 않는다.
     const groupAllowedCategories = isGaeyu
       ? ['essential_problem']
-      : ['type_example', 'special_lecture'];
+      : isSuryeok
+        ? ['type_problem']
+        : ['type_example', 'special_lecture'];
     const groupDisallowed = category
       ? !groupAllowedCategories.includes(category)
       : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
@@ -393,7 +520,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       : normalizeContentGroup(raw.content_group);
     out.items.push({
       number,
-      label,
+      // 수력충전에 난이도는 없다. 계산 조심 / 생각 더하기 / 조건 확인 배지는
+      // 단원 마무리 평가에만 인쇄되므로 다른 코너의 라벨은 지어낸 것이다.
+      label: isSuryeok && category !== 'unit_review' ? '' : label,
       category,
       // 개념+유형 탄탄 단원 다지기의 노란 별(중요) 표시. 난이도(label)와 별개다.
       is_important: isGaeyu && raw.is_important === true,
@@ -439,9 +568,13 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   }
   backfillWonriCategories(out, series);
   backfillGaeyuCategories(out, series);
+  backfillSuryeokCategories(out, series);
+  carrySuryeokContentGroups(out, series);
+  stripGaeyuLabelsWithoutCorner(out, series);
   backfillMissingItemRegions(out);
   backfillBasicDrillItemRegions(out, series);
   backfillMissingBboxes(out);
+  repairSuryeokItemRegions(out, series);
   repairGaeyuNumberBboxes(out, series);
   validateBasicDrillItems(out, series);
   annotateExpectedBasicDrillStart(out, opts?.expectedStartNumber);
@@ -483,6 +616,96 @@ function normalizeWonriCategory(raw, label, series) {
     return 'exercise';
   }
   return '';
+}
+
+// 수력충전 문항 번호를 인쇄된 두 자리 표기로 맞춘다.
+//
+// 지면에는 "01", "28" 처럼 두 자리로 인쇄되고 정답·해설 파일도 같은 표기를 쓰는데
+// 모델은 "1", "8" 로 흘려보낼 때가 있다. 두 표기가 섞이면 크롭 키와 정답 키가
+// 어긋나 그 문항의 답이 통째로 비므로 여기서 한쪽으로 모은다.
+// 세트 헤더("1~5")도 양쪽 끝을 같은 규칙으로 맞춘다.
+export function formatSuryeokNumber(printedNumber) {
+  const raw = String(printedNumber ?? '').trim();
+  if (!raw) return '';
+  const pad = (value) => {
+    const digits = value.replace(/^0+(?=\d)/, '');
+    return digits.length >= 2 ? digits : digits.padStart(2, '0');
+  };
+  if (/^\d+$/.test(raw)) return pad(raw);
+  const range = raw.match(/^(\d+)\s*[~\-\u2013\u2014\u301c]\s*(\d+)$/);
+  if (range) return `${pad(range[1])}~${pad(range[2])}`;
+  return raw;
+}
+
+// 수력충전 단일 패스 — 문항의 category 를 검증/보정한다.
+//
+// 코너가 둘뿐이고 한 지면에 섞이지 않아서 모델이 category 를 빠뜨렸을 때는
+// 지면 section 을 그대로 물려주면 된다. 개념 체크는 배지로만 판별한다.
+export function resolveSuryeokCategory(raw, pageSection) {
+  const value = String(raw?.category ?? '').trim();
+  if (SURYEOK_ITEM_CATEGORIES.includes(value)) return value;
+  if (SURYEOK_ITEM_CATEGORIES.includes(pageSection)) {
+    return pageSection === 'concept_check' ? 'type_problem' : pageSection;
+  }
+  return '';
+}
+
+// category 를 못 받은 문항을 같은 지면의 다수 카테고리(또는 지면 section)로
+// 채운다. 수력충전은 한 지면이 통째로 한 코너라 다수결이 곧 정답이다.
+function backfillSuryeokCategories(result, series) {
+  if (series !== 'suryeok') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+  const missing = result.items.filter((item) => !item.category);
+  if (missing.length === 0) return;
+
+  const counts = new Map();
+  for (const item of result.items) {
+    // 개념 체크는 지면에 한 개뿐이라 다수결 근거로 쓰면 안 된다.
+    if (!item.category || item.category === 'concept_check') continue;
+    counts.set(item.category, (counts.get(item.category) || 0) + 1);
+  }
+  let fallback = '';
+  if (counts.size > 0) {
+    fallback = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  } else if (result.section === 'unit_review') {
+    fallback = 'unit_review';
+  } else {
+    fallback = 'type_problem';
+  }
+  for (const item of missing) {
+    item.category = fallback;
+  }
+  const suffix = `suryeok_category_backfilled=${missing.length}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+}
+
+// 유형 머리말은 유형이 바뀔 때만 인쇄되고, 그 아래 문항은 단을 넘어가며
+// 이어진다. 모델은 오른쪽 단으로 넘어가는 순간 유형명을 빠뜨릴 때가 있어
+// (같은 지면을 두 번 돌리면 한 번은 붙고 한 번은 빈다) 읽는 순서대로
+// 직전 유형을 물려준다. 지면 첫 문항부터 비어 있는 경우는 앞 지면에서
+// 이어지는 것이라 매니저가 소단원 단위로 다시 메운다.
+function carrySuryeokContentGroups(result, series) {
+  if (series !== 'suryeok') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+  let last = null;
+  let filled = 0;
+  for (const item of result.items) {
+    if (item.category !== 'type_problem') continue;
+    if (item.content_group?.kind === 'type') {
+      last = item.content_group;
+      continue;
+    }
+    if (!last) continue;
+    item.content_group = { ...last };
+    item.content_group_kind = last.kind;
+    item.content_group_label = last.label;
+    item.content_group_title = last.title;
+    item.content_group_order = last.order;
+    filled += 1;
+  }
+  if (filled === 0) return;
+  const suffix = `suryeok_content_group_carried=${filled}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
 }
 
 // category 를 못 받은 문항을 같은 페이지의 다수 카테고리(또는 페이지 section)
@@ -529,6 +752,43 @@ const GAEYU_DESCRIPTIVE_NUMBER_PREFIX = Object.freeze({
   '서술형 연습': '연습',
 });
 
+// 개념+유형에서 label 은 코너마다 뜻이 다르고, 대부분의 코너에는 아예 없다.
+//   탄탄(unit_drill) — 원 세 개로 인쇄된 난이도 "상/중/하"
+//   쓱쓱(descriptive) — 갈래 "예제/유제/서술형 연습"
+// 쏙쏙·필수 문제·개념확인·한 번 더 연습에는 난이도가 인쇄되지 않는데, 모델이
+// 이어지는 지면을 탄탄으로 오해하면 없는 난이도를 지어낸다(109쪽 "중" 사고).
+// 코너에 없는 라벨은 여기서 지운다.
+const GAEYU_DIFFICULTY_LABELS = Object.freeze(new Set(['상', '중', '하']));
+
+function gaeyuLabelForCategory(category, label) {
+  if (!label) return '';
+  if (category === 'unit_drill') {
+    return GAEYU_DIFFICULTY_LABELS.has(label) ? label : '';
+  }
+  if (category === 'descriptive') {
+    return GAEYU_DESCRIPTIVE_NUMBER_PREFIX[label] ? label : '';
+  }
+  return '';
+}
+
+// 카테고리 백필까지 끝난 뒤에 돌린다. 백필 전에 지우면 category 를 늦게 받은
+// 탄탄 문항의 난이도까지 같이 날아간다.
+function stripGaeyuLabelsWithoutCorner(result, series) {
+  if (series !== 'gaeyu') return;
+  if (!Array.isArray(result.items)) return;
+  let stripped = 0;
+  for (const item of result.items) {
+    const label = gaeyuLabelForCategory(item.category, item.label);
+    const important = item.category === 'unit_drill' && item.is_important;
+    if (label !== item.label || important !== item.is_important) stripped += 1;
+    item.label = label;
+    item.is_important = important;
+  }
+  if (stripped === 0) return;
+  const suffix = `gaeyu_labels_stripped=${stripped}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+}
+
 function normalizeGaeyuCategory(raw, label) {
   const value = String(raw?.category ?? '').trim();
   if (GAEYU_ITEM_CATEGORIES.includes(value)) return value;
@@ -569,12 +829,29 @@ function hasGaeyuEssentialGroup(raw) {
   );
 }
 
+// 개념+유형 따름 문제 번호: "1-1", "2-1", "7-2".
+// 개념 번호는 하이픈을 쓰지 않으므로, 이 양식은 배지·코너와 무관하게
+// 무조건 필수 문제(따름)로 둔다. 지면 맨 위에서 배지 없이 이어질 때도 같다.
+function isGaeyuFollowUpNumber(printedNumber) {
+  return /^\d+\s*[-–—]\s*\d+$/.test(String(printedNumber || '').trim());
+}
+
+function normalizeGaeyuFollowUpNumber(printedNumber) {
+  const match = String(printedNumber || '')
+    .trim()
+    .match(/^(\d+)\s*[-–—]\s*(\d+)$/);
+  if (!match) return String(printedNumber || '').trim();
+  return `${match[1]}-${match[2]}`;
+}
+
 // 개념확인 배지 옆에는 문항 번호가 인쇄되지 않는다. 그러니 번호가 찍혀 있는데
 // 모델이 concept_check 라고 했다면 같은 지면의 "필수 문제"(보라색 원 안 숫자)나
 // 따름 문제("1-1")를 잘못 읽은 것이다. 그대로 두면 번호가 "개념확인<페이지>" 로
 // 덮여 그 문항이 통째로 사라지고, 같은 지면에 개념확인이 하나 더 있으면 키까지
 // 겹쳐서 뒤 문항 번호가 전부 밀린다.
 function resolveGaeyuCategory({ raw, label, printedNumber, pageSection }) {
+  // N-M 하이픈 번호는 개념/쏙쏙/탄탄이 될 수 없다. 배지보다도 먼저 고정한다.
+  if (isGaeyuFollowUpNumber(printedNumber)) return 'essential_problem';
   const category = normalizeGaeyuCategory(raw, label);
   // 모델이 선택한 category보다 지면에 실제로 인쇄된 배지 원문을 우선한다.
   // "필수 문제"를 읽고도 category만 concept_check로 잘못 고르는 경우를 막는다.
@@ -587,12 +864,11 @@ function resolveGaeyuCategory({ raw, label, printedNumber, pageSection }) {
       .replace(/\s+/g, '')
       .trim();
     const style = String(raw?.badge_style ?? '').trim();
-    // 개념확인은 위치나 "참고" 내용으로 추측하지 않는다. 전용 배지가
-    // 검증되지 않았다면 가짜 개념확인 문항을 만드는 대신 버린다.
     if (
       badge !== '개념확인' ||
       style !== 'concept_check_round_two_line'
     ) {
+      // 번호나 유형명이 함께 왔으면 필수 문제를 개념확인으로 잘못 읽은 것이다.
       if (hasGaeyuEssentialGroup(raw) || /\d/.test(printedNumber)) {
         if (
           GAEYU_ITEM_CATEGORIES.includes(pageSection) &&
@@ -602,7 +878,10 @@ function resolveGaeyuCategory({ raw, label, printedNumber, pageSection }) {
         }
         return 'essential_problem';
       }
-      return '';
+      // "참고" 캡슐처럼 다른 배지를 읽고도 개념확인이라 고른 경우만 버린다.
+      // 배지 필드를 통째로 빠뜨린 응답까지 버리면 지면의 개념확인이 흔적 없이
+      // 사라지므로(102쪽 사고) 모델 판단을 그대로 살린다.
+      if (badge && badge !== '개념확인') return '';
     }
   }
   // 필수 문제만 유형명 그룹을 가진다. 모델이 번호와 배지 필드를 모두 놓쳐도
@@ -636,6 +915,9 @@ function formatGaeyuNumber({ category, label, printedNumber, conceptCheckPage })
     const prefix = GAEYU_DESCRIPTIVE_NUMBER_PREFIX[label];
     if (prefix) return `${prefix}${Number.parseInt(digits[0], 10)}`;
     return printedNumber;
+  }
+  if (isGaeyuFollowUpNumber(printedNumber)) {
+    return normalizeGaeyuFollowUpNumber(printedNumber);
   }
   return printedNumber;
 }
@@ -730,6 +1012,13 @@ function normalizeDifficultyLabel(input) {
   if (/^(서술형)?연습(해보자)?\d*$/.test(compact)) return '서술형 연습';
   if (compact.includes('서술형') || compact.includes('논술')) return '서술형';
   if (compact === '대표문제') return '대표 문제';
+  // 수력충전 단원 마무리 평가 배지. ALLOWED_LABELS 는 띄어쓰기가 있는 표기라
+  // 여기서 되돌려 주지 않으면 배지를 읽고도 라벨이 통째로 버려진다.
+  // 교재에 따라 "조건 확인!" 처럼 느낌표가 붙어 인쇄된다.
+  const suryeokBadge = compact.replace(/[!！.]+$/, '');
+  if (suryeokBadge === '계산조심') return '계산 조심';
+  if (suryeokBadge === '생각더하기') return '생각 더하기';
+  if (suryeokBadge === '조건확인') return '조건 확인';
   if (compact === '교육청기출') return '교육청기출';
   // 개념원리 연습문제 하단 기출 구간 라벨. "수능 기출"/"수능기출" 등 표기 변형 흡수.
   if (/^수능기출$/.test(compact)) return '수능기출';
@@ -1118,6 +1407,107 @@ function synthesizeNumberBboxFromItemRegion(item, section) {
   const right = clamp01k(Math.min(xMax, xMin + width));
   if (left >= right || top >= bottom) return null;
   return [top, left, bottom, right];
+}
+
+// 수력충전은 번호가 문항 왼쪽 위 모서리에 붙고 본문 첫 줄이 번호와 같은 줄에서
+// 시작한다. 둘째 줄부터는 번호 아래까지 글이 내려오고, 문항 사이의 여백은 답을
+// 쓰는 공간이라 문항의 일부다. 모델은 번호 줄만 item_region 으로 주거나 번호
+// 오른쪽부터 잡아 주는 일이 잦아 본문이 잘리므로, 번호 bbox 로 세로 범위를
+// 다시 계산한다: 위는 번호 줄, 아래는 다음 번호 직전, 좌우는 단 전체.
+export function repairSuryeokItemRegions(result, series) {
+  if (series !== 'suryeok') return;
+  if (!result || result.page_kind === 'concept_page') return;
+  const items = Array.isArray(result.items) ? result.items : [];
+  const withBbox = items.filter((item) => Array.isArray(item.bbox));
+  if (withBbox.length === 0) return;
+
+  const columns = new Map();
+  for (const item of withBbox) {
+    const key =
+      item.column === 1 || item.column === 2 ? item.column : inferColumn(item.bbox);
+    if (!columns.has(key)) columns.set(key, []);
+    columns.get(key).push(item);
+  }
+  const columnMins = Array.from(columns.entries())
+    .map(([column, list]) => ({
+      column,
+      minX: Math.min(...list.map((entry) => entry.bbox[1])),
+    }))
+    .sort((a, b) => a.minX - b.minX);
+
+  const headers = Array.isArray(result.type_headers) ? result.type_headers : [];
+
+  let repaired = 0;
+  for (const list of columns.values()) {
+    list.sort((a, b) => a.bbox[0] - b.bbox[0]);
+    const left = clamp01k(
+      Math.max(0, Math.min(...list.map((entry) => entry.bbox[1])) - 6),
+    );
+    const nextColumn = columnMins.find((entry) => entry.minX > left + 40);
+    const right = clamp01k(nextColumn ? nextColumn.minX - 8 : 960);
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i];
+      if (item.__suryeokRegionRepaired) continue;
+      const bbox = item.bbox;
+      const prev = Array.isArray(item.item_region) ? item.item_region : null;
+      const nextItem = list[i + 1] || null;
+      const next = nextItem?.bbox || null;
+      const top = clamp01k(Math.max(0, bbox[0] - 6));
+      // 다음 문항 사이에 새 유형 머리말이 끼어 있으면 거기서 끊는다. 머리말
+      // 좌표를 못 받았을 때는 유형이 바뀌는 것만 보고, 모델이 잡아 준 아래끝을
+      // 그대로 써서 머리말을 삼키지 않게 한다.
+      const headerTop = headers
+        .filter(
+          (header) =>
+            Array.isArray(header.bbox) &&
+            header.bbox[0] > bbox[0] &&
+            header.bbox[3] > left &&
+            header.bbox[1] < right,
+        )
+        .map((header) => header.bbox[0])
+        .sort((a, b) => a - b)[0];
+      const startsNewType =
+        Boolean(nextItem) &&
+        contentGroupLabelOf(nextItem) !== '' &&
+        contentGroupLabelOf(nextItem) !== contentGroupLabelOf(item);
+      const tightBottom = Math.max(prev ? prev[2] + 24 : 0, bbox[2] + 90);
+      const bottom = clamp01k(
+        next
+          ? Math.max(
+              top + 24,
+              Math.min(
+                next[0] - 8,
+                headerTop != null ? headerTop - 8 : Infinity,
+                headerTop == null && startsNewType ? tightBottom : Infinity,
+              ),
+            )
+          : // 마지막 문항은 다음 번호가 없으니 쪽 아래 여백(머리·꼬리말 제외)까지
+            // 두되, 모델이 잡아 준 아래끝보다 지나치게 넓히지는 않는다.
+            Math.min(940, tightBottom),
+      );
+      if (bottom <= top + 12 || right <= left + 20) continue;
+      const region = [top, left, bottom, right];
+      // 좌표 보정 2차 판독 뒤 다시 불릴 수 있어, 이미 손본 문항은 건드리지
+      // 않는다(마지막 문항의 아래끝이 호출마다 늘어나는 것을 막는다).
+      Object.defineProperty(item, '__suryeokRegionRepaired', {
+        value: true,
+        enumerable: false,
+        configurable: true,
+      });
+      if (prev && prev.every((v, idx) => v === region[idx])) continue;
+      item.item_region = region;
+      repaired += 1;
+    }
+  }
+
+  if (repaired > 0) {
+    const suffix = `suryeok_item_region_repaired=${repaired}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+}
+
+function contentGroupLabelOf(item) {
+  return String(item?.content_group_label || item?.content_group?.label || '').trim();
 }
 
 function inferColumn(bbox) {

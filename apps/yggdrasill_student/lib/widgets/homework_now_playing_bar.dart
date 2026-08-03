@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -151,25 +152,13 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                       ),
                     ),
                     SizedBox(width: 2 * s),
-                    _IconButton(
-                      tooltip: running ? '일시정지' : '수행',
+                    _AnimatedPlayPauseButton(
+                      running: running,
+                      busy: busy,
                       size: 44 * s,
-                      onTap: busy ? null : onPlayPause,
-                      child: busy
-                          ? SizedBox(
-                              width: 22 * s,
-                              height: 22 * s,
-                              child: const CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                              ),
-                            )
-                          : Icon(
-                              running
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                              size: (inline ? 28.0 : 30.0) * s,
-                              color: titleColor,
-                            ),
+                      iconSize: (inline ? 28.0 : 30.0) * s,
+                      color: titleColor,
+                      onTap: onPlayPause,
                     ),
                     _IconButton(
                       tooltip: '제출',
@@ -182,6 +171,118 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 재생↔정지: 눌림 시 살짝 줄어든 뒤 아이콘이 크로스페이드로 바뀜 (스피너 없음).
+class _AnimatedPlayPauseButton extends StatefulWidget {
+  const _AnimatedPlayPauseButton({
+    required this.running,
+    required this.busy,
+    required this.size,
+    required this.iconSize,
+    required this.color,
+    required this.onTap,
+  });
+
+  final bool running;
+  final bool busy;
+  final double size;
+  final double iconSize;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  State<_AnimatedPlayPauseButton> createState() =>
+      _AnimatedPlayPauseButtonState();
+}
+
+class _AnimatedPlayPauseButtonState extends State<_AnimatedPlayPauseButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _press;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _press = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 110),
+      reverseDuration: const Duration(milliseconds: 160),
+    );
+    _scale = Tween<double>(begin: 1, end: 0.78).animate(
+      CurvedAnimation(
+        parent: _press,
+        curve: Curves.easeInCubic,
+        reverseCurve: Curves.easeOutBack,
+      ),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimatedPlayPauseButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 상태 반영(또는 busy 종료) 후 줄어든 상태에서 다시 커지며 아이콘 전환.
+    final settled = widget.running != oldWidget.running ||
+        (oldWidget.busy && !widget.busy);
+    if (settled && _press.isCompleted) {
+      _press.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _press.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleTap() async {
+    if (widget.busy) return;
+    await _press.forward();
+    if (!mounted) return;
+    widget.onTap();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.running ? '일시정지' : '수행',
+      child: InkWell(
+        onTap: widget.busy ? null : () => unawaited(_handleTap()),
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Center(
+            child: ScaleTransition(
+              scale: _scale,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, anim) {
+                  return FadeTransition(
+                    opacity: anim,
+                    child: ScaleTransition(
+                      scale: Tween<double>(begin: 0.72, end: 1).animate(anim),
+                      child: child,
+                    ),
+                  );
+                },
+                child: Icon(
+                  widget.running
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  key: ValueKey<bool>(widget.running),
+                  size: widget.iconSize,
+                  color: widget.color,
                 ),
               ),
             ),

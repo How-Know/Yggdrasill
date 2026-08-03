@@ -221,6 +221,10 @@ class _TextbookAuthoringStageDialogState
   static const _kInfo = Color(0xFF7AA9E6);
   static const _kWarn = Color(0xFFE6C07A);
 
+  /// 한 지면을 블록을 바꿔 가며 다시 물어볼 수 있는 최대 횟수.
+  /// 수력충전 "빠른 정답" 한 쪽에는 소단원 블록이 여덟 개까지 들어간다.
+  static const int _kStageWindowSweeps = 10;
+
   static const int _kVlmLongEdgePx = 1500;
   static const int _kAnswerImageLongEdgePx = 3000;
 
@@ -731,15 +735,13 @@ class _TextbookAuthoringStageDialogState
         .where(
             (c) => _answersByCropId[c.id]?.answerText.trim().isNotEmpty == true)
         .length;
-    final targetCrops = answerCrops
-        .where(
-            (c) => _answersByCropId[c.id]?.answerText.trim().isNotEmpty != true)
-        .toList();
     // 기대 문항은 **순서 배열**로 다룬다. 번호를 Map 키로 쓰면 코너마다
     // 번호가 1번부터 다시 시작하는 개념+유형에서 같은 "1" 끼리 서로를
     // 덮어쓴다(실제로 82개가 43개로 뭉개져 절반이 정답 없이 남았다).
+    // 저장된 문항도 목록에는 남겨 둔다. 일부만 재실행할 때 저장된 문항을
+    // 빼면 번호가 01로 되감기는 소단원 경계를 잃어 블록 구조가 무너진다.
     final targets = <_AnswerTarget>[
-      for (final c in targetCrops)
+      for (final c in answerCrops)
         if (c.problemNumber.isNotEmpty)
           _AnswerTarget(
             crop: c,
@@ -760,6 +762,15 @@ class _TextbookAuthoringStageDialogState
       });
       return;
     }
+    // 수력충전 답지·해설은 블록이 본문 차례대로 인쇄되고 번호가 블록마다
+    // 01부터 다시 시작한다. 남은 문항을 전부 보내면 모델이 블록을 헷갈리므로
+    // 아직 못 찾은 블록 앞쪽만 잘라 보낸다.
+    final blockIndexes = _stageBlockIndexes(
+      targets,
+      carryUnitReviewContinuation: widget.seriesKey == 'suryeok',
+    );
+    final windowedBatch = widget.seriesKey == 'suryeok';
+    final needsCorner = textbookAnswerNeedsCorner(widget.seriesKey);
     final totalPages = doc.pages.length;
     final pageRange = _pageRangeFromScopes(answer: true, pageCount: totalPages);
     final startPage = pageRange.start;
@@ -770,79 +781,153 @@ class _TextbookAuthoringStageDialogState
       'target=${targets.length} saved=$savedCount '
       'answerPages=$startPage..$endPage/$totalPages',
     );
-    final pending = <int>{for (var i = 0; i < targets.length; i += 1) i};
+    final pending = <int>{
+      for (var i = 0; i < targets.length; i += 1)
+        if (_answersByCropId[targets[i].crop.id]?.answerText.trim().isNotEmpty !=
+            true)
+          i,
+    };
+    if (pending.isEmpty) {
+      setState(() {
+        _runningAnswerVlm = false;
+        _answerStatus = '정답 VLM 생략 · 저장된 정답 $savedCount개';
+      });
+      return;
+    }
     final hits = <int, _AnswerHit>{};
     final detectedNumbers = <String>[];
     final pageErrors = <String>[];
 
     try {
-      for (var page = startPage; page <= endPage; page += 1) {
+      if (windowedBatch) {
+        // 소단원별 문항 수·번호는 이미 1단계 크롭에 있다. 모델은 빠른 정답
+        // 지면의 머리와 번호/답만 OCR하고, 어느 크롭인지는 앱이 1:1로 붙인다.
+        await _assignAnswersByLayout(
+          targets: targets,
+          blockIndexes: blockIndexes,
+          pending: pending,
+          hits: hits,
+          startPage: startPage,
+          endPage: endPage,
+          savedCount: savedCount,
+          pageErrors: pageErrors,
+        );
+      }
+      // 블록 하나씩 묻는 교재는 한 지면에 블록이 여럿 실려 있으므로 같은 지면을
+      // 블록을 바꿔 가며 여러 번 훑는다. 한 바퀴 동안 한 번도 안 잡힌 블록은
+      // 다음 바퀴에서 건너뛴다. 안 그러면 그 블록이 뒤 블록을 모두 막는다.
+      final skipBlocks = <int>{};
+      final passLimit = windowedBatch ? 0 : 1;
+      final sweepLimit = windowedBatch ? _kStageWindowSweeps : 1;
+      for (var pass = 0; pass < passLimit; pass += 1) {
         if (pending.isEmpty) break;
-        if (!mounted) return;
-        setState(() {
-          _answerStatus =
-              '답지 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
-        });
-        final Uint8List png;
-        try {
-          final rendered = await _answerPagePng(page);
-          if (rendered == null) {
-            pageErrors.add('p$page: 답지 페이지 렌더 결과 없음');
+        final pendingAtPassStart = pending.length;
+        final triedBlocks = <int>{};
+        final matchedBlocks = <int>{};
+        for (var page = startPage; page <= endPage; page += 1) {
+          if (pending.isEmpty) break;
+          if (!mounted) return;
+          setState(() {
+            _answerStatus =
+                '답지 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
+          });
+          final Uint8List png;
+          try {
+            final rendered = await _answerPagePng(page);
+            if (rendered == null) {
+              pageErrors.add('p$page: 답지 페이지 렌더 결과 없음');
+              continue;
+            }
+            png = rendered;
+          } catch (e) {
+            debugPrint('[stage2] render failed page=$page err=$e');
+            pageErrors.add('p$page: 렌더 실패 $e');
             continue;
           }
-          png = rendered;
-        } catch (e) {
-          debugPrint('[stage2] render failed page=$page err=$e');
-          pageErrors.add('p$page: 렌더 실패 $e');
-          continue;
-        }
-        try {
-          final order = pending.toList()..sort();
-          final batch = TextbookExpectedAnswerBatch(
-            positions: order,
-            entries: <TextbookExpectedAnswer>[
-              for (final position in order) targets[position].expected,
-            ],
-          );
-          final res = await _extractAnswersOnPage(
-            imageBytes: png,
-            page: page,
-            expectedNumbers: batch.numbers,
-            expectedDetails: batch.entries,
-          );
-          for (final it in res.items) {
-            if (it.answerText.trim().isEmpty) continue;
-            final matched = batch.resolve(
-              detectedNumber: it.problemNumber,
-              expectedIndex: it.expectedIndex,
+          for (var sweep = 0; sweep < sweepLimit; sweep += 1) {
+            if (pending.isEmpty) break;
+            final order = _stageBlockWindow(
+              targets: targets,
+              blockIndexes: blockIndexes,
+              pending: pending,
+              windowed: windowedBatch,
+              skipBlocks: skipBlocks,
             );
-            if (matched.isEmpty) continue;
-            detectedNumbers.add(it.problemNumber);
-            _ImageAnswerCrop? imageCrop;
-            if (it.isImage && it.bbox != null) {
-              imageCrop = await _cropAnswerImageFromPage(
-                    page: res.rawPage,
-                    bbox1k: it.bbox!,
-                  ) ??
-                  _cropAnswerImage(png, it.bbox!);
-            }
-            for (final position in matched) {
-              if (!pending.remove(position)) continue;
-              hits[position] = _AnswerHit(
-                item: it,
-                rawPage: res.rawPage,
-                imageCrop: imageCrop,
+            if (order.isEmpty) break;
+            final windowBlock = windowedBatch ? blockIndexes[order.first] : -1;
+            if (windowBlock >= 0) triedBlocks.add(windowBlock);
+            var matchedHere = 0;
+            try {
+              final batch = TextbookExpectedAnswerBatch(
+                positions: order,
+                entries: <TextbookExpectedAnswer>[
+                  for (final position in order) targets[position].expected,
+                ],
+                // 블록 하나만 담은 목록은 번호가 겹치지 않으므로 모델이 배지를
+                // 안 적어도 번호로 짝을 지어도 안전하다.
+                requireExpectedIndex: needsCorner && !windowedBatch,
               );
+              final res = await _extractAnswersOnPage(
+                imageBytes: png,
+                page: page,
+                expectedNumbers: batch.numbers,
+                expectedDetails: batch.entries,
+                skipBadges: windowedBatch
+                    ? _stageSkipBadges(
+                        targets: targets,
+                        blockIndexes: blockIndexes,
+                        order: order,
+                      )
+                    : null,
+              );
+              for (final it in res.items) {
+                if (it.answerText.trim().isEmpty) continue;
+                final matched = batch.resolve(
+                  detectedNumber: it.problemNumber,
+                  expectedIndex: it.expectedIndex,
+                );
+                if (matched.isEmpty) continue;
+                detectedNumbers.add(it.problemNumber);
+                _ImageAnswerCrop? imageCrop;
+                if (it.isImage && it.bbox != null) {
+                  imageCrop = await _cropAnswerImageFromPage(
+                        page: res.rawPage,
+                        bbox1k: it.bbox!,
+                      ) ??
+                      _cropAnswerImage(png, it.bbox!);
+                }
+                for (final position in matched) {
+                  if (!pending.remove(position)) continue;
+                  matchedHere += 1;
+                  hits[position] = _AnswerHit(
+                    item: it,
+                    rawPage: res.rawPage,
+                    imageCrop: imageCrop,
+                  );
+                }
+              }
+            } catch (e) {
+              debugPrint('[stage2] vlm failed page=$page err=$e');
+              pageErrors.add('p$page: VLM 실패 $e');
+              break;
             }
+            if (matchedHere > 0 && windowBlock >= 0) {
+              matchedBlocks.add(windowBlock);
+            }
+            if (!windowedBatch || matchedHere == 0) break;
           }
-        } catch (e) {
-          debugPrint('[stage2] vlm failed page=$page err=$e');
-          pageErrors.add('p$page: VLM 실패 $e');
+          if (!mounted) return;
+          setState(() {
+            _answerProgress = (page - startPage + 1) / scanTotal;
+          });
         }
-        if (!mounted) return;
-        setState(() {
-          _answerProgress = (page - startPage + 1) / scanTotal;
-        });
+        final stuck = triedBlocks.difference(matchedBlocks);
+        skipBlocks.addAll(stuck);
+        debugPrint(
+          '[stage2] pass=$pass matched=${pendingAtPassStart - pending.length} '
+          'pending=${pending.length} stuck=${stuck.length}',
+        );
+        if (pending.length == pendingAtPassStart && stuck.isEmpty) break;
       }
 
       if (hits.isEmpty) {
@@ -1145,11 +1230,160 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
+  /// 수력충전 빠른 정답을 소단원 구조로 1:1 연결한다.
+  ///
+  /// 모델은 소단원 머리와 초록색 번호/정답을 보이는 순서대로 OCR만 한다.
+  /// 머리의 본문 페이지 배지로 현재 소단원을 정하고, 같은 소단원의 같은 번호
+  /// 크롭에 앱이 직접 붙인다. 모델에게 매칭을 맡기지 않는다.
+  Future<void> _assignAnswersByLayout({
+    required List<_AnswerTarget> targets,
+    required List<int> blockIndexes,
+    required Set<int> pending,
+    required Map<int, _AnswerHit> hits,
+    required int startPage,
+    required int endPage,
+    required int savedCount,
+    required List<String> pageErrors,
+  }) async {
+    if (targets.isEmpty || blockIndexes.length != targets.length) return;
+
+    final lowPage = <int, int>{};
+    final highPage = <int, int>{};
+    final cornerOf = <int, String>{};
+    final byNumber = <int, Map<String, int>>{};
+    for (var i = 0; i < targets.length; i += 1) {
+      final block = blockIndexes[i];
+      final corner = targets[i].expected.corner.trim();
+      if ((cornerOf[block] ?? '').isEmpty && corner.isNotEmpty) {
+        cornerOf[block] = corner;
+      } else {
+        cornerOf.putIfAbsent(block, () => corner);
+      }
+      final bodyPage = targets[i].expected.bodyPage ?? 0;
+      if (bodyPage > 0) {
+        lowPage[block] = math.min(lowPage[block] ?? bodyPage, bodyPage);
+        highPage[block] = math.max(highPage[block] ?? bodyPage, bodyPage);
+      }
+      (byNumber[block] ??= <String, int>{}).putIfAbsent(
+        textbookAnswerNumberKey(targets[i].expected.number),
+        () => i,
+      );
+    }
+
+    int blockForHeader(TextbookVlmAnswerLayoutEntry header) {
+      if (header.title.replaceAll(' ', '').contains('단원마무리')) {
+        for (final entry in cornerOf.entries) {
+          if (entry.value.isNotEmpty) return entry.key;
+        }
+      }
+      if (header.pageStart <= 0) return -1;
+      final end =
+          header.pageEnd >= header.pageStart ? header.pageEnd : header.pageStart;
+      for (final block in lowPage.keys) {
+        if (header.pageStart <= highPage[block]! &&
+            end >= lowPage[block]!) {
+          return block;
+        }
+      }
+      return -1;
+    }
+
+    var currentBlock = -1;
+    for (var page = startPage; page <= endPage; page += 1) {
+      if (!mounted || pending.isEmpty) return;
+      setState(() {
+        _answerStatus =
+            '답지 $page / $endPage 구조 읽는 중… · 저장 $savedCount개 · 남은 ${pending.length}개';
+      });
+      final Uint8List png;
+      try {
+        final rendered = await _answerPagePng(page);
+        if (rendered == null) {
+          pageErrors.add('p$page: 답지 페이지 렌더 결과 없음');
+          currentBlock = -1;
+          continue;
+        }
+        png = rendered;
+      } catch (e) {
+        pageErrors.add('p$page: 렌더 실패 $e');
+        currentBlock = -1;
+        continue;
+      }
+
+      TextbookVlmAnswerLayoutPage layout;
+      try {
+        layout = await _answerService.extractAnswerLayoutOnPage(
+          imageBytes: png,
+          rawPage: page,
+        );
+      } catch (e) {
+        debugPrint('[stage2] layout read failed page=$page err=$e');
+        pageErrors.add('p$page: 정답 지면 읽기 실패 $e');
+        currentBlock = -1;
+        continue;
+      }
+
+      if (!layout.leadingContinuation) currentBlock = -1;
+      var matchedHere = 0;
+      var skippedHere = 0;
+      for (final entry in layout.entries) {
+        if (entry.isHeader) {
+          currentBlock = blockForHeader(entry);
+          continue;
+        }
+        final answer = entry.answer;
+        if (currentBlock < 0 || answer == null) {
+          skippedHere += 1;
+          continue;
+        }
+        final position = byNumber[currentBlock]?[
+            textbookAnswerNumberKey(answer.problemNumber)];
+        if (position == null || !pending.remove(position)) {
+          skippedHere += 1;
+          continue;
+        }
+
+        final matchedAnswer = TextbookVlmAnswerItem(
+          problemNumber: targets[position].expected.number,
+          kind: answer.kind,
+          answerText: answer.answerText,
+          answerLatex2d: answer.answerLatex2d,
+          answerAssets: answer.answerAssets,
+          bbox: answer.bbox,
+        );
+        _ImageAnswerCrop? imageCrop;
+        if (matchedAnswer.isImage && matchedAnswer.bbox != null) {
+          imageCrop = await _cropAnswerImageFromPage(
+                page: page,
+                bbox1k: matchedAnswer.bbox!,
+              ) ??
+              _cropAnswerImage(png, matchedAnswer.bbox!);
+        }
+        hits[position] = _AnswerHit(
+          item: matchedAnswer,
+          rawPage: page,
+          imageCrop: imageCrop,
+        );
+        matchedHere += 1;
+      }
+      debugPrint(
+        '[stage2] p$page entries=${layout.entries.length} '
+        'matched=$matchedHere skipped=$skippedHere '
+        'block=$currentBlock pending=${pending.length}',
+      );
+      if (!mounted) return;
+      setState(() {
+        _answerProgress = (page - startPage + 1) / (endPage - startPage + 1);
+      });
+    }
+  }
+
   Future<TextbookVlmAnswerPageResult> _extractAnswersOnPage({
     required Uint8List imageBytes,
     required int page,
     required List<String> expectedNumbers,
     List<TextbookExpectedAnswer>? expectedDetails,
+    List<String>? skipBadges,
   }) async {
     return _answerService.extractAnswersOnPage(
       imageBytes: imageBytes,
@@ -1159,6 +1393,7 @@ class _TextbookAuthoringStageDialogState
       gradeLabel: widget.gradeLabel,
       expectedNumbers: expectedNumbers,
       expectedDetails: expectedDetails,
+      skipBadges: skipBadges,
       seriesKey: widget.seriesKey.trim().toLowerCase(),
     );
   }
@@ -1249,11 +1484,149 @@ class _TextbookAuthoringStageDialogState
     return png;
   }
 
+  /// 해설 좌표를 **지면 구조로** 붙인다 (모델에게 매칭을 시키지 않는다).
+  ///
+  /// 소단원마다 문항 수와 차례는 이미 크롭에 저장돼 있고, 해설에는 소단원
+  /// 머리("11 사각형의 중점의 활용 ▶p.28")와 01, 02 … 번호가 순서대로 인쇄된다.
+  /// 그러니 모델에게는 "머리가 어디 있고 번호가 어디 있는지"만 묻고, 어느
+  /// 문항인지는 우리가 정한다. 머리를 지날 때마다 지금 읽는 소단원을 바꾸고,
+  /// 그 뒤에 나오는 번호를 그 소단원의 같은 번호 크롭에 붙이면 끝이다.
+  /// 배지 없이 시작하는 지면 첫머리는 앞 지면에서 이어진 소단원이다.
+  Future<void> _assignSolutionRefsByLayout({
+    required List<_AnswerTarget> targets,
+    required List<int> blockIndexes,
+    required Set<int> pending,
+    required Map<int, _SolutionRefWithPage> hits,
+    required int startPage,
+    required int endPage,
+    required int savedCount,
+    required List<String> pageErrors,
+  }) async {
+    if (targets.isEmpty || blockIndexes.length != targets.length) return;
+
+    // 소단원(블록)마다 본문 페이지 범위와, 번호 → 기대 문항 위치 표를 만든다.
+    final lowPage = <int, int>{};
+    final highPage = <int, int>{};
+    final cornerOf = <int, String>{};
+    final byNumber = <int, Map<String, int>>{};
+    String numberKey(String raw) {
+      final digits = raw.replaceAll(RegExp(r'\D'), '');
+      return digits.isEmpty ? raw.trim() : digits.replaceFirst(RegExp(r'^0+'), '');
+    }
+
+    for (var i = 0; i < targets.length; i += 1) {
+      final block = blockIndexes[i];
+      final corner = targets[i].expected.corner.trim();
+      if ((cornerOf[block] ?? '').isEmpty && corner.isNotEmpty) {
+        cornerOf[block] = corner;
+      } else {
+        cornerOf.putIfAbsent(block, () => corner);
+      }
+      final page = targets[i].expected.bodyPage ?? 0;
+      if (page > 0) {
+        lowPage[block] = math.min(lowPage[block] ?? page, page);
+        highPage[block] = math.max(highPage[block] ?? page, page);
+      }
+      (byNumber[block] ??= <String, int>{})
+          .putIfAbsent(numberKey(targets[i].expected.number), () => i);
+    }
+
+    int blockForHeader(TextbookVlmSolutionPageEntry head) {
+      // 단원 마무리 평가는 배지 대신 이름이 고정이라 이름으로도 가려진다.
+      if (head.title.replaceAll(' ', '').contains('단원마무리')) {
+        for (final entry in cornerOf.entries) {
+          if (entry.value.isNotEmpty) return entry.key;
+        }
+      }
+      if (head.pageStart <= 0) return -1;
+      final end = head.pageEnd >= head.pageStart ? head.pageEnd : head.pageStart;
+      for (final block in lowPage.keys) {
+        if (head.pageStart <= highPage[block]! && end >= lowPage[block]!) {
+          return block;
+        }
+      }
+      return -1;
+    }
+
+    var current = -1;
+    for (var page = startPage; page <= endPage; page += 1) {
+      if (!mounted) return;
+      setState(() {
+        _solRefStatus =
+            '해설 $page / $endPage 지면 읽는 중… · 저장 $savedCount개 · 남은 ${pending.length}개';
+      });
+      final Uint8List png;
+      try {
+        final rendered = await _solutionPagePng(page);
+        if (rendered == null) {
+          pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
+          continue;
+        }
+        png = rendered;
+      } catch (e) {
+        pageErrors.add('p$page: 렌더 실패 $e');
+        continue;
+      }
+      TextbookVlmSolutionBlockPage res;
+      try {
+        res = await _solRefService.detectBlocksOnPage(
+          imageBytes: png,
+          rawPage: page,
+        );
+      } catch (e) {
+        debugPrint('[stage3] layout read failed page=$page err=$e');
+        pageErrors.add('p$page: 지면 읽기 실패 $e');
+        // 이 지면을 못 읽었으면 이어지던 소단원도 끊어진 것으로 본다.
+        current = -1;
+        continue;
+      }
+      // 첫머리에 머리가 없으면 앞 지면에서 이어진다. 머리로 시작하면 거기서부터.
+      if (!res.leadingContinuation) current = -1;
+      var matchedHere = 0;
+      var skipped = 0;
+      for (final entry in res.sequence) {
+        if (entry.isHeader) {
+          current = blockForHeader(entry);
+          continue;
+        }
+        final region = entry.numberRegion1k;
+        if (current < 0 || region == null) {
+          skipped += 1;
+          continue;
+        }
+        final position = byNumber[current]?[numberKey(entry.text)];
+        if (position == null || !pending.remove(position)) {
+          skipped += 1;
+          continue;
+        }
+        hits[position] = _SolutionRefWithPage(
+          item: TextbookVlmSolutionRefItem(
+            problemNumber: targets[position].expected.number,
+            numberRegion1k: region,
+            contentRegion1k: entry.contentRegion1k,
+          ),
+          rawPage: page,
+          displayPage: page,
+        );
+        matchedHere += 1;
+      }
+      debugPrint(
+        '[stage3] p$page 번호=${res.sequence.where((e) => !e.isHeader).length} '
+        '매칭=$matchedHere 건너뜀=$skipped 현재블록=$current 남은=${pending.length}',
+      );
+      if (!mounted) return;
+      setState(() {
+        _solRefProgress = (page - startPage + 1) / (endPage - startPage + 1);
+      });
+    }
+  }
+
   Future<TextbookVlmSolutionRefPageResult> _detectSolutionRefsOnPage({
     required Uint8List imageBytes,
     required int page,
     required List<String> expectedNumbers,
     List<TextbookExpectedAnswer>? expectedDetails,
+    List<String>? skipBadges,
   }) async {
     return _solRefService.detectOnPage(
       imageBytes: imageBytes,
@@ -1263,6 +1636,7 @@ class _TextbookAuthoringStageDialogState
       gradeLabel: widget.gradeLabel,
       expectedNumbers: expectedNumbers,
       expectedDetails: expectedDetails,
+      skipBadges: skipBadges,
       seriesKey: widget.seriesKey.trim().toLowerCase(),
     );
   }
@@ -1324,6 +1698,12 @@ class _TextbookAuthoringStageDialogState
       });
       return;
     }
+    final blockIndexes = _stageBlockIndexes(
+      targets,
+      carryUnitReviewContinuation: widget.seriesKey == 'suryeok',
+    );
+    final windowedBatch = widget.seriesKey == 'suryeok';
+    final needsCorner = textbookAnswerNeedsCorner(widget.seriesKey);
     final totalPages = doc.pages.length;
     final pageRange =
         _pageRangeFromScopes(answer: false, pageCount: totalPages);
@@ -1340,141 +1720,201 @@ class _TextbookAuthoringStageDialogState
     final pageErrors = <String>[];
 
     try {
-      for (var page = startPage; page <= endPage; page += 1) {
+      if (windowedBatch) {
+        // 소단원 경계와 번호 위치만 읽고, 짝은 **우리가** 짓는다. 소단원마다
+        // 문항 수와 차례를 이미 알고 있으므로 모델에게 매칭을 시킬 이유가 없다.
+        await _assignSolutionRefsByLayout(
+          targets: targets,
+          blockIndexes: blockIndexes,
+          pending: pending,
+          hits: hits,
+          startPage: startPage,
+          endPage: endPage,
+          savedCount: savedCount,
+          pageErrors: pageErrors,
+        );
+      }
+      // 그 밖의 시리즈는 예전대로 남은 문항을 지면마다 함께 물어본다.
+      final skipBlocks = <int>{};
+      final passLimit = windowedBatch ? 0 : 1;
+      const sweepLimit = 1;
+      for (var pass = 0; pass < passLimit; pass += 1) {
         if (pending.isEmpty) break;
-        if (!mounted) return;
-        setState(() {
-          _solRefStatus =
-              '해설 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
-        });
-        final Uint8List png;
-        try {
-          final rendered = await _solutionPagePng(page);
-          if (rendered == null) {
-            pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
+        final pendingAtPassStart = pending.length;
+        final triedBlocks = <int>{};
+        final matchedBlocks = <int>{};
+        for (var page = startPage; page <= endPage; page += 1) {
+          if (pending.isEmpty) break;
+          if (!mounted) return;
+          setState(() {
+            _solRefStatus =
+                '해설 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
+          });
+          final Uint8List png;
+          try {
+            final rendered = await _solutionPagePng(page);
+            if (rendered == null) {
+              pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
+              continue;
+            }
+            png = rendered;
+          } catch (e) {
+            debugPrint('[stage3] render failed page=$page err=$e');
+            pageErrors.add('p$page: 렌더 실패 $e');
             continue;
           }
-          png = rendered;
-        } catch (e) {
-          debugPrint('[stage3] render failed page=$page err=$e');
-          pageErrors.add('p$page: 렌더 실패 $e');
-          continue;
-        }
-        try {
-          final order = pending.toList()..sort();
-          final batch = TextbookExpectedAnswerBatch(
-            positions: order,
-            entries: <TextbookExpectedAnswer>[
-              for (final position in order) targets[position].expected,
-            ],
-          );
-          final res = await _detectSolutionRefsOnPage(
-            imageBytes: png,
-            page: page,
-            expectedNumbers: batch.numbers,
-            expectedDetails: batch.entries,
-          );
-          String itemSection(TextbookVlmSolutionRefItem item) {
-            final index = item.expectedIndex;
-            if (index >= 0 && index < order.length) {
-              return targets[order[index]].crop.section;
-            }
-            return RegExp(r'^(예제|유제|연습)').hasMatch(item.problemNumber)
-                ? 'descriptive'
-                : '';
-          }
+          for (var sweep = 0; sweep < sweepLimit; sweep += 1) {
+            if (pending.isEmpty) break;
+            final order = _stageBlockWindow(
+              targets: targets,
+              blockIndexes: blockIndexes,
+              pending: pending,
+              windowed: windowedBatch,
+              skipBlocks: skipBlocks,
+            );
+            if (order.isEmpty) continue;
+            final windowBlock = windowedBatch ? blockIndexes[order.first] : -1;
+            if (windowBlock >= 0) triedBlocks.add(windowBlock);
+            final pendingBefore = pending.length;
+            try {
+              final batch = TextbookExpectedAnswerBatch(
+                positions: order,
+                entries: <TextbookExpectedAnswer>[
+                  for (final position in order) targets[position].expected,
+                ],
+                requireExpectedIndex: needsCorner && !windowedBatch,
+              );
+              final res = await _detectSolutionRefsOnPage(
+                imageBytes: png,
+                page: page,
+                expectedNumbers: batch.numbers,
+                expectedDetails: batch.entries,
+                skipBadges: windowedBatch
+                    ? _stageSkipBadges(
+                        targets: targets,
+                        blockIndexes: blockIndexes,
+                        order: order,
+                      )
+                    : null,
+              );
+              String itemSection(TextbookVlmSolutionRefItem item) {
+                final index = item.expectedIndex;
+                if (index >= 0 && index < order.length) {
+                  return targets[order[index]].crop.section;
+                }
+                return RegExp(r'^(예제|유제|연습)').hasMatch(item.problemNumber)
+                    ? 'descriptive'
+                    : '';
+              }
 
-          final sections = <String>{
-            for (final position in order) targets[position].crop.section,
-          };
-          final reported = <(String, String)>[
-            for (final item in res.items)
-              (item.problemNumber.trim(), itemSection(item)),
-          ];
-          final sectionsToVerify = <String>{};
-          if (widget.seriesKey == 'gaeyu' && sections.length > 1) {
-            // 같은 페이지에서 쏙쏙 1~4 다음 탄탄 정답표와 1~9 풀이가
-            // 시작되면 혼합 호출은 앞 코너 번호만 반환할 때가 있다. 반환 번호와
-            // 겹치는 다른 코너가 남아 있으면 그 코너 전체를 단독 재검증한다.
-            for (final position in order) {
-              final target = targets[position];
-              // 모델은 우리가 보낸 기대 번호(쏙쏙은 인쇄된 로컬 번호)를
-              // 돌려주므로, 크롭에 저장된 접두어 번호와 비교하면 안 된다.
-              final number = target.expected.number.trim();
-              if (reported.any((one) =>
-                  one.$1 == number &&
-                  one.$2.isNotEmpty &&
-                  one.$2 != target.crop.section)) {
-                sectionsToVerify.add(target.crop.section);
+              final sections = <String>{
+                for (final position in order) targets[position].crop.section,
+              };
+              final reported = <(String, String)>[
+                for (final item in res.items)
+                  (item.problemNumber.trim(), itemSection(item)),
+              ];
+              final sectionsToVerify = <String>{};
+              if (widget.seriesKey == 'gaeyu' && sections.length > 1) {
+                // 같은 페이지에서 쏙쏙 1~4 다음 탄탄 정답표와 1~9 풀이가
+                // 시작되면 혼합 호출은 앞 코너 번호만 반환할 때가 있다. 반환
+                // 번호와 겹치는 다른 코너가 남아 있으면 그 코너를 단독 재검증한다.
+                for (final position in order) {
+                  final target = targets[position];
+                  // 모델은 우리가 보낸 기대 번호(쏙쏙은 인쇄된 로컬 번호)를
+                  // 돌려주므로, 크롭에 저장된 접두어 번호와 비교하면 안 된다.
+                  final number = target.expected.number.trim();
+                  if (reported.any((one) =>
+                      one.$1 == number &&
+                      one.$2.isNotEmpty &&
+                      one.$2 != target.crop.section)) {
+                    sectionsToVerify.add(target.crop.section);
+                  }
+                }
+                // 상세 풀이 뒤에 다음 코너의 정답표만 붙은 경우를 걸러낸다.
+                // 쓱쓱은 단독 호출에서도 실제 풀이가 보여야만 채택한다.
+                if (reported.any((one) => one.$2 == 'descriptive')) {
+                  sectionsToVerify.add('descriptive');
+                }
               }
-            }
-            // 상세 풀이 뒤에 다음 코너의 정답표만 붙은 경우를 걸러낸다.
-            // 쓱쓱은 단독 호출에서도 실제 풀이가 보여야만 채택한다.
-            if (reported.any((one) => one.$2 == 'descriptive')) {
-              sectionsToVerify.add('descriptive');
-            }
-          }
-          final pageItems = sectionsToVerify.isNotEmpty
-              ? res.items.where(
-                  (item) => !sectionsToVerify.contains(itemSection(item)))
-              : res.items;
-          for (final it in pageItems) {
-            final matched = batch.resolve(
-              detectedNumber: it.problemNumber,
-              expectedIndex: it.expectedIndex,
-            );
-            for (final position in matched) {
-              if (!pending.remove(position)) continue;
-              hits[position] = _SolutionRefWithPage(
-                item: it,
-                rawPage: res.rawPage,
-                displayPage: res.displayPage,
-              );
-            }
-          }
-          for (final section in sectionsToVerify) {
-            final sectionOrder = <int>[
-              for (final position in order)
-                if (pending.contains(position) &&
-                    targets[position].crop.section == section)
-                  position,
-            ];
-            if (sectionOrder.isEmpty) continue;
-            final sectionBatch = TextbookExpectedAnswerBatch(
-              positions: sectionOrder,
-              entries: <TextbookExpectedAnswer>[
-                for (final position in sectionOrder) targets[position].expected,
-              ],
-            );
-            final verified = await _detectSolutionRefsOnPage(
-              imageBytes: png,
-              page: page,
-              expectedNumbers: sectionBatch.numbers,
-              expectedDetails: sectionBatch.entries,
-            );
-            for (final it in verified.items) {
-              final matched = sectionBatch.resolve(
-                detectedNumber: it.problemNumber,
-                expectedIndex: it.expectedIndex,
-              );
-              for (final position in matched) {
-                if (!pending.remove(position)) continue;
-                hits[position] = _SolutionRefWithPage(
-                  item: it,
-                  rawPage: verified.rawPage,
-                  displayPage: verified.displayPage,
+              final pageItems = sectionsToVerify.isNotEmpty
+                  ? res.items.where(
+                      (item) => !sectionsToVerify.contains(itemSection(item)))
+                  : res.items;
+              for (final it in pageItems) {
+                final matched = batch.resolve(
+                  detectedNumber: it.problemNumber,
+                  expectedIndex: it.expectedIndex,
                 );
+                for (final position in matched) {
+                  if (!pending.remove(position)) continue;
+                  hits[position] = _SolutionRefWithPage(
+                    item: it,
+                    rawPage: res.rawPage,
+                    displayPage: res.displayPage,
+                  );
+                }
               }
+              for (final section in sectionsToVerify) {
+                final sectionOrder = <int>[
+                  for (final position in order)
+                    if (pending.contains(position) &&
+                        targets[position].crop.section == section)
+                      position,
+                ];
+                if (sectionOrder.isEmpty) continue;
+                final sectionBatch = TextbookExpectedAnswerBatch(
+                  positions: sectionOrder,
+                  entries: <TextbookExpectedAnswer>[
+                    for (final position in sectionOrder)
+                      targets[position].expected,
+                  ],
+                  requireExpectedIndex: needsCorner && !windowedBatch,
+                );
+                final verified = await _detectSolutionRefsOnPage(
+                  imageBytes: png,
+                  page: page,
+                  expectedNumbers: sectionBatch.numbers,
+                  expectedDetails: sectionBatch.entries,
+                );
+                for (final it in verified.items) {
+                  final matched = sectionBatch.resolve(
+                    detectedNumber: it.problemNumber,
+                    expectedIndex: it.expectedIndex,
+                  );
+                  for (final position in matched) {
+                    if (!pending.remove(position)) continue;
+                    hits[position] = _SolutionRefWithPage(
+                      item: it,
+                      rawPage: verified.rawPage,
+                      displayPage: verified.displayPage,
+                    );
+                  }
+                }
+              }
+            } catch (e) {
+              debugPrint('[stage3] vlm failed page=$page err=$e');
+              pageErrors.add('p$page: VLM 실패 $e');
+              break;
             }
+            final matchedHere = pendingBefore - pending.length;
+            if (matchedHere > 0 && windowBlock >= 0) {
+              matchedBlocks.add(windowBlock);
+            }
+            if (matchedHere == 0) break;
           }
-        } catch (e) {
-          debugPrint('[stage3] vlm failed page=$page err=$e');
-          pageErrors.add('p$page: VLM 실패 $e');
+          if (!mounted) return;
+          setState(() {
+            _solRefProgress = (page - startPage + 1) / scanTotal;
+          });
         }
-        if (!mounted) return;
-        setState(() {
-          _solRefProgress = (page - startPage + 1) / scanTotal;
-        });
+        final stuck = triedBlocks.difference(matchedBlocks);
+        skipBlocks.addAll(stuck);
+        debugPrint(
+          '[stage3] pass=$pass matched=${pendingAtPassStart - pending.length} '
+          'pending=${pending.length} stuck=${stuck.length}',
+        );
+        if (pending.length == pendingAtPassStart && stuck.isEmpty) break;
       }
 
       if (hits.isEmpty) {
@@ -3131,6 +3571,128 @@ class _TextbookAuthoringStageDialogState
     }
     Navigator.of(context).maybePop();
   }
+}
+
+/// 기대 문항을 답지·해설의 "블록" 단위로 끊는다.
+///
+/// 블록은 답지에서 번호가 01부터 다시 시작하는 묶음(소단원 하나 또는 단원
+/// 마무리 평가)이다. 목록은 책 차례대로 오므로, 코너가 바뀌거나 번호가
+/// 앞으로 되돌아가는 지점이 곧 블록 경계다.
+List<int> _stageBlockIndexes(
+  List<_AnswerTarget> targets, {
+  bool carryUnitReviewContinuation = false,
+}) {
+  final out = List<int>.filled(targets.length, -1);
+  final order = <int>[for (var i = 0; i < targets.length; i += 1) i];
+  if (carryUnitReviewContinuation) {
+    // 활성 슬롯은 A들을 먼저, B(단원 마무리)를 마지막에 싣는다. 기존 오분류
+    // 데이터의 마무리 연속 지면이 A로 남아 있으면 배열 순서가 p.63(A 33~40)
+    // → p.59(B 01~32)로 뒤집힌다. 본문 페이지 순으로 다시 세워야 실제 책
+    // 차례와 소단원 경계를 복원할 수 있다.
+    order.sort((a, b) {
+      final ap = targets[a].expected.bodyPage ?? 0;
+      final bp = targets[b].expected.bodyPage ?? 0;
+      final byPage = ap.compareTo(bp);
+      return byPage != 0 ? byPage : a.compareTo(b);
+    });
+  }
+  var block = -1;
+  var lastCorner = '\u0000';
+  var lastValue = 0;
+  for (final position in order) {
+    final target = targets[position];
+    final corner = target.expected.corner.trim();
+    final digits = target.expected.number.replaceAll(RegExp(r'\D'), '');
+    final value = int.tryParse(digits) ?? 0;
+    // 수력충전 단원 마무리 평가가 다음 본문 지면까지 이어지는데 그 지면이
+    // 일반 A 슬롯으로 잘못 저장된 기존 데이터가 있다. 번호가 32 → 33처럼
+    // 계속 증가하면 코너 값이 B → A로 바뀌어도 같은 마무리 블록이다.
+    final continuesUnitReview =
+        carryUnitReviewContinuation &&
+        lastCorner.isNotEmpty &&
+        corner.isEmpty &&
+        value > lastValue;
+    if (block < 0 ||
+        (corner != lastCorner && !continuesUnitReview) ||
+        value <= lastValue) {
+      block += 1;
+    }
+    out[position] = block;
+    lastCorner = corner;
+    lastValue = value;
+  }
+  return out;
+}
+
+/// 이번 호출에 물어볼 기대 문항의 위치 목록 — **블록 하나**.
+///
+/// 수력충전 답지·해설은 소단원 블록마다 번호가 01부터 다시 시작한다. 여러
+/// 블록을 함께 보내면 같은 "02" 가 목록에 여러 번 들어가고, 모델이 블록 머리
+/// 배지를 안 적어 주면 그 "02" 가 어느 소단원 것인지 가릴 방법이 없다. 실제로
+/// 그렇게 매긴 정답 5쌍·해설 좌표 8쌍이 다른 소단원 것으로 들어갔다.
+///
+/// 그래서 한 번에 블록 하나만 묻는다. 목록 안에서 번호가 겹치지 않으니 모델이
+/// 배지를 안 적어도 번호만으로 짝이 정해진다. [skipBlocks] 는 한 바퀴를 다
+/// 돌도록 한 번도 안 잡힌 블록으로, 뒤 블록이 막히지 않게 건너뛴다.
+List<int> _stageBlockWindow({
+  required List<_AnswerTarget> targets,
+  required List<int> blockIndexes,
+  required Set<int> pending,
+  required bool windowed,
+  Set<int> skipBlocks = const <int>{},
+}) {
+  final order = pending.toList()..sort();
+  if (!windowed || order.isEmpty || blockIndexes.length != targets.length) {
+    return order;
+  }
+  var block = -1;
+  for (final position in order) {
+    if (skipBlocks.contains(blockIndexes[position])) continue;
+    block = blockIndexes[position];
+    break;
+  }
+  if (block < 0) block = blockIndexes[order.first];
+  return <int>[
+    for (final position in order)
+      if (blockIndexes[position] == block) position,
+  ];
+}
+
+/// 창보다 앞선 블록의 배지 목록("p.10~11").
+///
+/// 모델은 상세표가 뒤쪽 블록만 가리켜도 지면 맨 위 블록부터 읽어 올린다. 이미
+/// 지나온 블록의 배지를 함께 알려 줘야 그 아래부터 읽는다.
+List<String> _stageSkipBadges({
+  required List<_AnswerTarget> targets,
+  required List<int> blockIndexes,
+  required List<int> order,
+}) {
+  if (order.isEmpty || blockIndexes.length != targets.length) {
+    return const <String>[];
+  }
+  final windowStart = blockIndexes[order.first];
+  if (windowStart <= 0) return const <String>[];
+  final pagesByBlock = <int, List<int>>{};
+  final cornerByBlock = <int, String>{};
+  for (var i = 0; i < targets.length; i += 1) {
+    final block = blockIndexes[i];
+    if (block >= windowStart) break;
+    final page = targets[i].expected.bodyPage;
+    if (page != null && page > 0) (pagesByBlock[block] ??= <int>[]).add(page);
+    cornerByBlock[block] ??= targets[i].expected.corner.trim();
+  }
+  final blocks = pagesByBlock.keys.toList()..sort();
+  final out = <String>[];
+  for (final block in blocks) {
+    final pages = pagesByBlock[block]!..sort();
+    final first = pages.first;
+    final last = pages.last;
+    final badge = first == last ? 'p.$first' : 'p.$first~$last';
+    final corner = cornerByBlock[block] ?? '';
+    out.add(corner.isEmpty ? badge : '$corner $badge');
+  }
+  // 앞쪽이 길어지면 프롬프트만 늘어난다. 바로 앞 블록 몇 개면 충분하다.
+  return out.length <= 8 ? out : out.sublist(out.length - 8);
 }
 
 /// 정답·해설을 아직 못 채운 크롭 하나와, 그 크롭을 답지에서 특정하기 위한

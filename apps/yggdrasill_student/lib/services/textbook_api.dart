@@ -592,6 +592,8 @@ class StudentTextbook {
     required this.gradedCount,
     required this.correctCount,
     required this.completedCount,
+    required this.firstWrongCount,
+    required this.correctedCount,
     required this.stageProgress,
     this.lastRawPage,
     this.lastDisplayPage,
@@ -610,11 +612,33 @@ class StudentTextbook {
   final int gradedCount;
   final int correctCount;
   final int completedCount;
+  /// 최초 시도가 틀린 문항 수.
+  final int firstWrongCount;
+  /// 최초 오답 후 현재 정답인 문항 수.
+  final int correctedCount;
   final Map<String, TextbookStageProgress> stageProgress;
   final int? lastRawPage;
   final int? lastDisplayPage;
   final DateTime? lastActivity;
   final DateTime? startedAt;
+
+  /// 진행률 = 풀이 문항 / 전체.
+  double get advanceRate =>
+      totalProblems <= 0 ? 0 : gradedCount / totalProblems;
+
+  /// 완료율 = 완료(현재 정답·수정 완료) / 전체.
+  double get completionRate =>
+      totalProblems <= 0 ? 0 : completedCount / totalProblems;
+
+  /// 정답률 = 최초 시도 정답 / 풀이 문항. 없으면 null.
+  int? get accuracyPercent => gradedCount <= 0
+      ? null
+      : ((correctCount * 100) / gradedCount).round();
+
+  /// 수정률 = 최초 오답 중 이후 정답 / 최초 오답. 없으면 null.
+  int? get revisionPercent => firstWrongCount <= 0
+      ? null
+      : ((correctedCount * 100) / firstWrongCount).round();
 
   static StudentTextbook fromRow(
     Map<String, dynamic> row, {
@@ -641,7 +665,9 @@ class StudentTextbook {
       totalProblems: (row['total_problems'] as num?)?.toInt() ?? 0,
       gradedCount: (row['graded_count'] as num?)?.toInt() ?? 0,
       correctCount: (row['correct_count'] as num?)?.toInt() ?? 0,
-      completedCount: (row['correct_count'] as num?)?.toInt() ?? 0,
+      completedCount: (row['completed_count'] as num?)?.toInt() ?? 0,
+      firstWrongCount: (row['first_wrong_count'] as num?)?.toInt() ?? 0,
+      correctedCount: (row['corrected_count'] as num?)?.toInt() ?? 0,
       stageProgress: stages,
       lastRawPage: (row['last_raw_page'] as num?)?.toInt(),
       lastDisplayPage: (row['last_display_page'] as num?)?.toInt(),
@@ -666,7 +692,8 @@ class TextbookStageProgress {
   final int correct;
   final int completed;
 
-  double get progress => total <= 0 ? 0 : correct / total;
+  /// 스테이지 진행률 = 완료(수정 허용) / 전체.
+  double get progress => total <= 0 ? 0 : completed / total;
 
   static TextbookStageProgress fromMap(Map<String, dynamic> map) {
     return TextbookStageProgress(

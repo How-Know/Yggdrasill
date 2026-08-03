@@ -50,6 +50,9 @@ void fw_publish_pause_all();
 void fw_publish_raise_question();
 void fw_publish_create_descriptive_writing(void);
 void fw_publish_check_update();
+void fw_watchdog_pause();
+void fw_watchdog_resume();
+void fw_mark_ui_stage(uint32_t stage);
 void fw_publish_list_today();
 void fw_publish_list_homeworks(const char* studentIdArg);
 

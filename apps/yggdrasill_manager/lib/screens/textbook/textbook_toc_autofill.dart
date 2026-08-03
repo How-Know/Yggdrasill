@@ -77,6 +77,28 @@ bool _isConceptPlusUnitEndName(String name) {
   return false;
 }
 
+/// 수력충전 목차/트리에서 단원명이 아니라 문제 라벨인 항목들.
+const Set<String> kSuryeokCategoryLabels = <String>{
+  '유형',
+  '개념 체크',
+  '개념체크',
+  '계산 조심',
+  '계산조심',
+  '생각 더하기',
+  '생각더하기',
+  '조건 확인',
+  '조건확인',
+  '개념 찾아보기',
+  '개념찾아보기',
+};
+
+/// 수력충전 중단원 끝의 마무리 행인지.
+///
+/// 목차에는 "• 단원 마무리 평가" 한 줄로 인쇄된다. 앞의 글머리표나 "평가" 누락
+/// 같은 판독 흔들림을 흡수하려고 "단원 마무리" 로만 판정한다.
+bool _isSuryeokUnitEndName(String name) =>
+    name.replaceAll(RegExp(r'\s+'), '').contains('단원마무리');
+
 /// 목차 트리를 만들 때 쓰는 시리즈별 규칙.
 @immutable
 class TocAutofillSeriesRules {
@@ -102,6 +124,13 @@ class TocAutofillSeriesRules {
 }
 
 TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
+  if (seriesKey.trim().toLowerCase() == 'suryeok') {
+    return TocAutofillSeriesRules(
+      categoryLabels: kSuryeokCategoryLabels,
+      unitEndRowName: '단원 마무리 평가',
+      isUnitEndName: _isSuryeokUnitEndName,
+    );
+  }
   if (seriesKey.trim().toLowerCase() == 'gaeyu') {
     return TocAutofillSeriesRules(
       categoryLabels: kConceptPlusCategoryLabels,

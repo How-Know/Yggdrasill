@@ -2,13 +2,16 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_api.dart';
+import '../services/student_avatar_recent_photos.dart';
 import '../services/student_avatar_session.dart';
 import '../widgets/student_avatar_view.dart';
 import '../widgets/student_status_island.dart';
+import 'avatar_circle_crop_screen.dart';
 
 /// 프로필 사진 편집 — 전체 화면. 상태 아일랜드는 호스트 오버레이로 상단 유지.
 class ProfileAvatarEditScreen extends StatefulWidget {
@@ -20,28 +23,28 @@ class ProfileAvatarEditScreen extends StatefulWidget {
   final String studentName;
 
   static Future<void> open(BuildContext context, {required String studentName}) {
+    // 과제 상세 시트와 동일: 아래에서 위로 슬라이드.
+    const duration = Duration(milliseconds: 420);
     return Navigator.of(context, rootNavigator: true).push<void>(
       PageRouteBuilder<void>(
-        transitionDuration: const Duration(milliseconds: 320),
-        reverseTransitionDuration: const Duration(milliseconds: 280),
+        opaque: true,
+        transitionDuration: duration,
+        reverseTransitionDuration: duration,
         pageBuilder: (context, animation, secondaryAnimation) {
           return ProfileAvatarEditScreen(studentName: studentName);
         },
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           final curve = CurvedAnimation(
             parent: animation,
-            curve: Curves.easeOutCubic,
-            reverseCurve: Curves.easeInCubic,
+            curve: Curves.easeInOutCubic,
+            reverseCurve: Curves.easeInOutCubic,
           );
-          return FadeTransition(
-            opacity: curve,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0, 0.04),
-                end: Offset.zero,
-              ).animate(curve),
-              child: child,
-            ),
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 1),
+              end: Offset.zero,
+            ).animate(curve),
+            child: child,
           );
         },
       ),
@@ -62,6 +65,7 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
   bool _photoDirty = false;
   bool _picking = false;
   bool _saving = false;
+  List<Uint8List> _recentPhotos = const [];
 
   @override
   void initState() {
@@ -72,10 +76,49 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
     _monogramStyle = s.monogramStyleIndex;
     _photoBytes = s.photoBytes;
     _photoUrl = s.photoUrl;
+    _loadRecentPhotos();
   }
 
   String get _name =>
       widget.studentName.trim().isEmpty ? '학생' : widget.studentName.trim();
+
+  Future<void> _loadRecentPhotos() async {
+    var list = await StudentAvatarRecentPhotos.instance.load();
+    final current = _photoBytes;
+    if (current != null &&
+        current.isNotEmpty &&
+        !list.any((b) => StudentAvatarRecentPhotos.sameBytes(b, current))) {
+      list = await StudentAvatarRecentPhotos.instance.push(current);
+    }
+    if (!mounted) return;
+    setState(() => _recentPhotos = list);
+  }
+
+  Future<void> _applyCroppedPhoto(Uint8List cropped) async {
+    final recent = await StudentAvatarRecentPhotos.instance.push(cropped);
+    if (!mounted) return;
+    setState(() {
+      _kind = StudentAvatarKind.photo;
+      _photoBytes = cropped;
+      _photoUrl = null;
+      _photoDirty = true;
+      _recentPhotos = recent;
+    });
+  }
+
+  void _selectRecentPhoto(Uint8List bytes) {
+    setState(() {
+      _kind = StudentAvatarKind.photo;
+      _photoBytes = bytes;
+      _photoUrl = null;
+      _photoDirty = true;
+    });
+  }
+
+  bool _isSelectedPhoto(Uint8List bytes) {
+    if (_kind != StudentAvatarKind.photo || _photoBytes == null) return false;
+    return StudentAvatarRecentPhotos.sameBytes(_photoBytes!, bytes);
+  }
 
   Future<void> _pickPhoto() async {
     if (_picking) return;
@@ -83,18 +126,19 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
     try {
       final file = await ImagePicker().pickImage(
         source: ImageSource.gallery,
-        maxWidth: 1200,
-        maxHeight: 1200,
-        imageQuality: 90,
+        maxWidth: 4096,
+        maxHeight: 4096,
+        imageQuality: 95,
       );
       if (file == null || !mounted) return;
       final bytes = await file.readAsBytes();
-      setState(() {
-        _kind = StudentAvatarKind.photo;
-        _photoBytes = bytes;
-        _photoUrl = null;
-        _photoDirty = true;
-      });
+      if (!mounted) return;
+      final cropped = await AvatarCircleCropScreen.open(
+        context,
+        imageBytes: bytes,
+      );
+      if (cropped == null || !mounted) return;
+      await _applyCroppedPhoto(cropped);
     } catch (_) {
       if (!mounted) return;
       TopGlassSnackBar.show(
@@ -196,17 +240,16 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
         }
         return StudentAvatarView(name: _name, radius: radius);
       case StudentAvatarKind.emoji:
-        final bg = StudentAvatarSession.sampleEmojis
-            .where((e) => e.$1 == _emoji)
-            .map((e) => e.$2)
-            .firstOrNull;
+        final fluent = StudentAvatarSession.fluentOptionFor(_emoji);
+        final bg = StudentAvatarSession.emojiBackground(_emoji) ??
+            const Color(0xFF3A3A3C);
         return Container(
           width: size,
           height: size,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: bg ?? const Color(0xFF3A3A3C),
+            color: bg,
             boxShadow: const [
               BoxShadow(
                 color: Color(0x33000000),
@@ -215,10 +258,17 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
               ),
             ],
           ),
-          child: Text(
-            _emoji,
-            style: TextStyle(fontSize: radius * 1.08, height: 1.1),
-          ),
+          child: fluent != null
+              ? SvgPicture.asset(
+                  fluent.asset,
+                  width: radius * 1.35,
+                  height: radius * 1.35,
+                  fit: BoxFit.contain,
+                )
+              : Text(
+                  _emoji,
+                  style: TextStyle(fontSize: radius * 1.08, height: 1.1),
+                ),
         );
       case StudentAvatarKind.monogram:
         final colors = StudentAvatarSession.monogramStyles[_monogramStyle];
@@ -383,34 +433,34 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
                                 ),
                           fill: sectionSlot,
                         ),
-                        if (_photoBytes != null) ...[
+                        for (var i = 0;
+                            i < StudentAvatarRecentPhotos.maxCount;
+                            i++) ...[
                           const SizedBox(width: 12),
-                          _CircleChoice(
-                            selected: _kind == StudentAvatarKind.photo,
-                            onTap: () => setState(
-                              () => _kind = StudentAvatarKind.photo,
-                            ),
-                            fill: sectionSlot,
-                            child: ClipOval(
-                              child: Image.memory(
-                                _photoBytes!,
-                                width: 68,
-                                height: 68,
-                                fit: BoxFit.cover,
+                          if (i < _recentPhotos.length)
+                            _CircleChoice(
+                              selected: _isSelectedPhoto(_recentPhotos[i]),
+                              onTap: () =>
+                                  _selectRecentPhoto(_recentPhotos[i]),
+                              fill: sectionSlot,
+                              child: ClipOval(
+                                child: Image.memory(
+                                  _recentPhotos[i],
+                                  width: 68,
+                                  height: 68,
+                                  fit: BoxFit.cover,
+                                ),
                               ),
+                            )
+                          else
+                            _CircleChoice(
+                              selected: false,
+                              onTap: null,
+                              fill: isDark
+                                  ? const Color(0xFF2C2C2E)
+                                  : const Color(0xFFE8E8ED),
+                              child: const SizedBox.shrink(),
                             ),
-                          ),
-                        ],
-                        for (var i = 0; i < 3; i++) ...[
-                          const SizedBox(width: 12),
-                          _CircleChoice(
-                            selected: false,
-                            onTap: null,
-                            fill: isDark
-                                ? const Color(0xFF2C2C2E)
-                                : const Color(0xFFE8E8ED),
-                            child: const SizedBox.shrink(),
-                          ),
                         ],
                       ],
                     ),
@@ -455,8 +505,6 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 28),
-                  _SectionHeader(title: '모노그램', color: text, sub: sub),
                   const SizedBox(height: 12),
                   SizedBox(
                     height: 76,
@@ -464,42 +512,96 @@ class _ProfileAvatarEditScreenState extends State<ProfileAvatarEditScreen> {
                       scrollDirection: Axis.horizontal,
                       children: [
                         for (var i = 0;
-                            i < StudentAvatarSession.monogramStyles.length;
+                            i < StudentAvatarSession.fluentEmojis.length;
                             i++) ...[
                           if (i > 0) const SizedBox(width: 12),
-                          _CircleChoice(
-                            selected: _kind == StudentAvatarKind.monogram &&
-                                _monogramStyle == i,
-                            onTap: () => setState(() {
-                              _kind = StudentAvatarKind.monogram;
-                              _monogramStyle = i;
-                            }),
-                            fill: Colors.transparent,
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors:
-                                  StudentAvatarSession.monogramStyles[i],
-                            ),
-                            child: Text(
-                              StudentAvatarSession.monogramLabel(_name),
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.4,
-                                shadows: const [
-                                  Shadow(
-                                    color: Color(0x40000000),
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                            ),
+                          Builder(
+                            builder: (context) {
+                              final item =
+                                  StudentAvatarSession.fluentEmojis[i];
+                              final selected = _kind ==
+                                      StudentAvatarKind.emoji &&
+                                  _emoji == item.storageValue;
+                              return _CircleChoice(
+                                selected: selected,
+                                onTap: () => setState(() {
+                                  _kind = StudentAvatarKind.emoji;
+                                  _emoji = item.storageValue;
+                                }),
+                                fill: item.background,
+                                child: SvgPicture.asset(
+                                  item.asset,
+                                  width: 40,
+                                  height: 40,
+                                  fit: BoxFit.contain,
+                                ),
+                              );
+                            },
                           ),
                         ],
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 28),
+                  _SectionHeader(title: '모노그램', color: text, sub: sub),
+                  const SizedBox(height: 12),
+                  Builder(
+                    builder: (context) {
+                      final styles = StudentAvatarSession.monogramStyles;
+                      final mid = (styles.length + 1) ~/ 2;
+                      Widget row(int from, int to) {
+                        return SizedBox(
+                          height: 76,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: to - from,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(width: 12),
+                            itemBuilder: (context, local) {
+                              final i = from + local;
+                              return _CircleChoice(
+                                selected:
+                                    _kind == StudentAvatarKind.monogram &&
+                                        _monogramStyle == i,
+                                onTap: () => setState(() {
+                                  _kind = StudentAvatarKind.monogram;
+                                  _monogramStyle = i;
+                                }),
+                                fill: Colors.transparent,
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: styles[i],
+                                ),
+                                child: Text(
+                                  StudentAvatarSession.monogramLabel(_name),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.4,
+                                    shadows: const [
+                                      Shadow(
+                                        color: Color(0x40000000),
+                                        blurRadius: 4,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        );
+                      }
+
+                      return Column(
+                        children: [
+                          row(0, mid),
+                          const SizedBox(height: 12),
+                          row(mid, styles.length),
+                        ],
+                      );
+                    },
                   ),
                 ],
               ),

@@ -21,6 +21,9 @@ dependencies:
   google_mlkit_digital_ink_recognition: ^0.15.0
   flutter_math_fork: ^0.7.4
   image_picker: ^1.2.3
+  flutter_svg: ^2.0.9
+  image: ^4.8.0
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:
@@ -32,6 +35,7 @@ flutter:
 
   assets:
     - assets/branding/academy_logo.png
+    - assets/emoji/fluent/
 
   # SPM+CocoaPods 하이브리드에서 Pods_Runner 링크 실패 버그가 있어
   # 이 앱은 CocoaPods만 사용한다.
@@ -55,3 +59,11 @@ flutter:
           weight: 700
         - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
           weight: 800
+    - family: Pretendard
+      fonts:
+        - asset: assets/fonts/pretendard/Pretendard-Regular.otf
+          weight: 400
+        - asset: assets/fonts/pretendard/Pretendard-SemiBold.otf
+          weight: 600
+        - asset: assets/fonts/pretendard/Pretendard-Bold.otf
+          weight: 700

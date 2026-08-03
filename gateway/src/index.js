@@ -33,6 +33,10 @@ const GW_STALE_ACTIVITY_WINDOW_MS = Number.parseInt(process.env.GW_STALE_ACTIVIT
 const GW_RECOVERY_COOLDOWN_MS = Number.parseInt(process.env.GW_RECOVERY_COOLDOWN_MS ?? '60000', 10);
 const M5_FULL_RESYNC_DELAY_MS = Number.parseInt(process.env.M5_FULL_RESYNC_DELAY_MS ?? '1500', 10);
 const M5_FULL_RESYNC_COOLDOWN_MS = Number.parseInt(process.env.M5_FULL_RESYNC_COOLDOWN_MS ?? '30000', 10);
+// 학생 수가 LVGL 정지의 촉발 조건인지 확인하기 위한 단일 기기 A/B 테스트.
+// 다른 M5의 등원 목록은 그대로 유지한다.
+const M5_STUDENT_LIST_TEST_DEVICE_ID = 'm5-device-013';
+const M5_STUDENT_LIST_TEST_LIMIT = 20;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE || !MQTT_URL) {
   console.error('[gateway] Missing envs');
@@ -403,6 +407,11 @@ async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source
 
 // Publish today's student list to a single device, excluding students that are
 // actively bound to OTHER devices (matches the historic list_today filter).
+function studentsForDevice(students, device_id) {
+  if (device_id !== M5_STUDENT_LIST_TEST_DEVICE_ID) return students;
+  return students.slice(0, M5_STUDENT_LIST_TEST_LIMIT);
+}
+
 async function publishStudentsTodayToDevice(academy_id, device_id, source = 'list') {
   const { data, error } = await supa.rpc('m5_get_students_today_basic', { p_academy_id: academy_id });
   if (error) { console.error('[gateway] students_today error', { source, error }); return 0; }
@@ -416,9 +425,17 @@ async function publishStudentsTodayToDevice(academy_id, device_id, source = 'lis
     (binds || []).filter(b => b.device_id !== device_id).map(b => b.student_id)
   );
   const filtered = (data || []).filter(s => !boundToOther.has(s.student_id));
-  console.log('[gateway][list_today] result', { source, device_id, rpcTotal: (data || []).length, boundToOther: boundToOther.size, sent: filtered.length });
-  publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
-  return filtered.length;
+  const sentStudents = studentsForDevice(filtered, device_id);
+  console.log('[gateway][list_today] result', {
+    source,
+    device_id,
+    rpcTotal: (data || []).length,
+    boundToOther: boundToOther.size,
+    available: filtered.length,
+    sent: sentStudents.length
+  });
+  publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: sentStudents }), { qos: 1, retain: false });
+  return sentStudents.length;
 }
 
 // After any bind/unbind, push a fresh student list to every UNBOUND online device
@@ -440,8 +457,8 @@ async function republishStudentListToUnboundDevices(academy_id, source = 'rebind
     const targets = (devicesRes.data || [])
       .map(d => d.device_id)
       .filter(id => id && !boundDevices.has(id));
-    const payload = JSON.stringify({ students: filtered });
     for (const device_id of targets) {
+      const payload = JSON.stringify({ students: studentsForDevice(filtered, device_id) });
       publish(`academies/${academy_id}/devices/${device_id}/students_today`, payload, { qos: 1, retain: false });
     }
     console.log('[gateway][list-resync] republished', { source, targets: targets.length, students: filtered.length });

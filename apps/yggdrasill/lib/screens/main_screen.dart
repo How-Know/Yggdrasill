@@ -4062,85 +4062,96 @@ class _MainScreenState extends State<MainScreen>
                                                                   bottom:
                                                                       sideSheetPad,
                                                                 ),
-                                                                child: ListView(
-                                                                  controller:
-                                                                      _waitingScrollCtrl,
-                                                                  padding:
-                                                                      EdgeInsets
-                                                                          .zero,
-                                                                  children: [
-                                                                    for (final t
-                                                                        in (<DateTime>{
-                                                                      ...waitingByTime
-                                                                          .keys,
-                                                                      ...trialWaitingByTime
-                                                                          .keys,
-                                                                    }.toList()
-                                                                          ..sort(
-                                                                            (a, b) =>
-                                                                                a.compareTo(b),
-                                                                          ))) ...[
-                                                                      Padding(
-                                                                        padding:
-                                                                            const EdgeInsets.only(
-                                                                          bottom:
-                                                                              12.0,
-                                                                        ),
-                                                                        child:
-                                                                            Center(
+                                                                child:
+                                                                    ScrollConfiguration(
+                                                                  behavior:
+                                                                      ScrollConfiguration.of(
+                                                                    context,
+                                                                  ).copyWith(
+                                                                    scrollbars:
+                                                                        false,
+                                                                  ),
+                                                                  child:
+                                                                      ListView(
+                                                                    controller:
+                                                                        _waitingScrollCtrl,
+                                                                    padding:
+                                                                        EdgeInsets
+                                                                            .zero,
+                                                                    children: [
+                                                                      for (final t
+                                                                          in (<DateTime>{
+                                                                        ...waitingByTime
+                                                                            .keys,
+                                                                        ...trialWaitingByTime
+                                                                            .keys,
+                                                                      }.toList()
+                                                                            ..sort(
+                                                                              (a, b) =>
+                                                                                  a.compareTo(b),
+                                                                            ))) ...[
+                                                                        Padding(
+                                                                          padding:
+                                                                              const EdgeInsets.only(
+                                                                            bottom:
+                                                                                12.0,
+                                                                          ),
                                                                           child:
-                                                                              Text(
-                                                                            _formatTime(t),
-                                                                            style:
-                                                                                TextStyle(
-                                                                              color: sideSheetPalette.labelUnselected,
-                                                                              fontSize: 14 * sideSheetScale,
-                                                                              fontWeight: FontWeight.bold,
+                                                                              Center(
+                                                                            child:
+                                                                                Text(
+                                                                              _formatTime(t),
+                                                                              style:
+                                                                                  TextStyle(
+                                                                                color: sideSheetPalette.labelUnselected,
+                                                                                fontSize: 14 * sideSheetScale,
+                                                                                fontWeight: FontWeight.bold,
+                                                                              ),
                                                                             ),
                                                                           ),
                                                                         ),
-                                                                      ),
-                                                                      Center(
-                                                                        child:
-                                                                            Wrap(
-                                                                          alignment:
-                                                                              WrapAlignment.center,
-                                                                          spacing:
-                                                                              _sideSheetWaitingCardSpacing * sideSheetScale,
-                                                                          runSpacing:
-                                                                              _sideSheetWaitingCardSpacing * sideSheetScale,
-                                                                          children: [
-                                                                            for (final w
-                                                                                in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
-                                                                              _buildAttendanceCard(
-                                                                                w,
-                                                                                status: 'waiting',
-                                                                                key: ValueKey(
-                                                                                  'waiting_${w.setId}',
+                                                                        Center(
+                                                                          child:
+                                                                              Wrap(
+                                                                            alignment:
+                                                                                WrapAlignment.center,
+                                                                            spacing:
+                                                                                _sideSheetWaitingCardSpacing * sideSheetScale,
+                                                                            runSpacing:
+                                                                                _sideSheetWaitingCardSpacing * sideSheetScale,
+                                                                            children: [
+                                                                              for (final w
+                                                                                  in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
+                                                                                _buildAttendanceCard(
+                                                                                  w,
+                                                                                  status: 'waiting',
+                                                                                  key: ValueKey(
+                                                                                    'waiting_${w.setId}',
+                                                                                  ),
+                                                                                  scale: sideSheetScale,
+                                                                                  arrival: arrivalBySet[w.setId],
+                                                                                  departure: departureBySet[w.setId],
                                                                                 ),
-                                                                                scale: sideSheetScale,
-                                                                                arrival: arrivalBySet[w.setId],
-                                                                                departure: departureBySet[w.setId],
-                                                                              ),
-                                                                            for (final s
-                                                                                in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
-                                                                              _buildTrialLessonAttendanceCard(
-                                                                                s,
-                                                                                status: 'waiting',
-                                                                                key: ValueKey(
-                                                                                  'trial_waiting_${s.id}',
+                                                                              for (final s
+                                                                                  in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
+                                                                                _buildTrialLessonAttendanceCard(
+                                                                                  s,
+                                                                                  status: 'waiting',
+                                                                                  key: ValueKey(
+                                                                                    'trial_waiting_${s.id}',
+                                                                                  ),
+                                                                                  scale: sideSheetScale,
                                                                                 ),
-                                                                                scale: sideSheetScale,
-                                                                              ),
-                                                                          ],
+                                                                            ],
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      SizedBox(
-                                                                        height: 12 *
-                                                                            sideSheetScale,
-                                                                      ),
+                                                                        SizedBox(
+                                                                          height: 12 *
+                                                                              sideSheetScale,
+                                                                        ),
+                                                                      ],
                                                                     ],
-                                                                  ],
+                                                                  ),
                                                                 ),
                                                               ),
                                                             ),

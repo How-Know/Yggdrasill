@@ -204,12 +204,10 @@ class _BookCardState extends State<_BookCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final book = widget.book;
-    final progress = book.totalProblems == 0
-        ? 0.0
-        : book.completedCount / book.totalProblems;
-    final accuracy = book.gradedCount == 0
-        ? null
-        : (book.correctCount / book.gradedCount * 100).round();
+    // 진행률(회색) ≥ 완료율(초록) 시각 보장.
+    final advance = book.advanceRate.clamp(0.0, 1.0);
+    final completion = book.completionRate.clamp(0.0, advance);
+    final accuracy = book.accuracyPercent;
     final coverUri = Uri.tryParse(book.coverRef);
     final hasNetworkCover = coverUri != null &&
         (coverUri.scheme == 'http' || coverUri.scheme == 'https');
@@ -272,7 +270,10 @@ class _BookCardState extends State<_BookCard> {
                         left: 12,
                         right: 12,
                         bottom: 12,
-                        child: _CoverProgressOverlay(progress: progress),
+                        child: _CoverProgressOverlay(
+                          advance: advance,
+                          completion: completion,
+                        ),
                       ),
                     ],
                   ),
@@ -318,12 +319,21 @@ class _BookCardState extends State<_BookCard> {
                     const SizedBox(height: 6),
                     Row(
                       children: [
-                        Text(
-                          accuracy == null ? '정답률 -' : '정답률 $accuracy%',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            fontSize: 14.5,
-                            color: theme.hintColor,
-                            fontWeight: FontWeight.w600,
+                        Text.rich(
+                          TextSpan(
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: 14.5,
+                              color: theme.hintColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            children: [
+                              const TextSpan(text: '정답률 '),
+                              TextSpan(
+                                text: accuracy == null ? '-' : '$accuracy%',
+                                // 카카오 폰트 숫자(9·3) 사이가 넓어 보이는 보정.
+                                style: const TextStyle(letterSpacing: -1.0),
+                              ),
+                            ],
                           ),
                         ),
                         const Spacer(),
@@ -349,7 +359,7 @@ class _BookCardState extends State<_BookCard> {
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: _expanded
-              ? _BookDetailSheet(book: book, progress: progress)
+              ? _BookDetailSheet(book: book, completion: completion)
               : const SizedBox(width: double.infinity),
         ),
       ],
@@ -463,16 +473,16 @@ class _DaysSinceStartBadge extends StatelessWidget {
   }
 }
 
-String _completionEstimateLabel(StudentTextbook book, double progress) {
-  if (progress >= 1) return '완주 완료';
+String _completionEstimateLabel(StudentTextbook book, double completion) {
+  if (completion >= 1) return '완주 완료';
   final startedAt = book.startedAt;
-  if (startedAt == null || book.correctCount < 5 || progress <= 0) {
+  if (startedAt == null || book.correctCount < 5 || completion <= 0) {
     return '예상 약 6개월';
   }
 
   final elapsedDays =
       math.max(1, DateTime.now().difference(startedAt).inDays + 1);
-  final observedTotalDays = elapsedDays / progress;
+  final observedTotalDays = elapsedDays / completion;
   final evidenceWeight = (book.correctCount / 30).clamp(0.0, 1.0);
   final estimatedDays =
       (180 * (1 - evidenceWeight) + observedTotalDays * evidenceWeight)
@@ -487,58 +497,120 @@ String _completionEstimateLabel(StudentTextbook book, double progress) {
   return '예상 ${months.toStringAsFixed(1)}개월 · $comparison';
 }
 
-/// 메타 아래 펼침 — 예상 개월수 + A/B/C 진행률.
+/// 메타 아래 펼침 — 4지표 + 예상 개월수 + A/B/C.
 class _BookDetailSheet extends StatelessWidget {
   const _BookDetailSheet({
     required this.book,
-    required this.progress,
+    required this.completion,
   });
 
   final StudentTextbook book;
-  final double progress;
+  final double completion;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final advancePct = (book.advanceRate * 100).round();
+    final completionPct = (book.completionRate * 100).round();
+    final accuracy =
+        book.accuracyPercent == null ? '-' : '${book.accuracyPercent}%';
+    final revision =
+        book.revisionPercent == null ? '-' : '${book.revisionPercent}%';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _RateChip(label: '진행률', value: '$advancePct%'),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _RateChip(label: '완료율', value: '$completionPct%'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _RateChip(label: '정답률', value: accuracy),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _RateChip(label: '수정률', value: revision),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _completionEstimateLabel(book, completion),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              fontSize: 13.5,
+            ),
+          ),
+          if (book.series == 'ssen') ...[
+            const SizedBox(height: 10),
+            for (final stage in const ['A', 'B', 'C']) ...[
+              _SheetProgressRow(
+                label: stage,
+                advance: () {
+                  final s = book.stageProgress[stage];
+                  if (s == null || s.total <= 0) return 0.0;
+                  return (s.graded / s.total).clamp(0.0, 1.0);
+                }(),
+                completion: book.stageProgress[stage]?.progress ?? 0,
+              ),
+              if (stage != 'C') const SizedBox(height: 6),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RateChip extends StatelessWidget {
+  const _RateChip({required this.label, required this.value});
+
+  final String label;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.07)
-              : Colors.black.withValues(alpha: 0.045),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.08)
-                : Colors.black.withValues(alpha: 0.06),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.08)
+            : Colors.black.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text.rich(
+        TextSpan(
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: theme.hintColor,
           ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                _completionEstimateLabel(book, progress),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13.5,
-                ),
+          children: [
+            TextSpan(text: '$label '),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: theme.colorScheme.onSurface,
+                letterSpacing: -1.0,
               ),
-              if (book.series == 'ssen') ...[
-                const SizedBox(height: 10),
-                for (final stage in const ['A', 'B', 'C']) ...[
-                  _SheetProgressRow(
-                    label: stage,
-                    value: book.stageProgress[stage]?.progress ?? 0,
-                  ),
-                  if (stage != 'C') const SizedBox(height: 6),
-                ],
-              ],
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -546,9 +618,13 @@ class _BookDetailSheet extends StatelessWidget {
 }
 
 class _CoverProgressOverlay extends StatelessWidget {
-  const _CoverProgressOverlay({required this.progress});
+  const _CoverProgressOverlay({
+    required this.advance,
+    required this.completion,
+  });
 
-  final double progress;
+  final double advance;
+  final double completion;
 
   @override
   Widget build(BuildContext context) {
@@ -559,21 +635,32 @@ class _CoverProgressOverlay extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
-        child: _OverlayProgressRow(label: '전체', value: progress),
+        child: _OverlayProgressRow(
+          label: '완료',
+          advance: advance,
+          completion: completion,
+        ),
       ),
     );
   }
 }
 
 class _SheetProgressRow extends StatelessWidget {
-  const _SheetProgressRow({required this.label, required this.value});
+  const _SheetProgressRow({
+    required this.label,
+    required this.advance,
+    required this.completion,
+  });
 
   final String label;
-  final double value;
+  final double advance;
+  final double completion;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final a = advance.clamp(0.0, 1.0);
+    final c = completion.clamp(0.0, a);
     return Row(
       children: [
         SizedBox(
@@ -587,27 +674,29 @@ class _SheetProgressRow extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: value.clamp(0, 1),
-              minHeight: 6,
-              backgroundColor: theme.brightness == Brightness.dark
-                  ? Colors.white12
-                  : Colors.black12,
-              color: YggGlassTokens.confirmActionColor,
-            ),
+          child: _LayeredProgressBar(
+            advance: a,
+            completion: c,
+            height: 6,
+            trackColor: theme.brightness == Brightness.dark
+                ? Colors.white12
+                : Colors.black12,
+            advanceColor: theme.brightness == Brightness.dark
+                ? Colors.white38
+                : Colors.black26,
+            completionColor: YggGlassTokens.confirmActionColor,
           ),
         ),
         const SizedBox(width: 8),
         SizedBox(
           width: 36,
           child: Text(
-            '${(value * 100).round()}%',
+            '${(c * 100).round()}%',
             textAlign: TextAlign.right,
             style: theme.textTheme.bodySmall?.copyWith(
               fontWeight: FontWeight.w700,
               fontSize: 12,
+              letterSpacing: -0.8,
             ),
           ),
         ),
@@ -617,13 +706,20 @@ class _SheetProgressRow extends StatelessWidget {
 }
 
 class _OverlayProgressRow extends StatelessWidget {
-  const _OverlayProgressRow({required this.label, required this.value});
+  const _OverlayProgressRow({
+    required this.label,
+    required this.advance,
+    required this.completion,
+  });
 
   final String label;
-  final double value;
+  final double advance;
+  final double completion;
 
   @override
   Widget build(BuildContext context) {
+    final a = advance.clamp(0.0, 1.0);
+    final c = completion.clamp(0.0, a);
     return Row(
       children: [
         SizedBox(
@@ -638,30 +734,75 @@ class _OverlayProgressRow extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: value.clamp(0, 1),
-              minHeight: 5,
-              backgroundColor: Colors.white24,
-              color: YggGlassTokens.confirmActionColor,
-            ),
+          child: _LayeredProgressBar(
+            advance: a,
+            completion: c,
+            height: 5,
+            trackColor: Colors.white24,
+            advanceColor: const Color(0x99FFFFFF),
+            completionColor: YggGlassTokens.confirmActionColor,
           ),
         ),
         const SizedBox(width: 8),
         SizedBox(
           width: 34,
           child: Text(
-            '${(value * 100).round()}%',
+            '${(c * 100).round()}%',
             textAlign: TextAlign.right,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 11,
               fontWeight: FontWeight.w700,
+              letterSpacing: -0.8,
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 회색(진행률) 위에 초록(완료율)을 겹친 바.
+class _LayeredProgressBar extends StatelessWidget {
+  const _LayeredProgressBar({
+    required this.advance,
+    required this.completion,
+    required this.height,
+    required this.trackColor,
+    required this.advanceColor,
+    required this.completionColor,
+  });
+
+  final double advance;
+  final double completion;
+  final double height;
+  final Color trackColor;
+  final Color advanceColor;
+  final Color completionColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: SizedBox(
+        height: height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ColoredBox(color: trackColor),
+            FractionallySizedBox(
+              widthFactor: advance.clamp(0.0, 1.0),
+              alignment: Alignment.centerLeft,
+              child: ColoredBox(color: advanceColor),
+            ),
+            FractionallySizedBox(
+              widthFactor: completion.clamp(0.0, 1.0),
+              alignment: Alignment.centerLeft,
+              child: ColoredBox(color: completionColor),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

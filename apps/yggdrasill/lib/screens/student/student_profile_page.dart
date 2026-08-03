@@ -154,7 +154,12 @@ class _StudentProfileHeader extends StatelessWidget {
                     ),
                     const SizedBox(width: 16),
                     Text(
-                      student.name,
+                      () {
+                        final nick = (student.nickname ?? '').trim();
+                        return nick.isEmpty
+                            ? student.name
+                            : '${student.name} - $nick';
+                      }(),
                       style: const TextStyle(
                         color: Color(0xFFEAF2F2),
                         fontSize: 32,

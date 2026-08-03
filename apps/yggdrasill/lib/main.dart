@@ -45,6 +45,7 @@ import 'app_overlays.dart';
 import 'screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'screens/learning/past_exam_papers_dialog.dart';
 import 'widgets/top_glass_snack_bar.dart';
+import 'widgets/textbook_download_progress_banner.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus =
@@ -1239,6 +1240,9 @@ class _MyAppState extends State<MyApp>
                     builder: (ctx) => child ?? const SizedBox.shrink()),
                 OverlayEntry(
                     builder: (ctx) => const _GlobalMemoFloatingBanners()),
+                OverlayEntry(
+                    builder: (ctx) =>
+                        const GlobalTextbookDownloadProgressBanner()),
                 // FAB 드롭다운 전용 레이어(플로팅 메모보다 위, 오른쪽 사이드시트보다 아래)
                 OverlayEntry(
                   builder: (ctx) => Positioned.fill(

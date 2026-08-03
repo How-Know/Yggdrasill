@@ -345,13 +345,17 @@ async function upsertRecord(
 ) {
   const { data: existing } = await admin
     .from('student_textbook_answer_records')
-    .select('id, attempt_count, first_correct_at')
+    .select('id, attempt_count, first_correct_at, first_attempt_correct')
     .eq('student_id', args.studentId)
     .eq('crop_id', args.cropId)
     .maybeSingle();
 
   const firstCorrectAt = existing?.first_correct_at ??
     (args.correct ? new Date().toISOString() : null);
+  // 최초 시도 정답 여부는 첫 기록 때만 세팅하고 이후 수정해도 고정.
+  const firstAttemptCorrect = existing == null
+    ? args.correct
+    : (existing.first_attempt_correct === true);
 
   const row: Record<string, unknown> = {
     academy_id: args.academyId,
@@ -363,6 +367,7 @@ async function upsertRecord(
     is_correct: args.correct,
     attempt_count: (existing?.attempt_count ?? 0) + 1,
     first_correct_at: firstCorrectAt,
+    first_attempt_correct: firstAttemptCorrect,
     graded_by: args.gradedBy,
     flags: args.flags,
     updated_at: new Date().toISOString(),

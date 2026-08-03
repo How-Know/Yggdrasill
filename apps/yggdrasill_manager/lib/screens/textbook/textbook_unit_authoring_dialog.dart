@@ -204,15 +204,50 @@ class _TextbookUnitAuthoringDialogState
   /// "10-1", "15-1" 처럼 구분한다 (정답 파일도 P.10 / P.15 로 나눠 인쇄된다).
   static const Set<String> _kGaeyuBlockScopedKeys = {'C', 'F'};
 
-  Map<String, String> get _conceptSubKeyByCategory =>
-      _seriesKey == 'gaeyu' ? _kGaeyuSubKeyByCategory : _kWonriSubKeyByCategory;
-  Map<String, String> get _conceptCategoryBySubKey =>
-      _seriesKey == 'gaeyu' ? _kGaeyuCategoryBySubKey : _kWonriCategoryBySubKey;
-  Map<String, String> get _conceptCategoryShortNames => _seriesKey == 'gaeyu'
-      ? _kGaeyuCategoryShortNames
-      : _kWonriCategoryShortNames;
-  Set<String> get _conceptPerSubUnitKeys =>
-      _seriesKey == 'gaeyu' ? _kGaeyuPerSubUnitKeys : _kWonriPerSubUnitKeys;
+  // ── 수력충전(suryeok) 단일 패스 ──────────────────────────────────────
+  //
+  // 소단원 행 하나가 통째로 한 코너다. 개념 체크는 유형 문제와 번호열을
+  // 공유하므로(27번 다음이 개념 체크 28번) 슬롯을 나누지 않고 같은 A 에 담고
+  // 문항이름으로만 구분한다. 슬롯을 쪼개면 정답 파일의 한 줄짜리 번호열이
+  // 두 스코프로 갈려 매칭이 어긋난다.
+  static const Map<String, String> _kSuryeokSubKeyByCategory = {
+    'type_problem': 'A', // 유형 문제
+    'concept_check': 'A', // 개념 체크 (같은 번호열)
+    'unit_review': 'B', // 단원 마무리 평가
+  };
+  static const Map<String, String> _kSuryeokCategoryBySubKey = {
+    'A': 'type_problem',
+    'B': 'unit_review',
+  };
+  static const Map<String, String> _kSuryeokCategoryShortNames = {
+    'type_problem': '유형 문제',
+    'concept_check': '개념 체크',
+    'unit_review': '단원 마무리',
+  };
+
+  /// 수력충전은 두 슬롯 모두 소단원 행마다 번호가 01부터 다시 시작한다.
+  static const Set<String> _kSuryeokPerSubUnitKeys = {'A', 'B'};
+
+  Map<String, String> get _conceptSubKeyByCategory => switch (_seriesKey) {
+        'gaeyu' => _kGaeyuSubKeyByCategory,
+        'suryeok' => _kSuryeokSubKeyByCategory,
+        _ => _kWonriSubKeyByCategory,
+      };
+  Map<String, String> get _conceptCategoryBySubKey => switch (_seriesKey) {
+        'gaeyu' => _kGaeyuCategoryBySubKey,
+        'suryeok' => _kSuryeokCategoryBySubKey,
+        _ => _kWonriCategoryBySubKey,
+      };
+  Map<String, String> get _conceptCategoryShortNames => switch (_seriesKey) {
+        'gaeyu' => _kGaeyuCategoryShortNames,
+        'suryeok' => _kSuryeokCategoryShortNames,
+        _ => _kWonriCategoryShortNames,
+      };
+  Set<String> get _conceptPerSubUnitKeys => switch (_seriesKey) {
+        'gaeyu' => _kGaeyuPerSubUnitKeys,
+        'suryeok' => _kSuryeokPerSubUnitKeys,
+        _ => _kWonriPerSubUnitKeys,
+      };
 
   /// 개념원리 필수유형 본문 정답·풀이 추출 대기열.
   ///
@@ -285,6 +320,19 @@ class _TextbookUnitAuthoringDialogState
   /// 문항의 개념서 카테고리. VLM 이 붙인 category 를 우선하고,
   /// 없으면 라벨 → 페이지 section 순으로 보정한다.
   String _wonriCategoryOfItem(TextbookVlmItem item, String pageSection) {
+    if (_seriesKey == 'suryeok') {
+      // 수력충전은 지면을 어느 슬롯에 넣을지 운영자가 이미 정해 두었으므로
+      // 슬롯이 곧 코너다. 단원 마무리 평가는 첫 지면에만 머리말이 인쇄돼서
+      // 이어지는 지면을 모델이 유형 문제로 보내는데, 그대로 두면 그 문항들이
+      // 소단원 슬롯으로 새고 답지 블록("단원 마무리 평가")을 못 찾는다.
+      if (pageSection == 'unit_review') return 'unit_review';
+      if (pageSection == 'type_problem') {
+        return item.category == 'concept_check' ? 'concept_check' : 'type_problem';
+      }
+      return _kSuryeokSubKeyByCategory.containsKey(item.category)
+          ? item.category
+          : '';
+    }
     if (_conceptSubKeyByCategory.containsKey(item.category)) {
       return item.category;
     }
@@ -329,6 +377,18 @@ class _TextbookUnitAuthoringDialogState
   /// (STEP1/STEP2/실력 UP/수능·평가원·교육청 기출)을 쓰고 없으면 "연습문제".
   String _wonriItemName(String category, String rawLabel) {
     if (_seriesKey == 'gaeyu') return _gaeyuItemName(category, rawLabel);
+    if (_seriesKey == 'suryeok') {
+      // 유형 문제의 이름은 코너가 아니라 지면의 유형명이고, 그것은
+      // content_group(유형 01 / 지수법칙의 표현)에 따로 저장된다.
+      switch (category) {
+        case 'concept_check':
+          return '개념 체크';
+        case 'unit_review':
+          return '단원 마무리 평가';
+        default:
+          return '';
+      }
+    }
     switch (category) {
       case 'concept_drill':
         return '개념원리 익히기';
@@ -365,6 +425,21 @@ class _TextbookUnitAuthoringDialogState
       default:
         return '';
     }
+  }
+
+  /// 개념+유형에서 그 코너에 실제로 인쇄되는 라벨만 남긴다.
+  /// 난이도(상/중/하)는 탄탄에만, 갈래(예제/유제/서술형 연습)는 쓱쓱에만 있다.
+  /// 쏙쏙 이어지는 지면을 탄탄으로 오해한 판독이 없는 난이도를 붙이는 일을 막는다.
+  String _gaeyuLabelForCategory(String category, String rawLabel) {
+    final label = rawLabel.trim();
+    if (label.isEmpty) return '';
+    if (category == 'unit_drill') {
+      return const {'상', '중', '하'}.contains(label) ? label : '';
+    }
+    if (category == 'descriptive') {
+      return const {'예제', '유제', '서술형 연습', '연습'}.contains(label) ? label : '';
+    }
+    return '';
   }
 
   /// 개념+유형 "문항이름". 쓱쓱 서술형만 갈래(예제/유제/연습해 보자)까지
@@ -1014,16 +1089,29 @@ class _TextbookUnitAuthoringDialogState
     required int rawPage,
     required int itemIndex,
   }) {
-    if (focus.subKey != 'B') return const _ResolvedContentGroup.none();
+    // 수력충전은 소단원 행(W) 전체가 유형 문제라 행 단위로 유형을 승계한다.
+    // 유형 머리말은 유형이 바뀔 때만 인쇄되므로, 지면이 넘어가도 직전 유형이
+    // 이어진다. 개념 체크는 유형에 딸리지 않으므로 승계 대상이 아니다.
+    final carrySeries = _seriesKey == 'suryeok';
+    if (!carrySeries && focus.subKey != 'B') {
+      return const _ResolvedContentGroup.none();
+    }
     _ResolvedContentGroup? lastGroup;
     final rows = state.pageResults.where((row) => row.ok).toList()
       ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
     for (final row in rows) {
       for (var i = 0; i < row.items.length; i += 1) {
+        final item = row.items[i];
+        final isTarget = row.rawPage == rawPage && i == itemIndex;
+        if (carrySeries &&
+            _wonriCategoryOfItem(item, row.section) != 'type_problem') {
+          if (isTarget) return const _ResolvedContentGroup.none();
+          continue;
+        }
         final rawGroup =
-            _rawContentGroupForItem(row.items[i], focus.subKey, row.section);
+            _rawContentGroupForItem(item, focus.subKey, row.section);
         if (rawGroup.kind == 'type') lastGroup = rawGroup;
-        if (row.rawPage == rawPage && i == itemIndex) {
+        if (isTarget) {
           return rawGroup.kind == 'type'
               ? rawGroup
               : (lastGroup ?? const _ResolvedContentGroup.none());
@@ -1066,6 +1154,10 @@ class _TextbookUnitAuthoringDialogState
         default:
           return 'unknown';
       }
+    }
+    // 게이트웨이 SURYEOK_SECTION_BY_SUB_KEY 와 동일하게 유지.
+    if (_seriesKey == 'suryeok') {
+      return _kSuryeokCategoryBySubKey[subKey] ?? 'unknown';
     }
     switch (subKey) {
       case 'A':
@@ -2042,11 +2134,19 @@ class _TextbookUnitAuthoringDialogState
       if (row == null || row.isExercise) return;
       guarded = _guardWonriRowsBeforeConceptDrillHeader(state.pageResults);
     } else if (_seriesKey == 'gaeyu') {
+      // 순서가 중요하다. 개념 번호 오인식을 먼저 걷어내야 번호 역행 가드가
+      // 가짜 번호를 기준선으로 삼아 다음 지면의 진짜 문항을 지우지 않는다.
       guarded = _guardGaeyuStepNumberRewind(
-        _guardGaeyuStepOrder(
-          _guardGaeyuExtraPracticeContinuation(state.pageResults),
+        _guardGaeyuEssentialNumberOrder(
+          _guardGaeyuStepOnEssentialPage(
+            _guardGaeyuStepOrder(
+              _guardGaeyuExtraPracticeContinuation(state.pageResults),
+            ),
+          ),
         ),
       );
+    } else if (_seriesKey == 'suryeok') {
+      guarded = _guardSuryeokNumberRewind(state.pageResults);
     } else {
       // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
       if (focus.subKey != 'A') return;
@@ -2071,6 +2171,64 @@ class _TextbookUnitAuthoringDialogState
       );
       return index < 0 || index >= row.items.length;
     });
+  }
+
+  /// 수력충전 소단원의 번호 역행 문항을 걷어낸다.
+  ///
+  /// 한 소단원 행 안에서 문항 번호는 01부터 끝까지 1씩 커진다(지면이 바뀌어도
+  /// 이어진다). 뒷 지면에서 앞 지면 최대 번호보다 작거나 같은 번호가 나오면
+  /// 그것은 문항이 아니라 개념 정리 박스의 항목 번호를 잘못 읽은 것이다.
+  ///
+  /// 같은 지면 안에서는 비교하지 않는다. 2단 조판이라 모델이 좌·우 단을 섞어
+  /// 내보내는 일이 있는데, 그때 멀쩡한 문항이 역행으로 보여 지워지기 때문이다.
+  List<_PageAnalysisRow> _guardSuryeokNumberRewind(
+    List<_PageAnalysisRow> rows,
+  ) {
+    int? printedNumber(TextbookVlmItem item) {
+      final digits = RegExp(r'\d+').firstMatch(item.number);
+      return digits == null ? null : int.tryParse(digits[0]!);
+    }
+
+    final order = rows.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    final droppedByPage = <int, Set<int>>{};
+    var maxBeforePage = 0;
+    for (final row in order) {
+      var maxOnPage = maxBeforePage;
+      for (var i = 0; i < row.items.length; i += 1) {
+        final item = row.items[i];
+        // 세트 헤더("01~05")는 아래 개별 문항과 같은 번호를 공유한다.
+        if (item.isSetHeader) continue;
+        final number = printedNumber(item);
+        if (number == null) continue;
+        if (number <= maxBeforePage) {
+          (droppedByPage[row.rawPage] ??= <int>{}).add(i);
+          continue;
+        }
+        if (number > maxOnPage) maxOnPage = number;
+      }
+      maxBeforePage = maxOnPage;
+    }
+    if (droppedByPage.isEmpty) return rows;
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      final dropped = row.ok ? droppedByPage[row.rawPage] : null;
+      if (dropped == null || dropped.isEmpty) {
+        out.add(row);
+        continue;
+      }
+      final kept = <TextbookVlmItem>[
+        for (var i = 0; i < row.items.length; i += 1)
+          if (!dropped.contains(i)) row.items[i],
+      ];
+      out.add(_rowWithGuardedItems(
+        row,
+        kept,
+        row.items.length,
+        reason: 'suryeok_number_rewind_filtered',
+      ));
+    }
+    return out;
   }
 
   /// 개념원리 소단원의 개념 구간(앞쪽 연속 "개념원리 이해" 페이지) 문항을
@@ -2272,6 +2430,145 @@ class _TextbookUnitAuthoringDialogState
     return out;
   }
 
+  /// 개념+유형 쏙쏙 개념 익히기(STEP1)는 자기 전용 지면에 1번부터 연속으로
+  /// 인쇄된다. 필수 문제·따름 문제가 있는 본문 지면에는 절대 섞이지 않는다.
+  ///
+  /// 그런데 개념 카드 제목 앞의 굵은 개념 번호를 모델이 앞 지면 쏙쏙의 이어지는
+  /// 번호로 오해해 필수 문제 지면에 쏙쏙 한 개를 얹는 일이 있다(122쪽 "4").
+  /// 필수 문제가 있는 지면에서 소수인 쏙쏙은 그런 오인식이라 걷어낸다.
+  List<_PageAnalysisRow> _guardGaeyuStepOnEssentialPage(
+    List<_PageAnalysisRow> rows,
+  ) {
+    final droppedByPage = <int, Set<int>>{};
+    for (final row in rows.where((r) => r.ok)) {
+      final stepIndexes = <int>[];
+      var essentialCount = 0;
+      for (var i = 0; i < row.items.length; i += 1) {
+        switch (_wonriCategoryOfItem(row.items[i], row.section)) {
+          case 'essential_problem':
+            essentialCount += 1;
+          case 'step_drill':
+            stepIndexes.add(i);
+        }
+      }
+      if (essentialCount == 0 || stepIndexes.isEmpty) continue;
+      // 쏙쏙이 다수인 지면은 반대로 필수 문제 쪽이 오인식일 수 있으니 건드리지
+      // 않는다. 번호 순서 가드가 따로 판단한다.
+      if (stepIndexes.length > essentialCount) continue;
+      (droppedByPage[row.rawPage] ??= <int>{}).addAll(stepIndexes);
+    }
+    if (droppedByPage.isEmpty) return rows;
+
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      final dropped = droppedByPage[row.rawPage];
+      if (dropped == null || dropped.isEmpty) {
+        out.add(row);
+        continue;
+      }
+      final kept = <TextbookVlmItem>[
+        for (var i = 0; i < row.items.length; i += 1)
+          if (!dropped.contains(i)) row.items[i],
+      ];
+      out.add(_rowWithGuardedItems(
+        row,
+        kept,
+        dropped.length,
+        reason: 'gaeyu_step_on_essential_page_filtered',
+      ));
+    }
+    return out;
+  }
+
+  /// "2-1" 처럼 대표 번호에 가지를 붙인 따름 문제 번호인지.
+  ///
+  /// 따름 문제는 대표 번호를 그대로 물려받으므로 번호 비교로 진짜/가짜를 가릴 수
+  /// 없다. 개념 번호에는 이 형태가 아예 없으니(사용자 확인) 번호 가드들은 이
+  /// 번호를 판정에서 빼야 한다. 대표 문제가 앞 지면에 있고 따름 문제가 다음 지면
+  /// 맨 위로 넘어가면(135쪽 필수 2 → 136쪽 2-1) 앞 지면 최대 번호와 같아져서
+  /// 역행으로 오해받아 통째로 지워졌다.
+  static final RegExp _gaeyuFollowUpNumber = RegExp(r'^\s*\d+\s*-\s*\d+\s*$');
+
+  bool _isGaeyuFollowUpNumber(String number) =>
+      _gaeyuFollowUpNumber.hasMatch(number);
+
+  /// 개념+유형 필수 문제 번호는 한 지면에서 **위에서 아래로 커진다.**
+  ///
+  /// 개념 카드 제목 앞의 굵은 개념 번호는 그 지면 필수 문제보다 앞서 나오는데,
+  /// 개념 번호는 중단원 전체를 통틀어 매기므로 그 지면 필수 번호보다 크다.
+  /// 122쪽에서 개념 번호 "4" 가 필수 문제 3·3-1 위에 있는데 필수 문제 4번으로
+  /// 잡혔고, 그 바람에 다음 지면의 진짜 필수 문제 4번이 번호 역행으로 지워졌다.
+  ///
+  /// 그래서 자기보다 **아래에 있는** 필수 문제 번호보다 큰 번호는 문항 번호가
+  /// 아니라고 본다. 따름 문제("3-1")는 대표 번호를 물려받을 뿐이라 판정에서 뺀다.
+  List<_PageAnalysisRow> _guardGaeyuEssentialNumberOrder(
+    List<_PageAnalysisRow> rows,
+  ) {
+    int? printedNumber(TextbookVlmItem item) {
+      final digits = RegExp(r'^\s*(\d+)').firstMatch(item.number);
+      return digits == null ? null : int.tryParse(digits[1]!);
+    }
+
+    final droppedByPage = <int, Set<int>>{};
+    for (final row in rows.where((r) => r.ok)) {
+      // 지면에 인쇄된 순서(단 → 위에서 아래)로 세운다. 필수 문제 지면은 1단이
+      // 기본이라 column 은 보조 기준으로만 쓴다.
+      final ordered = <int>[];
+      final numbers = <int, int>{};
+      for (var i = 0; i < row.items.length; i += 1) {
+        final item = row.items[i];
+        if (_wonriCategoryOfItem(item, row.section) != 'essential_problem') {
+          continue;
+        }
+        if (_isGaeyuFollowUpNumber(item.number)) continue;
+        final number = printedNumber(item);
+        final bbox = item.bbox;
+        if (number == null || bbox == null || bbox.length != 4) continue;
+        numbers[i] = number;
+        ordered.add(i);
+      }
+      if (ordered.length < 2) continue;
+      ordered.sort((a, b) {
+        final columnA = row.items[a].column ?? 1;
+        final columnB = row.items[b].column ?? 1;
+        if (columnA != columnB) return columnA.compareTo(columnB);
+        return row.items[a].bbox![0].compareTo(row.items[b].bbox![0]);
+      });
+      // 아래에서 위로 올라가며 "아래쪽 최소 번호" 를 들고 간다.
+      var minBelow = numbers[ordered.last]!;
+      for (var k = ordered.length - 2; k >= 0; k -= 1) {
+        final index = ordered[k];
+        final number = numbers[index]!;
+        if (number > minBelow) {
+          (droppedByPage[row.rawPage] ??= <int>{}).add(index);
+          continue;
+        }
+        if (number < minBelow) minBelow = number;
+      }
+    }
+    if (droppedByPage.isEmpty) return rows;
+
+    final out = <_PageAnalysisRow>[];
+    for (final row in rows) {
+      final dropped = droppedByPage[row.rawPage];
+      if (dropped == null || dropped.isEmpty) {
+        out.add(row);
+        continue;
+      }
+      final kept = <TextbookVlmItem>[
+        for (var i = 0; i < row.items.length; i += 1)
+          if (!dropped.contains(i)) row.items[i],
+      ];
+      out.add(_rowWithGuardedItems(
+        row,
+        kept,
+        dropped.length,
+        reason: 'gaeyu_essential_number_order_filtered',
+      ));
+    }
+    return out;
+  }
+
   /// 개념+유형 쏙쏙·탄탄의 번호가 **뒤로 돌아간** 문항을 걷어낸다.
   ///
   /// 이어지는 지면에는 코너 배지가 다시 인쇄되지 않아 모델이 앞 코너를
@@ -2290,8 +2587,7 @@ class _TextbookUnitAuthoringDialogState
     List<_PageAnalysisRow> rows,
   ) {
     // 필수 문제도 한 소단원 안에서 1번부터 끝번호까지 이어진다. 105쪽 개념 카드의
-    // "4" 가 필수 문제 7·8 사이에 끼어든 사고가 있어 같이 추적한다. 따름 문제
-    // ("7-1")는 앞자리가 대표 번호와 같아 판정에 영향을 주지 않는다.
+    // "4" 가 필수 문제 7·8 사이에 끼어든 사고가 있어 같이 추적한다.
     const tracked = <String>{'step_drill', 'unit_drill', 'essential_problem'};
 
     int? printedNumber(TextbookVlmItem item) {
@@ -2311,6 +2607,9 @@ class _TextbookUnitAuthoringDialogState
       for (var i = 0; i < row.items.length; i += 1) {
         final category = _wonriCategoryOfItem(row.items[i], row.section);
         if (!tracked.contains(category)) continue;
+        // 따름 문제는 대표 번호를 물려받으므로 기준선과 같거나 작을 수밖에 없다.
+        // 대표 문제가 앞 지면에 있으면 전부 역행으로 잡혀 지워진다.
+        if (_isGaeyuFollowUpNumber(row.items[i].number)) continue;
         final number = printedNumber(row.items[i]);
         if (number == null) continue;
         (numbersByCategory[category] ??= <int, int>{})[i] = number;
@@ -2870,8 +3169,13 @@ class _TextbookUnitAuthoringDialogState
     // 개념+유형 쏙쏙/한 번 더 연습은 한 소단원 안에서 지면 블록마다 번호가
     // 1번부터 다시 시작할 수 있다. 그런 슬롯만 번호 앞에 본문 페이지를 붙인다.
     final numberPrefixes = _gaeyuBlockNumberPrefixes(pageRows);
-    final groupCategory =
-        _seriesKey == 'gaeyu' ? 'essential_problem' : 'type_example';
+    // 유형명(content_group)을 갖는 카테고리. 수력충전 개념 체크는 유형에
+    // 딸리지 않는 마무리 확인 문항이라 유형명을 비운다.
+    final groupCategories = switch (_seriesKey) {
+      'gaeyu' => const {'essential_problem'},
+      'suryeok' => const {'type_problem'},
+      _ => const {'type_example'},
+    };
     for (final row in pageRows) {
       for (var i = 0; i < row.items.length; i += 1) {
         final vlm = row.items[i];
@@ -2885,7 +3189,7 @@ class _TextbookUnitAuthoringDialogState
         }
         final subKey = _conceptSubKeyByCategory[category]!;
         var group = const _ResolvedContentGroup.none();
-        if (category == groupCategory) {
+        if (groupCategories.contains(category)) {
           final rawGroup = _rawContentGroupForItem(vlm, subKey, category);
           group =
               rawGroup.kind == 'type' ? rawGroup : (lastTypeGroup ?? rawGroup);
@@ -2910,9 +3214,18 @@ class _TextbookUnitAuthoringDialogState
               // 개념원리는 난이도가 없어 label 을 비운다. 개념+유형은 탄탄의
               // 난이도(상/중/하)와 쓱쓱의 갈래(예제/유제/연습)를 label 에 담고,
               // 코너 이름은 두 시리즈 모두 전용 컬럼(itemName)에 저장한다.
-              label: _seriesKey == 'gaeyu' ? vlm.label.trim() : '',
+              // 수력충전에 난이도는 없고, 단원 마무리 평가의
+              // 계산 조심 / 생각 더하기 / 조건 확인 배지만 label 에 담는다.
+              label: switch (_seriesKey) {
+                'gaeyu' => _gaeyuLabelForCategory(category, vlm.label),
+                'suryeok' =>
+                  category == 'unit_review' ? vlm.label.trim() : '',
+                _ => '',
+              },
               itemName: _wonriItemName(category, vlm.label),
-              isImportant: vlm.isImportant,
+              isImportant: _seriesKey == 'gaeyu'
+                  ? category == 'unit_drill' && vlm.isImportant
+                  : vlm.isImportant,
               isSetHeader: vlm.isSetHeader,
               setFrom: vlm.setFrom,
               setTo: vlm.setTo,

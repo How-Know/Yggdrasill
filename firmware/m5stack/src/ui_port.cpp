@@ -120,6 +120,7 @@ static int s_pin_lock_seconds = 0;
 static lv_timer_t* s_pin_lock_timer = nullptr;
 static String s_pin_student_id = "";
 static String s_pin_student_name = "";
+static bool s_student_list_stale = false;
 static lv_obj_t* s_login_overlay = nullptr;   // "로그인 중..." 모달
 static lv_timer_t* s_bind_timeout_timer = nullptr;
 static bool s_bind_in_flight = false;          // 인터랙티브 로그인 진행 중에만 bind ack 처리(재접속 재announce ack 무시)
@@ -2520,11 +2521,17 @@ static void close_pin_page(void) {
   s_pin_buf[0] = '\0';
   s_pin_locked = false;
   s_pin_lock_seconds = 0;
+  if (s_student_list_stale) {
+    s_student_list_stale = false;
+    fw_publish_list_today();
+  }
 }
 
 static void show_pin_page(const char* student_id, const char* student_name, bool pin_set) {
   if (!student_id || !*student_id) return;
+  fw_mark_ui_stage(20);
   close_pin_page();
+  fw_mark_ui_stage(21);
   s_pin_student_id = student_id;
   s_pin_student_name = (student_name && *student_name) ? String(student_name) : u8"학생";
   s_pin_setup_mode = !pin_set;
@@ -2590,7 +2597,41 @@ static void show_pin_page(const char* student_id, const char* student_name, bool
     lv_obj_t* bd = pin_make_btn(s_pin_page, u8"지우기", xo[2], y0 + 3 * dy, bw, 0x323232);
     lv_obj_add_event_cb(bd, pin_del_cb, LV_EVENT_PRESSED, nullptr);
   }
+  fw_mark_ui_stage(22);
   screensaver_attach_activity(s_pin_page);
+  fw_mark_ui_stage(23);
+}
+
+// 카드 클릭 콜백 안에서 곧바로 전체 화면을 만들면 LVGL이 아직 그 터치의 스크롤 관성을
+// 처리하는 중이라, 새 화면이 방금 해제된 자리에 잡힐 때 망가진 참조를 따라가며
+// 무한 루프에 빠진다(=기기 정지). 한 프레임 미뤄 입력 처리가 끝난 뒤에 화면을 만든다.
+static char s_pending_open_sid[64] = {0};
+static char s_pending_open_name[96] = {0};
+static bool s_pending_open_pin_required = false;
+static bool s_pending_open_pin_set = false;
+static bool s_pending_open_scheduled = false;
+
+static void open_bind_flow_async(void* unused) {
+  (void)unused;
+  s_pending_open_scheduled = false;
+  fw_mark_ui_stage(25);
+  lv_indev_reset(NULL, NULL);  // 남아 있는 누름·스크롤 관성을 끊고 시작한다.
+  if (s_pending_open_pin_required) {
+    show_pin_page(s_pending_open_sid, s_pending_open_name, s_pending_open_pin_set);
+  } else {
+    show_bind_confirm_popup(s_pending_open_sid, s_pending_open_name);
+  }
+  fw_mark_ui_stage(26);
+}
+
+static void request_bind_flow(const char* sid, const char* name, bool pin_required, bool pin_set) {
+  if (s_pending_open_scheduled) return;
+  snprintf(s_pending_open_sid, sizeof(s_pending_open_sid), "%s", sid ? sid : "");
+  snprintf(s_pending_open_name, sizeof(s_pending_open_name), "%s", name ? name : "");
+  s_pending_open_pin_required = pin_required;
+  s_pending_open_pin_set = pin_set;
+  s_pending_open_scheduled = true;
+  lv_async_call(open_bind_flow_async, nullptr);
 }
 
 static void close_login_overlay(void) {
@@ -3289,6 +3330,7 @@ static void close_ota_popup(void) {
 
 static void start_ota_update(void) {
   Serial.println("[OTA] User requested update check");
+  fw_watchdog_pause();
   show_ota_popup();
   
   String latestVersion, downloadUrl;
@@ -3304,6 +3346,7 @@ static void start_ota_update(void) {
       lv_timer_del(t);
     }, 3000, NULL);
     lv_timer_set_repeat_count(close_timer, 1);
+    fw_watchdog_resume();
     return;
   }
   
@@ -3323,6 +3366,7 @@ static void start_ota_update(void) {
       lv_timer_del(t);
     }, 3000, NULL);
     lv_timer_set_repeat_count(close_timer, 1);
+    fw_watchdog_resume();
   }
   // 성공 시 자동 재부팅
 }
@@ -3504,6 +3548,12 @@ void ui_port_update_students(const JsonArray& students) {
     // 학생 리스트 모드가 아니면 학생 목록 갱신은 무시
     return;
   }
+  if (s_pin_page && lv_obj_is_valid(s_pin_page)) {
+    // PIN 입력 중 목록 전체를 다시 그리면 그동안 터치 입력이 밀린다.
+    // 갱신은 PIN 화면을 닫은 뒤 새 목록을 받아 반영한다.
+    s_student_list_stale = true;
+    return;
+  }
   struct StudentBindData {
     char sid[64];
     char name[96];
@@ -3582,8 +3632,8 @@ void ui_port_update_students(const JsonArray& students) {
           StudentBindData* data = (StudentBindData*)lv_event_get_user_data(e);
           if (!data) return;
           if (is_tap_suppressed()) return;
-          if (data->pin_required) show_pin_page(data->sid, data->name, data->pin_set);
-          else show_bind_confirm_popup(data->sid, data->name);
+          request_bind_flow(data->sid, data->name, data->pin_required, data->pin_set);
+          fw_mark_ui_stage(24);
         }, LV_EVENT_CLICKED, bind_data);
         lv_obj_add_event_cb(card, [](lv_event_t* e){
           if (lv_event_get_code(e) == LV_EVENT_DELETE) {

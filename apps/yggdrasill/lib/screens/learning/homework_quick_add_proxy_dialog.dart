@@ -27,6 +27,18 @@ import '../../utils/naesin_exam_context.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../resources/textbook_explorer_view.dart';
 
+typedef _SelectedMigratedConceptPage = ({
+  int bigOrder,
+  String bigName,
+  int midOrder,
+  String midName,
+  int smallOrder,
+  String smallKey,
+  String smallName,
+  int rawPage,
+  int displayPage,
+});
+
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
   final String? initialTitle;
@@ -97,6 +109,7 @@ class HomeworkQuickAddProxyDialogState
   final Set<String> _selectedProblemRegionIds = <String>{};
   TextbookExplorerController? _migratedExplorer;
   String? _migratedExplorerBookKey;
+  String _migratedConceptPageSelectionFingerprint = '';
   String _rangeAutoPage = '';
   String _rangeAutoCount = '';
   String _rangeAutoScope = '-';
@@ -353,6 +366,7 @@ class HomeworkQuickAddProxyDialogState
     controller.dispose();
     _migratedExplorer = null;
     _migratedExplorerBookKey = null;
+    _migratedConceptPageSelectionFingerprint = '';
   }
 
   InputDecoration _inputDecoration(String label, {String? hint}) {
@@ -1888,18 +1902,67 @@ class HomeworkQuickAddProxyDialogState
     }
     final selectionChanged = next.length != _selectedProblemRegionIds.length ||
         !next.every(_selectedProblemRegionIds.contains);
+    final conceptPageKeys = _selectedMigratedConceptPages()
+        .map((e) => '${e.smallKey}#${e.rawPage}')
+        .toList()
+      ..sort();
+    final conceptFingerprint = conceptPageKeys.join(',');
+    final conceptSelectionChanged =
+        conceptFingerprint != _migratedConceptPageSelectionFingerprint;
     // enrich로 페이지/소단원이 늘어나도 내준·완료 배지가 따라가도록 재집계.
     _syncMigratedHomeworkIssueStatsFromStore();
-    if (!selectionChanged && !regionsTouched) return;
+    if (!selectionChanged && !conceptSelectionChanged && !regionsTouched) {
+      return;
+    }
     setState(() {
       _rangePickerMode = 'type';
+      _migratedConceptPageSelectionFingerprint = conceptFingerprint;
       if (selectionChanged) {
         _selectedProblemRegionIds
           ..clear()
           ..addAll(next);
       }
     });
-    if (selectionChanged) _refreshRangeAutoDraft();
+    if (selectionChanged || conceptSelectionChanged) {
+      _refreshRangeAutoDraft();
+    }
+  }
+
+  List<_SelectedMigratedConceptPage> _selectedMigratedConceptPages() {
+    final controller = _migratedExplorer;
+    final book = _selectedLinkedBook;
+    if (controller == null ||
+        controller.loading ||
+        book == null ||
+        (!_isWonriLinkedBook(book) && !_isGaeyuLinkedBook(book))) {
+      return const [];
+    }
+    final out = <_SelectedMigratedConceptPage>[];
+    for (final big in controller.data.units) {
+      for (final mid in big.mids) {
+        for (final small in mid.smalls) {
+          for (final page in small.pages) {
+            if (!page.isConceptPage ||
+                !controller.checkedPageKeys
+                    .contains('${small.key}#${page.rawPage}')) {
+              continue;
+            }
+            out.add((
+              bigOrder: big.order,
+              bigName: big.name,
+              midOrder: mid.order,
+              midName: mid.name,
+              smallOrder: small.order,
+              smallKey: small.key,
+              smallName: small.name,
+              rawPage: page.rawPage,
+              displayPage: page.displayPage ?? page.rawPage,
+            ));
+          }
+        }
+      }
+    }
+    return out;
   }
 
   List<_BigUnitSelectionNode> _parseSelectionUnits(dynamic payload) {
@@ -4237,8 +4300,18 @@ class HomeworkQuickAddProxyDialogState
   /// 문항 기반: 선택 문항을 유형 그룹(소단원·유형)별 하위과제로 만든다.
   List<_DraftGroupItem> _buildProblemSubtaskDraftItems(_LinkedTextbook book) {
     final selected = _selectedProblemRegions();
-    if (selected.isEmpty) return const <_DraftGroupItem>[];
+    final selectedConceptPages = _selectedMigratedConceptPages();
+    if (selected.isEmpty && selectedConceptPages.isEmpty) {
+      return const <_DraftGroupItem>[];
+    }
     final smallNodes = _smallNodeByUnitKey();
+    final conceptPagesByUnit = <String, List<_SelectedMigratedConceptPage>>{};
+    for (final page in selectedConceptPages) {
+      final key = '${page.bigOrder}|${page.midOrder}|${page.smallOrder}';
+      conceptPagesByUnit
+          .putIfAbsent(key, () => <_SelectedMigratedConceptPage>[])
+          .add(page);
+    }
     final groups = <String, List<_TextbookProblemRegion>>{};
     final order = <String>[];
     for (final region in selected) {
@@ -4249,16 +4322,96 @@ class HomeworkQuickAddProxyDialogState
     final items = <_DraftGroupItem>[];
     for (final key in order) {
       final regions = groups[key]!;
+      final smallNode = _resolveSmallNodeForRegions(regions, smallNodes);
+      final first = regions.first;
+      final conceptUnitKey = smallNode == null
+          ? ''
+          : '${first.bigOrder}|${first.midOrder}|${smallNode.orderIndex}';
+      final conceptPages = conceptUnitKey.isEmpty
+          ? const <_SelectedMigratedConceptPage>[]
+          : (conceptPagesByUnit.remove(conceptUnitKey) ??
+              const <_SelectedMigratedConceptPage>[]);
       items.add(
         _buildProblemSubtaskDraftItem(
           book,
           regions,
-          _resolveSmallNodeForRegions(regions, smallNodes),
+          smallNode,
           draftKey: 'auto_prob_$key',
+          extraConceptPages:
+              conceptPages.map((page) => page.displayPage).toSet(),
+        ),
+      );
+    }
+    for (final entry in conceptPagesByUnit.entries) {
+      final pages = entry.value;
+      if (pages.isEmpty) continue;
+      items.add(
+        _buildMigratedConceptPageDraftItem(
+          book,
+          pages,
+          draftKey: 'auto_concept_${entry.key}',
         ),
       );
     }
     return items;
+  }
+
+  _DraftGroupItem _buildMigratedConceptPageDraftItem(
+    _LinkedTextbook book,
+    List<_SelectedMigratedConceptPage> selectedPages, {
+    required String draftKey,
+  }) {
+    final first = selectedPages.first;
+    final pages = selectedPages
+        .map((page) => page.displayPage)
+        .where((page) => page > 0)
+        .toSet();
+    final sortedPages = pages.toList()..sort();
+    final pageText = _pagesToCompactText(pages);
+    final pageCounts = <String, int>{
+      for (final page in sortedPages) '$page': 0,
+    };
+    final mapping = <String, dynamic>{
+      'selectionMode': 'page',
+      'sourceScope': 'migrated_concept_pages',
+      'bigOrder': first.bigOrder,
+      'midOrder': first.midOrder,
+      'smallOrder': first.smallOrder,
+      'subKey': first.smallKey,
+      'displaySubKey': first.smallKey,
+      'bigName': first.bigName,
+      'midName': first.midName,
+      'smallName': first.smallName,
+      'pageCounts': pageCounts,
+      'startPage': sortedPages.isEmpty ? null : sortedPages.first,
+      'endPage': sortedPages.isEmpty ? null : sortedPages.last,
+      'pageCoordinate': 'display',
+      'pageCount': sortedPages.length,
+      'problemCount': 0,
+      'problemNumbers': const <String>[],
+      'problemCrops': const <Map<String, dynamic>>[],
+      'problemStage': _migratedProblemStageCode,
+      'weight': 1.0,
+    };
+    final pathSummary = [
+      first.bigName,
+      first.midName,
+      first.smallName,
+    ].where((value) => '$value'.trim().isNotEmpty).join(' > ');
+    return _assembleSubtaskDraftItem(
+      book: book,
+      title: '${first.smallName}'.trim().isEmpty
+          ? '개념 페이지'
+          : '${first.smallName}'.trim(),
+      page: pageText,
+      count: '0',
+      pathSummary: pathSummary,
+      sourceUnitLevel: 'page',
+      sourceUnitPath: '${first.smallName}'.trim(),
+      unitMappings: <Map<String, dynamic>>[mapping],
+      draftKey: draftKey,
+      recommendedMinutes: 0,
+    );
   }
 
   /// 개념원리는 crop.sub_key(A~E) ≠ 소단원(U*) 이므로 이름·페이지로 소단원을 찾는다.
@@ -4303,12 +4456,17 @@ class HomeworkQuickAddProxyDialogState
     List<_TextbookProblemRegion> regions,
     _SmallUnitSelectionNode? smallNode, {
     String? draftKey,
+    Set<int> extraConceptPages = const <int>{},
   }) {
-    final pages = regions.map((region) => region.displayPage).toSet();
+    final pages = regions.map((region) => region.displayPage).toSet()
+      ..addAll(extraConceptPages.where((page) => page > 0));
     final pageText = _pagesToCompactText(pages);
     final byPage = <int, int>{};
     for (final region in regions) {
       byPage[region.displayPage] = (byPage[region.displayPage] ?? 0) + 1;
+    }
+    for (final page in extraConceptPages) {
+      if (page > 0) byPage.putIfAbsent(page, () => 0);
     }
     final groupLabels = <String>[];
     for (final region in regions) {
@@ -4486,7 +4644,11 @@ class HomeworkQuickAddProxyDialogState
   String _autoSelectionFingerprint() {
     if (_rangePickerMode == 'type') {
       final ids = _selectedProblemRegionIds.toList()..sort();
-      return 'type:${ids.join(',')}';
+      final conceptPages = _selectedMigratedConceptPages()
+          .map((page) => '${page.smallKey}#${page.rawPage}')
+          .toList()
+        ..sort();
+      return 'type:${ids.join(',')}|concept:${conceptPages.join(',')}';
     }
     final parts = <String>[];
     for (final big in _units) {
@@ -6216,9 +6378,9 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
-  /// 수동 모드에서만 표시. 자동 체크는 타이틀 행에 둔다.
+  /// 수동 모드(또는 사용자화)에서만 표시. 자동 체크는 타이틀 행에 둔다.
   Widget? _buildManualAddChildButton() {
-    if (_autoSubtaskMode) return null;
+    if (_autoSubtaskMode && !_useCustomSource) return null;
     final showNaesinPanel = _shouldShowNaesinPanel();
     final showControls = showNaesinPanel ||
         _useCustomSource ||
@@ -8487,6 +8649,10 @@ class HomeworkQuickAddProxyDialogState
                 setState(() {
                   _useNaesinSource = false;
                   _useCustomSource = true;
+                  // 사용자화는 수동으로 하위과제를 담아야 하므로 자동 모드를 끈다.
+                  _autoSubtaskMode = false;
+                  _autoDraftFingerprint = null;
+                  _detailsPanelExpanded = true;
                   _flowId = restoreFlowId.isNotEmpty ? restoreFlowId : _flowId;
                   _testOriginFlowId = null;
                   _selectedLinkedBookKey = null;
@@ -8865,7 +9031,7 @@ class HomeworkQuickAddProxyDialogState
         selectedBook: selectedBook,
       );
       final pinChildActions = _useCustomSource || hasBookSelection;
-      final showEmbeddedList = hasBookSelection && !_useCustomSource;
+      final showEmbeddedList = hasBookSelection || _useCustomSource;
       final addChildButton = secondaryActions();
       final panel = Container(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),

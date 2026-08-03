@@ -1,8 +1,10 @@
 #include <M5Unified.h>
+#include <new>
 #include <WiFi.h>
 #include <AsyncMqttClient.h>
 #include <ArduinoJson.h>
 #include "esp_wifi.h"
+#include "esp_task_wdt.h"
 #include <lvgl.h>
 #include <LittleFS.h>
 #include <Preferences.h>
@@ -102,10 +104,59 @@ static bool g_wifi_loop_connected = false;
 static const uint8_t ALERT_VIBRATION_STRENGTH = 150; // 실기기 모터 구동이 확인된 중간 출력
 static uint32_t g_last_boot_status_ui_ms = 0;
 
+// loop()가 멈추면 화면·터치·presence가 모두 죽어 사람이 전원을 뽑아야 복구됐다.
+// 워치독으로 자동 재부팅시키고, 마지막으로 지나간 단계를 RTC 메모리에 남겨
+// 재부팅 후 어느 구간에서 멈췄는지 확인한다.
+static const uint32_t LOOP_WDT_TIMEOUT_S = 15;
+static const uint32_t LOOP_STAGE_MAGIC = 0x5A6B7C8D;
+RTC_NOINIT_ATTR static uint32_t g_loop_stage;
+RTC_NOINIT_ATTR static uint32_t g_loop_stage_magic;
+#define LOOP_STAGE(n) do { g_loop_stage = (n); } while (0)
+
+// lv_timer_handler() 안에서 멈추면 loop 단계만으로는 UI 코드인지 LVGL 내부인지 구분이 안 된다.
+// UI 쪽에서 지나간 지점을 따로 남겨 재부팅 후 함께 출력한다.
+RTC_NOINIT_ATTR static uint32_t g_ui_stage;
+void fw_mark_ui_stage(uint32_t stage) { g_ui_stage = stage; }
+
 // Deferred homework update (MQTT callback -> main loop)
 static portMUX_TYPE g_hw_mux = portMUX_INITIALIZER_UNLOCKED;
-static volatile bool g_hw_pending = false;
-static String g_hw_pending_json;
+
+// MQTT 콜백(async-tcp 태스크)과 loop() 사이의 JSON 인계 슬롯.
+// portENTER_CRITICAL 구간은 인터럽트를 끈 채 스핀락을 잡으므로 그 안에서
+// 힙을 건드리면 안 된다(다른 코어가 힙 잠금을 쥐고 있으면 영구 대기 → 기기 정지).
+// 따라서 할당/해제는 임계 구역 밖에서 하고, 안에서는 포인터만 교환한다.
+class PendingPayload {
+ public:
+  void publish(const String& src) {
+    String* fresh = new (std::nothrow) String(src);
+    if (!fresh) return;
+    String* stale;
+    portENTER_CRITICAL(&g_hw_mux);
+    stale = slot_;
+    slot_ = fresh;
+    portEXIT_CRITICAL(&g_hw_mux);
+    delete stale;
+  }
+
+  // 소유권을 호출자에게 넘긴다. 반환값은 사용 후 delete 해야 한다.
+  String* take() {
+    String* taken;
+    portENTER_CRITICAL(&g_hw_mux);
+    taken = slot_;
+    slot_ = nullptr;
+    portEXIT_CRITICAL(&g_hw_mux);
+    return taken;
+  }
+
+  bool pending() const { return slot_ != nullptr; }
+
+ private:
+  String* volatile slot_ = nullptr;
+};
+
+static PendingPayload g_hw_payload;
+static PendingPayload g_students_payload;
+static PendingPayload g_student_info_payload;
 
 // Deferred UI work from MQTT (async-tcp) task -> executed in loop() (LVGL thread).
 // LVGL is not thread-safe; building UI directly in the MQTT callback races with
@@ -115,10 +166,6 @@ static bool g_bind_ack_ok = false;
 static char g_bind_ack_reason[32] = {0};
 static int g_bind_ack_attempts_left = -1;
 static int g_bind_ack_locked_seconds = -1;
-static volatile bool g_students_pending = false;
-static String g_students_pending_json;
-static volatile bool g_student_info_pending = false;
-static String g_student_info_pending_json;
 static volatile bool g_force_unbind_pending = false;
 
 // 초기 연결 안정화 보강 상태
@@ -680,6 +727,13 @@ static void handle_mqtt_connect_stall(uint32_t now) {
   }
 }
 
+// AsyncMqttClient의 payload는 널 종료가 보장되지 않으므로 len 만큼만 읽는다.
+static void append_mqtt_payload(String& dst, const char* payload, size_t len) {
+  if (!payload || len == 0) return;
+  dst.reserve(dst.length() + len + 1);
+  for (size_t i = 0; i < len; ++i) dst += payload[i];
+}
+
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
   (void)properties; (void)index; (void)total;
   String t = String(topic);
@@ -702,7 +756,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
       da_expected = total ? total : len;
       da_received = 0;
     }
-    da_acc.concat(String(payload).substring(0, (int)len));
+    append_mqtt_payload(da_acc, payload, len);
     da_received += len;
     if (total && da_received < total) { return; }
     g_last_mqtt_rx_ack_ms = nowMs;
@@ -735,27 +789,21 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   if (t == todayListTopic) {
     static String acc; static size_t expected = 0; static size_t received = 0;
     if (index == 0) { acc.remove(0); acc.reserve(total ? total : (len + 512)); expected = total ? total : len; received = 0; }
-    acc.concat(String(payload).substring(0, (int)len));
+    append_mqtt_payload(acc, payload, len);
     received += len;
     Serial.printf("students_today chunk: idx=%u len=%u total=%u recv=%u\n", (unsigned)index, (unsigned)len, (unsigned)total, (unsigned)received);
     if (total && received < total) { return; }
     // Defer parse + UI render to loop() (LVGL thread).
-    portENTER_CRITICAL(&g_hw_mux);
-    g_students_pending_json = acc;
-    g_students_pending = true;
-    portEXIT_CRITICAL(&g_hw_mux);
+    g_students_payload.publish(acc);
     acc.remove(0);
   }
   if (t == homeworksTopic) {
     static String hw_acc; static size_t hw_expected = 0; static size_t hw_received = 0;
     if (index == 0) { hw_acc.remove(0); hw_acc.reserve(total ? total : (len + 512)); hw_expected = total ? total : len; hw_received = 0; }
-    hw_acc.concat(String(payload).substring(0, (int)len));
+    append_mqtt_payload(hw_acc, payload, len);
     hw_received += len;
     if (total && hw_received < total) { return; }
-    portENTER_CRITICAL(&g_hw_mux);
-    g_hw_pending_json = hw_acc;
-    g_hw_pending = true;
-    portEXIT_CRITICAL(&g_hw_mux);
+    g_hw_payload.publish(hw_acc);
     g_last_mqtt_rx_homeworks_ms = nowMs;
     Serial.printf("[M5SYNC][rx] device=%s student=%s len=%u\n",
                   deviceId.c_str(),
@@ -772,12 +820,9 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   if (t == studentInfoTopic) {
     g_last_mqtt_rx_student_info_ms = nowMs;
     // Defer parse + UI render to loop() (LVGL thread).
-    String body; body.reserve(len + 1);
-    for (size_t i = 0; i < len; ++i) body += (char)payload[i];
-    portENTER_CRITICAL(&g_hw_mux);
-    g_student_info_pending_json = body;
-    g_student_info_pending = true;
-    portEXIT_CRITICAL(&g_hw_mux);
+    String body;
+    append_mqtt_payload(body, payload, len);
+    g_student_info_payload.publish(body);
   }
   if (t == unboundTopic) {
     Serial.println("[MQTT] unbound received – returning to student list");
@@ -1054,6 +1099,10 @@ static void publish_homeworks_sync_ack(JsonObject meta, unsigned int groupCount)
                 groupCount);
 }
 
+// OTA 다운로드는 loop()를 수 분간 점유하므로 그동안 워치독 감시에서 제외한다.
+void fw_watchdog_pause() { esp_task_wdt_delete(NULL); }
+void fw_watchdog_resume() { esp_task_wdt_add(NULL); esp_task_wdt_reset(); }
+
 void fw_publish_check_update() {
   DynamicJsonDocument doc(64);
   doc["action"] = "check_update";
@@ -1075,6 +1124,17 @@ void setup() {
   auto cfg = M5.config(); M5.begin(cfg);
   M5.Display.setTextSize(2);
   Serial.begin(115200);
+
+  if (g_loop_stage_magic == LOOP_STAGE_MAGIC) {
+    Serial.printf("[WDT] previous run: last loop stage=%lu ui stage=%lu reset_reason=%d\n",
+                  (unsigned long)g_loop_stage, (unsigned long)g_ui_stage,
+                  (int)esp_reset_reason());
+  }
+  g_loop_stage_magic = LOOP_STAGE_MAGIC;
+  g_loop_stage = 0;
+  g_ui_stage = 0;
+  esp_task_wdt_init(LOOP_WDT_TIMEOUT_S, true);
+  esp_task_wdt_add(NULL);
 
   // NVS에서 device_id 로드 (OTA 후에도 유지)
   {
@@ -1239,7 +1299,10 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
+  LOOP_STAGE(1);
   M5.update();
+  LOOP_STAGE(2);
   screensaver_notify_touch(M5.Touch.getCount() > 0);
   // LVGL ticking
   static uint32_t lastTick = 0;
@@ -1284,16 +1347,16 @@ void loop() {
     nextMqttReconnectMs = nowTick + 5000;
     Serial.println("[WiFi] loop disconnected -> wait for reconnect");
   }
+  LOOP_STAGE(3);
   update_boot_status_ui(false);
 
+  LOOP_STAGE(4);
   // homeworks 토픽은 단일 슬롯에 덮어쓰기 → 처리 중·직후에 또 도착한 페이로드를 같은 루프에서 연속 소비
-  for (int hw_drain = 0; hw_drain < 12 && g_hw_pending; hw_drain++) {
-    String json_copy;
-    portENTER_CRITICAL(&g_hw_mux);
-    json_copy = g_hw_pending_json;
-    g_hw_pending_json.remove(0);
-    g_hw_pending = false;
-    portEXIT_CRITICAL(&g_hw_mux);
+  for (int hw_drain = 0; hw_drain < 12 && g_hw_payload.pending(); hw_drain++) {
+    String* taken = g_hw_payload.take();
+    if (!taken) break;
+    String json_copy = *taken;
+    delete taken;
     if (json_copy.length() == 0) break;
     DynamicJsonDocument doc(json_copy.length() + 4096);
     DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
@@ -1340,13 +1403,11 @@ void loop() {
     ui_port_on_bind_ack(ok, reason, attemptsLeft, lockedSeconds);
   }
 
-  if (g_students_pending) {
+  LOOP_STAGE(6);
+  if (g_students_payload.pending()) {
+    String* taken = g_students_payload.take();
     String json_copy;
-    portENTER_CRITICAL(&g_hw_mux);
-    json_copy = g_students_pending_json;
-    g_students_pending_json.remove(0);
-    g_students_pending = false;
-    portEXIT_CRITICAL(&g_hw_mux);
+    if (taken) { json_copy = *taken; delete taken; }
     if (json_copy.length() > 0) {
       DynamicJsonDocument doc(json_copy.length() + 2048);
       DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
@@ -1385,13 +1446,11 @@ void loop() {
     }
   }
 
-  if (g_student_info_pending) {
+  LOOP_STAGE(7);
+  if (g_student_info_payload.pending()) {
+    String* taken = g_student_info_payload.take();
     String json_copy;
-    portENTER_CRITICAL(&g_hw_mux);
-    json_copy = g_student_info_pending_json;
-    g_student_info_pending_json.remove(0);
-    g_student_info_pending = false;
-    portEXIT_CRITICAL(&g_hw_mux);
+    if (taken) { json_copy = *taken; delete taken; }
     if (json_copy.length() > 0) {
       DynamicJsonDocument doc(json_copy.length() + 1024);
       DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
@@ -1434,15 +1493,18 @@ void loop() {
     }
   }
 
+  LOOP_STAGE(9);
   lv_timer_handler();
   // 첫 데이터(학생 리스트/학생 정보/과제) 수신 전에는 절전 진입을 막아
   // "연결 중" 상태가 빈 화면/꺼진 화면처럼 보이지 않게 한다.
   if (!g_first_ui_data_ready) {
     screensaver_keep_awake();
   }
+  LOOP_STAGE(10);
   screensaver_poll();
   screensaver_check_shake();
   
+  LOOP_STAGE(11);
   // PMIC vibration: 6초 주기, 0.5초 펄스
   static uint32_t lastVibMs = 0;
   static bool vibrationActive = false;
@@ -1460,6 +1522,7 @@ void loop() {
   }
   // Physical buttons disabled (no longer needed with touch UI)
 
+  LOOP_STAGE(12);
   // Periodic online retained presence
   static uint32_t lastPresence = 0;
   uint32_t now = millis();

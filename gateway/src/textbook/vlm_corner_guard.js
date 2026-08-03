@@ -31,6 +31,9 @@ const CORNER_KEYWORDS = [
   ['step_drill', ['쏙쏙']],
   ['unit_drill', ['탄탄']],
   ['descriptive', ['쓱쓱', '서술형']],
+  // 수력충전. 소단원 블록에는 코너 이름이 없고 본문 페이지 배지만 있어서
+  // 코너로 갈리는 것은 단원 마무리 평가 하나뿐이다.
+  ['unit_review', ['단원마무리', '마무리평가']],
 ];
 
 export function canonicalCorner(input) {

@@ -8,6 +8,11 @@
 // 답지는 "번호 + 정답값" 만 잔뜩 쌓인 콤팩트한 레이아웃이라 본문 탐지용 프롬프트를
 // 그대로 쓰면 false-positive 가 많아진다. 그래서 전용 프롬프트로 분리.
 
+import {
+  buildSuryeokBlockOrderLines,
+  buildSuryeokSkipBadgeLines,
+} from './vlm_suryeok_blocks.js';
+
 // 개념+유형(개념플러스유형) 답지는 다른 교재와 지면 구성이 다르다.
 // 정답이 "본문 페이지 배지(P.16, P.25~26) + 코너 이름 + 번호" 세 겹으로
 // 묶여 인쇄되고, 코너마다 번호가 1번부터 다시 시작한다. 그래서 기대 번호를
@@ -124,14 +129,82 @@ function buildConceptPlusExpectedTable(expectedEntries) {
   ];
 }
 
+// 수력충전 답지("빠른 정답") 전용 규칙.
+//
+// 지면은 소단원 블록 여러 개로 나뉜다. 블록 머리에 "10 지수법칙과 곱셈 공식
+// 이용한 식의 계산(2) ▶p.25" 처럼 소단원 번호·이름과 **본문 페이지 배지**가
+// 붙고, 그 아래에 01, 02 … 로 답이 나열된다. 번호가 소단원마다 01부터 다시
+// 시작하므로 한 지면에 "01" 이 예닐곱 개 있다. 블록을 못 고르면 남의 답이
+// 조용히 들어앉으므로, 본문 페이지 배지로 블록을 먼저 특정하게 한다.
+function buildSuryeokAnswerRules() {
+  return [
+    '',
+    '=== 수력충전 답지 읽는 법 (매우 중요) ===',
+    '[K1] 이 지면은 **소단원 블록** 여러 개로 나뉘어 있다. 블록 머리에는',
+    '   "10 지수법칙과 곱셈 공식 이용한 식의 계산(2)  ▶p.25" 처럼 소단원 번호와',
+    '   이름, 그리고 빨간 화살표 뒤에 **본문 페이지 배지**가 인쇄된다.',
+    '   중단원 끝 블록만 파란 상자에 "단원 마무리 평가 [01~13]  ▶문제편 p.29~33"',
+    '   으로 인쇄된다.',
+    '[K2] 문항 번호는 블록마다 01부터 다시 시작한다. 그래서 한 지면에 "01" 이',
+    '   여러 개 있다. **번호만 보고 답을 고르면 반드시 틀린다.**',
+    '   상세표의 배지(P.xx)와 같은 본문 페이지를 가진 블록에서만 읽어라.',
+    '   배지가 "p.10~11" 처럼 범위면 상세표의 페이지가 그 안에 들면 일치다.',
+    '   배지가 **안 보이는** 이어지는 블록은 [C1~C3] 으로 짚어서 읽는다.',
+    '[K3] 상세표에 코너가 "단원 마무리 평가" 로 적힌 문항은 반드시 그 파란 상자',
+    '   블록에서 읽어라. 코너가 비어 있으면 일반 소단원 블록이다.',
+    '[K4] problem_number 는 **기대 번호 문자열 그대로** 돌려줘라("01" 이면 "01").',
+    '   답지에 "1" 로 보여도 앞자리 0 을 살려 기대 번호 형식에 맞춘다.',
+    '   이 규칙은 [R3] 의 "원문 그대로" 보다 우선한다.',
+    '[K5] item 마다 실제로 읽은 블록을 source_* 에 적어라.',
+    '   - source_page = 배지의 시작 쪽, source_page_end = 끝 쪽',
+    '     ("▶p.10~11" 이면 10 과 11, "▶p.25" 면 둘 다 25).',
+    '   - source_corner 는 단원 마무리 평가 블록이면 "단원 마무리 평가",',
+    '     일반 소단원 블록이면 그 블록 머리의 소단원 이름을 그대로 적는다.',
+    '   - 검산용이다. 상세표와 어긋나면 서버가 그 item 을 버리므로,',
+    '     **맞추려고 지어내지 말고 눈에 보이는 대로** 적어라.',
+    '[K6] 상세표의 줄마다 item 을 하나씩 만든다. 블록의 첫 문항만 뽑고 끝내지',
+    '   마라. 이 교재는 한 블록에 20~30개가 이어진다. 상세표에 있는데 이 지면에',
+    '   정말 안 보이는 것만 생략한다.',
+    '[K7] "해설 참조", "풀이 참조" 로만 적힌 답은 그대로 answer_text 에 담는다.',
+    '   빈 문자열로 두지 마라.',
+  ];
+}
+
+// 소단원 블록을 가리키는 상세표. 코너가 없는 줄은 본문 페이지 배지가 유일한
+// 단서라 페이지를 반드시 함께 보여 준다.
+function buildSuryeokExpectedTable(expectedEntries, skipBadges) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  if (!rows.length) return [];
+  return [
+    '',
+    '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+    '각 줄은 "돌려줄 problem_number | 답지에서 찾을 블록 | 본문 페이지 배지" 이다.',
+    '번호가 겹치므로 반드시 배지가 맞는 블록에서만 읽어라.',
+    ...rows.map((e) => {
+      const corner = e.corner ? `블록="${e.corner}"` : '블록=일반 소단원';
+      const page = e.page ? `배지=p.${e.page}` : '배지=미상';
+      return `- problem_number="${e.number}" | ${corner} | ${page}`;
+    }),
+    ...buildSuryeokBlockOrderLines(rows),
+    ...buildSuryeokSkipBadgeLines(skipBadges),
+  ];
+}
+
 export function buildExtractAnswersPrompt({
   rawPage,
   displayPage,
   expectedNumbers,
   expectedEntries,
+  skipBadges,
   series,
 }) {
-  const isConceptPlus = String(series || '').trim().toLowerCase() === 'gaeyu';
+  const seriesKey = String(series || '').trim().toLowerCase();
+  const isConceptPlus = seriesKey === 'gaeyu';
+  const isSuryeok = seriesKey === 'suryeok';
+  // 답지 블록이 번호를 재사용하는 교재는 출처(source_*)를 함께 받아 검산한다.
+  const needsSourceBadge = isConceptPlus || isSuryeok;
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 답지(정답지) PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -165,6 +238,10 @@ export function buildExtractAnswersPrompt({
     ...expectedBlock,
     ...(isConceptPlus ? buildConceptPlusExpectedTable(expectedEntries) : []),
     ...(isConceptPlus ? buildConceptPlusAnswerRules() : []),
+    ...(isSuryeok
+        ? buildSuryeokExpectedTable(expectedEntries, skipBadges)
+        : []),
+    ...(isSuryeok ? buildSuryeokAnswerRules() : []),
     '',
     '=== 출력 스키마 ===',
     '{',
@@ -176,7 +253,7 @@ export function buildExtractAnswersPrompt({
     '      "answer_latex_2d": "<주관식일 때 2D 렌더에 쓸 LaTeX. 단순한 경우 answer_text 와 동일. 객관식/그림이면 빈 문자열>",',
       '      "bbox": [<ymin>, <xmin>, <ymax>, <xmax>] | null,',
     '      "answer_assets": [ { "marker": "[image]", "asset_type": "image" | "table" | "grid" | "graph", "bbox": [<ymin>, <xmin>, <ymax>, <xmax>] } ]',
-    ...(isConceptPlus
+    ...(needsSourceBadge
       ? [
           '      ,"source_corner": "<이 답을 읽은 박스의 코너 이름 (본 그대로)>",',
           '      "source_page": <그 박스 배지의 시작 쪽. "P.12~13" 이면 12>,',

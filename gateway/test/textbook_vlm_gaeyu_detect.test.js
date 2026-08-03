@@ -38,7 +38,9 @@ test('개념+유형 프롬프트가 여섯 코너와 번호 규칙을 설명한�
   assert.match(prompt, /"개념 확인" 전용 원형 배지/);
   assert.match(prompt, /\*\*인쇄된 번호가 없다\.\*\*/);
   assert.match(prompt, /"필수 문제" 보라색 배지/);
-  assert.match(prompt, /"1-1", "1-2" 처럼 하이픈이 붙은 번호/);
+  assert.match(prompt, /"1-1", "1-2", "2-1" 처럼 \*\*하이픈이 붙은 번호\(N-M\)\*\*/);
+  assert.match(prompt, /\[D0-Follow\]/);
+  assert.match(prompt, /무조건 따름 문제/);
   assert.match(prompt, /"한번 더 연습" 배지/);
   assert.match(prompt, /절대 step_drill 로 분류하지 마라/);
   assert.match(prompt, /작은 원 세 개/);
@@ -54,8 +56,9 @@ test('개념+유형 프롬프트가 교과서 +α 개념 카드를 문항에서 
   assert.match(prompt, /교과서 \+α/);
   assert.match(prompt, /배경색·테두리색이 무엇이든 개념 카드/);
   assert.match(prompt, /빨간 네모 안에 있어도 개념 번호/);
-  // 배지 없이는 필수 문제로 올리지 못하게 막는 게이트.
-  assert.match(prompt, /같은\*\*\n?.*\*\*줄에 실제로 보일 때만\*\*/s);
+  // 대표 번호는 배지 게이트, 따름(N-M)은 배지 없이도 필수다.
+  assert.match(prompt, /같은 줄에 실제로 보일 때\*\* essential_problem/);
+  assert.match(prompt, /N-M 하이픈 번호는 배지 없이도 무조건/);
   assert.match(prompt, /개념 카드 제목을 content_group\.title\(유형명\)로 쓰지 마라/);
 });
 
@@ -100,6 +103,24 @@ test('개념+유형 따름 문제는 하이픈 번호를 그대로 유지한다'
     ['1', '1-1', '1-2'],
   );
   assert.ok(result.items.every((item) => item.is_set_header === false));
+});
+
+// 136쪽처럼 지면 맨 위의 "2-1"을 개념/쏙쏙으로 오인해도 따름 문제로 고정한다.
+// 개념에는 하이픈 번호가 없고, "필수 문제" 배지도 따름에는 붙지 않는다.
+test('하이픈 번호(N-M)는 카테고리 오인·배지 없어도 따름 문제로 고정한다', () => {
+  const result = detect([
+    { number: '2-1', category: 'step_drill' },
+    { number: '2–2', category: 'unit_drill' },
+    { number: '3 - 1', category: 'concept_check' },
+  ]);
+  assert.deepEqual(
+    result.items.map((item) => [item.number, item.category]),
+    [
+      ['2-1', 'essential_problem'],
+      ['2-2', 'essential_problem'],
+      ['3-1', 'essential_problem'],
+    ],
+  );
 });
 
 test('개념+유형 대표 문항은 모델이 세트 헤더라 해도 일반 크롭으로 남긴다', () => {

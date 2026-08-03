@@ -442,6 +442,9 @@ class TextbookVlmDetectResult {
       'type_example',
       'check',
       'exercise',
+      // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
+      'type_problem',
+      'unit_review',
       'unknown',
     };
     final section = allowedSections.contains(sec) ? sec : 'unknown';
@@ -613,6 +616,9 @@ class TextbookVlmItem {
       'unit_drill',
       'descriptive',
       'extra_practice',
+      // 수력충전 (개념 체크는 개념+유형과 이름을 공유한다)
+      'type_problem',
+      'unit_review',
     };
     final categoryRaw = '${map['category'] ?? ''}'.trim();
 

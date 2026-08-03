@@ -288,6 +288,7 @@ class StudentInfo {
     this.avatarUrl,
     this.avatarEmoji,
     this.avatarMonogramStyle,
+    this.nickname,
   });
 
   final String name;
@@ -300,6 +301,14 @@ class StudentInfo {
   final String? avatarUrl;
   final String? avatarEmoji;
   final int? avatarMonogramStyle;
+
+  /// 학생앱 표시용. 비어 있으면 [name](실명)을 쓴다.
+  final String? nickname;
+
+  String get displayName {
+    final nick = (nickname ?? '').trim();
+    return nick.isNotEmpty ? nick : name.trim();
+  }
 }
 
 class AcademyBranding {
@@ -403,7 +412,7 @@ class AttendanceScoreInfo {
   }
 }
 
-/// 오늘 제출·완료된 과제 그룹 (진행률 상세 카드용).
+/// 오늘 완료된 과제 그룹 (진행률 상세 카드용, completed_at 기준).
 class TodayCompletedHomework {
   const TodayCompletedHomework({
     required this.groupId,
@@ -675,6 +684,7 @@ class StudentApi {
     final rows = await _client.rpc('student_get_info') as List<dynamic>;
     if (rows.isEmpty) return null;
     final row = rows.first as Map<String, dynamic>;
+    final nickRaw = (row['nickname'] as String?)?.trim() ?? '';
     final info = StudentInfo(
       name: (row['name'] as String?) ?? '',
       school: (row['school'] as String?) ?? '',
@@ -686,6 +696,7 @@ class StudentApi {
       avatarUrl: row['avatar_url'] as String?,
       avatarEmoji: row['avatar_emoji'] as String?,
       avatarMonogramStyle: (row['avatar_monogram_style'] as num?)?.toInt(),
+      nickname: nickRaw.isEmpty ? null : nickRaw,
     );
     StudentAvatarSession.instance.hydrateFromServer(
       kindRaw: info.avatarKind,
@@ -732,6 +743,13 @@ class StudentApi {
       'p_url': url,
       'p_emoji': emoji,
       'p_monogram_style': monogramStyle,
+    });
+  }
+
+  /// 빈 문자열이면 닉네임 제거(실명 표시로 복귀).
+  Future<void> setNickname(String? nickname) async {
+    await _client.rpc('student_set_nickname', params: {
+      'p_nickname': (nickname ?? '').trim(),
     });
   }
 

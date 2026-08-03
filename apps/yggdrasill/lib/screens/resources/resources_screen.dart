@@ -32,6 +32,7 @@ import '../../utils/naesin_exam_context.dart';
 import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../../services/textbook_download_progress_service.dart';
 import '../../services/textbook_viewer_preference.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
@@ -6498,6 +6499,35 @@ class _GridFileCardState extends State<_GridFileCard> {
       if (isTextbook &&
           (TextbookViewerPreference.instance.useInApp ||
               _isStorageBackedTextbookLink(link))) {
+        // 스토리지 교재는 미캐시면 전체화면 뷰어 대신 우하단 안내창으로 받는다.
+        if (_isStorageBackedTextbookLink(link)) {
+          bool cached = false;
+          try {
+            cached = await resState?._isTextbookPdfCached(
+                  fileId: file.id,
+                  gradeLabel: currentGrade,
+                  kind: 'body',
+                ) ??
+                false;
+          } catch (_) {}
+          if (!cached) {
+            await _enqueueTextbookBackgroundDownload(
+              context,
+              fileId: file.id,
+              displayName: file.name,
+              gradeLabel: currentGrade,
+              kind: 'body',
+              onCompleted: () {
+                resState?._invalidateTextbookCacheStatus(
+                  fileId: file.id,
+                  gradeLabel: currentGrade,
+                  kind: 'body',
+                );
+              },
+            );
+            return;
+          }
+        }
         await _openTextbookInAppViewer(
           context,
           fileId: file.id,
@@ -6629,7 +6659,21 @@ class _GridFileCardState extends State<_GridFileCard> {
                 cached = false;
               }
               if (!cached) {
-                await openPrimaryLink();
+                // 미캐시 마이그레이션 교재: 전체화면 대신 우하단 안내창으로 다운로드.
+                await _enqueueTextbookBackgroundDownload(
+                  context,
+                  fileId: file.id,
+                  displayName: file.name,
+                  gradeLabel: currentGrade!,
+                  kind: 'body',
+                  onCompleted: () {
+                    resState?._invalidateTextbookCacheStatus(
+                      fileId: file.id,
+                      gradeLabel: currentGrade!,
+                      kind: 'body',
+                    );
+                  },
+                );
                 return;
               }
               // 마이그레이션(스토리지) 교재 + 다운로드 완료 → 페이지 진입.
@@ -7486,6 +7530,32 @@ Future<void> _openTextbookInAppViewer(
     // resources screen. Any dialog-level errors are already surfaced inside
     // the viewer itself.
   }
+}
+
+/// 마이그레이션 교재 PDF를 백그라운드로 받아 우하단 안내창에 진행률을 표시한다.
+Future<void> _enqueueTextbookBackgroundDownload(
+  BuildContext context, {
+  required String fileId,
+  required String displayName,
+  required String gradeLabel,
+  required String kind,
+  VoidCallback? onCompleted,
+}) async {
+  try {
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    if (academyId == null || academyId.isEmpty) return;
+    await TextbookDownloadProgressService.instance.enqueue(
+      ref: TextbookPdfRef(
+        academyId: academyId,
+        fileId: fileId,
+        gradeLabel: gradeLabel,
+        kind: kind,
+        displayName: displayName,
+      ),
+      title: displayName,
+      onCompleted: onCompleted,
+    );
+  } catch (_) {}
 }
 
 class _SmallLinkButton extends StatelessWidget {

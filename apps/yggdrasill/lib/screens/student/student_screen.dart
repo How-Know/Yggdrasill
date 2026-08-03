@@ -530,13 +530,9 @@ class StudentScreenState extends State<StudentScreen> {
             child: Builder(
               builder: (context) {
                 if (_customTabIndex == 0) {
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom:
-                          FabTabBarTokens.fabStyleScreenTabBarBottomPadding - 28,
-                    ),
-                    child: _buildAllStudentsView(),
-                  );
+                  // FAB/탭바는 오버레이이므로 본문을 줄이지 않는다.
+                  // 리스트·상세는 스크롤 하단 패딩으로 FAB 아래까지 지나간다.
+                  return _buildAllStudentsView();
                 } else {
                   // 성향 → 웹 설문 임베드
                   return Container(
@@ -1781,7 +1777,12 @@ class StudentScreenState extends State<StudentScreen> {
           Row(
             children: [
               Text(
-                student.name,
+                () {
+                  final nick = (student.nickname ?? '').trim();
+                  return nick.isEmpty
+                      ? student.name
+                      : '${student.name} - $nick';
+                }(),
                 style: const TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.bold,

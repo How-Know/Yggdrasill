@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_avatar_session.dart';
@@ -52,22 +53,9 @@ class StudentAvatarView extends StatelessWidget {
               child = _MonogramDisk(name: name, radius: radius);
             }
           case StudentAvatarKind.emoji:
-            final bg = StudentAvatarSession.sampleEmojis
-                .where((e) => e.$1 == session.emoji)
-                .map((e) => e.$2)
-                .firstOrNull;
-            child = Container(
-              width: size,
-              height: size,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: bg ?? const Color(0xFF3A3A3C),
-              ),
-              child: Text(
-                session.emoji,
-                style: TextStyle(fontSize: radius * 1.05, height: 1.1),
-              ),
+            child = _EmojiDisk(
+              emoji: session.emoji,
+              radius: radius,
             );
           case StudentAvatarKind.monogram:
             child = _MonogramDisk(
@@ -92,6 +80,57 @@ class StudentAvatarView extends StatelessWidget {
           child: child,
         );
       },
+    );
+  }
+}
+
+class _EmojiDisk extends StatelessWidget {
+  const _EmojiDisk({
+    required this.emoji,
+    required this.radius,
+    this.showShadow = false,
+  });
+
+  final String emoji;
+  final double radius;
+  final bool showShadow;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = radius * 2;
+    final fluent = StudentAvatarSession.fluentOptionFor(emoji);
+    final bg = StudentAvatarSession.emojiBackground(emoji) ??
+        const Color(0xFF3A3A3C);
+    final imageSize = radius * 1.35;
+
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: bg,
+        boxShadow: showShadow
+            ? const [
+                BoxShadow(
+                  color: Color(0x33000000),
+                  blurRadius: 24,
+                  offset: Offset(0, 10),
+                ),
+              ]
+            : null,
+      ),
+      child: fluent != null
+          ? SvgPicture.asset(
+              fluent.asset,
+              width: imageSize,
+              height: imageSize,
+              fit: BoxFit.contain,
+            )
+          : Text(
+              emoji,
+              style: TextStyle(fontSize: radius * 1.05, height: 1.1),
+            ),
     );
   }
 }

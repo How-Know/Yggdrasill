@@ -6,6 +6,11 @@
 // 입력: 해설 PDF 의 한 페이지를 래스터한 PNG
 // 출력 규약: JSON only. 0..1000 정규화 [ymin, xmin, ymax, xmax].
 
+import {
+  buildSuryeokBlockOrderLines,
+  buildSuryeokSkipBadgeLines,
+} from './vlm_suryeok_blocks.js';
+
 // 개념+유형 해설도 답지와 같은 코너 박스 구조라, 코너마다 번호가 1번부터
 // 다시 시작한다("필수 문제 4" 옆에 "STEP1 쏙쏙 개념 익히기"의 1~6 이 나란히
 // 있다). 번호만 주면 어느 코너의 몇 번인지 고를 수 없어서, 답지 프롬프트와
@@ -81,14 +86,62 @@ function buildConceptPlusSolutionRefRules(expectedEntries) {
   ];
 }
 
+// 수력충전 해설. 답지와 같은 소단원 블록 구조라서 블록 머리의 본문 페이지
+// 배지("▶p.10~11")가 유일한 분간 수단이다. 번호는 블록마다 01부터 다시
+// 시작하므로 번호만 보고 잡으면 남의 풀이 좌표가 들어앉는다.
+function buildSuryeokSolutionRefRules(expectedEntries, skipBadges) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  return [
+    '',
+    '=== 수력충전 해설 읽는 법 (매우 중요) ===',
+    '[K1] 지면은 소단원 블록 여러 개로 나뉜다. 블록 머리에 "01 거듭제곱과',
+    '   지수법칙  ▶p.10~11" 처럼 소단원 번호·이름과 본문 페이지 배지가 붙고,',
+    '   그 아래 01, 02 … 순으로 "답 …" 과 풀이가 이어진다.',
+    '   중단원 끝 블록만 "단원 마무리 평가  ▶문제편 p.29~33" 으로 인쇄된다.',
+    '[K2] 번호는 블록마다 01부터 다시 시작한다. 반드시 상세표의 배지와 같은',
+    '   본문 페이지를 가진 블록에서만 잡아라. 배지가 범위면 그 안에 들면 일치다.',
+    '   기대 번호를 못 찾았으면 옆 블록의 같은 번호를 대신 집어오지 말고',
+    '   item 을 만들지 마라. 다만 배지가 **안 보이는** 이어지는 블록은 [C1~C3]',
+    '   으로 어느 블록인지 짚어서 반드시 잡아라.',
+    '[K3] number_region 은 인쇄된 굵은 번호("01")만 감싼다. content_region 은',
+    '   그 번호부터 다음 번호 직전까지의 풀이 영역이다.',
+    '[K4] problem_number 는 기대 번호 문자열 그대로 돌려줘라("01").',
+    '   이 규칙은 [R1] 의 "원문 그대로" 보다 우선한다.',
+    '[K5] source_page 는 블록 배지의 시작 쪽, source_page_end 는 끝 쪽이다',
+    '   ("▶p.10~11" → 10/11). source_corner 는 단원 마무리 평가 블록이면',
+    '   "단원 마무리 평가", 아니면 블록 머리의 소단원 이름을 그대로 적는다.',
+    '[K6] 답만 있고 풀이가 없는 문항(예: "01 답 a³")도 item 으로 만든다.',
+    ...(rows.length
+      ? [
+          '',
+          '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+          '각 줄은 "돌려줄 problem_number | 찾을 블록 | 본문 페이지 배지" 이다.',
+          ...rows.map((e) => {
+            const corner = e.corner ? `블록="${e.corner}"` : '블록=일반 소단원';
+            const page = e.page ? `배지=p.${e.page}` : '배지=미상';
+            return `- problem_number="${e.number}" | ${corner} | ${page}`;
+          }),
+        ]
+      : []),
+    ...buildSuryeokBlockOrderLines(rows),
+    ...buildSuryeokSkipBadgeLines(skipBadges),
+  ];
+}
+
 export function buildDetectSolutionRefsPrompt({
   rawPage,
   displayPage,
   expectedNumbers,
   expectedEntries,
+  skipBadges,
   series,
 }) {
-  const isConceptPlus = String(series || '').trim().toLowerCase() === 'gaeyu';
+  const seriesKey = String(series || '').trim().toLowerCase();
+  const isConceptPlus = seriesKey === 'gaeyu';
+  const isSuryeok = seriesKey === 'suryeok';
+  const needsSourceBadge = isConceptPlus || isSuryeok;
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 해설 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -121,6 +174,9 @@ export function buildDetectSolutionRefsPrompt({
     '',
     ...expectedBlock,
     ...(isConceptPlus ? buildConceptPlusSolutionRefRules(expectedEntries) : []),
+    ...(isSuryeok
+        ? buildSuryeokSolutionRefRules(expectedEntries, skipBadges)
+        : []),
     '',
     '=== 출력 스키마 ===',
     '{',
@@ -129,7 +185,7 @@ export function buildDetectSolutionRefsPrompt({
     '      "problem_number": "<원문 그대로. 예: \\"0001\\", \\"12\\", \\"48~52\\">",',
     '      "number_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
     '      "content_region": [<ymin>, <xmin>, <ymax>, <xmax>] | null',
-    ...(isConceptPlus
+    ...(needsSourceBadge
       ? [
           '      ,"source_corner": "<이 해설이 실린 블록의 코너 이름 (본 그대로)>",',
           '      "source_page": <그 블록 배지의 시작 쪽. "P.12~13" 이면 12>,',

@@ -22,6 +22,8 @@ import {
 } from './problem_number_key.js';
 
 const ANSWER_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+// 한 지면에 블록이 여러 개 쌓이고 블록마다 번호가 1번부터 다시 시작하는 교재.
+const ANSWER_DENSE_SERIES = new Set(['gaeyu', 'suryeok']);
 const ANSWER_DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {
@@ -45,6 +47,7 @@ export async function extractAnswersOnPage({
   pageOffset,
   expectedNumbers,
   expectedEntries,
+  skipBadges,
   series,
   model,
   apiKey,
@@ -79,6 +82,7 @@ export async function extractAnswersOnPage({
               pageOffset,
               expectedNumbers,
               expectedEntries,
+              skipBadges,
               series,
             }),
           },
@@ -91,12 +95,14 @@ export async function extractAnswersOnPage({
       maxOutputTokens: 32768,
       // 개념+유형 답지는 한 지면에 코너별 박스가 6~10개 쌓이고, 각 박스 안에서
       // 필수 문제와 따름 문제가 다시 갈린다. thinkingLevel=low 로는 박스 하나당
-      // 첫 문항만 뽑고 멈추는 누락이 재현된다. 이 시리즈만 사고 예산을 올린다.
+      // 첫 문항만 뽑고 멈추는 누락이 재현된다. 수력충전도 소단원 블록이 여럿에
+      // 블록당 20~30문항이 이어져 같은 누락이 난다. 두 시리즈만 예산을 올린다.
       thinkingConfig: {
-        thinkingLevel:
-          String(series || '').trim().toLowerCase() === 'gaeyu'
-            ? 'medium'
-            : 'low',
+        thinkingLevel: ANSWER_DENSE_SERIES.has(
+          String(series || '').trim().toLowerCase(),
+        )
+          ? 'medium'
+          : 'low',
       },
     },
   };

@@ -1507,10 +1507,12 @@ class DataManager {
         final rows = await supa
             .from('students')
             .select(
-                'id,name,school,education_level,grade,avatar_kind,avatar_url,avatar_emoji,avatar_monogram_style')
+                'id,name,school,education_level,grade,avatar_kind,avatar_url,avatar_emoji,avatar_monogram_style,nickname')
             .eq('academy_id', academyId);
         final supaStudents = (rows as List)
-            .map((r) => Student(
+            .map((r) {
+              final nick = (r['nickname'] as String?)?.trim();
+              return Student(
                   id: r['id'] as String,
                   name: (r['name'] as String?) ?? '',
                   school: (r['school'] as String?) ?? '',
@@ -1522,7 +1524,9 @@ class DataManager {
                   avatarEmoji: r['avatar_emoji'] as String?,
                   avatarMonogramStyle:
                       (r['avatar_monogram_style'] as num?)?.toInt(),
-                ))
+                  nickname: (nick == null || nick.isEmpty) ? null : nick,
+                );
+            })
             .toList();
         final sbiRows = await supa
             .from('student_basic_info')
@@ -1592,6 +1596,7 @@ class DataManager {
               avatarUrl: supaStudents[i].avatarUrl,
               avatarEmoji: supaStudents[i].avatarEmoji,
               avatarMonogramStyle: supaStudents[i].avatarMonogramStyle,
+              nickname: supaStudents[i].nickname,
             )
         ];
         _studentsWithInfo = [

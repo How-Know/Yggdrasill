@@ -45,6 +45,7 @@ class TextbookExpectedAnswerBatch {
   TextbookExpectedAnswerBatch({
     required this.positions,
     required this.entries,
+    this.requireExpectedIndex = false,
   }) : assert(positions.length == entries.length);
 
   /// 호출자의 전체 기대 목록에서의 위치.
@@ -52,6 +53,15 @@ class TextbookExpectedAnswerBatch {
 
   /// 이번 호출에 실제로 보낸 기대 문항.
   final List<TextbookExpectedAnswer> entries;
+
+  /// 번호로 되짚는 보정을 끌지 여부.
+  ///
+  /// 블록마다 번호가 01부터 다시 시작하는 교재(개념+유형·수력충전)는 한 호출에
+  /// 같은 "02" 가 블록 수만큼 들어 있다. 게이트웨이가 배지로 블록을 특정하지
+  /// 못해 위치를 못 돌려준 항목을 번호로 되짚으면 **목록에서 먼저 나온 블록**의
+  /// 크롭에 붙는다. 실제로 해설 좌표 8쌍이 서로 다른 소단원의 같은 자리를
+  /// 가리켰다. 근거 없이 붙이느니 비워 두고 다음 지면에서 다시 찾게 한다.
+  final bool requireExpectedIndex;
 
   bool get isEmpty => entries.isEmpty;
 
@@ -69,6 +79,7 @@ class TextbookExpectedAnswerBatch {
     if (expectedIndex >= 0 && expectedIndex < positions.length) {
       return <int>[positions[expectedIndex]];
     }
+    if (requireExpectedIndex) return const <int>[];
     final key = textbookAnswerNumberKey(detectedNumber);
     if (key.isNotEmpty) {
       for (var i = 0; i < entries.length; i += 1) {
@@ -100,9 +111,24 @@ const Map<String, String> _kConceptPlusAnswerCorners = <String, String>{
   'extra_practice': '한번 더 연습',
 };
 
-/// 코너 이름을 붙일 수 있는 시리즈인지. 지금은 개념+유형만 해당한다.
-bool textbookAnswerNeedsCorner(String seriesKey) =>
-    seriesKey.trim().toLowerCase() == 'gaeyu';
+/// 수력충전 크롭의 section → 답지 블록 이름.
+///
+/// 소단원 블록에는 코너 이름 대신 소단원 이름이 찍혀 있어 크롭 정보만으로는
+/// 알 수 없다. 대신 블록 머리의 본문 페이지 배지("▶p.10~11")가 블록을
+/// 특정하므로 코너는 비우고 [TextbookExpectedAnswer.bodyPage] 로 가른다.
+/// 단원 마무리 평가만 이름이 고정이라 코너로 쓸 수 있다.
+const Map<String, String> _kSuryeokAnswerCorners = <String, String>{
+  'unit_review': '단원 마무리 평가',
+};
+
+/// 답지 블록을 코너·본문 페이지로 가려야 하는 시리즈인지.
+///
+/// 번호가 블록마다 1번(01번)부터 다시 시작해 한 지면에 같은 번호가 여러 번
+/// 나오는 교재들이다.
+bool textbookAnswerNeedsCorner(String seriesKey) {
+  final key = seriesKey.trim().toLowerCase();
+  return key == 'gaeyu' || key == 'suryeok';
+}
 
 /// 번호가 블록마다 1번부터 다시 시작하는 코너. 앱은 이 코너의 크롭에만
 /// 본문 페이지를 접두어로 붙여 저장한다("14-1").
@@ -144,6 +170,14 @@ TextbookExpectedAnswer textbookExpectedAnswerFor({
     return TextbookExpectedAnswer(number: problemNumber);
   }
   final bodyPage = displayPage != null && displayPage > 0 ? displayPage : null;
+  if (seriesKey.trim().toLowerCase() == 'suryeok') {
+    // 수력충전은 번호에 접두어를 붙이지 않는다. 블록은 본문 페이지로 가른다.
+    return TextbookExpectedAnswer(
+      number: problemNumber,
+      corner: _kSuryeokAnswerCorners[section.trim()] ?? '',
+      bodyPage: bodyPage,
+    );
+  }
   return TextbookExpectedAnswer(
     number: _conceptPlusPrintedNumber(
       number: problemNumber,
@@ -262,6 +296,7 @@ class TextbookVlmAnswerService {
     required String gradeLabel,
     List<String>? expectedNumbers,
     List<TextbookExpectedAnswer>? expectedDetails,
+    List<String>? skipBadges,
     String seriesKey = '',
     String mimeType = 'image/png',
   }) async {
@@ -279,6 +314,8 @@ class TextbookVlmAnswerService {
       'grade_label': gradeLabel,
       if (seriesKey.trim().isNotEmpty) 'series': seriesKey.trim(),
       if (expected != null) 'expected_numbers': expected,
+      if (skipBadges != null && skipBadges.isNotEmpty)
+        'skip_badges': skipBadges,
     };
     final res = await _http.post(
       _uri('/textbook/vlm/extract-answers'),
@@ -299,6 +336,32 @@ class TextbookVlmAnswerService {
       );
     }
     return TextbookVlmAnswerPageResult.fromMap(json);
+  }
+
+  /// 수력충전 빠른 정답 지면을 소단원 머리와 번호/정답 순서로 읽는다.
+  /// 실제 본문 크롭과의 매칭은 저장된 소단원별 문항 목록으로 앱이 수행한다.
+  Future<TextbookVlmAnswerLayoutPage> extractAnswerLayoutOnPage({
+    required Uint8List imageBytes,
+    required int rawPage,
+    String mimeType = 'image/png',
+  }) async {
+    final res = await _http.post(
+      _uri('/textbook/vlm/extract-answer-layout'),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{
+        'image_base64': base64Encode(imageBytes),
+        'mime_type': mimeType,
+        'raw_page': rawPage,
+      }),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'vlm_extract_answer_layout_failed(${res.statusCode}): '
+        '${json['error'] ?? json['message'] ?? res.body}',
+      );
+    }
+    return TextbookVlmAnswerLayoutPage.fromMap(json);
   }
 
   /// Upserts a batch of (crop_id → answer) rows into the Stage-2 sidecar.
@@ -379,6 +442,66 @@ class TextbookVlmAnswerService {
 }
 
 /// One row returned by the Stage-2 VLM per-page extractor.
+class TextbookVlmAnswerLayoutEntry {
+  const TextbookVlmAnswerLayoutEntry({
+    required this.isHeader,
+    this.title = '',
+    this.pageStart = 0,
+    this.pageEnd = 0,
+    this.answer,
+  });
+
+  final bool isHeader;
+  final String title;
+  final int pageStart;
+  final int pageEnd;
+  final TextbookVlmAnswerItem? answer;
+
+  factory TextbookVlmAnswerLayoutEntry.fromMap(Map<String, dynamic> map) {
+    int asInt(dynamic value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse('$value') ?? 0;
+    }
+
+    final isHeader = '${map['kind']}' == 'header';
+    return TextbookVlmAnswerLayoutEntry(
+      isHeader: isHeader,
+      title: '${map['title'] ?? ''}'.trim(),
+      pageStart: asInt(map['page_start']),
+      pageEnd: asInt(map['page_end']),
+      answer: isHeader ? null : TextbookVlmAnswerItem.fromMap(map),
+    );
+  }
+}
+
+class TextbookVlmAnswerLayoutPage {
+  const TextbookVlmAnswerLayoutPage({
+    required this.rawPage,
+    required this.leadingContinuation,
+    required this.entries,
+  });
+
+  final int rawPage;
+  final bool leadingContinuation;
+  final List<TextbookVlmAnswerLayoutEntry> entries;
+
+  factory TextbookVlmAnswerLayoutPage.fromMap(Map<String, dynamic> map) {
+    final raw = (map['entries'] as List?) ?? const [];
+    return TextbookVlmAnswerLayoutPage(
+      rawPage: int.tryParse('${map['raw_page']}') ?? 0,
+      leadingContinuation: map['leading_continuation'] == true,
+      entries: <TextbookVlmAnswerLayoutEntry>[
+        for (final entry in raw)
+          if (entry is Map)
+            TextbookVlmAnswerLayoutEntry.fromMap(
+              entry.map((k, dynamic v) => MapEntry('$k', v)),
+            ),
+      ],
+    );
+  }
+}
+
 class TextbookVlmAnswerItem {
   const TextbookVlmAnswerItem({
     required this.problemNumber,

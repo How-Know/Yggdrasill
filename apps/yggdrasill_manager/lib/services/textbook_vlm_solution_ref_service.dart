@@ -64,6 +64,7 @@ class TextbookVlmSolutionRefService {
     required String gradeLabel,
     List<String>? expectedNumbers,
     List<TextbookExpectedAnswer>? expectedDetails,
+    List<String>? skipBadges,
     String seriesKey = '',
     String mimeType = 'image/png',
   }) async {
@@ -82,6 +83,8 @@ class TextbookVlmSolutionRefService {
       'grade_label': gradeLabel,
       if (seriesKey.trim().isNotEmpty) 'series': seriesKey.trim(),
       if (expected != null) 'expected_numbers': expected,
+      if (skipBadges != null && skipBadges.isNotEmpty)
+        'skip_badges': skipBadges,
     };
     final res = await _http.post(
       _uri('/textbook/vlm/detect-solution-refs'),
@@ -102,6 +105,36 @@ class TextbookVlmSolutionRefService {
       );
     }
     return TextbookVlmSolutionRefPageResult.fromMap(json);
+  }
+
+  /// 해설 지면에 실려 있는 소단원 블록 머리 목록만 읽는다.
+  ///
+  /// 문항을 바로 물으면 모델이 그 지면에 있는 **다른 소단원** 풀이를 번호만
+  /// 맞춰 돌려준다(이어지는 지면에는 블록 머리가 안 찍혀 분간할 단서가 없다).
+  /// 지면마다 블록 목록을 먼저 확정해 두면 어느 블록을 어느 지면에서 물을지
+  /// 정해진다. (POST /textbook/vlm/detect-solution-blocks)
+  Future<TextbookVlmSolutionBlockPage> detectBlocksOnPage({
+    required Uint8List imageBytes,
+    required int rawPage,
+    String mimeType = 'image/png',
+  }) async {
+    final res = await _http.post(
+      _uri('/textbook/vlm/detect-solution-blocks'),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{
+        'image_base64': base64Encode(imageBytes),
+        'mime_type': mimeType,
+        'raw_page': rawPage,
+      }),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'vlm_detect_solution_blocks_failed(${res.statusCode}): '
+        '${json['error'] ?? json['message'] ?? res.body}',
+      );
+    }
+    return TextbookVlmSolutionBlockPage.fromMap(json);
   }
 
   /// 정답·풀이가 본문에 인쇄된 문항 전용 — 본문 PDF 페이지에서 풀이 단락
@@ -272,6 +305,135 @@ class TextbookVlmSolutionRefPageResult {
       notes: '${map['notes'] ?? ''}',
       elapsedMs: asInt(map['elapsed_ms']),
       model: '${map['model'] ?? ''}',
+    );
+  }
+}
+
+/// 해설 지면 하나에서 읽은 블록 머리 하나.
+class TextbookVlmSolutionBlock {
+  const TextbookVlmSolutionBlock({
+    required this.title,
+    required this.pageStart,
+    required this.pageEnd,
+  });
+
+  /// 블록 머리에 인쇄된 이름("04 두 선분의 길이의 합의 최솟값").
+  final String title;
+
+  /// 본문 페이지 배지("▶p.16~17")의 시작·끝 쪽. 못 읽었으면 0.
+  final int pageStart;
+  final int pageEnd;
+
+  factory TextbookVlmSolutionBlock.fromMap(Map<String, dynamic> map) {
+    int asInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('$v') ?? 0;
+    }
+
+    return TextbookVlmSolutionBlock(
+      title: '${map['title'] ?? ''}'.trim(),
+      pageStart: asInt(map['page_start']),
+      pageEnd: asInt(map['page_end']),
+    );
+  }
+}
+
+/// 지면을 읽는 차례대로 늘어놓은 요소 하나 — 블록 머리이거나 문항 번호다.
+class TextbookVlmSolutionPageEntry {
+  const TextbookVlmSolutionPageEntry({
+    required this.isHeader,
+    required this.column,
+    this.title = '',
+    this.pageStart = 0,
+    this.pageEnd = 0,
+    this.text = '',
+    this.numberRegion1k,
+    this.contentRegion1k,
+  });
+
+  final bool isHeader;
+
+  /// 몇 번째 단(column)에 있는지. 읽는 차례는 단 → 위에서 아래.
+  final int column;
+
+  final String title;
+  final int pageStart;
+  final int pageEnd;
+
+  /// 인쇄된 문항 번호("01").
+  final String text;
+  final List<int>? numberRegion1k;
+  final List<int>? contentRegion1k;
+
+  factory TextbookVlmSolutionPageEntry.fromMap(Map<String, dynamic> map) {
+    List<int>? bbox(dynamic raw) {
+      if (raw is! List || raw.length != 4) return null;
+      final out = <int>[];
+      for (final v in raw) {
+        final n = v is num ? v.toInt() : int.tryParse('$v');
+        if (n == null) return null;
+        out.add(n);
+      }
+      return out;
+    }
+
+    int asInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('$v') ?? 0;
+    }
+
+    return TextbookVlmSolutionPageEntry(
+      isHeader: '${map['kind']}' == 'header',
+      column: asInt(map['column']),
+      title: '${map['title'] ?? ''}'.trim(),
+      pageStart: asInt(map['page_start']),
+      pageEnd: asInt(map['page_end']),
+      text: '${map['text'] ?? ''}'.trim(),
+      numberRegion1k: bbox(map['number_region']),
+      contentRegion1k: bbox(map['content_region']),
+    );
+  }
+}
+
+class TextbookVlmSolutionBlockPage {
+  const TextbookVlmSolutionBlockPage({
+    required this.rawPage,
+    required this.leadingContinuation,
+    required this.blocks,
+    required this.sequence,
+  });
+
+  final int rawPage;
+
+  /// 지면 첫머리가 블록 머리 없이 번호부터 시작하는지 — 앞 지면에서 넘어온 것.
+  final bool leadingContinuation;
+  final List<TextbookVlmSolutionBlock> blocks;
+
+  /// 블록 머리와 문항 번호를 읽는 차례대로 늘어놓은 것.
+  final List<TextbookVlmSolutionPageEntry> sequence;
+
+  factory TextbookVlmSolutionBlockPage.fromMap(Map<String, dynamic> map) {
+    final raw = (map['blocks'] as List?) ?? const [];
+    final seq = (map['sequence'] as List?) ?? const [];
+    return TextbookVlmSolutionBlockPage(
+      rawPage: int.tryParse('${map['raw_page']}') ?? 0,
+      leadingContinuation: map['leading_continuation'] == true,
+      blocks: <TextbookVlmSolutionBlock>[
+        for (final r in raw)
+          if (r is Map)
+            TextbookVlmSolutionBlock.fromMap(
+              r.map((k, dynamic v) => MapEntry('$k', v)),
+            ),
+      ],
+      sequence: <TextbookVlmSolutionPageEntry>[
+        for (final r in seq)
+          if (r is Map)
+            TextbookVlmSolutionPageEntry.fromMap(
+              r.map((k, dynamic v) => MapEntry('$k', v)),
+            ),
+      ],
     );
   }
 }

@@ -185,6 +185,58 @@ export function extractBalancedJsonObject(input) {
   return null;
 }
 
+function tryParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return null;
+  }
+}
+
+// 짝이 없는 닫는 괄호를 지운다.
+//
+// Gemini 가 배열을 두 번 닫아 버리는 quirk 가 관측된다 (finishReason=STOP, 절단
+// 아님). 예) '... "questions": [ {..}, {..} ]\n  ]\n}' — questions 배열의 ']' 가
+// 하나 더 붙는다. 이러면 스택이 루트 '{' 까지 잘못 닫혀서 closeTruncatedJson 의
+// 두 후보 모두 발동 조건(스택 잔여)을 잃고, 같은 응답이 재시도에서도 그대로
+// 나와 지면 전체가 실패한다.
+//
+// 문자열 리터럴을 인식하며 열린 컨테이너를 추적해, 스택 top 과 짝이 맞지 않는
+// 닫는 괄호만 버린다. 버린 것이 없으면 null 을 돌려 호출부가 다음 후보로 넘어가게 한다.
+export function dropUnmatchedClosers(input) {
+  if (typeof input !== 'string' || !input) return null;
+  let inStr = false;
+  let esc = false;
+  const stack = [];
+  const out = [];
+  let dropped = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inStr) {
+      out.push(ch);
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+    } else if (ch === '{') {
+      stack.push('}');
+    } else if (ch === '[') {
+      stack.push(']');
+    } else if (ch === '}' || ch === ']') {
+      if (stack[stack.length - 1] !== ch) {
+        dropped += 1;
+        continue;
+      }
+      stack.pop();
+    }
+    out.push(ch);
+  }
+  return dropped > 0 ? out.join('') : null;
+}
+
 export function closeTruncatedJson(input) {
   if (typeof input !== 'string' || !input) return null;
   let inStr = false;
@@ -368,6 +420,23 @@ export async function callGeminiWithPdf({
             parsedJson = JSON.parse(m[0]);
           } catch (_) {
             // 다음 단계(닫는 괄호 보정)로.
+          }
+        }
+      }
+      // 닫는 괄호가 하나 더 붙은 경우(예: 배열을 두 번 닫음) 짝 없는 괄호만
+      // 버리고 다시 시도한다. 스택이 망가진 상태로는 아래 절단 복구가 발동조건을
+      // 잃으므로 그 앞에 둔다.
+      if (!parsedJson) {
+        const pruned =
+          dropUnmatchedClosers(repaired) || dropUnmatchedClosers(modelText);
+        if (pruned) {
+          try {
+            parsedJson = JSON.parse(pruned);
+          } catch (_) {
+            parsedJson =
+              (extractBalancedJsonObject(pruned)
+                ? tryParseJson(extractBalancedJsonObject(pruned))
+                : null) || closeTruncatedJson(pruned);
           }
         }
       }

@@ -889,7 +889,8 @@ class _TodayHomeworkProgressSectionState
   Future<void> _toggle() async {
     final next = !_expanded;
     setState(() => _expanded = next);
-    if (next) await _ensureCompletedLoaded();
+    // 펼칠 때마다 다시 받아 학습앱 완료 반영을 바로 본다.
+    if (next) await _ensureCompletedLoaded(force: true);
   }
 
   Future<void> _ensureCompletedLoaded({bool force = false}) async {

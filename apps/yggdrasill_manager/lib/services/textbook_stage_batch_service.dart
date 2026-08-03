@@ -275,6 +275,7 @@ class TextbookStageBatchService {
     final batch = TextbookExpectedAnswerBatch(
       positions: <int>[for (var i = 0; i < targets.length; i += 1) i],
       entries: <TextbookExpectedAnswer>[for (final t in targets) t.expected],
+      requireExpectedIndex: textbookAnswerNeedsCorner(seriesKey),
     );
 
     final hits = <int, _BatchAnswerHit>{};
@@ -446,6 +447,7 @@ class TextbookStageBatchService {
     final batch = TextbookExpectedAnswerBatch(
       positions: <int>[for (var i = 0; i < targets.length; i += 1) i],
       entries: <TextbookExpectedAnswer>[for (final t in targets) t.expected],
+      requireExpectedIndex: textbookAnswerNeedsCorner(seriesKey),
     );
     final hits = <int, _SolutionRefWithPage>{};
     final totalPages = doc.pages.length;
@@ -538,6 +540,7 @@ class TextbookStageBatchService {
               for (final position in sectionPositions)
                 targets[position].expected,
             ],
+            requireExpectedIndex: textbookAnswerNeedsCorner(seriesKey),
           );
           final verified = await _solutionRefService.detectOnPage(
             imageBytes: png,

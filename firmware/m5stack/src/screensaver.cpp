@@ -78,6 +78,7 @@ static void close_timer_cb(lv_timer_t* t) {
     
     if (g_prev_scr) lv_scr_load(g_prev_scr);
     if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
+    lv_indev_reset(NULL, NULL);
     g_last_activity_ms = lv_tick_get();
     if (g_wake_cb) g_wake_cb();
 }
@@ -688,16 +689,15 @@ void screensaver_init(uint32_t timeout_ms) {
 
 void screensaver_attach_activity(lv_obj_t* root) {
     if (!root) return;
-    
-    // 중복 부착 방지: 최대 10개 객체 추적
-    static lv_obj_t* attached_objs[10] = {NULL};
-    for (int i = 0; i < 10; i++) {
-        if (attached_objs[i] == root) return; // 이미 부착됨
-        if (attached_objs[i] == NULL) {
-            attached_objs[i] = root; // 새로 추가
-            break;
-        }
-    }
+
+    // 중복 부착 방지.
+    // 고정 크기 추적 배열은 (1) 10칸을 넘기면 중복을 전혀 못 걸러내고
+    // (2) 삭제된 객체 주소가 남아 잘못 판정한다. 특히 lv_scr_act()처럼 매번 같은
+    // 객체에 부착하는 호출이 많아 콜백이 무한 누적되고, 터치 한 번에 처리해야 할
+    // 콜백이 계속 늘어나 결국 lv_timer_handler()가 끝나지 않는다(=기기 정지).
+    // 부착 전에 기존 콜백을 모두 제거해 항상 한 벌만 유지한다.
+    while (lv_obj_remove_event_cb(root, any_activity_event_cb)) { }
+
     // 버블 보장
     lv_obj_add_flag(root, LV_OBJ_FLAG_EVENT_BUBBLE);
     // 필요한 이벤트만 등록
@@ -805,6 +805,9 @@ void screensaver_check_shake(void) {
         if (g_prev_scr) lv_scr_load(g_prev_scr);
         Serial.println("[SS-DIAG] after lv_scr_load / before lv_obj_del"); Serial.flush();
         if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
+        // 삭제된 화면을 가리킨 채로 남은 입력 상태(누름 중인 객체·스크롤 관성)를 버린다.
+        // 그대로 두면 다음 화면을 만들 때 LVGL이 해제된 메모리를 따라가 무한 루프에 빠진다.
+        lv_indev_reset(NULL, NULL);
         Serial.println("[SS-DIAG] after lv_obj_del / before wake_cb"); Serial.flush();
         g_last_activity_ms = lv_tick_get();
         if (g_wake_cb) g_wake_cb();
@@ -829,6 +832,7 @@ void screensaver_dismiss(void) {
         g_mouth = NULL; g_face_container = NULL;
         if (g_prev_scr) lv_scr_load(g_prev_scr);
         if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
+        lv_indev_reset(NULL, NULL);
         g_last_activity_ms = lv_tick_get();
         if (g_wake_cb) g_wake_cb();
     } else {

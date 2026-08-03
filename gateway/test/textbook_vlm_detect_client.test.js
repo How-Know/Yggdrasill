@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  mergeItemGeometry,
   normalizeDetectResult,
   shouldTreatWonriPageAsConcept,
 } from '../src/textbook/vlm_detect_client.js';
 import {
   buildDetectProblemsPrompt,
+  buildItemGeometryRepairPrompt,
   buildRpmSetHeaderPrompt,
   buildWonriPageClassPrompt,
 } from '../src/textbook/vlm_detect_prompt.js';
@@ -290,4 +292,132 @@ test('ssen A still rejects a lone flexible-geometry false positive', () => {
 
   assert.deepEqual(result.items, []);
   assert.equal(result.page_kind, 'concept_page');
+});
+
+test('item geometry repair fills coordinates the first pass omitted', () => {
+  const prompt = buildItemGeometryRepairPrompt({
+    rawPage: 152,
+    displayPage: 152,
+    numbers: ['예제1', '유제1'],
+  });
+  assert.match(prompt, /"예제1", "유제1"/);
+  assert.match(prompt, /풀이 과정/);
+
+  const first = {
+    notes: '',
+    items: [
+      { number: '예제1', bbox: null, item_region: null, column: null },
+      // 이미 좌표가 있는 문항은 덮어쓰지 않는다.
+      {
+        number: '유제1',
+        bbox: [125, 500, 169, 553],
+        item_region: [125, 553, 182, 905],
+        column: 2,
+      },
+    ],
+  };
+  const filled = mergeItemGeometry(first, {
+    items: [
+      {
+        number: '예제 1',
+        column: 1,
+        bbox: [125, 77, 169, 134],
+        item_region: [125, 134, 182, 483],
+      },
+      { number: '유제 1', column: 2, bbox: [0, 0, 1, 1], item_region: [0, 0, 1, 1] },
+    ],
+  });
+
+  assert.equal(filled, 1);
+  assert.deepEqual(first.items[0].item_region, [125, 134, 182, 483]);
+  assert.equal(first.items[0].column, 1);
+  assert.deepEqual(first.items[1].item_region, [125, 553, 182, 905]);
+  assert.match(first.notes, /item_geometry_repaired=1/);
+});
+
+test('gaeyu keeps a numberless 개념확인 even when badge fields are missing', () => {
+  // 배지 칸을 통째로 빠뜨린 응답까지 버리면 그 지면의 개념확인이 흔적 없이
+  // 사라진다(2-2 102쪽). "참고" 처럼 다른 배지를 읽은 경우에만 버린다.
+  const base = {
+    section: 'essential_problem',
+    page_kind: 'mixed',
+    page_layout: 'one_column',
+    notes: '',
+  };
+  const kept = normalizeDetectResult(
+    {
+      ...base,
+      items: [
+        {
+          number: '',
+          category: 'concept_check',
+          label: '',
+          bbox: [244, 102, 279, 160],
+          item_region: [266, 175, 523, 649],
+        },
+      ],
+    },
+    { series: 'gaeyu', rawPage: 102, displayPage: 102 },
+  );
+  assert.deepEqual(
+    kept.items.map((item) => [item.number, item.category]),
+    [['개념확인102', 'concept_check']],
+  );
+
+  const dropped = normalizeDetectResult(
+    {
+      ...base,
+      items: [
+        {
+          number: '',
+          category: 'concept_check',
+          label: '',
+          badge_text: '참고',
+          badge_style: '',
+          bbox: [244, 102, 279, 160],
+          item_region: [266, 175, 523, 649],
+        },
+      ],
+    },
+    { series: 'gaeyu', rawPage: 102, displayPage: 102 },
+  );
+  assert.deepEqual(dropped.items, []);
+});
+
+test('gaeyu strips difficulty labels from corners that never print them', () => {
+  const result = normalizeDetectResult(
+    {
+      section: 'step_drill',
+      page_kind: 'problem_page',
+      page_layout: 'one_column',
+      items: [
+        {
+          number: '5',
+          category: 'step_drill',
+          label: '중',
+          is_important: true,
+          bbox: [100, 50, 122, 105],
+          item_region: [100, 110, 250, 900],
+        },
+        {
+          number: '1',
+          category: 'unit_drill',
+          label: '상',
+          is_important: true,
+          bbox: [300, 50, 322, 105],
+          item_region: [300, 110, 450, 900],
+        },
+      ],
+      notes: '',
+    },
+    { series: 'gaeyu', rawPage: 109, displayPage: 109 },
+  );
+
+  const step = result.items.find((item) => item.category === 'step_drill');
+  assert.equal(step.label, '');
+  assert.equal(step.is_important, false);
+  const unit = result.items.find((item) => item.category === 'unit_drill');
+  assert.equal(unit.label, '상');
+  assert.equal(unit.is_important, true);
+  assert.match(result.notes, /gaeyu_labels_stripped=1/);
 });

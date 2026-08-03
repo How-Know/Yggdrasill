@@ -19,6 +19,9 @@ class Student {
   final String? avatarEmoji;
   final int? avatarMonogramStyle;
 
+  /// 학생앱 표시용 닉네임. 없으면 null.
+  final String? nickname;
+
   Student({
     required this.id,
     required this.name,
@@ -33,6 +36,7 @@ class Student {
     this.avatarUrl,
     this.avatarEmoji,
     this.avatarMonogramStyle,
+    this.nickname,
   });
 
   Student copyWith({
@@ -49,8 +53,10 @@ class Student {
     String? avatarUrl,
     String? avatarEmoji,
     int? avatarMonogramStyle,
+    String? nickname,
     bool clearGroupInfo = false,
     bool clearGroupId = false,
+    bool clearNickname = false,
   }) {
     return Student(
       id: id ?? this.id,
@@ -66,10 +72,12 @@ class Student {
       avatarUrl: avatarUrl ?? this.avatarUrl,
       avatarEmoji: avatarEmoji ?? this.avatarEmoji,
       avatarMonogramStyle: avatarMonogramStyle ?? this.avatarMonogramStyle,
+      nickname: clearNickname ? null : (nickname ?? this.nickname),
     );
   }
 
   factory Student.fromDb(Map<String, dynamic> row) {
+    final nick = (row['nickname'] as String?)?.trim();
     return Student(
       id: row['id'] as String,
       name: row['name'] as String,
@@ -85,6 +93,7 @@ class Student {
       avatarUrl: row['avatar_url'] as String?,
       avatarEmoji: row['avatar_emoji'] as String?,
       avatarMonogramStyle: (row['avatar_monogram_style'] as num?)?.toInt(),
+      nickname: (nick == null || nick.isEmpty) ? null : nick,
     );
   }
 
