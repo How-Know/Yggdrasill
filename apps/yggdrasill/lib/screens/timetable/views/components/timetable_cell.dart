@@ -271,6 +271,55 @@ class TrialOverlayLabel {
   const TrialOverlayLabel({required this.noteId, required this.text});
 }
 
+class TimetableCapacityIndicator extends StatelessWidget {
+  const TimetableCapacityIndicator({
+    super.key,
+    required this.count,
+    this.color,
+  });
+
+  final int count;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final isOutline =
+        color == Colors.transparent || (color != null && color!.a == 0);
+    final fill = isOutline ? Colors.transparent : (color ?? Colors.green);
+    // 투명(여유) 알약 숫자는 시간표 상단 "N월" 위젯과 동일 색.
+    final textColor =
+        isOutline ? Colors.grey.shade300 : const Color(0xFF0B1112);
+
+    return Container(
+      height: 22,
+      padding: const EdgeInsets.only(left: 8, right: 10),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(11),
+        border:
+            isOutline ? Border.all(color: panelStyle.divider, width: 1) : null,
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          '$count',
+          style: TextStyle(
+            color: textColor,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w800,
+            height: 1.0,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.visible,
+        ),
+      ),
+    );
+  }
+}
+
 class TimetableCell extends StatelessWidget {
   final int dayIdx;
   final int blockIdx;
@@ -292,6 +341,7 @@ class TimetableCell extends StatelessWidget {
   final VoidCallback? onDragEnd;
   final Color? countColor;
   final int activeStudentCount;
+  final bool showCapacityIndicator;
   final List<StudentWithInfo> cellStudentWithInfos;
   final List<GroupInfo> groups;
   final double cellWidth;
@@ -322,6 +372,7 @@ class TimetableCell extends StatelessWidget {
     this.onDragEnd,
     this.countColor,
     this.activeStudentCount = 0,
+    this.showCapacityIndicator = true,
     this.cellStudentWithInfos = const [],
     this.groups = const [],
     this.cellWidth = 0,
@@ -1049,47 +1100,15 @@ class TimetableCell extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (activeStudentCount > 0)
+              if (showCapacityIndicator && activeStudentCount > 0)
                 Positioned(
-                  top: 3,
+                  top: 0,
                   left: 1,
                   right: 1,
-                  child: Builder(builder: (context) {
-                    final brightness = Theme.of(context).brightness;
-                    final panelStyle =
-                        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-                    final bool isOutline = countColor == Colors.transparent ||
-                        (countColor != null && countColor!.a == 0);
-                    final Color fill =
-                        isOutline ? Colors.transparent : (countColor ?? Colors.green);
-                    final Color textColor = isOutline
-                        ? panelStyle.divider
-                        : const Color(0xFF0B1112);
-                    return Container(
-                      height: 20,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      decoration: BoxDecoration(
-                        color: fill,
-                        borderRadius: BorderRadius.circular(10),
-                        border: isOutline
-                            ? Border.all(color: panelStyle.divider, width: 1)
-                            : null,
-                      ),
-                      child: Center(
-                        child: Text(
-                          '$activeStudentCount',
-                          style: TextStyle(
-                            color: textColor,
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w800,
-                            height: 1.0,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.visible,
-                        ),
-                      ),
-                    );
-                  }),
+                  child: TimetableCapacityIndicator(
+                    count: activeStudentCount,
+                    color: countColor,
+                  ),
                 ),
               if (isExpanded && students.isNotEmpty)
                 // 학생 카드(간단 버전)
@@ -1115,7 +1134,7 @@ class TimetableCell extends StatelessWidget {
                   inquiryOverlays.isNotEmpty)
                 Positioned(
                   left: 4,
-                  top: activeStudentCount > 0 ? 33 : 4,
+                  top: activeStudentCount > 0 ? 32 : 4,
                   right: 4,
                   child: Wrap(
                     spacing: 4,

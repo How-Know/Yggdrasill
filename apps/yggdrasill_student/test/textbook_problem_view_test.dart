@@ -7,6 +7,7 @@ void main() {
       final view = StudentTextbookProblemView.fromJson(const {
         'status': 'ready',
         'pdf_url': 'https://example.test/problem.pdf',
+        'body_pdf_url': 'https://example.test/book.pdf',
         'raw_page': 12,
         'item_region_1k': [100, 200, 500, 800],
         'expires_in': 3600,
@@ -15,6 +16,7 @@ void main() {
 
       expect(view.isReady, isTrue);
       expect(view.pdfUrl, 'https://example.test/problem.pdf');
+      expect(view.bodyPdfUrl, 'https://example.test/book.pdf');
       expect(view.rawPage, 12);
       expect(view.itemRegion1k, [100, 200, 500, 800]);
       expect(view.expiresIn, 3600);

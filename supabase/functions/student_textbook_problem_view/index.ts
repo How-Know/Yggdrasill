@@ -357,6 +357,12 @@ async function handleView(
   const asset = exactAsset ?? currentVersion[0] ?? rows[0] ?? null;
   const needsRefresh = Boolean(asset && !exactAsset);
   if (asset) {
+    // 본문모드용 body PDF 서명은 문항 PDF 서명과 병렬로 받는다.
+    const bodyFallbackPromise = signedBodyFallback(
+      admin,
+      account.academy_id,
+      current,
+    );
     const { data: signed, error: signedError } = await admin.storage
       .from(asset.storage_bucket)
       .createSignedUrl(asset.storage_path, SIGNED_URL_SECONDS);
@@ -370,11 +376,13 @@ async function handleView(
           String(question.id ?? '') || undefined,
         );
       }
+      const bodyFallback = await bodyFallbackPromise;
       return json({
         ok: true,
         status: 'ready',
         source: 'question_render',
         pdf_url: signed.signedUrl,
+        body_pdf_url: bodyFallback?.body_pdf_url ?? null,
         expires_in: SIGNED_URL_SECONDS,
         cache_key: asset.cache_key,
         page_count: asset.page_count,

@@ -466,7 +466,7 @@ class _HomeworkSectionHeader extends StatelessWidget {
           Text(
             title,
             style: theme.textTheme.headlineSmall?.copyWith(
-              fontSize: 28,
+              fontSize: 26,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.4,
               height: 1.15,
@@ -1586,7 +1586,7 @@ class _GroupCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _HomeworkCoverThumb(
                 size: _coverSize,
@@ -1598,10 +1598,10 @@ class _GroupCard extends StatelessWidget {
                 bookLabel: group.sourceLabel,
                 courseLabel: group.courseLabel,
               ),
-              const SizedBox(width: 17.6),
+              const SizedBox(width: 28),
               Expanded(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -1609,9 +1609,9 @@ class _GroupCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleLarge?.copyWith(
-                        fontSize: 20,
+                        fontSize: 26,
                         fontWeight: FontWeight.w800,
-                        letterSpacing: -0.2,
+                        letterSpacing: -0.4,
                         color: dlg.text,
                         height: 1.2,
                       ),

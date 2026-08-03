@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show base64Encode;
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -20,7 +21,7 @@ import '../widgets/student_status_island.dart';
 
 enum _InputMode { pencil, editor, keyboard }
 
-enum _PaneMode { answers, question }
+enum _PaneMode { answers, question, body }
 
 /// 페이지를 열 때 어떤 문항을 선택할지.
 enum _PageEntrySelect { auto, first, last }
@@ -945,7 +946,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     _pencilKey = GlobalKey<PencilInputPadState>();
     _keyboardController.text =
         _answers[_answerKeyOf(problem.cropId, _selectedPartKey)] ?? '';
-    if (_paneMode == _PaneMode.question) {
+    if (_paneMode == _PaneMode.question || _paneMode == _PaneMode.body) {
       _startProblemViewLoad(problem.cropId);
     }
   }
@@ -964,7 +965,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
 
   void _startProblemViewLoad(String cropId) {
     final requestEpoch = ++_problemViewRequestEpoch;
-    final cached = _problemViewCache[cropId];
+    var cached = _problemViewCache[cropId];
+    // 본문모드는 body_pdf_url이 필요. ready 캐시에 없으면 폐기 후 재요청.
+    if (_paneMode == _PaneMode.body &&
+        cached != null &&
+        (cached.bodyPdfUrl == null || cached.bodyPdfUrl!.isEmpty)) {
+      _problemViewCache.remove(cropId);
+      cached = null;
+    }
     _problemView = cached;
     _problemViewError = null;
     _loadingProblemView = cached == null;
@@ -1301,10 +1309,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   void _togglePaneMode() {
     setState(() {
       _resetTitleCollapse();
-      _paneMode = _paneMode == _PaneMode.answers
-          ? _PaneMode.question
-          : _PaneMode.answers;
-      if (_paneMode == _PaneMode.question) {
+      _paneMode = switch (_paneMode) {
+        _PaneMode.answers => _PaneMode.question,
+        _PaneMode.question => _PaneMode.body,
+        _PaneMode.body => _PaneMode.answers,
+      };
+      if (_paneMode == _PaneMode.question || _paneMode == _PaneMode.body) {
         final problems = _problems ?? const <PageProblem>[];
         if (problems.isNotEmpty) {
           final selected = problems.firstWhere(
@@ -1962,81 +1972,93 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       builder: (context, constraints) {
         // 기존 Column flex 2:1 비율과 동일하게 입력 시트 높이를 고정.
         final inputH = (constraints.maxHeight - dividerH) / 3;
-        final showAnswers = _paneMode == _PaneMode.answers;
 
-        final body = showAnswers
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    flex: 2,
-                    child: Stack(
-                      children: [
-                        ListView.builder(
-                          controller: _answersScrollController,
-                          // 하단 FAB(문항/정답 보기) 아래로 카드가 지나가도록 여백.
-                          padding: EdgeInsets.fromLTRB(24, topInset + 12, 24, 72),
-                          itemCount: problems.length,
-                          itemBuilder: (context, i) => _problemRow(
-                            theme,
-                            problems[i],
-                            showObjectiveButtons: false,
-                          ),
-                        ),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 10,
-                          child: Center(child: _buildPaneModeButton()),
-                        ),
-                      ],
-                    ),
-                  ),
-                  divider,
-                  Expanded(
-                    flex: 1,
-                    child: inputPanel,
-                  ),
-                ],
-              )
-            : Stack(
-                fit: StackFit.expand,
-                children: [
-                  // 문항 시트는 입력 패널 아래까지 스크롤되도록 전체 높이를 쓴다.
-                  Positioned.fill(
-                    child: _buildQuestionPane(
-                      theme,
-                      selectedProblem,
-                      topInset: topInset,
-                      scrollUnderInset: inputH + dividerH,
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: Material(
-                      color: Colors.white,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          divider,
-                          SizedBox(
-                            height: inputH,
-                            child: inputPanel,
-                          ),
-                        ],
+        Widget stackedContentPane(Widget content) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Positioned.fill(child: content),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Material(
+                  color: Colors.white,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      divider,
+                      SizedBox(
+                        height: inputH,
+                        child: inputPanel,
                       ),
-                    ),
+                    ],
                   ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: inputH + dividerH + 10,
-                    child: Center(child: _buildPaneModeButton()),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: inputH + dividerH + 10,
+                child: Center(child: _buildPaneModeButton()),
+              ),
+            ],
+          );
+        }
+
+        final body = switch (_paneMode) {
+          _PaneMode.answers => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: Stack(
+                    children: [
+                      ListView.builder(
+                        controller: _answersScrollController,
+                        // 하단 FAB(문항/정답 보기) 아래로 카드가 지나가도록 여백.
+                        padding:
+                            EdgeInsets.fromLTRB(24, topInset + 12, 24, 72),
+                        itemCount: problems.length,
+                        itemBuilder: (context, i) => _problemRow(
+                          theme,
+                          problems[i],
+                          showObjectiveButtons: false,
+                        ),
+                      ),
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 10,
+                        child: Center(child: _buildPaneModeButton()),
+                      ),
+                    ],
                   ),
-                ],
-              );
+                ),
+                divider,
+                Expanded(
+                  flex: 1,
+                  child: inputPanel,
+                ),
+              ],
+            ),
+          _PaneMode.question => stackedContentPane(
+              _buildQuestionPane(
+                theme,
+                selectedProblem,
+                topInset: topInset,
+                scrollUnderInset: inputH + dividerH,
+              ),
+            ),
+          _PaneMode.body => stackedContentPane(
+              _buildBodyPane(
+                theme,
+                selectedProblem,
+                topInset: topInset,
+                bottomInset: inputH + dividerH,
+              ),
+            ),
+        };
 
         return Stack(
           children: [
@@ -2121,12 +2143,28 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   Widget _buildPaneModeButton() {
-    final showQuestion = _paneMode == _PaneMode.question;
+    // 라벨은 다음에 갈 모드 (정답 → 문항 → 본문 → 정답).
+    final (tooltip, icon, label) = switch (_paneMode) {
+      _PaneMode.answers => (
+          '문항 보기',
+          Icons.description_outlined,
+          '문항',
+        ),
+      _PaneMode.question => (
+          '본문 보기',
+          Icons.menu_book_outlined,
+          '본문',
+        ),
+      _PaneMode.body => (
+          '정답 목록으로 돌아가기',
+          Icons.fact_check_outlined,
+          '정답',
+        ),
+    };
     return _SolveGlassButton(
-      tooltip: showQuestion ? '정답 목록으로 돌아가기' : '문항 보기',
-      icon:
-          showQuestion ? Icons.fact_check_outlined : Icons.description_outlined,
-      label: showQuestion ? '정답' : '문항',
+      tooltip: tooltip,
+      icon: icon,
+      label: label,
       onPressed: _togglePaneMode,
     );
   }
@@ -2190,6 +2228,127 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 본문모드: 원본 교재 PDF를 팬/줌하고, 선택 문항 정답 카드는 상단에 고정.
+  Widget _buildBodyPane(
+    ThemeData theme,
+    PageProblem? problem, {
+    required double topInset,
+    required double bottomInset,
+  }) {
+    if (problem == null) {
+      return Padding(
+        padding: EdgeInsets.only(top: topInset),
+        child: const Center(child: Text('표시할 문항이 없어요.')),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardMaxH =
+            (constraints.maxHeight - topInset - bottomInset) * 0.42;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: ColoredBox(
+                color: const Color(0xFFF3F3F5),
+                child: Padding(
+                  // 상단 카드·하단 입력 패널 아래로 PDF가 비치도록 여백은 두지 않는다.
+                  padding: EdgeInsets.only(bottom: bottomInset),
+                  child: _buildBodyPdf(theme),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 24,
+              right: 24,
+              top: topInset + 12,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: cardMaxH.clamp(120.0, 360.0),
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: SingleChildScrollView(
+                        // 카드 영역만 스크롤 — PDF InteractiveViewer와 제스처 분리.
+                        primary: false,
+                        child: _problemRow(
+                          theme,
+                          problem,
+                          showObjectiveButtons: false,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBodyPdf(ThemeData theme) {
+    if (_loadingProblemView) {
+      return const Center(child: YggLoadingIndicator());
+    }
+    final error = _problemViewError;
+    if (error != null) {
+      return Center(
+        child: _problemViewMessage(
+          theme,
+          _problemViewErrorMessage(error),
+          icon: Icons.error_outline_rounded,
+        ),
+      );
+    }
+    final view = _problemView;
+    if (view == null) {
+      return Center(
+        child: _problemViewMessage(theme, '문항을 선택해 주세요.'),
+      );
+    }
+    if (view.isQueued && (view.bodyPdfUrl == null || view.bodyPdfUrl!.isEmpty)) {
+      return Center(
+        child: _problemViewMessage(
+          theme,
+          '교재 PDF를 준비하고 있어요.\n잠시 후 다시 시도해 주세요.',
+          icon: Icons.hourglass_top_rounded,
+        ),
+      );
+    }
+    final url = view.bodyPdfUrl;
+    final uri = url == null ? null : Uri.tryParse(url);
+    final pageNumber = view.rawPage ?? _page?.rawPage;
+    if (uri == null || pageNumber == null || pageNumber < 1) {
+      return Center(
+        child: _problemViewMessage(
+          theme,
+          '원본 교재 PDF를 열 수 없어요.',
+          icon: Icons.menu_book_outlined,
+        ),
+      );
+    }
+    return _BodyTextbookPdfViewer(
+      key: ValueKey<String>('body|$url|$pageNumber'),
+      uri: uri,
+      pageNumber: pageNumber,
     );
   }
 
@@ -3534,6 +3693,136 @@ class _FallbackProblemPdfPageState extends State<_FallbackProblemPdfPage> {
       document: document,
       pageNumber: pageNumber,
       itemRegion1k: region,
+    );
+  }
+}
+
+/// 본문모드용 원본 교재 PDF.
+///
+/// 선택 페이지만 실제 크기로 두고 나머지는 문서 아래 1×1 스텁으로 두어
+/// 한 장만 렌더한다. [PdfViewer]로 줌에 맞춰 고해상도 재렌더한다.
+class _BodyTextbookPdfViewer extends StatelessWidget {
+  const _BodyTextbookPdfViewer({
+    super.key,
+    required this.uri,
+    required this.pageNumber,
+  });
+
+  final Uri uri;
+  final int pageNumber;
+
+  PdfPageLayout _layoutSinglePage(
+    List<PdfPage> pages,
+    PdfViewerParams params,
+  ) {
+    if (pages.isEmpty) {
+      return PdfPageLayout(
+        pageLayouts: const <Rect>[],
+        documentSize: Size.zero,
+      );
+    }
+    final target = pageNumber.clamp(1, pages.length);
+    final page = pages[target - 1];
+    final width = math.max(page.width + params.margin * 2, 1.0);
+    final height = math.max(page.height + params.margin * 2, 1.0);
+    final targetRect = Rect.fromLTWH(
+      (width - page.width) / 2,
+      params.margin,
+      page.width,
+      page.height,
+    );
+    // 스텁도 documentSize 안에 둬야 pdfrx 초기 행렬이 깨지지 않는다.
+    return PdfPageLayout(
+      pageLayouts: [
+        for (final p in pages)
+          p.pageNumber == target
+              ? targetRect
+              : Rect.fromLTWH(0, height + p.pageNumber, 1, 1),
+      ],
+      documentSize: Size(width, height + pages.length + 1),
+    );
+  }
+
+  Matrix4 _normalizeToPage(
+    Matrix4 matrix,
+    Size viewSize,
+    PdfPageLayout layout,
+    PdfViewerController? controller,
+  ) {
+    if (controller == null ||
+        !controller.isReady ||
+        layout.pageLayouts.isEmpty) {
+      return matrix;
+    }
+    final index = (pageNumber - 1).clamp(0, layout.pageLayouts.length - 1);
+    final pageRect = layout.pageLayouts[index];
+    // 스텁(1×1)이 잡히면 그대로 두면 화면이 비므로 가드.
+    if (pageRect.width < 8 || pageRect.height < 8) return matrix;
+    final zoom = matrix.zoom.clamp(controller.minScale, 8.0).toDouble();
+    final pos = matrix.calcPosition(viewSize);
+    final halfW = viewSize.width / 2 / zoom;
+    final halfH = viewSize.height / 2 / zoom;
+    final minX = pageRect.left + halfW;
+    final maxX = pageRect.right - halfW;
+    final minY = pageRect.top + halfH;
+    final maxY = pageRect.bottom - halfH;
+    final x = (minX > maxX)
+        ? pageRect.center.dx
+        : pos.dx.clamp(minX, maxX).toDouble();
+    final y = (minY > maxY)
+        ? pageRect.center.dy
+        : pos.dy.clamp(minY, maxY).toDouble();
+    return controller.calcMatrixFor(
+      Offset(x, y),
+      zoom: zoom,
+      viewSize: viewSize,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PdfViewer.uri(
+      uri,
+      initialPageNumber: pageNumber,
+      params: PdfViewerParams(
+        backgroundColor: const Color(0xFFF3F3F5),
+        margin: 8,
+        pageDropShadow: null,
+        pageAnchor: PdfPageAnchor.top,
+        pageAnchorEnd: PdfPageAnchor.top,
+        panEnabled: true,
+        scaleEnabled: true,
+        maxScale: 8,
+        useAlternativeFitScaleAsMinScale: true,
+        horizontalCacheExtent: 0.05,
+        verticalCacheExtent: 0.05,
+        layoutPages: _layoutSinglePage,
+        normalizeMatrix: _normalizeToPage,
+        calculateInitialPageNumber: (document, _) =>
+            pageNumber.clamp(1, math.max(document.pages.length, 1)),
+        calculateInitialZoom: (document, controller, fitZoom, coverZoom) {
+          if (fitZoom > 0 && fitZoom.isFinite) return fitZoom;
+          return coverZoom;
+        },
+        onePassRenderingScaleThreshold: 320 / 72,
+        getPageRenderingScale: (context, page, controller, estimatedScale) {
+          final boosted = estimatedScale * 1.35;
+          const maxPixels = 7000.0;
+          final maxByPixels = math.min(
+            maxPixels / page.width,
+            maxPixels / page.height,
+          );
+          return math.max(1.0, math.min(boosted, maxByPixels));
+        },
+        errorBannerBuilder: (context, error, stackTrace, documentRef) {
+          return const Center(
+            child: Text('원본 교재 PDF를 표시할 수 없어요.'),
+          );
+        },
+        loadingBannerBuilder: (context, bytesDownloaded, totalBytes) {
+          return const Center(child: YggLoadingIndicator());
+        },
+      ),
     );
   }
 }

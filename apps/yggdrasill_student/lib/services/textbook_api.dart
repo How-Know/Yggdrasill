@@ -469,7 +469,11 @@ class StudentTextbookProblemView {
     return StudentTextbookProblemView(
       status: status,
       pdfUrl: nullableString(json['pdf_url']),
-      bodyPdfUrl: nullableString(json['body_pdf_url']),
+      bodyPdfUrl: nullableString(
+        json['body_pdf_url'] ??
+            fallback['body_pdf_url'] ??
+            fallback['pdf_url'],
+      ),
       rawPage: ((json['raw_page'] ?? fallback['raw_page']) as num?)?.toInt(),
       itemRegion1k: region?.length == 4 ? region : null,
       pollAfterMs: (json['poll_after_ms'] as num?)?.toInt(),
