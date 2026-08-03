@@ -1,0 +1,25 @@
+Homework Live Activity — Xcode one-time setup (Mac)
+
+1. Open ios/Runner.xcworkspace in Xcode.
+2. File > New > Target… > Widget Extension
+   - Product Name: HomeworkLiveActivity
+   - Embed in Application: Runner
+   - Uncheck "Include Configuration App Intent"
+3. When asked to Activate scheme, Activate.
+4. Delete the generated Swift/storyboard boilerplate.
+5. Add existing files from ios/HomeworkLiveActivity/:
+   - HomeworkLiveActivityBundle.swift
+   - Info.plist (set as INFOPLIST_FILE for the extension)
+   - HomeworkLiveActivity.entitlements (CODE_SIGN_ENTITLEMENTS)
+6. Extension target settings:
+   - Bundle ID: com.beleunu.yggdrasillStudent.HomeworkLiveActivity
+   - iOS Deployment Target: 16.1+
+   - App Groups: group.com.beleunu.yggdrasillStudent
+     (same group as Runner entitlements)
+7. Runner already has:
+   - NSSupportsLiveActivities
+   - URL scheme yggstudent
+   - App Group entitlement
+
+Preview: Live Activities need a physical iPhone/iPad (iOS 16.1+).
+Windows Flutter run cannot show them. Xcode Previews can mock Widget UI only.

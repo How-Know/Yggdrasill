@@ -32,6 +32,14 @@ Future<void> main() async {
 class StudentApp extends StatelessWidget {
   const StudentApp({super.key});
 
+  /// 학생앱 전역 서체 — 학습앱 카카오 테마 위에 Pretendard 를 덮어쓴다.
+  static ThemeData _withPretendard(ThemeData base) {
+    return base.copyWith(
+      textTheme: base.textTheme.apply(fontFamily: 'Pretendard'),
+      primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'Pretendard'),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
@@ -42,8 +50,8 @@ class StudentApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           navigatorKey: rootNavigatorKey,
           themeMode: mode,
-          theme: buildYggLightTheme(),
-          darkTheme: buildYggDarkTheme(),
+          theme: _withPretendard(buildYggLightTheme()),
+          darkTheme: _withPretendard(buildYggDarkTheme()),
           builder: (context, child) => StudentStatusIslandHost(child: child),
           home: const _AuthGate(),
         );

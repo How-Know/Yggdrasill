@@ -82,6 +82,7 @@ class SharedFolderTreePanel extends StatelessWidget {
     this.reserveTitleTrailingSlot = false,
     this.reserveSubtitleSlot = false,
     this.titleTrailingSlotFraction = 0.58,
+    this.hideHeader = false,
   });
 
   final String title;
@@ -91,6 +92,8 @@ class SharedFolderTreePanel extends StatelessWidget {
   final bool reserveTitleTrailingSlot;
   final bool reserveSubtitleSlot;
   final double titleTrailingSlotFraction;
+  /// true면 상단 타이틀/서브타이틀 영역을 그리지 않는다.
+  final bool hideHeader;
   final List<SharedFolderTreeNode> nodes;
   final List<SharedFolderTreeNode> trailingNodes;
   final String? selectedNodeId;
@@ -125,45 +128,46 @@ class SharedFolderTreePanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal - 6,
-                20,
-                FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
-                (subtitle != null || reserveSubtitleSlot)
-                    ? 12
-                    : sharedFolderTreeTitleListGap,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildTitleRow(panelStyle),
-                  if (subtitle != null || reserveSubtitleSlot) ...[
-                    const SizedBox(height: 6),
-                    SizedBox(
-                      height: _subtitleSlotHeight,
-                      child: subtitle == null
-                          ? const SizedBox.shrink()
-                          : Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                subtitle!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: panelStyle.hint,
-                                  fontSize: _subtitleFontSize,
-                                  fontWeight: FontWeight.w600,
-                                  height: _subtitleLineHeight,
+            if (!hideHeader)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal - 6,
+                  20,
+                  FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
+                  (subtitle != null || reserveSubtitleSlot)
+                      ? 12
+                      : sharedFolderTreeTitleListGap,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildTitleRow(panelStyle),
+                    if (subtitle != null || reserveSubtitleSlot) ...[
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        height: _subtitleSlotHeight,
+                        child: subtitle == null
+                            ? const SizedBox.shrink()
+                            : Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  subtitle!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: panelStyle.hint,
+                                    fontSize: _subtitleFontSize,
+                                    fontWeight: FontWeight.w600,
+                                    height: _subtitleLineHeight,
+                                  ),
                                 ),
                               ),
-                            ),
-                    ),
-                    const SizedBox(height: 8),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
             Expanded(
               child: _buildBody(context, panelStyle, brightness),
             ),
@@ -246,7 +250,10 @@ class SharedFolderTreePanel extends StatelessWidget {
     }
 
     return ListView(
-      padding: EdgeInsets.only(bottom: listBottomPadding),
+      padding: EdgeInsets.only(
+        top: hideHeader ? 8 : 0,
+        bottom: listBottomPadding,
+      ),
       children: [
         for (var i = 0; i < nodes.length; i++)
           _buildNode(

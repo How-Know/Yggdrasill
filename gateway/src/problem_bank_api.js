@@ -61,13 +61,16 @@ import {
   detectItemGeometryOnPage,
   detectProblemsOnPage,
   detectRpmSetHeadersOnPage,
+  detectSuryeokMarksOnPage,
   classifyWonriPage,
+  mergeSuryeokMarks,
   mergeItemGeometry,
   normalizeDetectResult,
   numberBboxesLookTemplated,
   overwriteItemGeometry,
   repairSuryeokItemRegions,
   shouldTreatWonriPageAsConcept,
+  suryeokMarksNeedRepair,
 } from './textbook/vlm_detect_client.js';
 import {
   extractAnswersOnPage,
@@ -6703,6 +6706,43 @@ async function handleTextbookVlmDetectProblems(body, res) {
     displayPage,
     rawPage,
   });
+  // 수력충전은 (1) 도움말 아래의 초록 번호를 개념 설명으로 오인하거나,
+  // (2) 단원 마무리의 작고 복수인 특수 배지를 누락하는 경우가 있다.
+  // 의심스러운 유형 지면과 모든 마무리 지면은 번호·배지만 묻는 짧은 2차
+  // 판독으로 보완한다. 문항 본문/분류를 다시 추측시키지는 않는다.
+  if (series === 'suryeok' && suryeokMarksNeedRepair(normalized, sectionHint)) {
+    try {
+      const marks = await detectSuryeokMarksOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+        sectionHint,
+      });
+      const merged = mergeSuryeokMarks(
+        normalized,
+        marks.parsedJson,
+        sectionHint,
+      );
+      if (merged.added > 0 || merged.breaks > 0) {
+        repairSuryeokItemRegions(normalized, series);
+      }
+    } catch (err) {
+      console.warn(
+        '[textbook-vlm-detect] suryeok_mark_repair_failed',
+        JSON.stringify({
+          rawPage,
+          bookId,
+          gradeLabel,
+          message: compact(err?.message || err),
+        }),
+      );
+    }
+  }
   // 좌표가 틀어졌을 때 "앱이 보낸 이미지"와 "모델 원본 응답"을 그대로 떠 놓는다.
   // 로컬에서 같은 이미지를 다시 돌려 봐야 렌더 차이인지 모델 흔들림인지 갈린다.
   dumpTextbookDetectInput({ imageBase64, rawPage, gradeLabel, result, normalized });
@@ -6714,7 +6754,10 @@ async function handleTextbookVlmDetectProblems(body, res) {
     normalized.items.length > 0 &&
     normalized.items.some(
       (item) =>
-        !Array.isArray(item?.item_region) || item.item_region.length !== 4,
+        !Array.isArray(item?.bbox) ||
+        item.bbox.length !== 4 ||
+        !Array.isArray(item?.item_region) ||
+        item.item_region.length !== 4,
     )
   ) {
     try {

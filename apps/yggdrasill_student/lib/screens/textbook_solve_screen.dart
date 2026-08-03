@@ -2946,7 +2946,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   Widget _objectiveButtons(ThemeData theme, PageProblem problem) {
-    const circled = ['①', '②', '③', '④', '⑤'];
     final answer = _answers[problem.cropId] ?? '';
     final selected = answer
         .split(',')
@@ -2954,32 +2953,51 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         .map(int.parse)
         .toSet();
     const accent = YggGlassTokens.confirmActionColor;
+    final idle = theme.hintColor;
 
-    // 동그라미 숫자(①~⑤)만 표시. 바깥 원형 테두리는 이중 원처럼 보여 제거.
-    // 주관식 답 텍스트보다 작아 보이지 않도록 한 단계 더 키운다.
-    final numberSize =
-        (theme.textTheme.titleMedium?.fontSize ?? 16) * 1.5 * 1.1 * 1.25;
-    return Wrap(
-      spacing: 4,
-      children: [
-        for (var n = 1; n <= 5; n++)
-          InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: () => _toggleObjective(problem.cropId, n),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              child: Text(
-                circled[n - 1],
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: selected.contains(n) ? accent : theme.hintColor,
-                  fontSize: numberSize,
-                  fontWeight: FontWeight.w700,
-                  height: 1.0,
+    // 유니코드 ① 은 글꼴 테두리 두께를 못 줄여서, 얇은 원 + 숫자로 그린다.
+    // 이전 ① 크기(+50%)와 비슷한 지름.
+    final diameter =
+        (theme.textTheme.titleMedium?.fontSize ?? 16) * 1.5 * 1.1 * 1.25 * 1.5;
+    final digitSize = diameter * 0.46;
+    // 문항/정답 모드 공통: 살짝 위로.
+    return Transform.translate(
+      offset: const Offset(0, -12),
+      child: Wrap(
+        spacing: 8,
+        children: [
+          for (var n = 1; n <= 5; n++)
+            InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => _toggleObjective(problem.cropId, n),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Container(
+                  width: diameter,
+                  height: diameter,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected.contains(n) ? accent : idle,
+                      width: selected.contains(n) ? 3.8 : 3.2,
+                    ),
+                  ),
+                  child: Text(
+                    '$n',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: selected.contains(n) ? accent : idle,
+                      fontSize: digitSize,
+                      fontWeight: FontWeight.w700,
+                      height: 1.0,
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 

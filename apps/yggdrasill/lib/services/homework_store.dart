@@ -428,6 +428,21 @@ class HomeworkStore {
     return allowed.contains(raw) ? raw : 'original';
   }
 
+  /// `homework_item_units.source_scope`의 DB CHECK 제약에 맞춘다.
+  ///
+  /// 문항/페이지 선택 방식은 mapping의 `selectionMode` 등에 별도로 보존되므로
+  /// `problem_regions`, `migrated_concept_pages` 같은 UI 분류를 단원 범위 출처
+  /// 컬럼에 그대로 저장하지 않는다.
+  static String _normalizeUnitSourceScope(dynamic value) {
+    const allowed = <String>{
+      'direct_small',
+      'expanded_from_mid',
+      'expanded_from_big',
+    };
+    final raw = (value is String ? value : '').trim();
+    return allowed.contains(raw) ? raw : 'direct_small';
+  }
+
   bool _isMissingAssignmentCodeColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('assignment_code') &&
@@ -449,6 +464,14 @@ class HomeworkStore {
   bool _isAssignmentCodeConflictError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('assignment_code') &&
+        (message.contains('duplicate key') ||
+            message.contains('unique') ||
+            message.contains('23505'));
+  }
+
+  bool _isHomeworkItemPrimaryKeyConflictError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('homework_items_pkey') &&
         (message.contains('duplicate key') ||
             message.contains('unique') ||
             message.contains('23505'));
@@ -2404,8 +2427,7 @@ class HomeworkStore {
           // null 로 덮어쓰지 않는다. 단계 갱신 중 로컬 유실이 서버 값을 지우면
           // 진행 중 권장시간이 사라진다.
           if (_normalizePositiveInt(it.recommendedMinutes) != null)
-            'recommended_minutes':
-                _normalizePositiveInt(it.recommendedMinutes),
+            'recommended_minutes': _normalizePositiveInt(it.recommendedMinutes),
           if (_normalizePositiveInt(it.recommendedMinutesAuto) != null)
             'recommended_minutes_auto':
                 _normalizePositiveInt(it.recommendedMinutesAuto),
@@ -2476,7 +2498,21 @@ class HomeworkStore {
         );
         return;
       }
-      // Insert if not exists
+      // UPDATE 0행은 "행 없음"뿐 아니라 OCC 버전 불일치일 수도 있다.
+      // 이미 존재하는 id를 다시 INSERT하면 연속 저장 중 PK 충돌이 발생하므로
+      // 존재 여부를 먼저 확인하고 서버 상태로 동기화한다.
+      final existingRow = await supa
+          .from('homework_items')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('id', it.id)
+          .maybeSingle();
+      if (existingRow != null) {
+        await _reloadStudent(studentId);
+        return;
+      }
+
+      // 실제로 존재하지 않을 때만 새 행을 만든다.
       final insertRow = {
         'id': it.id,
         'academy_id': academyId,
@@ -2558,6 +2594,12 @@ class HomeworkStore {
         await _upsertItem(studentId, it);
         return;
       }
+      // 존재 확인 직후 다른 요청이 같은 행을 만든 경우도 성공으로 간주한다.
+      // 서버 행을 다시 읽어 로컬 상태만 맞춘다.
+      if (_isHomeworkItemPrimaryKeyConflictError(e)) {
+        await _reloadStudent(studentId);
+        return;
+      }
       // ignore: avoid_print
       print('[HW][upsert][ERROR] ' + e.toString() + '\n' + st.toString());
     }
@@ -2630,10 +2672,7 @@ class HomeworkStore {
           'end_page': endPage,
           'page_count': pageCount,
           'weight': asDouble(m['weight'], fallback: 1),
-          'source_scope': asString(
-            m['sourceScope'],
-            fallback: 'direct_small',
-          ),
+          'source_scope': _normalizeUnitSourceScope(m['sourceScope']),
         });
       }
       if (rows.isNotEmpty) {

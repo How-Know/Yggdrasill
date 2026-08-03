@@ -1054,27 +1054,42 @@ class TimetableCell extends StatelessWidget {
                   top: 3,
                   left: 1,
                   right: 1,
-                  child: Container(
-                    height: 20,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: countColor ?? Colors.green,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Center(
-                      child: Text(
-                        '$activeStudentCount',
-                        style: const TextStyle(
-                          color: Color(0xFF0B1112),
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w800,
-                          height: 1.0,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.visible,
+                  child: Builder(builder: (context) {
+                    final brightness = Theme.of(context).brightness;
+                    final panelStyle =
+                        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+                    final bool isOutline = countColor == Colors.transparent ||
+                        (countColor != null && countColor!.a == 0);
+                    final Color fill =
+                        isOutline ? Colors.transparent : (countColor ?? Colors.green);
+                    final Color textColor = isOutline
+                        ? panelStyle.divider
+                        : const Color(0xFF0B1112);
+                    return Container(
+                      height: 20,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: fill,
+                        borderRadius: BorderRadius.circular(10),
+                        border: isOutline
+                            ? Border.all(color: panelStyle.divider, width: 1)
+                            : null,
                       ),
-                    ),
-                  ),
+                      child: Center(
+                        child: Text(
+                          '$activeStudentCount',
+                          style: TextStyle(
+                            color: textColor,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                            height: 1.0,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.visible,
+                        ),
+                      ),
+                    );
+                  }),
                 ),
               if (isExpanded && students.isNotEmpty)
                 // 학생 카드(간단 버전)

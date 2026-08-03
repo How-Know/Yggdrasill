@@ -24,6 +24,7 @@ class HomeworkGroup {
     required this.content,
     required this.type,
     required this.timeLimitMinutes,
+    this.recommendedMinutes,
     required this.waitTitle,
     required this.children,
     this.bookId = '',
@@ -47,7 +48,10 @@ class HomeworkGroup {
   final DateTime? runStart;
   final String content;
   final String type;
+  /// 시험 제한시간(분). 권장시간과 다름.
   final int? timeLimitMinutes;
+  /// 권장 소요시간(분). 학습앱 홈 카드와 동일 집계.
+  final int? recommendedMinutes;
   final String waitTitle;
   final List<HomeworkChild> children;
   final String bookId;
@@ -93,6 +97,24 @@ class HomeworkGroup {
     if (source.isEmpty) return course;
     if (course.isEmpty) return source;
     return '$source, $course';
+  }
+
+  /// 권장 소요 시간 (예: `1시간 30분 소요 예정` / `45분 소요 예정`).
+  /// [recommendedMinutes]가 없거나 0 이하면 빈 문자열.
+  String get recommendedDurationLine {
+    final minutes = recommendedMinutes ?? 0;
+    if (minutes <= 0) return '';
+    final hours = minutes ~/ 60;
+    final mins = minutes % 60;
+    final String amount;
+    if (hours > 0 && mins > 0) {
+      amount = '$hours시간 $mins분';
+    } else if (hours > 0) {
+      amount = '$hours시간';
+    } else {
+      amount = '$mins분';
+    }
+    return '$amount 소요 예정';
   }
 
   /// 3행: 페이지 · 문항수 (예: `p.10-12 · 12문항`)
@@ -157,6 +179,7 @@ class HomeworkGroup {
       content: (row['content'] as String?) ?? '',
       type: (row['type'] as String?) ?? '',
       timeLimitMinutes: (row['time_limit_minutes'] as num?)?.toInt(),
+      recommendedMinutes: (row['recommended_minutes'] as num?)?.toInt(),
       waitTitle: (row['m5_wait_title'] as String?) ?? '',
       children: children,
       bookId: (row['book_id'] as String?)?.trim() ?? '',
@@ -366,6 +389,53 @@ class TodayAttendance {
   final DateTime? arrival;
   final DateTime? departure;
   final DateTime? classDateTime;
+}
+
+/// 최근 출결 1회 — 프로필 펼침 그래프용.
+class RecentAttendanceSession {
+  const RecentAttendanceSession({
+    required this.classDateTime,
+    this.arrival,
+    this.departure,
+    this.className = '',
+    this.deltaMinutes,
+    this.latenessThreshold = 10,
+  });
+
+  final DateTime classDateTime;
+  final DateTime? arrival;
+  final DateTime? departure;
+  final String className;
+  /// 등원 − 수업시작(분). 음수=일찍, 양수=늦음. 등원 없으면 null.
+  final int? deltaMinutes;
+  final int latenessThreshold;
+
+  bool get hasArrival => arrival != null;
+
+  bool get isLate {
+    final d = deltaMinutes;
+    if (d == null) return false;
+    return d > latenessThreshold;
+  }
+
+  static RecentAttendanceSession? fromRow(Map<String, dynamic> row) {
+    final classRaw = row['class_date_time'];
+    if (classRaw == null) return null;
+    final classDt = DateTime.tryParse(classRaw as String)?.toLocal();
+    if (classDt == null) return null;
+    DateTime? parse(String key) => row[key] != null
+        ? DateTime.tryParse(row[key] as String)?.toLocal()
+        : null;
+    return RecentAttendanceSession(
+      classDateTime: classDt,
+      arrival: parse('arrival_time'),
+      departure: parse('departure_time'),
+      className: (row['class_name'] as String?)?.trim() ?? '',
+      deltaMinutes: (row['delta_minutes'] as num?)?.toInt(),
+      latenessThreshold:
+          (row['lateness_threshold'] as num?)?.toInt() ?? 10,
+    );
+  }
 }
 
 /// 출결(출석) 점수 — 학습앱 스탯과 동일 규칙(서버 계산).
@@ -872,6 +942,23 @@ class StudentApi {
       departure: parse('departure_time'),
       classDateTime: parse('class_date_time'),
     );
+  }
+
+  /// 최근 N회 출결(등원 편차). 최신이 앞.
+  Future<List<RecentAttendanceSession>> listRecentAttendance({
+    int limit = 10,
+  }) async {
+    final rows = await _client.rpc(
+      'student_list_recent_attendance_v1',
+      params: {'p_limit': limit},
+    ) as List<dynamic>;
+    return rows
+        .whereType<Map>()
+        .map((r) => RecentAttendanceSession.fromRow(
+              Map<String, dynamic>.from(r),
+            ))
+        .whereType<RecentAttendanceSession>()
+        .toList(growable: false);
   }
 
   // ---------------------------------------------------------------- 기록

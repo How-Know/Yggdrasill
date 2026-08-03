@@ -175,6 +175,21 @@ test('개념+유형 프롬프트가 번호 규칙과 코너를 설명한다', ()
   assert.equal(/개념\+유형 교재 전용 규칙/.test(other), false);
 });
 
+test('수력충전 프롬프트가 독립 세트 안의 종속 소문항과 단 넘김을 보존한다', () => {
+  const prompt = buildPrompt({
+    textbookScope: {
+      series: 'suryeok',
+      sub_key: 'A',
+      big_order: 1,
+      mid_order: 1,
+    },
+    expectedQuestionNumbers: ['01', '02', '03'],
+    expectedIndependentSetRanges: ['01~03'],
+  });
+  assert.match(prompt, /좌단 아래에서 시작한 문항의 2\), 3\)이 우단 위로/);
+  assert.match(prompt, /set_type="mixed_set"/);
+});
+
 test('개념+유형의 번호 없는 소문항 묶음은 종속형 세트로 고정한다', () => {
   const rows = normalizeIndependentSetPayloadQuestions(
     [{

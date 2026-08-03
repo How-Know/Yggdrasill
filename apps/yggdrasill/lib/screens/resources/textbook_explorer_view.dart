@@ -61,6 +61,9 @@ class TextbookExplorerController extends ChangeNotifier {
 
   final Set<String> expandedNodeIds = <String>{};
 
+  /// 과제 추가 모드에서 첫 로드 시 대단원을 한 번만 펼친다.
+  bool _initialBigUnitsExpanded = false;
+
   /// 이전 구현 호환용. 실제 필터 기준은 문제은행 사설교재 트리와 동일하게
   /// [checkedPageKeys] 하나로 관리한다.
   final Set<String> checkedSmallKeys = <String>{};
@@ -239,6 +242,7 @@ class TextbookExplorerController extends ChangeNotifier {
       );
       if (_disposed) return;
       _applyLoadedData(core);
+      _ensureInitialBigUnitsExpanded();
       loading = false;
       if (!core.hasQuestions) {
         error = '이 교재에는 연결된 문항 정보가 없어 단원/문항 탐색을 지원하지 않습니다.';
@@ -289,6 +293,16 @@ class TextbookExplorerController extends ChangeNotifier {
   void toggleExpand(String nodeId) {
     if (!expandedNodeIds.remove(nodeId)) expandedNodeIds.add(nodeId);
     notifyListeners();
+  }
+
+  /// 홈 과제추가(마이그레이션 교재)에서는 대단원이 열린 상태로 시작한다.
+  void _ensureInitialBigUnitsExpanded() {
+    if (!homeworkSelectionMode || _initialBigUnitsExpanded) return;
+    if (data.units.isEmpty) return;
+    for (final big in data.units) {
+      expandedNodeIds.add(unitBigKey(big));
+    }
+    _initialBigUnitsExpanded = true;
   }
 
   bool isSmallFullyChecked(TbExSmallUnit small) {
@@ -1162,12 +1176,15 @@ class TextbookExplorerTreePanel extends StatelessWidget {
             title: controller.bookTitle.trim().isEmpty
                 ? '(이름 없음)'
                 : controller.bookTitle.trim(),
-            subtitle: _subtitle(),
-            reserveSubtitleSlot: true,
+            subtitle: controller.homeworkSelectionMode ? null : _subtitle(),
+            reserveSubtitleSlot: !controller.homeworkSelectionMode,
             titleLeading: _buildTitleLeading(context, style),
-            titleTrailing: _buildTitleTrailing(context, style),
-            reserveTitleTrailingSlot: true,
+            titleTrailing: controller.homeworkSelectionMode
+                ? null
+                : _buildTitleTrailing(context, style),
+            reserveTitleTrailingSlot: !controller.homeworkSelectionMode,
             titleTrailingSlotFraction: 0.32,
+            hideHeader: controller.homeworkSelectionMode,
             isLoading: controller.loading,
             emptyMessage: '단원 정보가 없습니다.',
             nodes: _buildNodes(),

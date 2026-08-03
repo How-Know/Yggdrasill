@@ -11,6 +11,8 @@ import '../../services/data_manager.dart';
 import '../../services/homework_assignment_store.dart';
 import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
+import '../../services/tenant_service.dart';
+import '../../services/textbook_download_progress_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../utils/homework_page_text.dart';
 import '../../widgets/app_snackbar.dart';
@@ -547,7 +549,6 @@ class _GradingModePageState extends State<GradingModePage> {
         if (id.isEmpty) continue;
         final links = await DataManager.instance.loadResourceFileLinks(id);
         final answerLinks = _answerLinksFromResourceLinks(links);
-        if (answerLinks.isEmpty) continue;
 
         final grades = _answerGradesFromLinks(
           answerLinks: answerLinks,
@@ -613,18 +614,43 @@ class _GradingModePageState extends State<GradingModePage> {
     return out;
   }
 
+  Map<String, String> _solutionLinksFromResourceLinks(
+    Map<String, String> links,
+  ) {
+    final out = <String, String>{};
+    for (final entry in links.entries) {
+      final key = entry.key.trim();
+      if (!key.endsWith('#sol')) continue;
+      final path = entry.value.trim();
+      if (path.isEmpty) continue;
+      final gradeKey = key.substring(0, key.length - '#sol'.length).trim();
+      if (gradeKey.isEmpty) continue;
+      out[gradeKey] = path;
+    }
+    return out;
+  }
+
+  bool _isMigratedTextbookStoragePath(String raw) {
+    return raw.trim().startsWith('storage://textbook/');
+  }
+
   List<_GradingAnswerBookGrade> _answerGradesFromLinks({
     required Map<String, String> answerLinks,
     required Map<String, String> resourceLinks,
   }) {
-    final gradeKeys = answerLinks.keys
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    final solutionLinks = _solutionLinksFromResourceLinks(resourceLinks);
+    final gradeKeys = <String>{
+      ...answerLinks.keys.map((e) => e.trim()).where((e) => e.isNotEmpty),
+      // 마이그레이션된 교재는 정답 파일이 없어도 서버 해설 파일로
+      // 정답 바로가기를 제공한다. legacy URL에는 이 폴백을 적용하지 않는다.
+      for (final entry in solutionLinks.entries)
+        if (_isMigratedTextbookStoragePath(entry.value)) entry.key.trim(),
+    }.where((e) => e.isNotEmpty).toList();
     gradeKeys.sort(_compareGradeKeys);
     return <_GradingAnswerBookGrade>[
       for (final gradeKey in gradeKeys)
-        if ((answerLinks[gradeKey] ?? '').trim().isNotEmpty)
+        if ((answerLinks[gradeKey] ?? '').trim().isNotEmpty ||
+            _isMigratedTextbookStoragePath(solutionLinks[gradeKey] ?? ''))
           _GradingAnswerBookGrade(
             gradeKey: gradeKey,
             gradeLabel: _gradeLabelForKey(gradeKey),
@@ -729,27 +755,76 @@ class _GradingModePageState extends State<GradingModePage> {
     return raw;
   }
 
+  Future<bool> _enqueueMissingAnswerBookDownloads({
+    required _GradingAnswerBook book,
+    required String gradeLabel,
+    required String answerPathRaw,
+    required String solutionPathRaw,
+  }) async {
+    final academyId =
+        (await TenantService.instance.getActiveAcademyId())?.trim() ?? '';
+    if (academyId.isEmpty) return false;
+
+    final candidates = <({String kind, String rawPath, String label})>[
+      if (answerPathRaw.isNotEmpty)
+        (kind: 'ans', rawPath: answerPathRaw, label: '정답'),
+      if (solutionPathRaw.isNotEmpty)
+        (kind: 'sol', rawPath: solutionPathRaw, label: '해설'),
+    ];
+    var enqueued = false;
+    for (final candidate in candidates) {
+      final storageKey = _storageKeyFromTextbookPath(candidate.rawPath);
+      if (storageKey == null) continue;
+      final ref = TextbookPdfRef(
+        academyId: academyId,
+        fileId: book.id,
+        gradeLabel: gradeLabel,
+        kind: candidate.kind,
+        storageKey: storageKey,
+        displayName: '${book.displayName} · ${candidate.label}',
+      );
+      final cached = await TextbookPdfService.instance.isCached(ref);
+      if (cached) continue;
+      await TextbookDownloadProgressService.instance.enqueue(
+        ref: ref,
+        title: '${book.displayName} · $gradeLabel · ${candidate.label}',
+      );
+      enqueued = true;
+    }
+    return enqueued;
+  }
+
   Future<void> _openAnswerBook(
     _GradingAnswerBook book,
     _GradingAnswerBookGrade grade,
   ) async {
     final answerPathRaw = grade.answerPath.trim();
-    if (answerPathRaw.isEmpty) {
-      showAppSnackBar(
-          context, '\uC815\uB2F5 PDF\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.');
+    final solutionPathRaw = grade.solutionPath.trim();
+    if (answerPathRaw.isEmpty && solutionPathRaw.isEmpty) {
+      showAppSnackBar(context, '정답 또는 해설 PDF가 없습니다.');
       return;
     }
     final gradeLabel = grade.gradeLabel.trim().isNotEmpty
         ? grade.gradeLabel.trim()
         : grade.gradeKey.trim();
-    final solutionPathRaw = grade.solutionPath.trim();
+    final downloadStarted = await _enqueueMissingAnswerBookDownloads(
+      book: book,
+      gradeLabel: gradeLabel,
+      answerPathRaw: answerPathRaw,
+      solutionPathRaw: solutionPathRaw,
+    );
+    if (!mounted || downloadStarted) return;
+
     final resolvedPaths = await Future.wait<String>([
-      _resolveAnswerBookPdfPath(
-        bookId: book.id,
-        gradeLabel: gradeLabel,
-        kind: 'ans',
-        rawPath: answerPathRaw,
-      ),
+      if (answerPathRaw.isNotEmpty)
+        _resolveAnswerBookPdfPath(
+          bookId: book.id,
+          gradeLabel: gradeLabel,
+          kind: 'ans',
+          rawPath: answerPathRaw,
+        )
+      else
+        Future<String>.value(''),
       if (solutionPathRaw.isNotEmpty)
         _resolveAnswerBookPdfPath(
           bookId: book.id,
@@ -760,11 +835,16 @@ class _GradingModePageState extends State<GradingModePage> {
       else
         Future<String>.value(''),
     ]);
-    final answerPath = resolvedPaths[0];
-    final solutionPath = resolvedPaths[1];
+    var answerPath = resolvedPaths[0];
+    var solutionPath = resolvedPaths[1];
+    // 정답 파일이 없거나 서버에서 해석되지 않으면 해설을 기본 문서로 연다.
+    if (answerPath.isEmpty && solutionPath.isNotEmpty) {
+      answerPath = solutionPath;
+      solutionPath = '';
+    }
     if (!mounted) return;
     if (answerPath.isEmpty) {
-      showAppSnackBar(context, '정답 PDF를 열 수 없습니다.');
+      showAppSnackBar(context, '정답 또는 해설 PDF를 열 수 없습니다.');
       return;
     }
     final titleBase = book.name.trim().isEmpty

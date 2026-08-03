@@ -327,7 +327,9 @@ class _TextbookUnitAuthoringDialogState
       // 소단원 슬롯으로 새고 답지 블록("단원 마무리 평가")을 못 찾는다.
       if (pageSection == 'unit_review') return 'unit_review';
       if (pageSection == 'type_problem') {
-        return item.category == 'concept_check' ? 'concept_check' : 'type_problem';
+        return item.category == 'concept_check'
+            ? 'concept_check'
+            : 'type_problem';
       }
       return _kSuryeokSubKeyByCategory.containsKey(item.category)
           ? item.category
@@ -1171,6 +1173,17 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
+  String _sectionForFocus(_SubFocus focus) {
+    // 소단원 행 기반 시리즈의 실제 포커스 키는 A/B가 아니라 W0, W1...이다.
+    // 수력충전 단원마무리 행(W)의 힌트를 _sectionForSubKey에 바로 넘기면
+    // unknown이 되어, 이어지는 지면의 특수 라벨이 모두 제거된다.
+    if (_seriesKey == 'suryeok' && _isWonriRowFocus(focus)) {
+      final row = _wonriRowFor(focus);
+      return row?.isExercise == true ? 'unit_review' : 'type_problem';
+    }
+    return _sectionForSubKey(focus.subKey);
+  }
+
   bool _isRpmAConceptPage(
     _SubFocus focus,
     int rawPage,
@@ -1752,7 +1765,11 @@ class _TextbookUnitAuthoringDialogState
 
   Future<String?> _expectedStartNumberForFocus(_SubFocus focus) async {
     // 4자리 연속 번호(0001~)는 쎈/RPM A 파트 전용 개념이다.
-    if (focus.subKey != 'A' || _seriesKey == 'wonri') return null;
+    if (focus.subKey != 'A' ||
+        _seriesKey == 'wonri' ||
+        _seriesKey == 'suryeok') {
+      return null;
+    }
     try {
       final rows = await _supa
           .from('textbook_problem_crops')
@@ -1913,9 +1930,11 @@ class _TextbookUnitAuthoringDialogState
         gradeLabel: widget.gradeLabel,
         // 개념서(개념원리·개념+유형)는 단일 패스: 카테고리 힌트 없이 페이지의
         // 모든 문항을 감지하고 문항별 category 를 받는다.
-        sectionHint: _currentSeries().hasSubUnitRows
-            ? null
-            : _sectionForSubKey(focus.subKey),
+        sectionHint: _seriesKey == 'suryeok'
+            ? _sectionForFocus(focus)
+            : _currentSeries().hasSubUnitRows
+                ? null
+                : _sectionForSubKey(focus.subKey),
         expectedStartNumber: _expectedStartNumberForPage(
           focus,
           state,
@@ -2042,9 +2061,11 @@ class _TextbookUnitAuthoringDialogState
         academyId: widget.academyId,
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
-        sectionHint: _currentSeries().hasSubUnitRows
-            ? null
-            : _sectionForSubKey(focus.subKey),
+        sectionHint: _seriesKey == 'suryeok'
+            ? _sectionForFocus(focus)
+            : _currentSeries().hasSubUnitRows
+                ? null
+                : _sectionForSubKey(focus.subKey),
         expectedStartNumber: _expectedStartNumberForPage(
           focus,
           state,
@@ -3218,8 +3239,7 @@ class _TextbookUnitAuthoringDialogState
               // 계산 조심 / 생각 더하기 / 조건 확인 배지만 label 에 담는다.
               label: switch (_seriesKey) {
                 'gaeyu' => _gaeyuLabelForCategory(category, vlm.label),
-                'suryeok' =>
-                  category == 'unit_review' ? vlm.label.trim() : '',
+                'suryeok' => category == 'unit_review' ? vlm.label.trim() : '',
                 _ => '',
               },
               itemName: _wonriItemName(category, vlm.label),

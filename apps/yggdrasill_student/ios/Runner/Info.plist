@@ -77,5 +77,22 @@
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>프로필 사진으로 사용할 이미지를 선택하기 위해 사진 접근이 필요해요.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.beleunu.yggdrasillStudent</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>yggstudent</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

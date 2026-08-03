@@ -34,11 +34,14 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   Timer? _ticker;
   /// 확인(phase 4) 진입 스낵바용 — 이전 phase 스냅샷.
   final Map<String, int> _phaseByGroupId = {};
+  /// 페이지명: 닉네임(없으면 이름). 로드 전·실패 시 '과제'.
+  String _pageTitle = '과제';
 
   @override
   void initState() {
     super.initState();
     HomeworkSession.instance.addListener(_onSessionChanged);
+    unawaited(_loadPageTitle());
     // 목록은 HomeworkSession Realtime/폴백이 밀고, 여기선 초기 스냅샷 + 수동 새로고침.
     final cached = HomeworkSession.instance.lastGroups;
     if (cached != null) {
@@ -55,6 +58,18 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         setState(() {});
       }
     });
+  }
+
+  Future<void> _loadPageTitle() async {
+    try {
+      final info = await StudentApi.instance.getInfo();
+      if (!mounted || info == null) return;
+      final name = info.displayName.trim();
+      if (name.isEmpty) return;
+      setState(() => _pageTitle = name);
+    } catch (_) {
+      // 제목은 기본값 '과제' 유지.
+    }
   }
 
   @override
@@ -394,8 +409,8 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
               for (final group in priority) _groupCardFor(group),
             ],
           ),
-        // 카드 줄 ↔ 다음 섹션 타이틀 = 18 + 타이틀 top 10 = 28
-        const SizedBox(height: 18),
+        // 카드 줄 ↔ 다음 섹션 타이틀 (헤더 top padding 없음)
+        const SizedBox(height: 28),
         const _HomeworkSectionHeader(title: '대기 과제'),
         // 2줄 지그재그 + 세 번째 줄에 과제 추가 카드.
         _HomeworkZigzagRow(
@@ -411,7 +426,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     }
 
     return StudentCollapsingTitlePage(
-      title: '과제',
+      title: _pageTitle,
       onRefresh: _refresh,
       bodyBuilder: (context, topInset, bottomInset) {
         return Padding(
@@ -445,7 +460,7 @@ class _HomeworkSectionHeader extends StatelessWidget {
     final theme = Theme.of(context);
     final chevron = theme.colorScheme.onSurface.withValues(alpha: 0.35);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 10, 20, 8),
+      padding: const EdgeInsets.fromLTRB(22, 0, 20, 8),
       child: Row(
         children: [
           Text(
@@ -1554,6 +1569,8 @@ class _GroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dlg = YggDialogColors.of(context);
+    // 진행률 카드 부제와 동일: onSurface @ 55%.
+    final subText = theme.colorScheme.onSurface.withValues(alpha: 0.55);
     final title = group.title.isEmpty ? '(제목 없음)' : group.title;
     final coverUri = Uri.tryParse(coverRef ?? '');
     final hasNetworkCover = !group.isPrintSource &&
@@ -1569,6 +1586,7 @@ class _GroupCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _HomeworkCoverThumb(
                 size: _coverSize,
@@ -1583,7 +1601,7 @@ class _GroupCard extends StatelessWidget {
               const SizedBox(width: 17.6),
               Expanded(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisAlignment: MainAxisAlignment.start,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -1606,10 +1624,24 @@ class _GroupCard extends StatelessWidget {
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontSize: 20,
                         fontWeight: FontWeight.w500,
-                        color: dlg.textSub,
+                        color: subText,
                         height: 1.2,
                       ),
                     ),
+                    if (group.recommendedDurationLine.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        group.recommendedDurationLine,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w500,
+                          color: subText,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1755,12 +1787,14 @@ class _HomeworkCoverThumb extends StatelessWidget {
                           book,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: Colors.white,
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
                             height: 1.05,
                             letterSpacing: -0.35,
+                            fontFamily:
+                                Theme.of(context).textTheme.titleLarge?.fontFamily,
                           ),
                         ),
                       if (book.isNotEmpty && course.isNotEmpty)
@@ -1770,12 +1804,14 @@ class _HomeworkCoverThumb extends StatelessWidget {
                           course,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFFD8D8DE),
+                          style: TextStyle(
+                            color: const Color(0xFFD8D8DE),
                             fontSize: 20,
                             fontWeight: FontWeight.w500,
                             height: 1.05,
                             letterSpacing: -0.35,
+                            fontFamily:
+                                Theme.of(context).textTheme.bodyMedium?.fontFamily,
                           ),
                         ),
                     ],

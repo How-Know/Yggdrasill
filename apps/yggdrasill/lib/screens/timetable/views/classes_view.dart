@@ -1385,7 +1385,8 @@ class _ClassesViewState extends State<ClassesView>
                     if (activeStudentCount <
                         DataManager.instance.academySettings.defaultCapacity *
                             0.7) {
-                                  countColor = const Color(0xFF1B6B63);
+                                  // 여유: 투명 배경 + 디바이더 테두리(TimetableCell에서 처리)
+                                  countColor = Colors.transparent;
                     } else if (activeStudentCount >=
                         DataManager.instance.academySettings.defaultCapacity) {
                                   countColor = const Color(0xFFF2B45B);

@@ -3,11 +3,17 @@ import assert from 'node:assert/strict';
 
 import {
   normalizeDetectResult,
+  mergeItemGeometry,
+  mergeSuryeokMarks,
   numberBboxesLookTemplated,
   overwriteItemGeometry,
   repairSuryeokItemRegions,
+  suryeokMarksNeedRepair,
 } from '../src/textbook/vlm_detect_client.js';
-import { buildDetectProblemsPrompt } from '../src/textbook/vlm_detect_prompt.js';
+import {
+  buildDetectProblemsPrompt,
+  buildSuryeokMarkRepairPrompt,
+} from '../src/textbook/vlm_detect_prompt.js';
 import { buildExtractAnswersPrompt } from '../src/textbook/vlm_answer_prompt.js';
 import { buildDetectSolutionRefsPrompt } from '../src/textbook/vlm_solution_refs_prompt.js';
 import { buildParseTocPrompt } from '../src/textbook/vlm_toc_client.js';
@@ -53,6 +59,95 @@ test('suryeok detect prompt lists unit review badges only for the B slot', () =>
   assert.match(prompt, /계산 조심/);
   assert.match(prompt, /생각 더하기/);
   assert.match(prompt, /조건 확인/);
+  assert.match(prompt, /조건 확인\+생각 더하기/);
+});
+
+test('suryeok mark repair adds a missed green number and keeps combined badges', () => {
+  const result = {
+    section: 'type_problem',
+    page_kind: 'problem_page',
+    items: [
+      {
+        number: '03',
+        label: '',
+        category: 'type_problem',
+        is_set_header: false,
+        column: 1,
+        bbox: [789, 72, 805, 101],
+        item_region: [783, 66, 897, 506],
+      },
+    ],
+  };
+  assert.equal(suryeokMarksNeedRepair(result, 'type_problem'), true);
+  const merged = mergeSuryeokMarks(
+    result,
+    { items: [{ number: '02', label: '', bbox: [350, 72, 367, 101] }] },
+    'type_problem',
+  );
+  assert.equal(merged.added, 1);
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['02', '03'],
+  );
+
+  const review = {
+    section: 'unit_review',
+    page_kind: 'problem_page',
+    items: [
+      {
+        number: '33',
+        label: '',
+        category: 'unit_review',
+        is_set_header: false,
+        column: 2,
+        bbox: [690, 510, 705, 540],
+        item_region: [684, 504, 824, 960],
+      },
+    ],
+  };
+  const labels = mergeSuryeokMarks(
+    review,
+    {
+      items: [
+        {
+          number: '33',
+          label: '조건 확인! + 생각 더하기',
+          bbox: [690, 510, 705, 540],
+        },
+      ],
+    },
+    'unit_review',
+  );
+  assert.equal(labels.labels, 1);
+  assert.equal(review.items[0].label, '조건 확인+생각 더하기');
+  assert.match(
+    buildSuryeokMarkRepairPrompt({ rawPage: 89, sectionHint: 'unit_review' }),
+    /두 배지/,
+  );
+});
+
+test('geometry repair fills a missing number bbox even when item region exists', () => {
+  const result = {
+    items: [
+      {
+        number: '28',
+        bbox: null,
+        item_region: [430, 60, 560, 500],
+      },
+    ],
+    notes: '',
+  };
+  const filled = mergeItemGeometry(result, {
+    items: [
+      {
+        number: '28',
+        bbox: [442, 69, 457, 97],
+        item_region: [430, 60, 560, 500],
+      },
+    ],
+  });
+  assert.equal(filled, 1);
+  assert.deepEqual(result.items[0].bbox, [442, 69, 457, 97]);
 });
 
 test('suryeok numbers are padded to two digits and set ranges kept', () => {

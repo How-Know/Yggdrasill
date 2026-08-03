@@ -9,7 +9,7 @@ import '../services/student_api.dart';
 import 'student_bottom_nav_bar.dart';
 
 /// 커스텀 탭바 위 — 현재 수행 중 과제 미니 플레이어.
-class HomeworkNowPlayingBar extends StatelessWidget {
+class HomeworkNowPlayingBar extends StatefulWidget {
   const HomeworkNowPlayingBar({
     super.key,
     required this.group,
@@ -44,6 +44,66 @@ class HomeworkNowPlayingBar extends StatelessWidget {
   static const double _coverRadius = 8;
   static const double _maxWidth = 420;
 
+  /// 현재 사이클 수행시간 — `01:05` / `1:02:03` (자리수 고정으로 레이아웃 흔들림 방지).
+  static String formatCycleElapsed(int totalSec) {
+    final s = totalSec < 0 ? 0 : totalSec;
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final sec = s % 60;
+    final mm = m.toString().padLeft(2, '0');
+    final ss = sec.toString().padLeft(2, '0');
+    if (h > 0) {
+      return '$h:$mm:$ss';
+    }
+    return '$mm:$ss';
+  }
+
+  @override
+  State<HomeworkNowPlayingBar> createState() => _HomeworkNowPlayingBarState();
+}
+
+class _HomeworkNowPlayingBarState extends State<HomeworkNowPlayingBar> {
+  Timer? _tick;
+
+  bool get _running =>
+      HomeworkSession.instance.isRunningGroup(widget.group.groupId);
+
+  int get _cycleSec {
+    // 세션 러닝 중이면 live, 일시정지면 누적 사이클 초.
+    if (_running) return widget.group.liveCycleElapsed();
+    return widget.group.cycleElapsed < 0 ? 0 : widget.group.cycleElapsed;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncTicker();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeworkNowPlayingBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncTicker();
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  void _syncTicker() {
+    final need = _running;
+    if (need && _tick == null) {
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!need && _tick != null) {
+      _tick?.cancel();
+      _tick = null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
@@ -58,20 +118,27 @@ class HomeworkNowPlayingBar extends StatelessWidget {
         ? StudentBottomNavTokens.darkUnselected
         : StudentBottomNavTokens.lightUnselected;
     final blur = StudentBottomNavTokens.blurFor(brightness);
-    final s = scale.clamp(0.5, 1.5);
-    final barHeight = height * s;
+    final s = widget.scale.clamp(0.5, 1.5);
+    final barHeight = HomeworkNowPlayingBar.height * s;
     final radius = BorderRadius.circular(barHeight / 2);
-    final running = HomeworkSession.instance.isRunningGroup(group.groupId);
-    final title = group.title.isEmpty ? '(제목 없음)' : group.title;
-    final subtitle = group.primaryMetaLine;
-    final coverUri = Uri.tryParse(coverRef ?? '');
-    final hasCover = !group.isPrintSource &&
+    final running = _running;
+    final title =
+        widget.group.title.isEmpty ? '(제목 없음)' : widget.group.title;
+    final subtitle = widget.group.primaryMetaLine;
+    final coverUri = Uri.tryParse(widget.coverRef ?? '');
+    final hasCover = !widget.group.isPrintSource &&
         coverUri != null &&
         (coverUri.scheme == 'http' || coverUri.scheme == 'https');
-    final coverSize = (inline ? 40.0 : _coverSize) * s;
-    final coverRadius = (inline ? 7.0 : _coverRadius) * s;
-    final barWidth = width ??
-        (inline ? StudentBottomNavTokens.nowPlayingCompactMaxWidth : _maxWidth);
+    final coverSize =
+        (widget.inline ? 40.0 : HomeworkNowPlayingBar._coverSize) * s;
+    final coverRadius =
+        (widget.inline ? 7.0 : HomeworkNowPlayingBar._coverRadius) * s;
+    final barWidth = widget.width ??
+        (widget.inline
+            ? StudentBottomNavTokens.nowPlayingCompactMaxWidth
+            : HomeworkNowPlayingBar._maxWidth);
+    final elapsedLabel =
+        HomeworkNowPlayingBar.formatCycleElapsed(_cycleSec);
 
     return SizedBox(
       width: barWidth,
@@ -89,7 +156,7 @@ class HomeworkNowPlayingBar extends StatelessWidget {
               foregroundPainter: GlassRimPainter(isDark: isDark),
               child: Container(
                 padding: EdgeInsets.fromLTRB(
-                  (inline ? 12.0 : 18.0) * s,
+                  (widget.inline ? 12.0 : 18.0) * s,
                   8 * s,
                   8 * s,
                   8 * s,
@@ -104,17 +171,18 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                       child: Material(
                         color: Colors.transparent,
                         child: InkWell(
-                          onTap: onExpand,
+                          onTap: widget.onExpand,
                           borderRadius: BorderRadius.circular(12 * s),
                           child: Row(
                             children: [
                               _Cover(
                                 size: coverSize,
                                 radius: coverRadius,
-                                isPrint: group.isPrintSource,
-                                coverRef: hasCover ? coverRef : null,
+                                isPrint: widget.group.isPrintSource,
+                                coverRef: hasCover ? widget.coverRef : null,
                               ),
-                              SizedBox(width: (inline ? 10.0 : 12.0) * s),
+                              SizedBox(
+                                  width: (widget.inline ? 10.0 : 12.0) * s),
                               Expanded(
                                 child: Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
@@ -125,7 +193,8 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: (inline ? 14.0 : 15.0) * s,
+                                        fontSize:
+                                            (widget.inline ? 14.0 : 15.0) * s,
                                         fontWeight: FontWeight.w700,
                                         color: titleColor,
                                         height: 1.15,
@@ -137,7 +206,8 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: (inline ? 11.5 : 12.5) * s,
+                                        fontSize:
+                                            (widget.inline ? 11.5 : 12.5) * s,
                                         fontWeight: FontWeight.w500,
                                         color: subColor,
                                         height: 1.15,
@@ -151,22 +221,28 @@ class HomeworkNowPlayingBar extends StatelessWidget {
                         ),
                       ),
                     ),
+                    SizedBox(width: 4 * s),
+                    _MonospaceTimeLabel(
+                      text: elapsedLabel,
+                      fontSize: (widget.inline ? 13.0 : 14.0) * s,
+                      color: titleColor,
+                    ),
                     SizedBox(width: 2 * s),
                     _AnimatedPlayPauseButton(
                       running: running,
-                      busy: busy,
+                      busy: widget.busy,
                       size: 44 * s,
-                      iconSize: (inline ? 28.0 : 30.0) * s,
+                      iconSize: (widget.inline ? 28.0 : 30.0) * s,
                       color: titleColor,
-                      onTap: onPlayPause,
+                      onTap: widget.onPlayPause,
                     ),
                     _IconButton(
                       tooltip: '제출',
                       size: 44 * s,
-                      onTap: busy ? null : onSubmit,
+                      onTap: widget.busy ? null : widget.onSubmit,
                       child: Icon(
                         Icons.check_rounded,
-                        size: (inline ? 28.0 : 30.0) * s,
+                        size: (widget.inline ? 28.0 : 30.0) * s,
                         color: YggGlassTokens.confirmActionColor,
                       ),
                     ),
@@ -177,6 +253,46 @@ class HomeworkNowPlayingBar extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 글꼴이 tabular figures 를 안 줘도 자리마다 폭을 고정해 `:` 가 흔들리지 않게 한다.
+class _MonospaceTimeLabel extends StatelessWidget {
+  const _MonospaceTimeLabel({
+    required this.text,
+    required this.fontSize,
+    required this.color,
+  });
+
+  final String text;
+  final double fontSize;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final digitW = fontSize * 0.62;
+    final colonW = fontSize * 0.36;
+    final style = TextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w600,
+      color: color,
+      height: 1.0,
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < text.length; i++)
+          SizedBox(
+            width: text[i] == ':' ? colonW : digitW,
+            child: Text(
+              text[i],
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: style,
+            ),
+          ),
+      ],
     );
   }
 }

@@ -24,6 +24,7 @@ dependencies:
   flutter_svg: ^2.0.9
   image: ^4.8.0
   path_provider: ^2.1.6
+  live_activities: ^2.4.7
 
 dev_dependencies:
   flutter_test:

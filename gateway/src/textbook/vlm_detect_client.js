@@ -9,6 +9,7 @@ import {
   buildDetectProblemsPrompt,
   buildItemGeometryRepairPrompt,
   buildRpmSetHeaderPrompt,
+  buildSuryeokMarkRepairPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
   SURYEOK_ITEM_CATEGORIES,
@@ -196,6 +197,17 @@ export async function detectProblemsOnPage({
       lastBody,
     ).slice(0, 300)}`,
   );
+}
+
+export async function detectSuryeokMarksOnPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    series: 'suryeok',
+    promptOverride: buildSuryeokMarkRepairPrompt({
+      rawPage: options?.rawPage,
+      sectionHint: options?.sectionHint,
+    }),
+  });
 }
 
 export function detectRpmSetHeadersOnPage(options) {
@@ -1016,6 +1028,12 @@ function normalizeDifficultyLabel(input) {
   // 여기서 되돌려 주지 않으면 배지를 읽고도 라벨이 통째로 버려진다.
   // 교재에 따라 "조건 확인!" 처럼 느낌표가 붙어 인쇄된다.
   const suryeokBadge = compact.replace(/[!！.]+$/, '');
+  if (
+    suryeokBadge.includes('조건확인') &&
+    suryeokBadge.includes('생각더하기')
+  ) {
+    return '조건 확인+생각 더하기';
+  }
   if (suryeokBadge === '계산조심') return '계산 조심';
   if (suryeokBadge === '생각더하기') return '생각 더하기';
   if (suryeokBadge === '조건확인') return '조건 확인';
@@ -1414,6 +1432,135 @@ function synthesizeNumberBboxFromItemRegion(item, section) {
 // 쓰는 공간이라 문항의 일부다. 모델은 번호 줄만 item_region 으로 주거나 번호
 // 오른쪽부터 잡아 주는 일이 잦아 본문이 잘리므로, 번호 bbox 로 세로 범위를
 // 다시 계산한다: 위는 번호 줄, 아래는 다음 번호 직전, 좌우는 단 전체.
+export function suryeokMarksNeedRepair(result, sectionHint = '') {
+  if (!result || !Array.isArray(result.items)) return false;
+  if (sectionHint === 'unit_review' || result.section === 'unit_review') return true;
+  if (sectionHint !== 'type_problem') return false;
+  const columns = new Map();
+  for (const item of result.items) {
+    if (item?.is_set_header === true || !Array.isArray(item?.bbox)) continue;
+    const column =
+      item.column === 1 || item.column === 2
+        ? item.column
+        : inferColumn(item.bbox);
+    if (!columns.has(column)) columns.set(column, []);
+    columns.get(column).push(item.bbox[0]);
+  }
+  for (const ys of columns.values()) {
+    ys.sort((a, b) => a - b);
+    if (ys[0] > 650) return true;
+    for (let i = 1; i < ys.length; i += 1) {
+      if (ys[i] - ys[i - 1] > 300) return true;
+    }
+  }
+  return false;
+}
+
+export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
+  if (!result || !Array.isArray(result.items)) {
+    return { added: 0, labels: 0, breaks: 0 };
+  }
+  const rawItems = Array.isArray(parsedJson?.items) ? parsedJson.items : [];
+  const byNumber = new Map(
+    result.items
+      .filter((item) => item?.is_set_header !== true)
+      .map((item) => [formatSuryeokNumber(item?.number), item]),
+  );
+  const category =
+    sectionHint === 'unit_review' || result.section === 'unit_review'
+      ? 'unit_review'
+      : 'type_problem';
+  let added = 0;
+  let labels = 0;
+  let breaks = 0;
+  for (const raw of rawItems) {
+    const number = formatSuryeokNumber(raw?.number);
+    const bbox = parseBbox4(raw?.bbox);
+    if (!number || !bbox || /[~\-–—]/.test(number)) continue;
+    const label = normalizeDifficultyLabel(raw?.label);
+    const existing = byNumber.get(number);
+    if (existing) {
+      if (category === 'unit_review' && label && existing.label !== label) {
+        existing.label = label;
+        labels += 1;
+      }
+      continue;
+    }
+    const column = inferColumn(bbox);
+    const item = {
+      number,
+      label: category === 'unit_review' ? label : '',
+      category,
+      is_important: false,
+      is_set_header: false,
+      set_range: null,
+      content_group: { kind: 'none', label: '', title: '', order: null },
+      content_group_kind: 'none',
+      content_group_label: '',
+      content_group_title: '',
+      content_group_order: null,
+      column,
+      bbox,
+      item_region: [...bbox],
+    };
+    result.items.push(item);
+    byNumber.set(number, item);
+    added += 1;
+  }
+  if (category === 'type_problem' && Array.isArray(parsedJson?.breaks)) {
+    if (!Array.isArray(result.type_headers)) result.type_headers = [];
+    for (const raw of parsedJson.breaks) {
+      const bbox = parseBbox4(raw?.bbox);
+      if (!bbox) continue;
+      // 번호 바로 아래의 파란 도움말 배지는 그 문항 본문의 일부다(예: 85쪽
+      // 02번의 "직선의 방정식 이용"). 새 유형 경계로 쓰면 번호 한 줄만 남고
+      // 본문이 잘리므로, 같은 단의 번호 아래 60 이내 표시는 경계에서 제외한다.
+      const attachedToItem = result.items.some(
+        (item) =>
+          item?.is_set_header !== true &&
+          Array.isArray(item?.bbox) &&
+          inferColumn(item.bbox) === inferColumn(bbox) &&
+          bbox[0] >= item.bbox[2] &&
+          bbox[0] - item.bbox[2] <= 60,
+      );
+      if (attachedToItem) continue;
+      const duplicate = result.type_headers.some(
+        (header) =>
+          Array.isArray(header?.bbox) &&
+          Math.abs(header.bbox[0] - bbox[0]) < 8 &&
+          Math.abs(header.bbox[1] - bbox[1]) < 20,
+      );
+      if (duplicate) continue;
+      result.type_headers.push({
+        label: '',
+        title: String(raw?.title || '').trim(),
+        bbox,
+      });
+      breaks += 1;
+    }
+  }
+  if (added > 0 || breaks > 0) {
+    result.items.sort((a, b) => {
+      const aBox = Array.isArray(a?.bbox) ? a.bbox : [1000, 1000];
+      const bBox = Array.isArray(b?.bbox) ? b.bbox : [1000, 1000];
+      const aCol = a.column === 1 || a.column === 2 ? a.column : inferColumn(aBox);
+      const bCol = b.column === 1 || b.column === 2 ? b.column : inferColumn(bBox);
+      return aCol - bCol || aBox[0] - bBox[0];
+    });
+    for (const item of result.items) {
+      if (item && item.__suryeokRegionRepaired) {
+        delete item.__suryeokRegionRepaired;
+      }
+    }
+  }
+  if (added > 0 || labels > 0 || breaks > 0) {
+    const suffix =
+      `suryeok_marks_repaired=items:${added},labels:${labels},breaks:${breaks}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+  return { added, labels, breaks };
+}
+
 export function repairSuryeokItemRegions(result, series) {
   if (series !== 'suryeok') return;
   if (!result || result.page_kind === 'concept_page') return;

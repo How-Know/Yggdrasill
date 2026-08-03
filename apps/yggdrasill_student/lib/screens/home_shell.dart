@@ -4,6 +4,7 @@ import 'dart:ui' show lerpDouble;
 import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
+import '../services/homework_live_activity.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/student_shell_chrome.dart';
@@ -37,12 +38,15 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     StudentShellChrome.instance.addListener(_onChromeChanged);
     // Realtime + 1.2s 폴백 (학습앱과 동일 패턴).
     unawaited(HomeworkSession.instance.startSync());
+    // iOS 잠금화면 Live Activity (비-iOS는 no-op).
+    unawaited(HomeworkLiveActivity.instance.start());
     // 서버 아바타 → 세션 hydrate (계정 버튼/시트에 즉시 반영).
     unawaited(StudentApi.instance.getInfo());
   }
 
   @override
   void dispose() {
+    unawaited(HomeworkLiveActivity.instance.stop());
     unawaited(HomeworkSession.instance.stopSync());
     HomeworkSession.instance.removeListener(_onSessionChanged);
     StudentShellChrome.instance.removeListener(_onChromeChanged);

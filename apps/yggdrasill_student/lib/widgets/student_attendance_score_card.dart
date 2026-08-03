@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
 
 /// 내 정보 상단 출석 점수 카드.
-/// 목업 진행률 카드와 같은 크롬 · 진행 바, 상단은 타이틀/점수 정렬.
+/// 과제 메뉴 [StudentProgressSummaryCard] 와 같은 탭→펼침 크로마.
 class StudentAttendanceScoreCard extends StatelessWidget {
   const StudentAttendanceScoreCard({
     super.key,
     required this.score100,
     required this.subtitle,
+    this.onTap,
+    this.showInfoIcon = true,
+    this.infoFilled = false,
   });
 
   final double? score100;
   final String subtitle;
+  final VoidCallback? onTap;
+  final bool showInfoIcon;
+  final bool infoFilled;
 
   @override
   Widget build(BuildContext context) {
@@ -32,6 +38,93 @@ class StudentAttendanceScoreCard extends StatelessWidget {
     final clamped = (score100 ?? 0).clamp(0.0, 100.0);
     final scoreLabel = hasScore ? clamped.toStringAsFixed(1) : '—';
 
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 16, 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      '출석 점수',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: subText,
+                        height: 1.0,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: scoreLabel,
+                            style: theme.textTheme.displaySmall?.copyWith(
+                              fontSize: 44,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -1.2,
+                              height: 1.0,
+                              color: text,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '점',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              height: 1.0,
+                              color: text,
+                            ),
+                          ),
+                        ],
+                      ),
+                      textAlign: TextAlign.right,
+                    ),
+                  ],
+                ),
+              ),
+              if (showInfoIcon)
+                Icon(
+                  infoFilled
+                      ? Icons.info_rounded
+                      : Icons.info_outline_rounded,
+                  size: 22,
+                  color: subText,
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+              color: subText,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: hasScore ? clamped / 100 : 0,
+              minHeight: 14,
+              backgroundColor: track,
+              valueColor: AlwaysStoppedAnimation<Color>(fill),
+            ),
+          ),
+        ],
+      ),
+    );
+
     return DecoratedBox(
       decoration: BoxDecoration(
         color: surface,
@@ -46,76 +139,17 @@ class StudentAttendanceScoreCard extends StatelessWidget {
                 ),
               ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text(
-                  '출석 점수',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: subText,
-                    height: 1.0,
-                  ),
-                ),
-                const Spacer(),
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: scoreLabel,
-                        style: theme.textTheme.displaySmall?.copyWith(
-                          fontSize: 44,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -1.2,
-                          height: 1.0,
-                          color: text,
-                        ),
-                      ),
-                      TextSpan(
-                        text: '점',
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          height: 1.0,
-                          color: text,
-                        ),
-                      ),
-                    ],
-                  ),
-                  textAlign: TextAlign.right,
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
-                color: subText,
-                height: 1.25,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(22),
+        clipBehavior: Clip.antiAlias,
+        child: onTap == null
+            ? content
+            : InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(22),
+                child: content,
               ),
-            ),
-            const SizedBox(height: 14),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(999),
-              child: LinearProgressIndicator(
-                value: hasScore ? clamped / 100 : 0,
-                minHeight: 14,
-                backgroundColor: track,
-                valueColor: AlwaysStoppedAnimation<Color>(fill),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
