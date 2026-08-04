@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_overlays.dart';
+import '../widgets/app_snackbar.dart';
 import 'homework_assignment_store.dart';
 import 'homework_store.dart';
 
@@ -138,9 +139,7 @@ class HomeworkBatchConfirmService {
     }
 
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${pending.length}건의 과제를 일괄 처리했어요.')),
-    );
+    showAppSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
   }
 
   Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(

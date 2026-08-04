@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
@@ -7,6 +10,7 @@ import '../widgets/homework_assign_dialog.dart'
 import 'data_manager.dart';
 import 'homework_departure_draft_service.dart';
 import 'homework_store.dart';
+import 'print_routing_service.dart';
 import 'realtime_reconciler.dart';
 
 /// 키오스크(webOS TV) 하원 시 요청된 "알림장 인쇄"를 PC(메인앱)에서 대신 수행한다.
@@ -25,16 +29,20 @@ class KioskNoticePrintService {
   RealtimeChannel? _channel;
   String? _academyId;
   String? _workerId;
-  final Set<String> _handled = <String>{};
+  Timer? _pendingPollTimer;
+  bool _pendingLoadRunning = false;
+  final Set<String> _handledRequestKeys = <String>{};
 
   Future<void> start(String academyId) async {
-    if (_academyId == academyId && _channel != null) return;
+    final normalizedAcademyId = academyId.trim();
+    if (normalizedAcademyId.isEmpty) return;
+    if (_academyId == normalizedAcademyId && _channel != null) return;
     await stop();
-    _academyId = academyId;
+    _academyId = normalizedAcademyId;
     try {
       _workerId = await _ensureWorkerId();
       final chan = Supabase.instance.client
-          .channel('kiosk_notice_print:$academyId')
+          .channel('kiosk_notice_print:$normalizedAcademyId')
           .onPostgresChanges(
             event: PostgresChangeEvent.update,
             schema: 'public',
@@ -42,7 +50,7 @@ class KioskNoticePrintService {
             filter: PostgresChangeFilter(
               type: PostgresChangeFilterType.eq,
               column: 'academy_id',
-              value: academyId,
+              value: normalizedAcademyId,
             ),
             callback: (payload) {
               final m = payload.newRecord;
@@ -52,17 +60,31 @@ class KioskNoticePrintService {
       _channel = chan;
       RealtimeReconciler.instance.attachResubscribe(
         chan,
-        key: 'kiosk_notice_print:$academyId',
-        onResync: () async {},
+        key: 'kiosk_notice_print:$normalizedAcademyId',
+        onResync: () => _loadRecentPendingRequests(normalizedAcademyId),
+        skipFirstSubscribed: false,
       );
-    } catch (_) {}
+      // 구독 완료 직전 들어온 UPDATE도 놓치지 않도록 즉시 한 번 조회한다.
+      await _loadRecentPendingRequests(normalizedAcademyId);
+      _pendingPollTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (_) => unawaited(_loadRecentPendingRequests(normalizedAcademyId)),
+      );
+      debugPrint(
+          '[KIOSK_PRINT] started academy=$normalizedAcademyId worker=$_workerId');
+    } catch (e, st) {
+      debugPrint('[KIOSK_PRINT][START_ERROR] $e\n$st');
+    }
   }
 
   Future<void> stop() async {
+    _pendingPollTimer?.cancel();
+    _pendingPollTimer = null;
     try {
       await _channel?.unsubscribe();
     } catch (_) {}
     _channel = null;
+    _academyId = null;
   }
 
   void _onUpdate(Map<String, dynamic> m) {
@@ -74,26 +96,42 @@ class KioskNoticePrintService {
       final error = m['notice_print_error'];
       if (requestedAt == null) return; // 인쇄 요청이 아님
       if (printedAt != null || error != null) return; // 이미 처리됨
-      if (_handled.contains(id)) return;
 
       // 오래된 요청(예: 재접속 시점 등)에 반응하지 않도록 최근 요청만 처리.
       final reqTime = DateTime.tryParse(requestedAt as String)?.toLocal();
       if (reqTime == null) return;
       if (DateTime.now().difference(reqTime).inMinutes.abs() > 10) return;
 
-      _handled.add(id);
+      // attendance id가 재사용되더라도 새 requested_at은 별도 요청이다.
+      final requestKey = '$id|${reqTime.toUtc().toIso8601String()}';
+      if (!_handledRequestKeys.add(requestKey)) return;
+      debugPrint('[KIOSK_PRINT] request id=$id requestedAt=$requestedAt');
       // ignore: discarded_futures
-      _claimAndProcess(id, m);
-    } catch (_) {}
+      _claimAndProcess(id, requestKey, m);
+    } catch (e, st) {
+      debugPrint('[KIOSK_PRINT][UPDATE_ERROR] $e\n$st');
+    }
   }
 
   Future<void> _claimAndProcess(
     String attendanceId,
+    String requestKey,
     Map<String, dynamic> m,
   ) async {
     final workerId = _workerId;
-    if (workerId == null) return;
+    if (workerId == null) {
+      _handledRequestKeys.remove(requestKey);
+      return;
+    }
     try {
+      // 알림장 프린터가 지정되지 않은 PC가 요청을 먼저 선점하지 않게 한다.
+      final configuredPrinter = await PrintRoutingService.instance
+          .loadConfiguredPrinter(PrintRoutingChannel.todoSheet);
+      if ((configuredPrinter ?? '').trim().isEmpty) {
+        _handledRequestKeys.remove(requestKey);
+        debugPrint('[KIOSK_PRINT] skip claim: todo printer is not configured');
+        return;
+      }
       final result = await Supabase.instance.client.rpc(
         'kiosk_notice_print_claim',
         params: {
@@ -101,10 +139,49 @@ class KioskNoticePrintService {
           'p_worker_id': workerId,
         },
       );
-      if (result is! Map || result['claimed'] != true) return;
+      if (result is! Map || result['claimed'] != true) {
+        debugPrint(
+            '[KIOSK_PRINT] claim skipped id=$attendanceId result=$result');
+        return;
+      }
+      debugPrint(
+          '[KIOSK_PRINT] claimed id=$attendanceId printer=$configuredPrinter');
       await _process(attendanceId, m);
-    } catch (_) {
-      _handled.remove(attendanceId);
+    } catch (e, st) {
+      _handledRequestKeys.remove(requestKey);
+      debugPrint('[KIOSK_PRINT][CLAIM_ERROR] id=$attendanceId $e\n$st');
+    }
+  }
+
+  Future<void> _loadRecentPendingRequests(String academyId) async {
+    if (_pendingLoadRunning) return;
+    _pendingLoadRunning = true;
+    try {
+      final cutoff = DateTime.now()
+          .toUtc()
+          .subtract(const Duration(minutes: 10))
+          .toIso8601String();
+      final rowsRaw = await Supabase.instance.client
+          .from('attendance_records')
+          .select()
+          .eq('academy_id', academyId)
+          .not('notice_print_requested_at', 'is', null)
+          .isFilter('notice_printed_at', null)
+          .isFilter('notice_print_error', null)
+          .gte('notice_print_requested_at', cutoff)
+          .order('notice_print_requested_at')
+          .limit(20);
+      final rows = (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+      if (rows.isNotEmpty) {
+        debugPrint('[KIOSK_PRINT] pending resync count=${rows.length}');
+      }
+      for (final row in rows) {
+        _onUpdate(row);
+      }
+    } catch (e, st) {
+      debugPrint('[KIOSK_PRINT][RESYNC_ERROR] $e\n$st');
+    } finally {
+      _pendingLoadRunning = false;
     }
   }
 

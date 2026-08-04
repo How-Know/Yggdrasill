@@ -361,8 +361,13 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     // 진행률 카드 확장 시 아래 목록을 밀어내며 같은 ListView 스크롤을 쓴다.
     final children = <Widget>[
       // 교재 풀기 탭과 동일 좌우 여백(24) → 진행률 카드 너비 통일.
+      const Padding(
+        padding: EdgeInsets.fromLTRB(24, 20, 24, 0),
+        child: _DailyAverageDummySection(),
+      ),
+      const SizedBox(height: 28),
       Padding(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
         child: _TodayHomeworkProgressSection(
           coverByBookKey: _coverByBookKey,
         ),
@@ -878,6 +883,561 @@ class _AddHomeworkSheet extends StatelessWidget {
   }
 }
 
+/// iOS 스크린타임 스타일 더미 카드.
+/// 접힘: 일일 평균 + 메인 수치 / 펼침: 주간 차트 + 하단 링크.
+class _DailyAverageDummySection extends StatefulWidget {
+  const _DailyAverageDummySection();
+
+  @override
+  State<_DailyAverageDummySection> createState() =>
+      _DailyAverageDummySectionState();
+}
+
+class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
+  bool _expanded = false;
+  DateTime? _arrival;
+  StudentNextClass? _nextClass;
+  StudentClassDurationWeek? _weekDuration;
+  bool _loadingWeek = false;
+  DateTime? _weekFetchedAt;
+  Timer? _tick;
+
+  static const _cardRadius = 22.0;
+  static const _teal = Color(0xFF64D2CF);
+  static const _avgGreen = Color(0xFF34C759);
+  static const _weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadSchedule());
+    // 분 단위로 진행 시간 갱신.
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && _arrival != null) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadSchedule() async {
+    try {
+      final results = await Future.wait([
+        StudentApi.instance.todayAttendance(),
+        StudentApi.instance.nextClass(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _arrival = (results[0] as TodayAttendance).arrival;
+        _nextClass = results[1] as StudentNextClass?;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _arrival = null;
+        _nextClass = null;
+      });
+    }
+  }
+
+  Future<void> _ensureWeekLoaded({bool force = false}) async {
+    if (!force && (_weekDuration != null || _loadingWeek)) return;
+    setState(() => _loadingWeek = true);
+    try {
+      final week = await StudentApi.instance.classDurationWeek();
+      if (!mounted) return;
+      setState(() {
+        _weekDuration = week;
+        _weekFetchedAt = DateTime.now();
+        _loadingWeek = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingWeek = false);
+    }
+  }
+
+  void _toggle() {
+    final next = !_expanded;
+    setState(() => _expanded = next);
+    if (next) unawaited(_ensureWeekLoaded(force: true));
+  }
+
+  /// 등원 시각 → 지금까지. 예: "6시간 23분째", "42분째".
+  String _elapsedLabel() {
+    final arrival = _arrival;
+    if (arrival == null) return '등원 전';
+    final now = DateTime.now();
+    var minutes = now.difference(arrival).inMinutes;
+    if (minutes < 0) minutes = 0;
+    final hours = minutes ~/ 60;
+    final mins = minutes % 60;
+    if (hours <= 0) return '$mins분째';
+    if (mins == 0) return '$hours시간째';
+    return '$hours시간 $mins분째';
+  }
+
+  /// 다음 회차 — "수 16:00".
+  String _nextClassLabel() {
+    final next = _nextClass?.classDateTime;
+    if (next == null) return '일정 없음';
+    final wd = _weekdays[next.weekday - 1];
+    final hh = next.hour.toString().padLeft(2, '0');
+    final mm = next.minute.toString().padLeft(2, '0');
+    return '$wd $hh:$mm';
+  }
+
+  String _updatedLabel() {
+    final at = _weekFetchedAt;
+    if (at == null) {
+      return _loadingWeek
+          ? '수업시간 기록을 불러오는 중…'
+          : '펼치면 주간 수업시간이 표시돼요';
+    }
+    final ampm = at.hour < 12 ? '오전' : '오후';
+    final hour12 = at.hour % 12 == 0 ? 12 : at.hour % 12;
+    final mm = at.minute.toString().padLeft(2, '0');
+    return '오늘 $ampm $hour12:$mm에 업데이트됨';
+  }
+
+  List<String> _chartLabels() {
+    final days = _weekDuration?.days;
+    if (days == null || days.isEmpty) return const [];
+    return [for (final d in days) d.weekday];
+  }
+
+  List<double> _chartValues(int yMax) {
+    final days = _weekDuration?.days;
+    if (days == null || days.isEmpty || yMax <= 0) return const [];
+    return [
+      for (final d in days) (d.minutes / yMax).clamp(0.0, 1.0),
+    ];
+  }
+
+  double _chartAverage(int yMax) {
+    final avg = _weekDuration?.averageMinutes;
+    if (avg == null || yMax <= 0) return 0;
+    return (avg / yMax).clamp(0.0, 1.0);
+  }
+
+  String _yMaxLabel(int yMaxMinutes) {
+    final hours = (yMaxMinutes / 60).round();
+    return '$hours시간';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark
+        ? theme.colorScheme.surfaceContainerHigh
+        : Colors.white;
+    final text = theme.colorScheme.onSurface;
+    final subText = theme.colorScheme.onSurface.withValues(alpha: 0.55);
+    final divider = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : const Color(0xFFC6C6C8);
+    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.45);
+    final yMax = _weekDuration?.yMaxMinutes ?? 240;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Material(
+          color: surface,
+          borderRadius: BorderRadius.circular(_cardRadius),
+          clipBehavior: Clip.antiAlias,
+          // InkWell 스플래시(회색 퍼짐) 없이 탭만 처리.
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggle,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                  child: Builder(
+                    builder: (context) {
+                      final labelStyle = TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: -0.2,
+                        color: muted,
+                      );
+                      final valueStyle = TextStyle(
+                        fontSize: 34,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.8,
+                        height: 1.1,
+                        color: text,
+                      );
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text('오늘 수업', style: labelStyle),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  '다음 수업',
+                                  textAlign: TextAlign.end,
+                                  style: labelStyle,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _elapsedLabel(),
+                                  style: valueStyle,
+                                ),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  _nextClassLabel(),
+                                  textAlign: TextAlign.end,
+                                  style: valueStyle,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 320),
+                  curve: Curves.easeInOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: _expanded
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                              child: SizedBox(
+                                height: 196,
+                                child: _loadingWeek && _weekDuration == null
+                                    ? const Center(
+                                        child: YggLoadingIndicator(size: 28),
+                                      )
+                                    : _chartLabels().isEmpty
+                                        ? Center(
+                                            child: Text(
+                                              '등록된 수업 요일이 없어요.',
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                color: muted,
+                                              ),
+                                            ),
+                                          )
+                                        : _ScreenTimeWeekChart(
+                                            labels: _chartLabels(),
+                                            values: _chartValues(yMax),
+                                            average: _chartAverage(yMax),
+                                            yMaxLabel: _yMaxLabel(yMax),
+                                            barColor: _teal,
+                                            averageColor: _avgGreen,
+                                            gridColor:
+                                                muted.withValues(alpha: 0.35),
+                                            labelColor: muted,
+                                          ),
+                              ),
+                            ),
+                            Divider(
+                              height: 1,
+                              thickness: 0.33,
+                              color: divider,
+                            ),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 14, 12, 14),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '수업 기록 모두 보기',
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w400,
+                                        letterSpacing: -0.2,
+                                        color: text,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    size: 22,
+                                    color: muted,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _updatedLabel(),
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w400,
+            color: subText,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 스크린타임 스타일 주간 수업시간 막대 차트.
+class _ScreenTimeWeekChart extends StatelessWidget {
+  const _ScreenTimeWeekChart({
+    required this.labels,
+    required this.values,
+    required this.average,
+    required this.yMaxLabel,
+    required this.barColor,
+    required this.averageColor,
+    required this.gridColor,
+    required this.labelColor,
+  });
+
+  final List<String> labels;
+  final List<double> values;
+  final double average;
+  final String yMaxLabel;
+  final Color barColor;
+  final Color averageColor;
+  final Color gridColor;
+  final Color labelColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const labelH = 22.0;
+        const axisW = 44.0;
+        final chartH = constraints.maxHeight - labelH;
+        final barsW = constraints.maxWidth - axisW;
+
+        return Column(
+          children: [
+            SizedBox(
+              height: chartH,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: barsW,
+                    child: Stack(
+                      children: [
+                        // 가로 점선 그리드
+                        CustomPaint(
+                          size: Size(barsW, chartH),
+                          painter: _DashedGridPainter(color: gridColor),
+                        ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (var i = 0; i < values.length; i++) ...[
+                              if (i > 0) const SizedBox(width: 10),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: FractionallySizedBox(
+                                    widthFactor: 0.55,
+                                    heightFactor: values[i].clamp(0.0, 1.0),
+                                    child: values[i] <= 0
+                                        ? const SizedBox.shrink()
+                                        : DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              color: barColor,
+                                              borderRadius:
+                                                  BorderRadius.circular(3),
+                                            ),
+                                          ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        // 평균 점선
+                        if (average > 0)
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: chartH * average.clamp(0.0, 1.0),
+                            child: CustomPaint(
+                              size: Size(barsW, 1),
+                              painter: _DashedLinePainter(color: averageColor),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    width: axisW,
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Text(
+                            yMaxLabel,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w400,
+                              color: labelColor,
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: Text(
+                            '0',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w400,
+                              color: labelColor,
+                            ),
+                          ),
+                        ),
+                        if (average > 0)
+                          Positioned(
+                            left: 4,
+                            bottom: chartH * average.clamp(0.0, 1.0) - 7,
+                            child: Text(
+                              '평균',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: averageColor,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: labelH,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: barsW,
+                    child: Row(
+                      children: [
+                        for (var i = 0; i < labels.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              labels[i],
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w400,
+                                color: labelColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: axisW),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _DashedGridPainter extends CustomPainter {
+  _DashedGridPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    const rows = 5;
+    const dash = 3.0;
+    const gap = 3.0;
+    for (var r = 0; r <= rows; r++) {
+      final y = size.height * (r / rows);
+      var x = 0.0;
+      while (x < size.width) {
+        canvas.drawLine(
+          Offset(x, y),
+          Offset(math.min(x + dash, size.width), y),
+          paint,
+        );
+        x += dash + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedGridPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class _DashedLinePainter extends CustomPainter {
+  _DashedLinePainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    const dash = 4.0;
+    const gap = 3.0;
+    var x = 0.0;
+    final y = size.height / 2;
+    while (x < size.width) {
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(math.min(x + dash, size.width), y),
+        paint,
+      );
+      x += dash + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedLinePainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 /// 오늘 과제 완료율 요약 + (탭 시) iOS 배터리 스타일 상세 카드.
 class _TodayHomeworkProgressSection extends StatefulWidget {
   const _TodayHomeworkProgressSection({required this.coverByBookKey});
@@ -891,7 +1451,7 @@ class _TodayHomeworkProgressSection extends StatefulWidget {
 
 class _TodayHomeworkProgressSectionState
     extends State<_TodayHomeworkProgressSection> {
-  // 요약 카드 수치는 아직 목업. 상세 리스트만 실데이터.
+  // 요약 카드 수치는 아직 목업. 상세 리스트·수행속도만 실데이터.
   static const int _percent = 84;
   static const int _averagePercent = 72;
   static const String _subtitle = '오늘 과제 5개 중 4개 완료';
@@ -900,6 +1460,43 @@ class _TodayHomeworkProgressSectionState
   List<TodayCompletedHomework>? _completed;
   bool _loadingCompleted = false;
   String? _completedError;
+  /// 과제 세션 목록 변화 감지용 (완료로 목록에서 빠지면 수행속도 갱신).
+  Set<String> _trackedGroupIds = const {};
+  Timer? _completedRefreshDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _trackedGroupIds = {
+      for (final g in HomeworkSession.instance.lastGroups ?? const <HomeworkGroup>[])
+        g.groupId,
+    };
+    HomeworkSession.instance.addListener(_onHomeworkSessionChanged);
+    unawaited(_ensureCompletedLoaded(force: true));
+  }
+
+  @override
+  void dispose() {
+    _completedRefreshDebounce?.cancel();
+    HomeworkSession.instance.removeListener(_onHomeworkSessionChanged);
+    super.dispose();
+  }
+
+  void _onHomeworkSessionChanged() {
+    final groups = HomeworkSession.instance.lastGroups;
+    if (groups == null) return;
+    final ids = {for (final g in groups) g.groupId};
+    if (ids.length == _trackedGroupIds.length &&
+        ids.containsAll(_trackedGroupIds)) {
+      return;
+    }
+    _trackedGroupIds = ids;
+    // 목록 변동(완료·배정 등) 직후 완료 RPC를 잠깐 디바운스해 갱신.
+    _completedRefreshDebounce?.cancel();
+    _completedRefreshDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) unawaited(_ensureCompletedLoaded(force: true));
+    });
+  }
 
   Future<void> _toggle() async {
     final next = !_expanded;
@@ -930,6 +1527,45 @@ class _TodayHomeworkProgressSectionState
     }
   }
 
+  /// completed_at 기준 오늘 완료 과제의 누적 수행시간(초). 서버값 — 재시작해도 유지.
+  int _todayCompletedAccumulatedSec() {
+    final rows = _completed;
+    if (rows == null) return 0;
+    return rows.fold<int>(
+      0,
+      (sum, r) => sum + (r.accumulatedSec > 0 ? r.accumulatedSec : 0),
+    );
+  }
+
+  /// completed_at 기준 오늘 완료 과제의 문항수 합(제출만 된 과제 제외).
+  int _todayCompletedProblemCount() {
+    final rows = _completed;
+    if (rows == null) return 0;
+    return rows.fold<int>(
+      0,
+      (sum, r) => sum + (r.totalCount > 0 ? r.totalCount : 0),
+    );
+  }
+
+  /// 완료 문항·수행시간 없으면 `오늘 수행속도`, 있으면 `한 문제 당 45분`.
+  String _paceTrailingLabel() {
+    final problems = _todayCompletedProblemCount();
+    if (problems <= 0) return '오늘 수행속도';
+    final sec = _todayCompletedAccumulatedSec();
+    if (sec <= 0) return '오늘 수행속도';
+    final per = sec / problems / 60.0;
+    if (per < 1) {
+      final secs = (per * 60).round();
+      if (secs <= 0) return '오늘 수행속도';
+      return '한 문제 당 $secs초';
+    }
+    final whole = per.round();
+    if ((per - whole).abs() < 0.05) {
+      return '한 문제 당 $whole분';
+    }
+    return '한 문제 당 ${per.toStringAsFixed(1)}분';
+  }
+
   String? _coverRefFor(TodayCompletedHomework item) {
     if (item.bookId.isEmpty) return null;
     return widget.coverByBookKey['${item.bookId}|${item.gradeLabel}'] ??
@@ -944,6 +1580,7 @@ class _TodayHomeworkProgressSectionState
         StudentProgressSummaryCard(
           percent: _percent,
           subtitle: _subtitle,
+          trailingSubtitle: _paceTrailingLabel(),
           onTap: () => unawaited(_toggle()),
           showInfoIcon: true,
           infoFilled: _expanded,

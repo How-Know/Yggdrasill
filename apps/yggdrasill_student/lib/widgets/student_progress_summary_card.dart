@@ -6,6 +6,7 @@ class StudentProgressSummaryCard extends StatelessWidget {
     super.key,
     required this.percent,
     required this.subtitle,
+    this.trailingSubtitle,
     this.onTap,
     this.showInfoIcon = true,
     this.infoFilled = false,
@@ -13,6 +14,8 @@ class StudentProgressSummaryCard extends StatelessWidget {
 
   final int percent;
   final String subtitle;
+  /// 두 번째 줄 오른쪽(예: 오늘 수행속도). null/빈 문자열이면 왼쪽만.
+  final String? trailingSubtitle;
   final VoidCallback? onTap;
   final bool showInfoIcon;
   final bool infoFilled;
@@ -80,16 +83,44 @@ class StudentProgressSummaryCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-              color: subText,
-              height: 1.25,
-            ),
+          Builder(
+            builder: (context) {
+              final lineStyle = theme.textTheme.bodyMedium?.copyWith(
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+                color: subText,
+                height: 1.25,
+              );
+              final trailing = trailingSubtitle?.trim() ?? '';
+              if (trailing.isEmpty) {
+                return Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: lineStyle,
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: lineStyle,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    trailing,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: lineStyle,
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 14),
           ClipRRect(

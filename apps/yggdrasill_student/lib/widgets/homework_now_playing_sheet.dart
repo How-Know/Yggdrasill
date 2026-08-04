@@ -37,6 +37,7 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
   late final AnimationController _slide;
   late final Animation<Offset> _offset;
   bool _closing = false;
+  Timer? _paceTick;
 
   @override
   void initState() {
@@ -55,10 +56,16 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
       reverseCurve: Curves.easeInOutCubic,
     ));
     _slide.forward();
+    // 수행 중 문항당 페이스를 초 단위로 갱신.
+    _paceTick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (HomeworkSession.instance.active != null) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _paceTick?.cancel();
     _slide.dispose();
     super.dispose();
   }
@@ -179,6 +186,22 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
                         const SizedBox(height: 4),
                         Text(
                           group.pageCountLine,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: sub,
+                          ),
+                        ),
+                      ],
+                      if (group
+                          .averagePacePerProblemLine(isRunning: running)
+                          .isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          group.averagePacePerProblemLine(isRunning: running),
                           textAlign: TextAlign.center,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

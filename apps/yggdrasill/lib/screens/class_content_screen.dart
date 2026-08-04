@@ -26,6 +26,7 @@ import '../services/right_sheet_answer_preload_service.dart';
 import '../services/textbook_pdf_service.dart';
 import '../utils/naesin_exam_context.dart';
 import '../models/attendance_record.dart';
+import '../models/session_override.dart';
 import '../models/student_flow.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
@@ -91,7 +92,7 @@ class ClassContentScreen extends StatefulWidget {
 
   const ClassContentScreen({super.key, this.printController});
 
-  static const double _attendingCardHeight = 102; // 기존 대비 15% 축소
+  static const double _attendingCardHeight = 120;
   static const double _attendingCardWidth = 320; // 고정 폭으로 내부 우측 정렬 보장
   static const double _studentColumnWidth = 560 * 2 / 3;
   static const double _studentColumnContentWidth = 520 * 2 / 3;
@@ -2518,9 +2519,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             }
           }
           if (entries.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('하위 과제를 1개 이상 추가하세요.')),
-            );
+            _showHomeworkChipSnackBar(context, '하위 과제를 1개 이상 추가하세요.');
             return;
           }
           final selectedFlowId = (item['flowId'] as String?)?.trim();
@@ -2529,9 +2528,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             final testFlowId = await _ensureTestFlowIdForStudent(studentId);
             if (testFlowId == null || testFlowId.isEmpty) {
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
-              );
+              _showHomeworkChipSnackBar(context, '테스트 플로우를 준비하지 못했습니다.');
               return;
             }
             for (final entry in entries) {
@@ -2557,9 +2554,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           );
           if (createdItems.isEmpty) {
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')),
-            );
+            _showHomeworkChipSnackBar(context, '그룹 과제 생성에 실패했어요.');
             return;
           }
           if (!context.mounted) return;
@@ -2567,8 +2562,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           final msg = isReserve
               ? '그룹 예약 과제(하위 ${childCount}개)를 추가했어요.'
               : '그룹 과제(하위 ${childCount}개)를 추가했어요.';
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(msg)));
+          _showHomeworkChipSnackBar(context, msg);
           return;
         }
         final flowId = item['flowId'] as String?;
@@ -2588,9 +2582,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           testFlowId = await _ensureTestFlowIdForStudent(studentId);
           if (testFlowId == null || testFlowId.isEmpty) {
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
-            );
+            _showHomeworkChipSnackBar(context, '테스트 플로우를 준비하지 못했습니다.');
             return;
           }
         }
@@ -2685,9 +2677,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             );
             HomeworkStore.instance.bumpRevision();
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('예약 과제 저장에 실패했어요.')),
-            );
+            _showHomeworkChipSnackBar(context, '예약 과제 저장에 실패했어요.');
             return;
           }
         }
@@ -2698,8 +2688,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             : (entries.length > 1
                 ? '과제를 ${entries.length}개 추가했어요.'
                 : '과제를 추가했어요.');
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        _showHomeworkChipSnackBar(context, msg);
       }
     }
   }
@@ -3354,28 +3343,21 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           );
         } catch (e) {
           if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('알림장 인쇄에 실패했어요: $e')),
-          );
+          _showHomeworkChipSnackBar(context, '알림장 인쇄에 실패했어요: $e');
         }
       }
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${student.name} 하원 처리되었습니다.')),
-      );
+      _showHomeworkChipSnackBar(context, '${student.name} 하원 처리되었습니다.');
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('하원 처리 실패: $e')),
-      );
+      _showHomeworkChipSnackBar(context, '하원 처리 실패: $e');
     }
   }
 
   Future<void> _onAddTag(BuildContext context, String studentId) async {
     final setId = _inferSetIdForStudent(studentId);
     if (setId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('현재 수업 세트를 찾지 못했습니다. 시간표를 확인하세요.')));
+      _showHomeworkChipSnackBar(context, '현재 수업 세트를 찾지 못했습니다. 시간표를 확인하세요.');
       return;
     }
     await _openClassTagDialogLikeSideSheet(context, setId, studentId);
@@ -8020,88 +8002,90 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
       child: Align(
         alignment: Alignment.centerLeft,
         widthFactor: reveal,
-        child: AnimatedContainer(
-          duration: _homeworkChipExpandDuration,
-          curve: _homeworkChipExpandCurve,
-          width: _homeworkDraftExtensionWidth,
-          height: height,
-          clipBehavior: Clip.hardEdge,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: groupedCardBackground,
-            borderRadius: const BorderRadius.only(
-              topRight: Radius.circular(12),
-              bottomRight: Radius.circular(12),
-            ),
-            border: Border(
-              top: BorderSide(color: borderColor, width: 3),
-              right: BorderSide(color: borderColor, width: 3),
-              bottom: BorderSide(color: borderColor, width: 3),
-            ),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.only(
+            topRight: Radius.circular(12),
+            bottomRight: Radius.circular(12),
           ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 34,
-                child: Transform.scale(
-                  scale: 1.3,
-                  child: Checkbox(
-                    value: existingHomework ? true : selected,
-                    onChanged:
-                        enabled ? (value) => onSelected(value ?? false) : null,
-                    activeColor: kDlgAccent,
-                    checkColor: Colors.white,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
+          child: AnimatedContainer(
+            duration: _homeworkChipExpandDuration,
+            curve: _homeworkChipExpandCurve,
+            width: _homeworkDraftExtensionWidth,
+            height: height,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: groupedCardBackground,
+              border: Border(
+                top: BorderSide(color: borderColor, width: 3),
+                right: BorderSide(color: borderColor, width: 3),
+                bottom: BorderSide(color: borderColor, width: 3),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: InkWell(
-                  onTap: enabled ? () => _pickDueDate(context) : null,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          existingHomework ? '배정 완료' : '마감날짜',
-                          style: dueTextStyle.copyWith(
-                            color: enabled ? kDlgText : kDlgTextSub,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _formatDueDay(dueDate),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: dueTextStyle.copyWith(
-                            color: enabled ? kDlgText : kDlgTextSub,
-                            decoration:
-                                enabled ? TextDecoration.underline : null,
-                            decorationColor: kDlgTextSub,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _formatDueTime(dueDate),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: dueTextStyle.copyWith(
-                            color: enabled ? kDlgText : kDlgTextSub,
-                            decoration:
-                                enabled ? TextDecoration.underline : null,
-                            decorationColor: kDlgTextSub,
-                          ),
-                        ),
-                      ],
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 34,
+                  child: Transform.scale(
+                    scale: 1.3,
+                    child: Checkbox(
+                      value: existingHomework ? true : selected,
+                      onChanged: enabled
+                          ? (value) => onSelected(value ?? false)
+                          : null,
+                      activeColor: kDlgAccent,
+                      checkColor: Colors.white,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                 ),
-              ),
-            ],
+                const SizedBox(width: 10),
+                Expanded(
+                  child: InkWell(
+                    onTap: enabled ? () => _pickDueDate(context) : null,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            existingHomework ? '배정 완료' : '마감날짜',
+                            style: dueTextStyle.copyWith(
+                              color: enabled ? kDlgText : kDlgTextSub,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatDueDay(dueDate),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: dueTextStyle.copyWith(
+                              color: enabled ? kDlgText : kDlgTextSub,
+                              decoration:
+                                  enabled ? TextDecoration.underline : null,
+                              decorationColor: kDlgTextSub,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatDueTime(dueDate),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: dueTextStyle.copyWith(
+                              color: enabled ? kDlgText : kDlgTextSub,
+                              decoration:
+                                  enabled ? TextDecoration.underline : null,
+                              decorationColor: kDlgTextSub,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -15692,17 +15676,9 @@ Widget _buildHomeworkChipVisual(
                   ? Border.all(color: Colors.transparent, width: borderWMax)
                   : Border.all(
                       color: cardTheme.idleBorderColor, width: borderWMax))));
-  final Border border = attachRightExtension
-      ? Border(
-          left: fullBorder.left,
-          top: fullBorder.top,
-          bottom: fullBorder.bottom,
-          // 오른쪽 테두리를 제거하면 내용 영역이 3px 넓어져
-          // 우측 정렬 요소(플로우칩·총시간·과제번호)가 이동한다.
-          // 투명 테두리로 두께를 유지해 접힘/펼침 레이아웃을 동일하게 만든다.
-          right: const BorderSide(color: Colors.transparent, width: borderWMax),
-        )
-      : fullBorder;
+  // 둥근 모서리와 함께 쓰는 Border는 모든 면의 색상이 같아야 한다.
+  // 확장부가 붙어도 본체 테두리를 유지해 paint assertion과 내용 폭 변화를 막는다.
+  final Border border = fullBorder;
 
   Widget row1 = ConstrainedBox(
     constraints: BoxConstraints(maxWidth: maxRowW),
@@ -15817,168 +15793,167 @@ Widget _buildHomeworkChipVisual(
   final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
 
   String groupChildLabel(HomeworkItem child) {
-      final title = child.title.trim();
-      if (title.isNotEmpty) return title;
-      final pageRaw = (child.page ?? '').trim();
-      if (pageRaw.isNotEmpty) return 'p.$pageRaw';
-      return '(제목 없음)';
-    }
+    final title = child.title.trim();
+    if (title.isNotEmpty) return title;
+    final pageRaw = (child.page ?? '').trim();
+    if (pageRaw.isNotEmpty) return 'p.$pageRaw';
+    return '(제목 없음)';
+  }
 
-    String groupChildPageLabel(HomeworkItem child) {
-      final pageRaw = (child.page ?? '').trim();
-      return pageRaw.isEmpty ? '-' : 'p.$pageRaw';
-    }
+  String groupChildPageLabel(HomeworkItem child) {
+    final pageRaw = (child.page ?? '').trim();
+    return pageRaw.isEmpty ? '-' : 'p.$pageRaw';
+  }
 
-    String groupChildCountLabel(HomeworkItem child) {
-      final count = child.count;
-      if (count == null || count <= 0) return '-';
-      return '${count}문항';
-    }
+  String groupChildCountLabel(HomeworkItem child) {
+    final count = child.count;
+    if (count == null || count <= 0) return '-';
+    return '${count}문항';
+  }
 
-    String groupChildPageCountLabel(HomeworkItem child) {
-      final page = groupChildPageLabel(child);
-      final count = groupChildCountLabel(child);
-      if (page == '-' && count == '-') return '-';
-      if (page == '-') return count;
-      if (count == '-') return page;
-      return '$page $count';
-    }
+  String groupChildPageCountLabel(HomeworkItem child) {
+    final page = groupChildPageLabel(child);
+    final count = groupChildCountLabel(child);
+    if (page == '-' && count == '-') return '-';
+    if (page == '-') return count;
+    if (count == '-') return page;
+    return '$page $count';
+  }
 
-    Widget buildGroupChildRow(HomeworkItem child, int index) {
-      final bool childHasAssignment = assignedItemIds.contains(child.id);
-      final bool canDragChild = onGroupChildDropBefore != null &&
-          child.status != HomeworkStatus.completed &&
-          child.phase == 1 &&
-          !childHasAssignment;
-      final bool canTapPage = onGroupChildPageTap != null;
+  Widget buildGroupChildRow(HomeworkItem child, int index) {
+    final bool childHasAssignment = assignedItemIds.contains(child.id);
+    final bool canDragChild = onGroupChildDropBefore != null &&
+        child.status != HomeworkStatus.completed &&
+        child.phase == 1 &&
+        !childHasAssignment;
+    final bool canTapPage = onGroupChildPageTap != null;
 
-      Widget buildRowCore({
-        required bool enablePageTap,
-      }) {
-        final pageCountStyle = secondaryRowStyle.copyWith(
-          decoration:
-              enablePageTap ? TextDecoration.underline : TextDecoration.none,
-        );
-        return ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxRowW),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${index + 1}. ',
-                      style: secondaryRowStyle,
-                    ),
-                    Expanded(
-                      child: LatexTextRenderer(
-                        groupChildLabel(child),
-                        style: secondaryRowStyle,
-                        softWrap: true,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: enablePageTap
-                      ? () => onGroupChildPageTap?.call(child)
-                      : null,
-                  child: Text(
-                    // 2번째 줄: 페이지 → 문항수, 오른쪽 끝에 붙임
-                    groupChildPageCountLabel(child),
-                    style: pageCountStyle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-
-      final baseRow = buildRowCore(
-        enablePageTap: canTapPage,
+    Widget buildRowCore({
+      required bool enablePageTap,
+    }) {
+      final pageCountStyle = secondaryRowStyle.copyWith(
+        decoration:
+            enablePageTap ? TextDecoration.underline : TextDecoration.none,
       );
-
-      Widget rowContent = baseRow;
-      if (canDragChild) {
-        rowContent = LongPressDraggable<HomeworkItem>(
-          data: child,
-          maxSimultaneousDrags: 1,
-          feedback: Material(
-            color: Colors.transparent,
-            child: Opacity(
-              opacity: 0.95,
-              child: Container(
-                width: maxRowW,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: cardTheme.dragFeedbackBackground,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: cardTheme.dragFeedbackBorder),
-                ),
-                child: buildRowCore(enablePageTap: false),
-              ),
-            ),
-          ),
-          childWhenDragging: Opacity(
-            opacity: 0.32,
-            child: buildRowCore(
-              enablePageTap: canTapPage,
-            ),
-          ),
-          child: baseRow,
-        );
-      }
-
-      if (onGroupChildDropBefore == null) {
-        return rowContent;
-      }
-
-      return DragTarget<HomeworkItem>(
-        onWillAcceptWithDetails: (details) =>
-            canAcceptGroupChildDrag(details.data, targetBefore: child),
-        onAcceptWithDetails: (details) {
-          unawaited(onGroupChildDropBefore(details.data, child));
-        },
-        builder: (context, candidateData, rejectedData) {
-          final highlighted = candidateData.isNotEmpty;
-          return Stack(
-            clipBehavior: Clip.none,
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              rowContent,
-              Positioned(
-                left: 22,
-                right: 0,
-                top: 0,
-                child: IgnorePointer(
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 90),
-                    curve: Curves.easeOut,
-                    opacity: highlighted ? 1.0 : 0.0,
-                    child: Container(
-                      height: 2,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF4FBF97),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${index + 1}. ',
+                    style: secondaryRowStyle,
+                  ),
+                  Expanded(
+                    child: LatexTextRenderer(
+                      groupChildLabel(child),
+                      style: secondaryRowStyle,
+                      softWrap: true,
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: enablePageTap
+                    ? () => onGroupChildPageTap?.call(child)
+                    : null,
+                child: Text(
+                  // 2번째 줄: 페이지 → 문항수, 오른쪽 끝에 붙임
+                  groupChildPageCountLabel(child),
+                  style: pageCountStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
                 ),
               ),
             ],
-          );
-        },
+          ),
+        ),
       );
     }
+
+    final baseRow = buildRowCore(
+      enablePageTap: canTapPage,
+    );
+
+    Widget rowContent = baseRow;
+    if (canDragChild) {
+      rowContent = LongPressDraggable<HomeworkItem>(
+        data: child,
+        maxSimultaneousDrags: 1,
+        feedback: Material(
+          color: Colors.transparent,
+          child: Opacity(
+            opacity: 0.95,
+            child: Container(
+              width: maxRowW,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: cardTheme.dragFeedbackBackground,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: cardTheme.dragFeedbackBorder),
+              ),
+              child: buildRowCore(enablePageTap: false),
+            ),
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.32,
+          child: buildRowCore(
+            enablePageTap: canTapPage,
+          ),
+        ),
+        child: baseRow,
+      );
+    }
+
+    if (onGroupChildDropBefore == null) {
+      return rowContent;
+    }
+
+    return DragTarget<HomeworkItem>(
+      onWillAcceptWithDetails: (details) =>
+          canAcceptGroupChildDrag(details.data, targetBefore: child),
+      onAcceptWithDetails: (details) {
+        unawaited(onGroupChildDropBefore(details.data, child));
+      },
+      builder: (context, candidateData, rejectedData) {
+        final highlighted = candidateData.isNotEmpty;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            rowContent,
+            Positioned(
+              left: 22,
+              right: 0,
+              top: 0,
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 90),
+                  curve: Curves.easeOut,
+                  opacity: highlighted ? 1.0 : 0.0,
+                  child: Container(
+                    height: 2,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4FBF97),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   // 2~3번째 줄 간격(7)을 하위과제 요약 줄까지 동일하게 쓴다.
   const double expandLineGap = 7;
@@ -16202,6 +16177,8 @@ class _HomeworkExpandingCard extends StatelessWidget {
     // decoration 을 바깥에 두어 테두리·배경이 높이와 함께 늘어나게 한다.
     return Container(
       clipBehavior: Clip.hardEdge,
+      constraints:
+          const BoxConstraints(minHeight: _homeworkChipCollapsedHeight),
       padding: padding,
       alignment: Alignment.topLeft,
       decoration: decoration,
@@ -16993,25 +16970,17 @@ Future<void> _showGradingHistoryDialog({
                                           );
                                           if (!dialogContext.mounted) return;
                                           if (restoredCount == 0) {
-                                            ScaffoldMessenger.of(dialogContext)
-                                                .showSnackBar(
-                                              const SnackBar(
-                                                content: Text(
-                                                  '되돌릴 채점 대상을 찾지 못했습니다. 다시 시도해 주세요.',
-                                                ),
-                                              ),
+                                            _showHomeworkChipSnackBar(
+                                              dialogContext,
+                                              '되돌릴 채점 대상을 찾지 못했습니다. 다시 시도해 주세요.',
                                             );
                                             return;
                                           }
-                                          ScaffoldMessenger.of(dialogContext)
-                                              .showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                rollbackCount > 0
-                                                    ? '채점 ${restoredCount}건을 대기 상태로 되돌렸어요. 검사 기록도 조정했습니다.'
-                                                    : '채점 ${restoredCount}건을 대기 상태로 되돌렸어요.',
-                                              ),
-                                            ),
+                                          _showHomeworkChipSnackBar(
+                                            dialogContext,
+                                            rollbackCount > 0
+                                                ? '채점 ${restoredCount}건을 대기 상태로 되돌렸어요. 검사 기록도 조정했습니다.'
+                                                : '채점 ${restoredCount}건을 대기 상태로 되돌렸어요.',
                                           );
                                         } finally {
                                           if (dialogContext.mounted) {
@@ -17289,6 +17258,86 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
   }
 }
 
+/// 홈 등원 카드용 — 지금 이후 가장 가까운 수업 시각.
+DateTime? _nextClassDateTimeForStudent(String studentId, {DateTime? after}) {
+  final now = after ?? DateTime.now();
+  DateTime? best;
+  void consider(DateTime dt) {
+    if (!dt.isAfter(now)) return;
+    if (best == null || dt.isBefore(best!)) best = dt;
+  }
+
+  final dm = DataManager.instance;
+  final today = DateTime(now.year, now.month, now.day);
+  final weekStart = today.subtract(Duration(days: today.weekday - 1));
+  final hiddenOriginalKeys = <String>{};
+  for (final ov in dm.getSessionOverridesForStudent(studentId)) {
+    if (ov.reason != OverrideReason.makeup) continue;
+    if (ov.status == OverrideStatus.canceled) continue;
+    if (ov.overrideType != OverrideType.replace) continue;
+    final orig = ov.originalClassDateTime;
+    if (orig == null) continue;
+    final o = orig.toLocal();
+    hiddenOriginalKeys.add(
+      '${o.year}-${o.month}-${o.day}-${o.hour}:${o.minute}',
+    );
+  }
+
+  final blocks = dm.studentTimeBlocks.where((b) => b.studentId == studentId);
+  for (var week = 0; week < 6; week++) {
+    for (final b in blocks) {
+      final day = weekStart.add(Duration(days: week * 7 + b.dayIndex));
+      final dayOnly = DateTime(day.year, day.month, day.day);
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate == null
+          ? null
+          : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      if (dayOnly.isBefore(sd)) continue;
+      if (ed != null && dayOnly.isAfter(ed)) continue;
+      if (dm.isStudentPausedOn(studentId, dayOnly)) continue;
+      final key =
+          '${dayOnly.year}-${dayOnly.month}-${dayOnly.day}-${b.startHour}:${b.startMinute}';
+      if (hiddenOriginalKeys.contains(key)) continue;
+      consider(DateTime(
+        dayOnly.year,
+        dayOnly.month,
+        dayOnly.day,
+        b.startHour,
+        b.startMinute,
+      ));
+    }
+  }
+
+  for (final ov in dm.getSessionOverridesForStudent(studentId)) {
+    if (ov.reason != OverrideReason.makeup) continue;
+    if (ov.status == OverrideStatus.canceled) continue;
+    if (!(ov.overrideType == OverrideType.add ||
+        ov.overrideType == OverrideType.replace)) {
+      continue;
+    }
+    final rep = ov.replacementClassDateTime;
+    if (rep == null) continue;
+    final r = rep.toLocal();
+    if (dm.isStudentPausedOn(
+      studentId,
+      DateTime(r.year, r.month, r.day),
+    )) {
+      continue;
+    }
+    consider(r);
+  }
+  return best;
+}
+
+String _formatNextClassLabel(DateTime? dt) {
+  if (dt == null) return '다음 -';
+  const days = ['월', '화', '수', '목', '금', '토', '일'];
+  final dow = days[dt.weekday - 1];
+  final hm =
+      '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  return '다음 $dow $hm';
+}
+
 class _AttendingButton extends StatelessWidget {
   final String name;
   final Color color;
@@ -17309,6 +17358,43 @@ class _AttendingButton extends StatelessWidget {
     this.margin = const EdgeInsets.only(left: 24),
   });
 
+  Future<void> _confirmUnbindDevice(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Text(
+          '$name 학생의 기기 바인딩을 해제할까요?',
+          style: const TextStyle(color: Colors.white70, fontSize: 15),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('해제', style: TextStyle(color: Color(0xFF1FA95B))),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      if (academyId == null) return;
+      await Supabase.instance.client.rpc(
+        'm5_unbind_by_student',
+        params: {
+          'p_academy_id': academyId,
+          'p_student_id': studentId,
+        },
+      );
+      await DataManager.instance.loadStudents();
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
@@ -17322,6 +17408,8 @@ class _AttendingButton extends StatelessWidget {
         : Colors.black.withValues(alpha: 0.05);
     final deviceBadgeTextColor =
         isDark ? Colors.white38 : const Color(0xFF6B6B6B);
+    const secondaryLineHeight = 22.0;
+
     return MouseRegion(
       cursor:
           onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
@@ -17340,213 +17428,194 @@ class _AttendingButton extends StatelessWidget {
                   )
                 : null,
           ),
-          child: ValueListenableBuilder(
-              valueListenable: DataManager.instance.studentsNotifier,
-              builder: (context, _, __) => ValueListenableBuilder<int>(
-                  valueListenable: DataManager.instance.deviceBindingsRevision,
-                  builder: (context, _bindRev, __) =>
-                      ValueListenableBuilder<int>(
-                        valueListenable: HomeworkStore.instance.revision,
-                        builder: (context, _rev, _) {
-                          // 과제 진행 상태 확인
-                          final items = HomeworkStore.instance
-                              .items(studentId)
-                              .where(
-                                  (e) => e.status != HomeworkStatus.completed)
-                              .toList();
-                          final bool hasAny = items.isNotEmpty;
-                          final bool hasRunning =
-                              HomeworkStore.instance.runningOf(studentId) !=
-                                      null ||
-                                  items.any(
-                                    (e) => e.phase == 2 || e.runStart != null,
-                                  );
-                          final bool isResting =
-                              hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
+          child: AnimatedBuilder(
+            animation: Listenable.merge([
+              DataManager.instance.studentsNotifier,
+              DataManager.instance.deviceBindingsRevision,
+              DataManager.instance.studentTimeBlocksRevision,
+              DataManager.instance.sessionOverridesNotifier,
+              HomeworkStore.instance.revision,
+            ]),
+            builder: (context, _) {
+              final items = HomeworkStore.instance
+                  .items(studentId)
+                  .where((e) => e.status != HomeworkStatus.completed)
+                  .toList();
+              final hasAny = items.isNotEmpty;
+              final hasRunning =
+                  HomeworkStore.instance.runningOf(studentId) != null ||
+                      items.any((e) => e.phase == 2 || e.runStart != null);
+              final isResting = hasAny && !hasRunning;
 
-                          // 학생 정보 조회(학교/학년)
-                          String school = '';
-                          String gradeText = '';
-                          try {
-                            final swi = DataManager.instance.students
-                                .firstWhere((s) => s.student.id == studentId);
-                            school = swi.student.school;
-                            final int g = swi.student.grade;
-                            gradeText = g > 0 ? (g.toString() + '학년') : '';
-                          } catch (_) {}
+              String school = '';
+              String gradeText = '';
+              try {
+                final swi = DataManager.instance.students
+                    .firstWhere((s) => s.student.id == studentId);
+                school = swi.student.school;
+                final g = swi.student.grade;
+                gradeText = g > 0 ? '${g}학년' : '';
+              } catch (_) {}
 
-                          final boundDevice =
-                              DataManager.instance.boundDeviceId(studentId);
-                          final deviceLabel = boundDevice != null
-                              ? boundDevice.replaceAll(
-                                  RegExp(r'^m5-device-'), '')
-                              : null;
+              final boundDevice = DataManager.instance.boundDeviceId(studentId);
+              final deviceLabel = boundDevice != null
+                  ? boundDevice.replaceAll(RegExp(r'^m5-device-'), '')
+                  : null;
+              final nextClassLabel = _formatNextClassLabel(
+                _nextClassDateTimeForStudent(studentId),
+              );
 
-                          final nameStyle = TextStyle(
-                            color: isResting
-                                ? tertiaryTextColor
-                                : primaryTextColor,
-                            fontSize: 38,
-                            fontWeight: FontWeight.w600,
-                            height: 1.0,
-                          );
-                          final infoLine = [
-                            if (school.isNotEmpty) school,
-                            if (gradeText.isNotEmpty) gradeText,
-                          ].join(' · ');
-                          final arrivalText = arrivalTime != null
-                              ? _formatShortTime(arrivalTime!)
-                              : '--:--';
-                          final double nameHeight = (nameStyle.fontSize ?? 34) *
-                              (nameStyle.height ?? 1.0);
+              final nameStyle = TextStyle(
+                color: isResting ? tertiaryTextColor : primaryTextColor,
+                fontSize: 34,
+                fontWeight: FontWeight.w600,
+                height: 1.0,
+              );
+              final infoLine = [
+                if (school.isNotEmpty) school,
+                if (gradeText.isNotEmpty) gradeText,
+              ].join(' · ');
+              final arrivalText = arrivalTime != null
+                  ? _formatShortTime(arrivalTime!)
+                  : '--:--';
 
-                          return Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    flex: 3,
-                                    child: Text(
-                                      name,
-                                      style: nameStyle,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 20),
-                                  Expanded(
-                                    flex: 3,
-                                    child: Align(
-                                      alignment: Alignment.centerRight,
-                                      child: SizedBox(
-                                        height: nameHeight,
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              infoLine.isEmpty ? '-' : infoLine,
-                                              style: TextStyle(
-                                                color: secondaryTextColor,
-                                                fontSize: 16,
-                                                height: 1.2,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            Text(
-                                              '등원 $arrivalText',
-                                              style: TextStyle(
-                                                color: tertiaryTextColor,
-                                                fontSize: 14,
-                                                height: 1.2,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              if (deviceLabel != null)
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.only(top: 6, right: 0),
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: MouseRegion(
-                                      cursor: SystemMouseCursors.click,
-                                      child: GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: () async {
-                                          final confirm =
-                                              await showDialog<bool>(
-                                            context: context,
-                                            builder: (ctx) => AlertDialog(
-                                              backgroundColor:
-                                                  const Color(0xFF1E1E1E),
-                                              shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                          16)),
-                                              content: Text(
-                                                '$name 학생의 기기 바인딩을 해제할까요?',
-                                                style: const TextStyle(
-                                                    color: Colors.white70,
-                                                    fontSize: 15),
-                                              ),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.pop(ctx, false),
-                                                  child: const Text('취소',
-                                                      style: TextStyle(
-                                                          color:
-                                                              Colors.white54)),
-                                                ),
-                                                TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.pop(ctx, true),
-                                                  child: const Text('해제',
-                                                      style: TextStyle(
-                                                          color: Color(
-                                                              0xFF1FA95B))),
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                          if (confirm == true) {
-                                            try {
-                                              final academyId =
-                                                  await TenantService.instance
-                                                      .getActiveAcademyId();
-                                              if (academyId == null) return;
-                                              await Supabase.instance.client
-                                                  .rpc('m5_unbind_by_student',
-                                                      params: {
-                                                    'p_academy_id': academyId,
-                                                    'p_student_id': studentId,
-                                                  });
-                                              await DataManager.instance
-                                                  .loadStudents();
-                                            } catch (_) {}
-                                          }
-                                        },
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 10, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: deviceBadgeBackground,
-                                            borderRadius:
-                                                BorderRadius.circular(999),
-                                          ),
-                                          child: Text(
-                                            '기기 $deviceLabel',
-                                            style: TextStyle(
-                                              color: deviceBadgeTextColor,
-                                              fontSize: 12,
-                                              height: 1.2,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+              // 오른쪽 정보 3줄 — 글자 크기 동일
+              const rightInfoFontSize = 14.0;
+              final metaStyle = TextStyle(
+                color: secondaryTextColor,
+                fontSize: rightInfoFontSize,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+              );
+              final arrivalStyle = TextStyle(
+                color: tertiaryTextColor,
+                fontSize: rightInfoFontSize,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+              );
+              final nextClassStyle = TextStyle(
+                color: tertiaryTextColor,
+                fontSize: rightInfoFontSize,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+              );
+
+              Widget deviceLine({required double maxWidth}) {
+                if (deviceLabel == null) {
+                  return SizedBox(width: maxWidth, height: secondaryLineHeight);
+                }
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxWidth),
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _confirmUnbindDevice(context),
+                        child: Container(
+                          height: secondaryLineHeight,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: deviceBadgeBackground,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '기기 $deviceLabel',
+                            style: TextStyle(
+                              color: deviceBadgeTextColor,
+                              fontSize: 12,
+                              height: 1.0,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }
+
+              // 좌우 모두 같은 고정 높이. IntrinsicHeight는 내부 LayoutBuilder와
+              // 함께 쓸 수 없으므로 사용하지 않는다.
+              return Center(
+                child: SizedBox(
+                  height: 72,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 3,
+                        child: LayoutBuilder(
+                          builder: (context, leftConstraints) {
+                            final namePainter = TextPainter(
+                              text: TextSpan(text: name, style: nameStyle),
+                              maxLines: 1,
+                              ellipsis: '…',
+                              textDirection: TextDirection.ltr,
+                            )..layout(maxWidth: leftConstraints.maxWidth);
+                            final pillMaxWidth = namePainter.width
+                                .clamp(0.0, leftConstraints.maxWidth)
+                                .toDouble();
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: nameStyle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                            ],
-                          );
-                        },
-                      ))),
+                                // 이름·기기 알약 최소 간격
+                                const SizedBox(height: 10),
+                                const Spacer(),
+                                deviceLine(maxWidth: pillMaxWidth),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              infoLine.isEmpty ? '-' : infoLine,
+                              style: metaStyle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.right,
+                            ),
+                            Text(
+                              '등원 $arrivalText',
+                              style: arrivalStyle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.right,
+                            ),
+                            Text(
+                              nextClassLabel,
+                              style: nextClassStyle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.right,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ),
       ),
     );

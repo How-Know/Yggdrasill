@@ -141,7 +141,9 @@ export async function detectSolutionBlocksOnPage({
     generationConfig: {
       temperature: 0,
       responseMimeType: 'application/json',
-      maxOutputTokens: 2048,
+      // 조밀한 해설 지면은 블록 머리 2개 + 번호 30~40개가 한 페이지에
+      // 들어간다. 2048에서는 p132가 13번에서 잘려 14~18번이 누락됐다.
+      maxOutputTokens: 4096,
       thinkingConfig: { thinkingLevel: 'low' },
     },
   };

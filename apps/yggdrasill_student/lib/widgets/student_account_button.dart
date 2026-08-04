@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
@@ -665,59 +665,66 @@ class _StudentAccountSheetState extends State<_StudentAccountSheet> {
                             ),
                           ),
                           const SizedBox(height: 18),
+                          // 닉네임(표시명)만 탭 가능. 실명 줄은 고정·비클릭.
+                          // 폰트: 닉네임·이름 모두 nameStyle(26) — 이름 기준 통일.
                           Center(
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () =>
-                                    unawaited(_openNicknameEditDialog()),
-                                borderRadius: BorderRadius.circular(12),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 4,
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.center,
-                                    children: [
-                                      ConstrainedBox(
-                                        constraints: const BoxConstraints(
-                                          maxWidth: 240,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 280),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: () =>
+                                          unawaited(_openNicknameEditDialog()),
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 4,
                                         ),
-                                        child: Column(
+                                        child: Row(
                                           mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
                                           children: [
-                                            Text(
-                                              name,
-                                              textAlign: TextAlign.center,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: nameStyle,
-                                            ),
-                                            if (hasNickname) ...[
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                legalName,
+                                            Flexible(
+                                              child: Text(
+                                                name,
                                                 textAlign: TextAlign.center,
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: nameStyle,
                                               ),
-                                            ],
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Icon(
+                                              Icons.edit_rounded,
+                                              size: 18,
+                                              color: sub,
+                                            ),
                                           ],
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
-                                      Icon(
-                                        Icons.edit_rounded,
-                                        size: 18,
-                                        color: sub,
-                                      ),
-                                    ],
+                                    ),
                                   ),
-                                ),
+                                  if (hasNickname) ...[
+                                    const SizedBox(height: 4),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                      ),
+                                      child: Text(
+                                        legalName,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: nameStyle,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                           ),

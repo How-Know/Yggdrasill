@@ -3206,11 +3206,14 @@ void _scheduleTempDelete(String path) {
 }
 
 Future<void> _openPrintDialogForPath(String path) async {
-  await PrintRoutingService.instance.printFile(
+  final accepted = await PrintRoutingService.instance.printFile(
     path: path,
     channel: PrintRoutingChannel.todoSheet,
     duplexMode: PrintDuplexMode.twoSidedLongEdge,
     preferredPaperSize: 'A4',
     debugSource: 'homework.todo_sheet',
   );
+  if (!accepted) {
+    throw StateError('알림장 인쇄 작업을 프린터에 전달하지 못했습니다.');
+  }
 }

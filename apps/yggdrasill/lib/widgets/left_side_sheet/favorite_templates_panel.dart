@@ -15,6 +15,7 @@ import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
+import '../app_snackbar.dart';
 import '../dialog_tokens.dart';
 
 enum _TemplateLibraryMode { favorites, assignments }
@@ -365,9 +366,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       LearningProblemBankService.generatedAssignmentChanged.add(null);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('과제 순서 저장 실패: $e')),
-      );
+      showAppSnackBar(context, '과제 순서 저장 실패: $e');
     } finally {
       if (mounted) setState(() => _savingAssignmentOrder = false);
       if (_pendingAssignmentOrderSave && mounted) {
@@ -1061,9 +1060,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final academyId = await TenantService.instance.getActiveAcademyId();
     if (academyId == null || academyId.trim().isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('학원 정보가 없어 인쇄할 수 없습니다.')),
-      );
+      showAppSnackBar(context, '학원 정보가 없어 인쇄할 수 없습니다.');
       return;
     }
     final sourceDocumentId = preset.sourceDocumentId.trim().isNotEmpty
@@ -1077,9 +1074,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         .toList(growable: false);
     if (sourceDocumentId.isEmpty || selectedUids.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과제의 원본 문항 정보를 찾지 못했습니다.')),
-      );
+      showAppSnackBar(context, '과제의 원본 문항 정보를 찾지 못했습니다.');
       return;
     }
     if (mounted) setState(() => _printingPresetId = preset.id);
@@ -1117,17 +1112,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         final err = completed?.errorMessage.isNotEmpty == true
             ? completed!.errorMessage
             : (completed?.errorCode ?? completed?.status ?? 'unknown');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('과제 PDF 생성 실패: $err')),
-        );
+        showAppSnackBar(context, '과제 PDF 생성 실패: $err');
         return;
       }
       await _openPdfForPrint(completed.outputUrl.trim(), preset.id);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('과제 인쇄 실패: $e')),
-      );
+      showAppSnackBar(context, '과제 인쇄 실패: $e');
     } finally {
       if (mounted) setState(() => _printingPresetId = '');
     }
@@ -1140,17 +1131,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final safeAcademyId = (academyId ?? '').trim();
     if (safeAcademyId.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('학원 정보가 없어 과제를 볼 수 없습니다.')),
-      );
+      showAppSnackBar(context, '학원 정보가 없어 과제를 볼 수 없습니다.');
       return;
     }
     final selectedUids = _selectedQuestionUidsForPreset(preset);
     if (_sourceDocumentIdForPreset(preset).isEmpty || selectedUids.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과제의 원본 문항 정보를 찾지 못했습니다.')),
-      );
+      showAppSnackBar(context, '과제의 원본 문항 정보를 찾지 못했습니다.');
       return;
     }
 
@@ -1170,9 +1157,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         final err = completed?.errorMessage.isNotEmpty == true
             ? completed!.errorMessage
             : (completed?.errorCode ?? completed?.status ?? 'unknown');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('과제 미리보기 생성 실패: $err')),
-        );
+        showAppSnackBar(context, '과제 미리보기 생성 실패: $err');
         return;
       }
 
@@ -1275,12 +1260,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             final err = refreshed.errorMessage.isNotEmpty
                 ? refreshed.errorMessage
                 : refreshed.errorCode;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  '미리보기 생성 실패: ${err.isEmpty ? refreshed.status : err}',
-                ),
-              ),
+            showAppSnackBar(
+              context,
+              '미리보기 생성 실패: ${err.isEmpty ? refreshed.status : err}',
             );
             return null;
           }
@@ -1301,12 +1283,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             final err = generated.errorMessage.isNotEmpty
                 ? generated.errorMessage
                 : generated.errorCode;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'PDF 생성 실패: ${err.isEmpty ? generated.status : err}',
-                ),
-              ),
+            showAppSnackBar(
+              context,
+              'PDF 생성 실패: ${err.isEmpty ? generated.status : err}',
             );
             return;
           }
@@ -1350,14 +1329,11 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           LearningProblemBankService.generatedAssignmentChanged.add(null);
           await _refreshTemplates();
           if (!mounted) return false;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                presetIdToUpdate.isNotEmpty
-                    ? '미리 만든 과제를 저장했습니다.'
-                    : '새 미리 만든 과제를 저장했습니다.',
-              ),
-            ),
+          showAppSnackBar(
+            context,
+            presetIdToUpdate.isNotEmpty
+                ? '미리 만든 과제를 저장했습니다.'
+                : '새 미리 만든 과제를 저장했습니다.',
           );
           return true;
         },
@@ -1386,17 +1362,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             displayName: displayName,
           );
           if (!mounted) return false;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('미리 만든 과제를 추가로 생성했습니다.')),
-          );
+          showAppSnackBar(context, '미리 만든 과제를 추가로 생성했습니다.');
           return true;
         },
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('과제보기 실패: $e')),
-      );
+      showAppSnackBar(context, '과제보기 실패: $e');
     } finally {
       if (mounted) setState(() => _previewingPresetId = '');
     }
@@ -1459,14 +1431,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       LearningProblemBankService.generatedAssignmentChanged.add(null);
       await _refreshTemplates();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('미리 만든 과제를 삭제했습니다.')),
-      );
+      showAppSnackBar(context, '미리 만든 과제를 삭제했습니다.');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('과제 삭제 실패: $e')),
-      );
+      showAppSnackBar(context, '과제 삭제 실패: $e');
     }
   }
 
@@ -1606,20 +1574,15 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       LearningProblemBankService.generatedAssignmentChanged.add(null);
       await _refreshTemplates();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            normalized.isEmpty
-                ? '플로우 지정을 해제했습니다.'
-                : '플로우를 "$normalized"(으)로 변경했습니다.',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        normalized.isEmpty
+            ? '플로우 지정을 해제했습니다.'
+            : '플로우를 "$normalized"(으)로 변경했습니다.',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('플로우 변경 실패: $e')),
-      );
+      showAppSnackBar(context, '플로우 변경 실패: $e');
     }
   }
 
@@ -1700,14 +1663,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       LearningProblemBankService.generatedAssignmentChanged.add(null);
       await _refreshTemplates();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과제 이름을 수정했습니다.')),
-      );
+      showAppSnackBar(context, '과제 이름을 수정했습니다.');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('과제 이름 수정 실패: $e')),
-      );
+      showAppSnackBar(context, '과제 이름 수정 실패: $e');
     }
   }
 

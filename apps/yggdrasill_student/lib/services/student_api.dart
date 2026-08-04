@@ -117,6 +117,26 @@ class HomeworkGroup {
     return '$amount 소요 예정';
   }
 
+  /// 실제 수행시간(누적+현재 사이클) ÷ 문항수 — 학생 페이스.
+  /// 예: `한 문제당 약 60분`. 문항수·수행시간이 없으면 빈 문자열.
+  String averagePacePerProblemLine({required bool isRunning}) {
+    final count = totalCount;
+    if (count <= 0) return '';
+    final sec = liveTotalElapsedSec(isRunning: isRunning);
+    if (sec <= 0) return '';
+    final per = sec / count / 60.0;
+    if (per < 1) {
+      final secs = (per * 60).round();
+      if (secs <= 0) return '';
+      return '한 문제당 약 $secs초';
+    }
+    final whole = per.round();
+    if ((per - whole).abs() < 0.05) {
+      return '한 문제당 약 $whole분';
+    }
+    return '한 문제당 약 ${per.toStringAsFixed(1)}분';
+  }
+
   /// 3행: 페이지 · 문항수 (예: `p.10-12 · 12문항`)
   ///
   /// 서버 `page_summary` 우선. 비어 있으면 하위과제 page(이미 item_pages 로
@@ -150,6 +170,15 @@ class HomeworkGroup {
     if (!running) return cycleElapsed;
     final extra = DateTime.now().difference(fetchedAt).inSeconds;
     return cycleElapsed + (extra > 0 ? extra : 0);
+  }
+
+  /// 누적 + 현재 사이클 수행시간(초). [isRunning]은 세션 러닝 여부.
+  int liveTotalElapsedSec({required bool isRunning}) {
+    final acc = accumulated < 0 ? 0 : accumulated;
+    final cycle = isRunning
+        ? liveCycleElapsed()
+        : (cycleElapsed < 0 ? 0 : cycleElapsed);
+    return acc + cycle;
   }
 
   static HomeworkGroup fromRow(Map<String, dynamic> row,
@@ -389,6 +418,109 @@ class TodayAttendance {
   final DateTime? arrival;
   final DateTime? departure;
   final DateTime? classDateTime;
+}
+
+/// 학생앱 — 다음 회차 수업 일정.
+class StudentNextClass {
+  const StudentNextClass({
+    required this.classDateTime,
+    this.classEndTime,
+    this.className,
+  });
+
+  final DateTime classDateTime;
+  final DateTime? classEndTime;
+  final String? className;
+}
+
+/// 주간 수업시간(하원−등원) 막대 + 90일 평균.
+class StudentClassDurationWeek {
+  const StudentClassDurationWeek({
+    required this.days,
+    required this.yMaxMinutes,
+    required this.sampleCount,
+    this.averageMinutes,
+    this.weekStart,
+    this.weekEnd,
+  });
+
+  final List<StudentClassDurationDay> days;
+  final int? averageMinutes;
+  final int sampleCount;
+  final int yMaxMinutes;
+  final DateTime? weekStart;
+  final DateTime? weekEnd;
+
+  static StudentClassDurationWeek fromJson(Map<String, dynamic> json) {
+    final rawDays = json['days'];
+    final days = <StudentClassDurationDay>[];
+    if (rawDays is List) {
+      for (final item in rawDays) {
+        if (item is! Map) continue;
+        days.add(
+          StudentClassDurationDay.fromJson(Map<String, dynamic>.from(item)),
+        );
+      }
+    }
+    DateTime? parseDate(Object? value) {
+      if (value == null) return null;
+      final text = value.toString();
+      // date-only → local midnight
+      if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(text)) {
+        final parts = text.split('-');
+        return DateTime(
+          int.parse(parts[0]),
+          int.parse(parts[1]),
+          int.parse(parts[2]),
+        );
+      }
+      return DateTime.tryParse(text)?.toLocal();
+    }
+
+    return StudentClassDurationWeek(
+      days: days,
+      averageMinutes: (json['average_minutes'] as num?)?.toInt(),
+      sampleCount: (json['sample_count'] as num?)?.toInt() ?? 0,
+      yMaxMinutes: (json['y_max_minutes'] as num?)?.toInt() ?? 240,
+      weekStart: parseDate(json['week_start']),
+      weekEnd: parseDate(json['week_end']),
+    );
+  }
+}
+
+class StudentClassDurationDay {
+  const StudentClassDurationDay({
+    required this.weekday,
+    required this.minutes,
+    this.date,
+  });
+
+  final String weekday;
+  final int minutes;
+  final DateTime? date;
+
+  static StudentClassDurationDay fromJson(Map<String, dynamic> json) {
+    DateTime? date;
+    final raw = json['date'];
+    if (raw != null) {
+      final text = raw.toString();
+      if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(text)) {
+        final parts = text.split('-');
+        date = DateTime(
+          int.parse(parts[0]),
+          int.parse(parts[1]),
+          int.parse(parts[2]),
+        );
+      } else {
+        date = DateTime.tryParse(text)?.toLocal();
+      }
+    }
+    return StudentClassDurationDay(
+      weekday: '${json['weekday'] ?? ''}',
+      minutes: (json['minutes'] as num?)?.toInt() ?? 0,
+      date: date,
+    );
+  }
 }
 
 /// 최근 출결 1회 — 프로필 펼침 그래프용.
@@ -844,13 +976,15 @@ class StudentApi {
     );
   }
 
-  /// 오늘 제출·완료한 과제 그룹 (상세 카드 리스트용).
+  /// 오늘 완료한 과제 그룹 (completed_at 기준, 상세 카드·수행속도용).
   Future<List<TodayCompletedHomework>> listTodayCompletedHomework() async {
     final rows = await _client.rpc('student_list_today_completed_homework_v1')
         as List<dynamic>;
     return rows
-        .whereType<Map<String, dynamic>>()
-        .map(TodayCompletedHomework.fromRow)
+        .whereType<Map>()
+        .map((r) => TodayCompletedHomework.fromRow(
+              Map<String, dynamic>.from(r),
+            ))
         .toList(growable: false);
   }
 
@@ -930,17 +1064,72 @@ class StudentApi {
     return (result as Map<String, dynamic>?) ?? const {'ok': false};
   }
 
+  /// 이번 주(일~토) 일별 수업시간 + 최근 90일 평균.
+  Future<StudentClassDurationWeek> classDurationWeek() async {
+    final raw = await _client.rpc('student_class_duration_week_v1');
+    final map = raw is Map
+        ? Map<String, dynamic>.from(raw)
+        : const <String, dynamic>{};
+    return StudentClassDurationWeek.fromJson(map);
+  }
+
+  /// 다음 회차 수업 (아직 시작 전). 없으면 null.
+  Future<StudentNextClass?> nextClass() async {
+    final raw = await _client.rpc('student_next_class_v1');
+    final rows = raw is List
+        ? raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: false)
+        : const <Map<String, dynamic>>[];
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    final rawDt = row['class_date_time'];
+    if (rawDt == null) return null;
+    final dt = DateTime.tryParse(rawDt.toString())?.toLocal();
+    if (dt == null) return null;
+    final rawEnd = row['class_end_time'];
+    return StudentNextClass(
+      classDateTime: dt,
+      classEndTime: rawEnd == null
+          ? null
+          : DateTime.tryParse(rawEnd.toString())?.toLocal(),
+      className: (row['class_name'] as String?)?.trim(),
+    );
+  }
+
   Future<TodayAttendance> todayAttendance() async {
-    final rows = await _client.rpc('student_today_attendance') as List<dynamic>;
+    final raw = await _client.rpc('student_today_attendance');
+    final rows = raw is List
+        ? raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: false)
+        : const <Map<String, dynamic>>[];
     if (rows.isEmpty) return const TodayAttendance();
-    final row = rows.first as Map<String, dynamic>;
-    DateTime? parse(String key) => row[key] != null
-        ? DateTime.tryParse(row[key] as String)?.toLocal()
-        : null;
+
+    DateTime? parse(Map<String, dynamic> row, String key) {
+      final value = row[key];
+      if (value == null) return null;
+      return DateTime.tryParse(value.toString())?.toLocal();
+    }
+
+    // 등원 시각이 있는 행을 우선 (여러 수업이면 가장 이른 등원).
+    Map<String, dynamic>? best;
+    DateTime? bestArrival;
+    for (final row in rows) {
+      final arrival = parse(row, 'arrival_time');
+      if (arrival == null) continue;
+      if (bestArrival == null || arrival.isBefore(bestArrival)) {
+        best = row;
+        bestArrival = arrival;
+      }
+    }
+    final row = best ?? rows.first;
     return TodayAttendance(
-      arrival: parse('arrival_time'),
-      departure: parse('departure_time'),
-      classDateTime: parse('class_date_time'),
+      arrival: parse(row, 'arrival_time'),
+      departure: parse(row, 'departure_time'),
+      classDateTime: parse(row, 'class_date_time'),
     );
   }
 
