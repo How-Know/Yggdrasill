@@ -33,9 +33,11 @@ class RealtimeReconciler {
     required String key,
     required Future<void> Function() onResync,
     bool skipFirstSubscribed = true,
+    void Function(RealtimeSubscribeStatus status, Object? error)? onStatus,
   }) {
     bool sawFirstSubscribed = false;
     channel.subscribe((status, [err]) async {
+      onStatus?.call(status, err);
       if (err != null) {
         if (debug) {
           debugPrint('[RT][$key] subscribe error: $err');

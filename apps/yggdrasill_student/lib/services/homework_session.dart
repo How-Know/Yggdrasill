@@ -18,10 +18,13 @@ class HomeworkSession extends ChangeNotifier {
 
   HomeworkGroup? _active;
   String? _coverRef;
+
   /// 실제로 타이머가 돌아가는 그룹 (동시에 최대 1개).
   String? _runningGroupId;
+
   /// 사용자가 마지막으로 시작/선택한 그룹 (목록 순서보다 우선).
   String? _preferredGroupId;
+
   /// 아래로 스와이프해 미니바를 숨긴 그룹.
   String? _suppressedMiniBarGroupId;
   bool _busy = false;
@@ -52,6 +55,11 @@ class HomeworkSession extends ChangeNotifier {
   String? get runningGroupId => _runningGroupId;
   bool get busy => _busy;
   bool get hasActive => active != null;
+  HomeworkListKind? get activeListKind => active?.listKind;
+  HomeworkAssignmentOrigin? get activeAssignmentOrigin =>
+      active?.assignmentOrigin;
+  bool get activeIsHomework => active?.isHomework ?? false;
+
   /// 마지막 목록 스냅샷 (미니바 pause/play 후에도 과제 화면이 바로 따라가게).
   List<HomeworkGroup>? get lastGroups => _lastGroups;
   Map<String, String> get lastCovers => _lastCovers;
@@ -131,8 +139,7 @@ class HomeworkSession extends ChangeNotifier {
     // 일시정지 후에도 같은 과제를 미니바에 남겨 바로 재개할 수 있게 한다.
     if (next == null && _preferredGroupId != null) {
       for (final g in groups) {
-        if (g.groupId == _preferredGroupId &&
-            (g.phase == 1 || g.phase == 2)) {
+        if (g.groupId == _preferredGroupId && (g.phase == 1 || g.phase == 2)) {
           next = g;
           break;
         }
@@ -202,7 +209,8 @@ class HomeworkSession extends ChangeNotifier {
 
   void _startFallbackPoll() {
     _fallbackPollTimer?.cancel();
-    _pollCursorUtc = DateTime.now().toUtc().subtract(const Duration(seconds: 2));
+    _pollCursorUtc =
+        DateTime.now().toUtc().subtract(const Duration(seconds: 2));
     _fallbackPollTimer = Timer.periodic(_fallbackPollInterval, (_) {
       unawaited(_pollRecentUpdates());
     });

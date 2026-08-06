@@ -9,6 +9,7 @@ import {
   buildDetectProblemsPrompt,
   buildItemGeometryRepairPrompt,
   buildRpmSetHeaderPrompt,
+  buildSsenBasicDrillRescuePrompt,
   buildSuryeokMarkRepairPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
@@ -223,6 +224,20 @@ export function detectRpmSetHeadersOnPage(options) {
   });
 }
 
+export function detectSsenBasicDrillOnPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    series: 'ssen',
+    sectionHint: 'basic_drill',
+    includeContentGroups: true,
+    expectedStartNumber: '',
+    promptOverride: buildSsenBasicDrillRescuePrompt({
+      rawPage: options?.rawPage,
+      displayPage: options?.displayPage,
+    }),
+  });
+}
+
 /// 좌표(bbox·item_region)가 빠진 문항이 있는 지면을 좌표만 다시 물어 보정한다.
 /// 문항 목록은 1차 판독 결과를 그대로 쓴다.
 export function detectItemGeometryOnPage(options) {
@@ -399,13 +414,24 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   )
     ? pageKind
     : 'unknown';
+  const series = String(opts?.series || '').trim().toLowerCase();
+  const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
+  // 쎈/RPM A 지면에서 모델이 연속된 실제 4자리 문항과 좌표를 모두 반환하고도
+  // page_kind만 concept_page로 쓰는 모순 응답이 드물게 온다. 문항 검증 전에
+  // 조기 반환하면 정상 문항 전체가 사라지므로, 강한 번호·좌표 증거가 있을 때만
+  // 문항 쪽 판정을 우선한다. 단일 개념 번호 오탐은 기존 검증 기준상 구제되지 않는다.
+  const recoverBasicDrillItems =
+    (series === 'ssen' || series === 'rpm') &&
+    out.section === 'basic_drill' &&
+    hasStrongBasicDrillNumberEvidence(rawItems);
   // 개념원리 일반 소단원의 개념→문항 경계 판정용. 모델이 정확한
   // "개념원리 익히기" 인쇄 문구를 확인했다고 명시한 경우에만 true.
   out.concept_drill_header_visible =
     parsedJson.concept_drill_header_visible === true;
   if (
-    out.page_kind === 'concept_page' ||
-    /\bconcept_page\b/i.test(out.notes)
+    !recoverBasicDrillItems &&
+    (out.page_kind === 'concept_page' ||
+      /\bconcept_page\b/i.test(out.notes))
   ) {
     // Concept-only A pages should be visible in the UI as analyzed pages, but
     // must never persist fake crop rows.
@@ -413,8 +439,12 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     out.items = [];
     return out;
   }
+  if (recoverBasicDrillItems && out.page_kind === 'concept_page') {
+    out.page_kind = 'problem_page';
+    const suffix = 'concept_page_overridden_by_valid_basic_numbers';
+    out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+  }
 
-  const series = String(opts?.series || '').trim().toLowerCase();
   const isGaeyu = series === 'gaeyu';
   const isSuryeok = series === 'suryeok';
   // 수력충전 크롭 경계용. 유형 머리말은 문항이 아니지만, 앞 문항의 크롭이
@@ -430,13 +460,20 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   }
   // 개념+유형 개념확인은 번호가 인쇄돼 있지 않아 본문 인쇄 페이지를 번호로 쓴다.
   const conceptCheckPage = firstFiniteNumber(opts?.displayPage, opts?.rawPage);
-  const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   let droppedLectureConceptNumbers = 0;
   let gaeyuConceptCheckFixed = 0;
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
     const printedNumber = String(raw.number ?? '').trim();
-    const label = normalizeDifficultyLabel(raw.label);
+    // 쎈/RPM A단계에는 문항 라벨이 없다. 모델이 개념 박스의 글자나 세트
+    // 장식을 "중/대표 문제" 등으로 잘못 붙이면 정상 4자리 번호까지 A 검증에서
+    // 제거되므로, 확정된 basic_drill 지면에서는 잘못된 라벨을 버린다.
+    const detectedLabel = normalizeDifficultyLabel(raw.label);
+    const label =
+      out.section === 'basic_drill' &&
+      (series === 'ssen' || series === 'rpm')
+        ? ''
+        : detectedLabel;
     const gaeyuCategory = isGaeyu
       ? resolveGaeyuCategory({
           raw,
@@ -1147,6 +1184,7 @@ function validateBasicDrillItems(result, series = '') {
 }
 
 function hasStrongBasicDrillPageEvidence(items) {
+  if (!hasStrongBasicDrillNumberEvidence(items)) return false;
   const values = [];
   for (const item of items || []) {
     if (item?.is_set_header === true) continue;
@@ -1154,6 +1192,32 @@ function hasStrongBasicDrillPageEvidence(items) {
     const number = String(item?.number || '').trim();
     if (!/^\d{4}$/.test(number)) continue;
     if (!isValidBasicDrillItem(item, true)) continue;
+    const value = Number.parseInt(number, 10);
+    if (Number.isFinite(value)) values.push(value);
+  }
+  const unique = [...new Set(values)].sort((a, b) => a - b);
+  if (unique.length < 3) return false;
+  return unique.some((value, index) =>
+    index > 0 && value - unique[index - 1] >= 1 && value - unique[index - 1] <= 3
+  );
+}
+
+// page_kind 모순을 풀 때는 정규화 전 원본 좌표를 신뢰하지 않는다. Gemini가
+// [[ymin,xmin,ymax,xmax]]처럼 한 번 더 감싼 좌표를 반환하면 번호는 완벽해도
+// 기하 검사가 실패하기 때문이다. 연속된 실제 4자리 번호 자체만 강한 증거로
+// 사용하고, 좌표는 이후 parseBbox4 및 validateBasicDrillItems에서 다시 검증한다.
+function hasStrongBasicDrillNumberEvidence(items) {
+  const values = [];
+  for (const item of items || []) {
+    const number = String(item?.number || '').trim();
+    const range = parseBasicDrillRange(number);
+    if (range) {
+      for (let value = range.from; value <= range.to && value - range.from <= 60; value += 1) {
+        values.push(value);
+      }
+      continue;
+    }
+    if (!/^\d{4}$/.test(number)) continue;
     const value = Number.parseInt(number, 10);
     if (Number.isFinite(value)) values.push(value);
   }

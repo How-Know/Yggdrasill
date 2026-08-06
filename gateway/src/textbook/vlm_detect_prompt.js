@@ -150,6 +150,42 @@ export function buildRpmSetHeaderPrompt({ rawPage, displayPage }) {
   ].join('\n');
 }
 
+export function buildSsenBasicDrillRescuePrompt({ rawPage, displayPage }) {
+  return [
+    '당신은 한국 수학 교재 쎈의 A 기본다잡기 문항 페이지를 판독한다.',
+    `PDF 원본 페이지=${rawPage}, 표시 페이지=${displayPage}.`,
+    '',
+    '이 요청은 일반 판독이 문항 데이터를 길게 반환하고도 concept_page로 잘못 판정한 지면의 재검사다.',
+    '페이지에 굵은 4자리 문항번호(예: 0731)가 하나라도 보이면 반드시 problem_page다.',
+    '개념 설명 박스가 함께 있어도 4자리 번호 문항은 전부 추출하라.',
+    '',
+    '규칙:',
+    '- 일반 문항 number는 인쇄된 4자리 번호 그대로 적는다.',
+    '- "0731~0734" 같은 범위 지문은 is_set_header=true로 별도 항목을 만들고, 그 아래 0731~0734 개별 문항도 각각 만든다.',
+    '- A단계에는 난이도/대표 라벨이 없으므로 label은 항상 ""이다.',
+    '- "09-1 제목" 형태의 가장 가까운 소주제 머리말을 content_group에 반복해 넣는다.',
+    '- bbox는 문항번호만, item_region은 번호를 제외한 해당 문항 본문 전체를 감싼다.',
+    '- 좌표는 [ymin,xmin,ymax,xmax], 0~1000 정수다.',
+    '- 2단이면 좌단 column=1, 우단 column=2다.',
+    '',
+    'JSON 스키마:',
+    '{',
+    '  "section":"basic_drill",',
+    '  "page_kind":"problem_page"|"concept_page",',
+    '  "page_layout":"two_column"|"one_column"|"unknown",',
+    '  "items":[{',
+    '    "number":"0731", "label":"", "is_set_header":false,',
+    '    "set_range":null, "column":1,',
+    '    "bbox":[0,0,0,0], "item_region":[0,0,0,0],',
+    '    "content_group":{"kind":"basic_subtopic","label":"09-1","title":"제목","order":1}',
+    '  }],',
+    '  "notes":""',
+    '}',
+    '',
+    '보이는 4자리 번호를 빠짐없이 위 JSON으로만 반환하라.',
+  ].join('\n');
+}
+
 // 좌표 보정 전용 2차 판독.
 //
 // 1차 판독이 문항 번호는 다 찾았는데 bbox / item_region 을 빼고 돌려주는 일이

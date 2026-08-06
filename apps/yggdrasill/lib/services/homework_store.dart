@@ -352,6 +352,7 @@ class HomeworkStore {
       LearningProblemBankService();
   final math.Random _assignmentCodeRandom = math.Random();
   final Set<String> _assignmentCodeSyncInFlightItemIds = <String>{};
+  bool _supportsAssignmentCodeGroupReconcileRpc = true;
   bool _supportsAssignmentCodeColumn = true;
   bool _supportsLearningTrackColumn = true;
   bool _supportsPbPresetIdColumn = true;
@@ -363,11 +364,17 @@ class HomeworkStore {
   RealtimeChannel? _rt;
   String? _rtAcademyId;
   final Map<String, Timer> _rtReloadDebounce = {};
+  final Set<String> _rtReloadInFlightStudentIds = <String>{};
   final Set<String> _rtReloadSuppressedStudentIds = <String>{};
   final Set<String> _rtReloadPendingStudentIds = <String>{};
   Timer? _rtFallbackPollTimer;
   DateTime? _rtPollCursorUtc;
   bool _rtPollInFlight = false;
+  bool _rtHealthy = false;
+  int _rtPollGeneration = 0;
+  static const Duration _rtHealthyPollInterval = Duration(seconds: 15);
+  static const Duration _rtDegradedPollInterval =
+      Duration(milliseconds: 1200);
 
   static final RegExp _uuidTextPattern = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
@@ -506,6 +513,25 @@ class HomeworkStore {
     return false;
   }
 
+  /// PostgREST 는 기본 1000행에서 응답을 잘라낸다. 학원 단위 전체 조회는
+  /// 이 한도를 넘기므로 항상 range 페이지네이션으로 모든 행을 받아온다.
+  static const int _selectPageSize = 1000;
+
+  Future<List<Map<String, dynamic>>> _selectAllPaged(
+    dynamic Function() buildQuery,
+  ) async {
+    final all = <Map<String, dynamic>>[];
+    var from = 0;
+    while (true) {
+      final raw = await buildQuery().range(from, from + _selectPageSize - 1);
+      final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+      all.addAll(rows);
+      if (rows.length < _selectPageSize) break;
+      from += _selectPageSize;
+    }
+    return all;
+  }
+
   Future<List<Map<String, dynamic>>> _fetchHomeworkRows({
     required SupabaseClient supa,
     required String academyId,
@@ -521,12 +547,12 @@ class HomeworkStore {
       }
       return query
           .order('order_index', ascending: true)
-          .order('updated_at', ascending: false);
+          .order('updated_at', ascending: false)
+          .order('id', ascending: true);
     }
 
     Future<List<Map<String, dynamic>>> runSelect(String columns) async {
-      final data = await buildQuery(columns);
-      return (data as List<dynamic>).cast<Map<String, dynamic>>();
+      return _selectAllPaged(() => buildQuery(columns));
     }
 
     Future<List<Map<String, dynamic>>> runSelectWithCycleFallback({
@@ -1444,18 +1470,21 @@ class HomeworkStore {
       Future<List<Map<String, dynamic>>> runGroupQuery(
         String selectColumns,
       ) async {
-        dynamic query = supa
-            .from('homework_groups')
-            .select(selectColumns)
-            .eq('academy_id', academyId);
-        if (targetStudent != null) {
-          query = query.eq('student_id', targetStudent);
+        dynamic buildGroupQuery() {
+          dynamic query = supa
+              .from('homework_groups')
+              .select(selectColumns)
+              .eq('academy_id', academyId);
+          if (targetStudent != null) {
+            query = query.eq('student_id', targetStudent);
+          }
+          return query
+              .order('order_index', ascending: true)
+              .order('updated_at', ascending: false)
+              .order('id', ascending: true);
         }
-        query = query
-            .order('order_index', ascending: true)
-            .order('updated_at', ascending: false);
-        final rowsRaw = await query;
-        return (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+
+        return _selectAllPaged(buildGroupQuery);
       }
 
       Future<List<Map<String, dynamic>>>
@@ -1496,33 +1525,34 @@ class HomeworkStore {
         }
       }
 
-      dynamic groupItemQuery = supa
-          .from('homework_group_items')
-          .select(_homeworkGroupItemSelect)
-          .eq('academy_id', academyId);
-      if (targetStudent != null) {
-        groupItemQuery = groupItemQuery.eq('student_id', targetStudent);
-      }
-      groupItemQuery = groupItemQuery
-          .order('item_order_index', ascending: true)
-          .order('updated_at', ascending: false);
-
-      final groupRows = await runGroupQueryWithFallback();
-      final groupItemRowsRaw = await groupItemQuery;
-      final groupItemRows =
-          (groupItemRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
-      List<Map<String, dynamic>> runtimeRows = const [];
-      try {
-        dynamic runtimeQuery = supa
-            .from('homework_group_runtime')
-            .select(_homeworkGroupRuntimeSelect)
+      dynamic buildGroupItemQuery() {
+        dynamic query = supa
+            .from('homework_group_items')
+            .select(_homeworkGroupItemSelect)
             .eq('academy_id', academyId);
         if (targetStudent != null) {
-          runtimeQuery = runtimeQuery.eq('student_id', targetStudent);
+          query = query.eq('student_id', targetStudent);
         }
-        final runtimeRowsRaw = await runtimeQuery;
-        runtimeRows =
-            (runtimeRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+        return query
+            .order('item_order_index', ascending: true)
+            .order('updated_at', ascending: false)
+            .order('id', ascending: true);
+      }
+
+      final groupRows = await runGroupQueryWithFallback();
+      final groupItemRows = await _selectAllPaged(buildGroupItemQuery);
+      List<Map<String, dynamic>> runtimeRows = const [];
+      try {
+        runtimeRows = await _selectAllPaged(() {
+          dynamic query = supa
+              .from('homework_group_runtime')
+              .select(_homeworkGroupRuntimeSelect)
+              .eq('academy_id', academyId);
+          if (targetStudent != null) {
+            query = query.eq('student_id', targetStudent);
+          }
+          return query.order('group_id', ascending: true);
+        });
       } catch (e) {
         if (!_isMissingGroupRuntimeTableError(e)) rethrow;
       }
@@ -2068,12 +2098,36 @@ class HomeworkStore {
   void _startRealtimeFallbackPoll(String academyId) {
     final targetAcademyId = academyId.trim();
     if (targetAcademyId.isEmpty) return;
-    _rtFallbackPollTimer?.cancel();
     // 최근 2초 window부터 시작해 경계 타이밍 업데이트 유실을 줄인다.
     _rtPollCursorUtc = _nowUtc().subtract(const Duration(seconds: 2));
-    _rtFallbackPollTimer = Timer.periodic(
-      const Duration(milliseconds: 1200),
-      (_) => unawaited(_pollRecentHomeworkUpdates(targetAcademyId)),
+    _scheduleNextRealtimeFallbackPoll(targetAcademyId, immediate: true);
+  }
+
+  void _scheduleNextRealtimeFallbackPoll(
+    String academyId, {
+    bool immediate = false,
+  }) {
+    _rtFallbackPollTimer?.cancel();
+    final generation = ++_rtPollGeneration;
+    final delay = immediate
+        ? Duration.zero
+        : (_rtHealthy
+            ? _rtHealthyPollInterval
+            : _rtDegradedPollInterval);
+    _rtFallbackPollTimer = Timer(delay, () async {
+      await _pollRecentHomeworkUpdates(academyId);
+      if (generation != _rtPollGeneration) return;
+      _scheduleNextRealtimeFallbackPoll(academyId);
+    });
+  }
+
+  void _setHomeworkRealtimeHealthy(String academyId, bool healthy) {
+    if (_rtHealthy == healthy) return;
+    _rtHealthy = healthy;
+    debugPrint('[HW][rt] health=${healthy ? 'healthy' : 'degraded'}');
+    _scheduleNextRealtimeFallbackPoll(
+      academyId,
+      immediate: !healthy,
     );
   }
 
@@ -2083,15 +2137,23 @@ class HomeworkStore {
     try {
       final since =
           _rtPollCursorUtc ?? _nowUtc().subtract(const Duration(seconds: 2));
-      final rowsRaw = await Supabase.instance.client
-          .from('homework_items')
-          .select('id,student_id,updated_at')
-          .eq('academy_id', academyId)
-          .gt('updated_at', since.toIso8601String())
-          .order('updated_at', ascending: true)
-          .limit(300);
-      final rows = (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
-      if (rows.isEmpty) return;
+      Future<List<Map<String, dynamic>>> recentRows(String table) async {
+        final raw = await Supabase.instance.client
+            .from(table)
+            .select('student_id,updated_at')
+            .eq('academy_id', academyId)
+            .gt('updated_at', since.toIso8601String())
+            .order('updated_at', ascending: true)
+            .limit(300);
+        return (raw as List<dynamic>).cast<Map<String, dynamic>>();
+      }
+
+      final batches = await Future.wait([
+        recentRows('homework_items'),
+        recentRows('homework_groups'),
+        recentRows('homework_group_runtime'),
+      ]);
+      final rows = batches.expand((batch) => batch);
 
       final changedStudentIds = <String>{};
       DateTime maxUpdated = since;
@@ -2103,7 +2165,9 @@ class HomeworkStore {
           maxUpdated = ts;
         }
       }
-      _rtPollCursorUtc = maxUpdated.add(const Duration(milliseconds: 1));
+      if (changedStudentIds.isNotEmpty) {
+        _rtPollCursorUtc = maxUpdated.add(const Duration(milliseconds: 1));
+      }
       for (final sid in changedStudentIds) {
         _scheduleRealtimeReload(sid);
       }
@@ -2175,8 +2239,23 @@ class HomeworkStore {
     _rtReloadDebounce[sid]?.cancel();
     _rtReloadDebounce[sid] = Timer(const Duration(milliseconds: 120), () {
       _rtReloadDebounce.remove(sid);
-      unawaited(_reloadStudent(sid));
+      unawaited(_runRealtimeReload(sid));
     });
+  }
+
+  Future<void> _runRealtimeReload(String studentId) async {
+    if (!_rtReloadInFlightStudentIds.add(studentId)) {
+      _rtReloadPendingStudentIds.add(studentId);
+      return;
+    }
+    try {
+      await _reloadStudent(studentId);
+    } finally {
+      _rtReloadInFlightStudentIds.remove(studentId);
+      if (_rtReloadPendingStudentIds.remove(studentId)) {
+        _scheduleRealtimeReload(studentId);
+      }
+    }
   }
 
   void _subscribeRealtime(String academyId) {
@@ -2188,6 +2267,7 @@ class HomeworkStore {
         final prev = _rt!;
         _rt = null;
         _rtAcademyId = null;
+        _rtHealthy = false;
         unawaited(prev.unsubscribe());
       }
       final channelName =
@@ -2228,7 +2308,6 @@ class HomeworkStore {
                 return;
               }
               _scheduleRealtimeReload(sid);
-              debugPrint('[HW][rt][UPDATE] student=$sid');
             } catch (e, st) {
               debugPrint('[HW][rt][UPDATE] error: $e\n$st');
             }
@@ -2257,14 +2336,9 @@ class HomeworkStore {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
-            if (_rtReloadSuppressedStudentIds.contains(sid)) {
-              _scheduleRealtimeReload(sid);
-            } else {
-              unawaited(_reloadGroupsForStudentByAcademy(
-                academyId: targetAcademyId,
-                studentId: sid,
-              ));
-            }
+            // item/group/link 이벤트를 모두 같은 debounce 경로로 합쳐야
+            // 서로 다른 시점의 부분 스냅샷이 그룹 캐시를 덮어쓰지 않는다.
+            _scheduleRealtimeReload(sid);
           },
         )
         ..onPostgresChanges(
@@ -2278,14 +2352,7 @@ class HomeworkStore {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
-            if (_rtReloadSuppressedStudentIds.contains(sid)) {
-              _scheduleRealtimeReload(sid);
-            } else {
-              unawaited(_reloadGroupsForStudentByAcademy(
-                academyId: targetAcademyId,
-                studentId: sid,
-              ));
-            }
+            _scheduleRealtimeReload(sid);
           },
         )
         ..onPostgresChanges(
@@ -2299,7 +2366,6 @@ class HomeworkStore {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
-            debugPrint('[HW][rt][RUNTIME] student=$sid');
             _scheduleRealtimeReload(sid);
           },
         );
@@ -2310,6 +2376,12 @@ class HomeworkStore {
           try {
             await loadAll();
           } catch (_) {}
+        },
+        onStatus: (status, error) {
+          _setHomeworkRealtimeHealthy(
+            targetAcademyId,
+            status == RealtimeSubscribeStatus.subscribed && error == null,
+          );
         },
       );
       _rtAcademyId = targetAcademyId;
@@ -5620,12 +5692,14 @@ class HomeworkStore {
         'waiting_at': item.waitingAt?.toUtc().toIso8601String(),
       };
 
-      final insRows = await supa.from('homework_items').insert({
+      // 응답 유실 뒤 재시도돼도 같은 item id로 이어서 group link를 만들 수
+      // 있도록 creation write 자체를 idempotent하게 유지한다.
+      final insRows = await supa.from('homework_items').upsert({
         'id': item.id,
         'academy_id': academyId,
         ...base,
         'version': item.version,
-      }).select(
+      }, onConflict: 'id').select(
         [
           'version',
           if (_supportsAssignmentCodeColumn) 'assignment_code',
@@ -5747,6 +5821,18 @@ class HomeworkStore {
             '[HW][addWaitingItemToGroup][RETRY_ASSIGNMENT_CODE_CONFLICT] $retryError\n$retrySt',
           );
         }
+      }
+      // 네트워크 timeout은 서버 commit 여부를 알 수 없다. item/group link
+      // 모두 upsert이므로 한 번 재시도해 부분 커밋을 완성한다.
+      try {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        await persistToServer();
+        return item.id;
+      } catch (retryError, retrySt) {
+        print(
+          '[HW][addWaitingItemToGroup][RETRY_NETWORK_ERROR] '
+          '$retryError\n$retrySt',
+        );
       }
       print('[HW][addWaitingItemToGroup][ERROR] $e\n$st');
       await _reloadStudent(studentId);
@@ -5925,20 +6011,27 @@ class HomeworkStore {
 
       Future<void> groupPersistence = Future<void>.value();
       if (!reserveAssignments) {
-        groupPersistence = supa.from('homework_groups').insert({
-          'id': groupId,
-          'academy_id': academyId,
-          'student_id': studentId,
-          'title': cleanedGroupTitle,
-          'flow_id': _uuidOrNull(cleanedFlowId),
-          if (_supportsLearningTrackColumn)
-            'learning_track_code': groupLearningTrackCode,
-          'order_index': group.orderIndex,
-          'status': 'active',
-          'created_at': now.toUtc().toIso8601String(),
-          'updated_at': now.toUtc().toIso8601String(),
-          'version': 1,
-        }).then<void>((_) {});
+        Future<void> persistGroup() async {
+          await supa.from('homework_groups').upsert({
+            'id': groupId,
+            'academy_id': academyId,
+            'student_id': studentId,
+            'title': cleanedGroupTitle,
+            'flow_id': _uuidOrNull(cleanedFlowId),
+            if (_supportsLearningTrackColumn)
+              'learning_track_code': groupLearningTrackCode,
+            'order_index': group.orderIndex,
+            'status': 'active',
+            'created_at': now.toUtc().toIso8601String(),
+            'updated_at': now.toUtc().toIso8601String(),
+            'version': 1,
+          }, onConflict: 'id');
+        }
+
+        groupPersistence = persistGroup().catchError((Object _) async {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          await persistGroup();
+        });
       }
 
       final createFutures = <Future<String?>>[];
@@ -6066,11 +6159,15 @@ class HomeworkStore {
     } finally {
       if (suppressRealtimeReload) {
         // Supabase realtime 이벤트가 응답보다 조금 늦게 도착할 수 있으므로 짧은
-        // 유예 동안 이번 쓰기에서 발생한 이벤트를 흡수한다.
+        // 유예 동안 이번 쓰기에서 발생한 이벤트를 흡수한 뒤, 누적 이벤트가
+        // 있었다면 완성된 서버 상태를 반드시 한 번 다시 읽는다.
         Timer(const Duration(milliseconds: 700), () {
           _rtReloadSuppressedStudentIds.remove(studentId);
-          _rtReloadPendingStudentIds.remove(studentId);
           _rtReloadDebounce.remove(studentId)?.cancel();
+          final hadPending = _rtReloadPendingStudentIds.remove(studentId);
+          if (hadPending) {
+            _scheduleRealtimeReload(studentId);
+          }
         });
       }
     }
@@ -6174,6 +6271,17 @@ class HomeworkStore {
         academyId: academyId,
         studentId: studentId,
       );
+      final reconciledGroups = await _reconcileDuplicateAssignmentCodeGroups(
+        academyId: academyId,
+        studentId: studentId,
+      );
+      if (reconciledGroups) {
+        await _reloadGroups(
+          academyId: academyId,
+          studentId: studentId,
+          bump: false,
+        );
+      }
       _syncRecoveredAssignmentCodesToServer(
         studentId: studentId,
         recoveredCodesByItemId: recoveredCodes,
@@ -6246,12 +6354,15 @@ class HomeworkStore {
           offset,
           offset + batchSize > ids.length ? ids.length : offset + batchSize,
         );
-        final raw = await supa
-            .from('homework_item_pages')
-            .select('homework_item_id, page_number, problem_count')
-            .eq('academy_id', academyId)
-            .inFilter('homework_item_id', batch);
-        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        final rows = await _selectAllPaged(
+          () => supa
+              .from('homework_item_pages')
+              .select('homework_item_id, page_number, problem_count')
+              .eq('academy_id', academyId)
+              .inFilter('homework_item_id', batch)
+              .order('homework_item_id', ascending: true)
+              .order('page_number', ascending: true),
+        );
         for (final row in rows) {
           final itemId = (row['homework_item_id'] as String?)?.trim() ?? '';
           final page = _parseIntOpt(row['page_number']);
@@ -6368,6 +6479,54 @@ class HomeworkStore {
           debugPrint('[HW][unifyAssignmentCode][ERROR] $e');
         }
       }
+    }
+  }
+
+  Future<bool> _reconcileDuplicateAssignmentCodeGroups({
+    required String academyId,
+    required String studentId,
+  }) async {
+    if (!_supportsAssignmentCodeGroupReconcileRpc) return false;
+    final groupIdsByCode = <String, Set<String>>{};
+    for (final item in _byStudentId[studentId] ?? const <HomeworkItem>[]) {
+      if (item.status == HomeworkStatus.completed || item.completedAt != null) {
+        continue;
+      }
+      final code = _normalizeAssignmentCode(item.assignmentCode);
+      final groupId = (_groupIdByItemId[item.id] ?? '').trim();
+      if (code == null || groupId.isEmpty) continue;
+      groupIdsByCode.putIfAbsent(code, () => <String>{}).add(groupId);
+    }
+    if (!groupIdsByCode.values.any((ids) => ids.length > 1)) return false;
+
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'homework_reconcile_assignment_code_groups',
+        params: {
+          'p_academy_id': academyId,
+          'p_student_id': studentId,
+        },
+      );
+      final moved = raw is num ? raw.toInt() : int.tryParse('$raw') ?? 0;
+      if (moved > 0) {
+        debugPrint(
+          '[HW][reconcileAssignmentCodeGroups] '
+          'student=$studentId moved=$moved',
+        );
+      }
+      return moved > 0;
+    } catch (e) {
+      final message = e.toString().toLowerCase();
+      if (message.contains('homework_reconcile_assignment_code_groups') &&
+          (message.contains('does not exist') ||
+              message.contains('could not find') ||
+              message.contains('pgrst202') ||
+              message.contains('42883'))) {
+        _supportsAssignmentCodeGroupReconcileRpc = false;
+        return false;
+      }
+      debugPrint('[HW][reconcileAssignmentCodeGroups][ERROR] $e');
+      return false;
     }
   }
 }

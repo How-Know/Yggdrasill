@@ -7,6 +7,59 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_config.dart';
 import 'student_avatar_session.dart';
 
+enum HomeworkListKind {
+  inClass,
+  homework;
+
+  static HomeworkListKind parse(
+    Object? raw, {
+    required bool homeworkOnlyFallback,
+  }) {
+    final value = '$raw'.trim().toLowerCase().replaceAll('-', '_');
+    switch (value) {
+      case 'in_class':
+      case 'inclass':
+      case 'class':
+        return HomeworkListKind.inClass;
+      case 'homework':
+      case 'homework_only':
+        return HomeworkListKind.homework;
+      default:
+        return homeworkOnlyFallback
+            ? HomeworkListKind.homework
+            : HomeworkListKind.inClass;
+    }
+  }
+}
+
+enum HomeworkAssignmentOrigin {
+  direct,
+  classCarryover,
+  unknown;
+
+  static HomeworkAssignmentOrigin parse(
+    Object? raw, {
+    required HomeworkListKind listKind,
+  }) {
+    final value = '$raw'.trim().toLowerCase().replaceAll('-', '_');
+    switch (value) {
+      case 'direct':
+      case 'direct_homework':
+      case 'homework_direct':
+        return HomeworkAssignmentOrigin.direct;
+      case 'class_carryover':
+      case 'carryover':
+      case 'in_class':
+      case 'class':
+        return HomeworkAssignmentOrigin.classCarryover;
+      default:
+        return listKind == HomeworkListKind.homework
+            ? HomeworkAssignmentOrigin.direct
+            : HomeworkAssignmentOrigin.unknown;
+    }
+  }
+}
+
 /// 과제 그룹 (m5_list_homework_groups와 동일 형태).
 class HomeworkGroup {
   HomeworkGroup({
@@ -33,6 +86,15 @@ class HomeworkGroup {
     this.isNaesin = false,
     this.pendingComplete = false,
     this.isHomeworkOnly = false,
+    this.listKind = HomeworkListKind.inClass,
+    this.assignmentOrigin = HomeworkAssignmentOrigin.unknown,
+    this.dueDate,
+    this.digitalSolvable = false,
+    this.inspectionStatus = '',
+    this.originalDueDate,
+    this.absenceCarryover = false,
+    this.deferCount = 0,
+    this.lastInspectionOutcome = '',
   });
 
   final String groupId;
@@ -48,8 +110,10 @@ class HomeworkGroup {
   final DateTime? runStart;
   final String content;
   final String type;
+
   /// 시험 제한시간(분). 권장시간과 다름.
   final int? timeLimitMinutes;
+
   /// 권장 소요시간(분). 학습앱 홈 카드와 동일 집계.
   final int? recommendedMinutes;
   final String waitTitle;
@@ -60,6 +124,35 @@ class HomeworkGroup {
   bool isNaesin;
   bool pendingComplete;
   final bool isHomeworkOnly;
+  final HomeworkListKind listKind;
+  final HomeworkAssignmentOrigin assignmentOrigin;
+  final DateTime? dueDate;
+  final bool digitalSolvable;
+  final String inspectionStatus;
+  final DateTime? originalDueDate;
+  final bool absenceCarryover;
+  final int deferCount;
+  final String lastInspectionOutcome;
+
+  bool get isInClass => listKind == HomeworkListKind.inClass;
+  bool get isHomework => listKind == HomeworkListKind.homework;
+  bool get isDueForCheck => inspectionStatus == 'due_for_check';
+
+  String get inspectionLabel {
+    if (!isDueForCheck) return '';
+    return absenceCarryover ? '결석 이월 · 오늘 검사' : '오늘 검사';
+  }
+
+  String get assignmentOriginLabel {
+    switch (assignmentOrigin) {
+      case HomeworkAssignmentOrigin.direct:
+        return '직접 숙제';
+      case HomeworkAssignmentOrigin.classCarryover:
+        return '수업 이월';
+      case HomeworkAssignmentOrigin.unknown:
+        return '';
+    }
+  }
 
   /// 출력물/프린트 출처 — 표지 대신 흰 배경.
   bool get isPrintSource {
@@ -175,9 +268,8 @@ class HomeworkGroup {
   /// 누적 + 현재 사이클 수행시간(초). [isRunning]은 세션 러닝 여부.
   int liveTotalElapsedSec({required bool isRunning}) {
     final acc = accumulated < 0 ? 0 : accumulated;
-    final cycle = isRunning
-        ? liveCycleElapsed()
-        : (cycleElapsed < 0 ? 0 : cycleElapsed);
+    final cycle =
+        isRunning ? liveCycleElapsed() : (cycleElapsed < 0 ? 0 : cycleElapsed);
     return acc + cycle;
   }
 
@@ -191,6 +283,21 @@ class HomeworkGroup {
           .map(HomeworkChild.fromRow)
           .toList(growable: false);
     }
+    final listKind = HomeworkListKind.parse(
+      row['list_kind'] ?? row['listKind'],
+      homeworkOnlyFallback: homeworkOnly,
+    );
+    final type = (row['type'] as String?) ?? '';
+    final explicitDigital = row['digital_solvable'] ?? row['digitalSolvable'];
+    final digitalSolvable = explicitDigital is bool
+        ? explicitDigital
+        : explicitDigital is num
+            ? explicitDigital != 0
+            : explicitDigital is String
+                ? const {'true', 't', '1', 'yes'}
+                    .contains(explicitDigital.trim().toLowerCase())
+                : type.trim() != '출력물' && type.trim() != '프린트';
+    final dueDateRaw = row['due_date'] ?? row['dueDate'];
     return HomeworkGroup(
       groupId: row['group_id'] as String,
       title: (row['group_title'] as String?) ?? '',
@@ -206,7 +313,7 @@ class HomeworkGroup {
           ? DateTime.tryParse(row['run_start'] as String)
           : null,
       content: (row['content'] as String?) ?? '',
-      type: (row['type'] as String?) ?? '',
+      type: type,
       timeLimitMinutes: (row['time_limit_minutes'] as num?)?.toInt(),
       recommendedMinutes: (row['recommended_minutes'] as num?)?.toInt(),
       waitTitle: (row['m5_wait_title'] as String?) ?? '',
@@ -214,6 +321,21 @@ class HomeworkGroup {
       bookId: (row['book_id'] as String?)?.trim() ?? '',
       gradeLabel: (row['grade_label'] as String?)?.trim() ?? '',
       isHomeworkOnly: homeworkOnly,
+      listKind: listKind,
+      assignmentOrigin: HomeworkAssignmentOrigin.parse(
+        row['assignment_origin'] ?? row['assignmentOrigin'],
+        listKind: listKind,
+      ),
+      dueDate: dueDateRaw == null
+          ? null
+          : DateTime.tryParse('$dueDateRaw')?.toLocal(),
+      digitalSolvable: digitalSolvable,
+      inspectionStatus: '${row['inspection_status'] ?? ''}'.trim(),
+      originalDueDate:
+          DateTime.tryParse('${row['original_due_at'] ?? ''}')?.toLocal(),
+      absenceCarryover: row['absence_carryover'] == true,
+      deferCount: (row['defer_count'] as num?)?.toInt() ?? 0,
+      lastInspectionOutcome: '${row['last_outcome'] ?? ''}'.trim(),
     );
   }
 }
@@ -538,6 +660,7 @@ class RecentAttendanceSession {
   final DateTime? arrival;
   final DateTime? departure;
   final String className;
+
   /// 등원 − 수업시작(분). 음수=일찍, 양수=늦음. 등원 없으면 null.
   final int? deltaMinutes;
   final int latenessThreshold;
@@ -564,8 +687,7 @@ class RecentAttendanceSession {
       departure: parse('departure_time'),
       className: (row['class_name'] as String?)?.trim() ?? '',
       deltaMinutes: (row['delta_minutes'] as num?)?.toInt(),
-      latenessThreshold:
-          (row['lateness_threshold'] as num?)?.toInt() ?? 10,
+      latenessThreshold: (row['lateness_threshold'] as num?)?.toInt() ?? 10,
     );
   }
 }
@@ -995,14 +1117,31 @@ class StudentApi {
       _client.rpc('student_list_homework_only_groups_v1'),
       _client.rpc('student_group_test_naesin_flags'),
       _client.rpc('student_group_pending_complete_flags'),
+      _client.rpc('student_homework_inspection_metadata_v1'),
     ]);
+
+    final inspectionByGroup = <String, Map<String, dynamic>>{};
+    for (final raw in results[4] as List<dynamic>) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+      final groupId = '${row['group_id'] ?? ''}'.trim();
+      if (groupId.isNotEmpty) inspectionByGroup[groupId] = row;
+    }
+    Map<String, dynamic> withInspection(Map<String, dynamic> source) {
+      final row = Map<String, dynamic>.from(source);
+      final metadata = inspectionByGroup['${row['group_id'] ?? ''}'.trim()];
+      if (metadata != null) row.addAll(metadata);
+      return row;
+    }
 
     final main = (results[0] as List<dynamic>)
         .whereType<Map<String, dynamic>>()
-        .map((r) => HomeworkGroup.fromRow(r))
+        .map(withInspection)
+        .map(HomeworkGroup.fromRow)
         .toList();
     final homeworkOnly = (results[1] as List<dynamic>)
         .whereType<Map<String, dynamic>>()
+        .map(withInspection)
         .map((r) => HomeworkGroup.fromRow(r, homeworkOnly: true))
         .toList();
 
@@ -1067,9 +1206,8 @@ class StudentApi {
   /// 이번 주(일~토) 일별 수업시간 + 최근 90일 평균.
   Future<StudentClassDurationWeek> classDurationWeek() async {
     final raw = await _client.rpc('student_class_duration_week_v1');
-    final map = raw is Map
-        ? Map<String, dynamic>.from(raw)
-        : const <String, dynamic>{};
+    final map =
+        raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
     return StudentClassDurationWeek.fromJson(map);
   }
 

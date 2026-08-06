@@ -117,6 +117,8 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
           final title = group.title.isEmpty ? '(제목 없음)' : group.title;
           final subtitle = group.primaryMetaLine;
           final children = group.children;
+          final kindLabel = group.isHomework ? '숙제' : '오늘 수업';
+          final origin = group.assignmentOriginLabel;
 
           return Material(
             color: surface,
@@ -154,6 +156,15 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
                         ),
                       ),
                       const SizedBox(height: 28),
+                      Center(
+                        child: _SessionKindBadge(
+                          label: origin.isEmpty
+                              ? kindLabel
+                              : '$kindLabel · $origin',
+                          homework: group.isHomework,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
                       Text(
                         title,
                         textAlign: TextAlign.center,
@@ -216,6 +227,7 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
                       _NowPlayingActionRow(
                         running: running,
                         busy: busy,
+                        kindLabel: group.isHomework ? '숙제' : '수업',
                         onPlayPause: widget.onPlayPause,
                         onSubmit: widget.onSubmit,
                       ),
@@ -272,9 +284,7 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
                                   ),
                                 ),
                                 title: Text(
-                                  child.title.isEmpty
-                                      ? '(제목 없음)'
-                                      : child.title,
+                                  child.title.isEmpty ? '(제목 없음)' : child.title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
@@ -336,12 +346,14 @@ class _NowPlayingActionRow extends StatelessWidget {
   const _NowPlayingActionRow({
     required this.running,
     required this.busy,
+    required this.kindLabel,
     required this.onPlayPause,
     required this.onSubmit,
   });
 
   final bool running;
   final bool busy;
+  final String kindLabel;
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
 
@@ -380,15 +392,13 @@ class _NowPlayingActionRow extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(
-                      running
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
+                      running ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       size: 26,
                       color: pillFg,
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      running ? '일시정지' : '수행',
+                      running ? '일시정지' : '$kindLabel 수행',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -404,7 +414,7 @@ class _NowPlayingActionRow extends StatelessWidget {
         ),
         const SizedBox(width: 12),
         Tooltip(
-          message: '제출',
+          message: '$kindLabel 제출',
           child: Material(
             color: circleBg,
             shape: const CircleBorder(),
@@ -427,6 +437,40 @@ class _NowPlayingActionRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SessionKindBadge extends StatelessWidget {
+  const _SessionKindBadge({
+    required this.label,
+    required this.homework,
+  });
+
+  final String label;
+  final bool homework;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = homework
+        ? YggGlassTokens.confirmActionColor
+        : Theme.of(context).colorScheme.primary;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
     );
   }
 }

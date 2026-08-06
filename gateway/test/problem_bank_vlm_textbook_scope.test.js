@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { selectExpectedQuestions } from '../src/problem_bank/extract_engines/vlm/runner.js';
+import {
+  isRetryableVlmChunkError,
+  selectExpectedQuestions,
+} from '../src/problem_bank/extract_engines/vlm/runner.js';
+
+test('textbook VLM retries transient fetch failures but not daily quota exhaustion', () => {
+  assert.equal(isRetryableVlmChunkError('fetch failed'), true);
+  assert.equal(isRetryableVlmChunkError('ECONNRESET: socket hang up'), true);
+  assert.equal(
+    isRetryableVlmChunkError(
+      'RESOURCE_EXHAUSTED generate_requests_per_model_per_day please retry in 12h',
+    ),
+    false,
+  );
+});
 
 test('textbook VLM keeps only crop-scoped questions in crop order', () => {
   const questions = [

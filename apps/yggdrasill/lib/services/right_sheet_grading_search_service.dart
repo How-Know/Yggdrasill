@@ -7,6 +7,7 @@ import '../screens/learning/models/problem_bank_export_models.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'data_manager.dart';
 import 'homework_batch_confirm_service.dart';
+import 'homework_grading_state_codec.dart';
 import 'homework_test_grading_result_service.dart';
 import 'homework_store.dart';
 import 'learning_problem_bank_service.dart';
@@ -1013,27 +1014,11 @@ class RightSheetGradingSearchService {
   }
 
   String _encodeTestGradingState(HomeworkAnswerCellState state) {
-    switch (state) {
-      case HomeworkAnswerCellState.correct:
-        return 'correct';
-      case HomeworkAnswerCellState.wrong:
-        return 'wrong';
-      case HomeworkAnswerCellState.unsolved:
-        return 'unsolved';
-    }
+    return encodeHomeworkGradingUiState(state);
   }
 
   HomeworkAnswerCellState _decodeTestGradingState(String? raw) {
-    final normalized = (raw ?? '').trim().toLowerCase();
-    switch (normalized) {
-      case 'wrong':
-        return HomeworkAnswerCellState.wrong;
-      case 'unsolved':
-        return HomeworkAnswerCellState.unsolved;
-      case 'correct':
-      default:
-        return HomeworkAnswerCellState.correct;
-    }
+    return decodeHomeworkGradingUiState(raw);
   }
 
   Map<String, String> _toRightSheetStateMap(
@@ -1062,8 +1047,7 @@ class RightSheetGradingSearchService {
     if (session == null) return const <String, HomeworkAnswerCellState>{};
     final out = <String, HomeworkAnswerCellState>{};
     session.states.forEach((key, state) {
-      if (state == HomeworkAnswerCellState.wrong ||
-          state == HomeworkAnswerCellState.unsolved) {
+      if (isHomeworkGradingRetryState(state)) {
         out[key] = state;
       }
     });

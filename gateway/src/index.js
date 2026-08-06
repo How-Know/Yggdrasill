@@ -8,6 +8,7 @@ import {
   createM5HomeworksEnvelope,
   sanitizeGroupsForDevicePayload as sanitizeM5GroupsForDevicePayload
 } from './m5_sync_fingerprint.js';
+import { isM5SyncAckMatch } from './m5_sync_ack.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY;
@@ -33,6 +34,9 @@ const GW_STALE_ACTIVITY_WINDOW_MS = Number.parseInt(process.env.GW_STALE_ACTIVIT
 const GW_RECOVERY_COOLDOWN_MS = Number.parseInt(process.env.GW_RECOVERY_COOLDOWN_MS ?? '60000', 10);
 const M5_FULL_RESYNC_DELAY_MS = Number.parseInt(process.env.M5_FULL_RESYNC_DELAY_MS ?? '1500', 10);
 const M5_FULL_RESYNC_COOLDOWN_MS = Number.parseInt(process.env.M5_FULL_RESYNC_COOLDOWN_MS ?? '30000', 10);
+const M5_SYNC_ACK_TIMEOUT_MS = Number.parseInt(process.env.M5_SYNC_ACK_TIMEOUT_MS ?? '12000', 10);
+const M5_REVISION_POLL_MS = Number.parseInt(process.env.M5_REVISION_POLL_MS ?? '15000', 10);
+const M5_SAFETY_RESYNC_MS = Number.parseInt(process.env.M5_SAFETY_RESYNC_MS ?? '300000', 10);
 // 학생 수가 LVGL 정지의 촉발 조건인지 확인하기 위한 단일 기기 A/B 테스트.
 // 다른 M5의 등원 목록은 그대로 유지한다.
 const M5_STUDENT_LIST_TEST_DEVICE_ID = 'm5-device-013';
@@ -65,7 +69,10 @@ const cfg = {
   staleActivityWindowMs: validInt(GW_STALE_ACTIVITY_WINDOW_MS, 600000),
   recoveryCooldownMs: validInt(GW_RECOVERY_COOLDOWN_MS, 60000),
   m5FullResyncDelayMs: validInt(M5_FULL_RESYNC_DELAY_MS, 1500),
-  m5FullResyncCooldownMs: validInt(M5_FULL_RESYNC_COOLDOWN_MS, 30000)
+  m5FullResyncCooldownMs: validInt(M5_FULL_RESYNC_COOLDOWN_MS, 30000),
+  m5SyncAckTimeoutMs: validInt(M5_SYNC_ACK_TIMEOUT_MS, 12000),
+  m5RevisionPollMs: validInt(M5_REVISION_POLL_MS, 15000),
+  m5SafetyResyncMs: validInt(M5_SAFETY_RESYNC_MS, 300000)
 };
 const GROUP_CMD_V2_DEVICE_ID = process.env.GROUP_CMD_V2_DEVICE_ID || 'm5-device-001';
 const GROUP_CMD_V2_LOG_TAG = 'GROUP_CMD_V2';
@@ -122,7 +129,8 @@ const BASE_SUBSCRIPTIONS = [
   'academies/+/students/+/homework/+/command',
   'academies/+/devices/+/command',
   'academies/+/devices/+/presence',
-  'academies/+/devices/+/diag'
+  'academies/+/devices/+/diag',
+  'academies/+/devices/+/sync_ack'
 ];
 
 const tlsOpts = {};
@@ -222,6 +230,7 @@ client.on('connect', (packet = {}) => {
     cleanSession: cfg.cleanSession
   });
   subscribeBaseTopics('connect');
+  scheduleFullM5HomeworkResync('mqtt:connect', true);
 });
 
 // simple idempotency cache (10 minutes TTL)
@@ -280,17 +289,23 @@ logEvent('log', '[gateway] mqtt runtime config', {
   staleActivityWindowMs: cfg.staleActivityWindowMs,
   recoveryCooldownMs: cfg.recoveryCooldownMs,
   m5FullResyncDelayMs: cfg.m5FullResyncDelayMs,
-  m5FullResyncCooldownMs: cfg.m5FullResyncCooldownMs
+  m5FullResyncCooldownMs: cfg.m5FullResyncCooldownMs,
+  m5SyncAckTimeoutMs: cfg.m5SyncAckTimeoutMs,
+  m5RevisionPollMs: cfg.m5RevisionPollMs,
+  m5SafetyResyncMs: cfg.m5SafetyResyncMs
 });
 
 /** 학생 단위로 RPC+푸시를 직렬화해 빠른 연속 DB 이벤트 시 스냅샷 역전·중간 상태 유실 완화 */
 const homeworkPublishChains = new Map();
 const homeworkPublishCoalesce = new Map();
 const m5SyncSequences = new Map();
+const m5LatestSnapshots = new Map();
 let m5FullResyncTimer = null;
 let m5FullResyncInFlight = false;
 let m5FullResyncPendingReason = null;
 let m5FullResyncLastRunTs = 0;
+let m5RevisionPollInFlight = false;
+let m5RevisionPollCursorUtc = new Date(Date.now() - 2000);
 
 function sanitizeGroupsForDevicePayload(groups) {
   return sanitizeM5GroupsForDevicePayload(groups, {
@@ -306,6 +321,10 @@ function nextM5SyncSeq(academy_id, device_id, student_id) {
   return next;
 }
 
+function m5SnapshotKey(academy_id, device_id) {
+  return `${academy_id}::${device_id}`;
+}
+
 function publishHomeworksToDevice(academy_id, student_id, device_id, groups, source = 'unknown') {
   const payloadGroups = sanitizeGroupsForDevicePayload(groups || []);
   const envelope = createM5HomeworksEnvelope({
@@ -316,13 +335,70 @@ function publishHomeworksToDevice(academy_id, student_id, device_id, groups, sou
     source,
     syncSeq: nextM5SyncSeq(academy_id, device_id, student_id)
   });
-  publish(
-    `academies/${academy_id}/devices/${device_id}/homeworks`,
-    JSON.stringify(envelope),
-    { qos: 1, retain: false }
-  );
+  const topic = `academies/${academy_id}/devices/${device_id}/homeworks`;
+  const payload = JSON.stringify(envelope);
+  publish(topic, payload, { qos: 1, retain: false });
+  const key = m5SnapshotKey(academy_id, device_id);
+  m5LatestSnapshots.set(key, {
+    academy_id,
+    student_id,
+    device_id,
+    topic,
+    payload,
+    envelope,
+    publishedAt: nowMs(),
+    ackedAt: 0,
+    cachedRetrySent: false,
+    lastMismatchRecoveryAt: m5LatestSnapshots.get(key)?.lastMismatchRecoveryAt || 0
+  });
   logEvent('log', '[gateway][m5-sync] publish', envelope.meta);
   return envelope;
+}
+
+function handleM5SyncAck(academy_id, device_id, msg) {
+  if (msg?.type !== 'homeworks_apply') return;
+  const key = m5SnapshotKey(academy_id, device_id);
+  const latest = m5LatestSnapshots.get(key);
+  if (!latest) {
+    logSampled(
+      `m5_sync_ack_without_snapshot:${key}`,
+      10000,
+      'log',
+      '[gateway][m5-sync] status before snapshot',
+      { academy_id, device_id, sync_fp: msg?.sync_fp || null }
+    );
+    return;
+  }
+
+  const appliedFp = (msg?.sync_fp || '').toString();
+  const expectedFp = latest.envelope?.meta?.sync_fp || '';
+  if (isM5SyncAckMatch(expectedFp, msg)) {
+    latest.ackedAt = nowMs();
+    latest.cachedRetrySent = false;
+    logSampled(
+      `m5_sync_ack:${key}:${appliedFp}`,
+      5000,
+      'log',
+      '[gateway][m5-sync] ack matched',
+      { academy_id, device_id, sync_fp: appliedFp, sync_seq: msg?.sync_seq ?? null }
+    );
+    return;
+  }
+
+  const now = nowMs();
+  if (now - latest.lastMismatchRecoveryAt < cfg.m5SyncAckTimeoutMs) return;
+  latest.lastMismatchRecoveryAt = now;
+  logEvent('warn', '[gateway][m5-sync] ack mismatch; refreshing snapshot', {
+    academy_id,
+    device_id,
+    expected_fp: expectedFp,
+    applied_fp: appliedFp || null
+  });
+  void queueHomeworksToBoundDevices(
+    latest.academy_id,
+    latest.student_id,
+    'sync_ack_mismatch'
+  );
 }
 
 // Active homework groups + take-home (숙제) groups merged. The homework-only
@@ -639,6 +715,101 @@ function scheduleFullM5HomeworkResync(reason = 'unknown', force = false) {
   }, cfg.m5FullResyncDelayMs);
 }
 
+async function pollM5HomeworkRevisions() {
+  if (m5RevisionPollInFlight) return;
+  m5RevisionPollInFlight = true;
+  const pollStartedAt = new Date();
+  const sinceIso = m5RevisionPollCursorUtc.toISOString();
+  try {
+    const { data: binds, error: bindError } = await supa
+      .from('m5_device_bindings')
+      .select('academy_id,student_id')
+      .eq('active', true);
+    if (bindError) throw bindError;
+
+    const boundKeys = new Set(
+      (binds || [])
+        .filter((row) => row?.academy_id && row?.student_id)
+        .map((row) => `${row.academy_id}::${row.student_id}`)
+    );
+    if (boundKeys.size === 0) {
+      m5RevisionPollCursorUtc = new Date(pollStartedAt.getTime() - 2000);
+      return;
+    }
+
+    const tables = ['homework_items', 'homework_groups', 'homework_group_runtime'];
+    const results = await Promise.all(
+      tables.map((table) =>
+        supa
+          .from(table)
+          .select('academy_id,student_id,updated_at')
+          .gt('updated_at', sinceIso)
+          .order('updated_at', { ascending: true })
+          .limit(1000)
+      )
+    );
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw failed.error;
+
+    const changed = new Map();
+    for (const result of results) {
+      for (const row of result.data || []) {
+        const academy_id = (row?.academy_id || '').toString();
+        const student_id = (row?.student_id || '').toString();
+        const key = `${academy_id}::${student_id}`;
+        if (!academy_id || !student_id || !boundKeys.has(key)) continue;
+        changed.set(key, { academy_id, student_id });
+      }
+    }
+
+    m5RevisionPollCursorUtc = new Date(pollStartedAt.getTime() - 2000);
+    for (const entry of changed.values()) {
+      void queueHomeworksToBoundDevices(
+        entry.academy_id,
+        entry.student_id,
+        'revision_poll'
+      );
+    }
+    if (changed.size > 0) {
+      logEvent('log', '[gateway][m5-sync] revision poll changed', {
+        students: changed.size,
+        since: sinceIso
+      });
+    }
+  } catch (e) {
+    logEvent('warn', '[gateway][m5-sync] revision poll failed', {
+      since: sinceIso,
+      error: e?.message ?? String(e)
+    });
+  } finally {
+    m5RevisionPollInFlight = false;
+  }
+}
+
+setInterval(() => {
+  const now = nowMs();
+  for (const latest of m5LatestSnapshots.values()) {
+    if (latest.ackedAt >= latest.publishedAt || latest.cachedRetrySent) continue;
+    if (now - latest.publishedAt < cfg.m5SyncAckTimeoutMs) continue;
+    latest.cachedRetrySent = true;
+    publish(latest.topic, latest.payload, { qos: 1, retain: false });
+    logEvent('warn', '[gateway][m5-sync] ack timeout; cached retry', {
+      academy_id: latest.academy_id,
+      device_id: latest.device_id,
+      student_id: latest.student_id,
+      sync_fp: latest.envelope?.meta?.sync_fp || null
+    });
+  }
+}, Math.max(1000, Math.floor(cfg.m5SyncAckTimeoutMs / 3)));
+
+setInterval(() => {
+  void pollM5HomeworkRevisions();
+}, cfg.m5RevisionPollMs);
+
+setInterval(() => {
+  scheduleFullM5HomeworkResync('periodic_safety');
+}, cfg.m5SafetyResyncMs);
+
 function handleRealtimeSubscribeStatus(label, status) {
   console.log(`[gateway][rt] ${label}`, status);
   if (status === 'SUBSCRIBED') {
@@ -696,6 +867,10 @@ client.on('message', async (topic, payload) => {
       return;
     }
     const msg = JSON.parse(payload.toString());
+    if (parts.length >= 5 && parts[0] === 'academies' && parts[2] === 'devices' && parts[4] === 'sync_ack') {
+      handleM5SyncAck(parts[1], parts[3], msg);
+      return;
+    }
     if (parts.length >= 6 && parts[0] === 'academies' && parts[2] === 'students' && parts[4] === 'homework') {
       if (!validate(msg)) {
         console.warn('[gateway] invalid payload', validate.errors);
@@ -1119,7 +1294,7 @@ try {
   const rt = supa.realtime;
   rt.onOpen(() => {
     console.log('[gateway][rt] socket open');
-    scheduleFullM5HomeworkResync('rt:socket_open');
+    scheduleFullM5HomeworkResync('rt:socket_open', true);
   });
   rt.onClose(() => console.log('[gateway][rt] socket close'));
   rt.onError((e) => console.log('[gateway][rt] socket error', e));

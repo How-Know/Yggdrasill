@@ -7,7 +7,9 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
+import '../services/student_attendance_session.dart';
 import '../services/textbook_api.dart';
+import 'textbook_solve_screen.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_progress_summary_card.dart';
 
@@ -27,13 +29,16 @@ class HomeworkScreen extends StatefulWidget {
 
 class _HomeworkScreenState extends State<HomeworkScreen> {
   List<HomeworkGroup>? _groups;
+
   /// bookId|gradeLabel → cover_ref (활성 교재 목록에서 해석).
   Map<String, String> _coverByBookKey = const {};
   String? _error;
   bool _busy = false;
   Timer? _ticker;
+
   /// 확인(phase 4) 진입 스낵바용 — 이전 phase 스냅샷.
   final Map<String, int> _phaseByGroupId = {};
+
   /// 페이지명: 닉네임(없으면 이름). 로드 전·실패 시 '과제'.
   String _pageTitle = '과제';
 
@@ -166,9 +171,10 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         _coverByBookKey[group.bookId];
   }
 
-  Future<void> _transition(HomeworkGroup group, int fromPhase,
+  Future<bool> _transition(HomeworkGroup group, int fromPhase,
       {String? successMessage}) async {
-    if (_busy) return;
+    if (_busy) return false;
+    var succeeded = false;
     if (fromPhase == 1) {
       HomeworkSession.instance.preferGroup(group.groupId);
     }
@@ -178,8 +184,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         groupId: group.groupId,
         fromPhase: fromPhase,
       );
-      if (!mounted) return;
+      if (!mounted) return false;
       if (result['ok'] == true) {
+        succeeded = true;
         if (successMessage != null) {
           TopGlassSnackBar.show(
             context,
@@ -189,7 +196,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         }
       } else if (result['error'] == 'phase_mismatch') {
         await _refresh();
-        if (!mounted) return;
+        if (!mounted) return false;
         if (fromPhase == 1) {
           HomeworkGroup? latest;
           for (final g in _groups ?? const <HomeworkGroup>[]) {
@@ -205,8 +212,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
               groupId: group.groupId,
               fromPhase: 1,
             );
-            if (!mounted) return;
+            if (!mounted) return false;
             if (retry['ok'] == true) {
+              succeeded = true;
               if (successMessage != null) {
                 TopGlassSnackBar.show(
                   context,
@@ -214,7 +222,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
                   icon: Icons.check_circle_outline_rounded,
                 );
               }
-              return;
+              return true;
             }
           }
         }
@@ -244,6 +252,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         await _refresh();
       }
     }
+    return succeeded;
   }
 
   Future<void> _openAddHomework() async {
@@ -288,26 +297,115 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     }
   }
 
-  void _onGroupTap(HomeworkGroup group) {
+  Future<void> _onGroupTap(HomeworkGroup group) async {
     HomeworkSession.instance.preferGroup(group.groupId);
-    if (_busy || group.isHomeworkOnly) return;
+    if (_busy) return;
 
     // 확인 완료(대기중) 탭 → 과제 찾아왔는지 묻고 대기로 전환.
     if (group.phase == 4) {
-      unawaited(_confirmFoundHomework(group));
+      await _confirmFoundHomework(group);
       return;
+    }
+
+    if (group.isHomework && group.phase <= 2) {
+      final opened = await _openDigitalHomework(group);
+      if (opened) return;
     }
 
     // 대기·일시정지(수행 phase인데 타이머 정지) 탭 → 수행 시작.
     // 미니바 pause 직후 목록이 아직 phase=2로 남아 있어도 재개되게 한다.
     if (!group.running && (group.phase == 1 || group.phase == 2)) {
-      unawaited(
-        _transition(
-          group,
-          1,
-          successMessage: '${group.title} 시작!',
+      await _transition(
+        group,
+        1,
+        successMessage: '${group.title} 시작!',
+      );
+    }
+  }
+
+  /// 문항 스냅샷이 있는 교재 숙제는 배정 범위만 교재 풀이 화면에서 연다.
+  ///
+  /// 문항이 없거나 출력물/미마이그레이션 과제면 false를 반환해 기존 공용
+  /// phase 타이머 경로로 이어 간다.
+  Future<bool> _openDigitalHomework(HomeworkGroup group) async {
+    if (!group.digitalSolvable || group.isPrintSource) return false;
+
+    setState(() => _busy = true);
+    try {
+      final problems =
+          await StudentApi.instance.listHomeworkProblems(group.groupId);
+      final usable = problems
+          .where((problem) =>
+              problem.cropId.trim().isNotEmpty && problem.rawPage != null)
+          .toList(growable: false);
+      if (usable.isEmpty) return false;
+
+      final books = await TextbookApi.instance.listTextbooks();
+      final first = usable.first;
+      StudentTextbook? book;
+      for (final candidate in books) {
+        if (candidate.bookId == first.bookId &&
+            candidate.gradeLabel == first.gradeLabel) {
+          book = candidate;
+          break;
+        }
+      }
+      book ??= StudentTextbook(
+        bookId: first.bookId,
+        gradeLabel: first.gradeLabel,
+        name: group.sourceLabel.isEmpty ? group.title : group.sourceLabel,
+        description: '',
+        colorValue: group.color,
+        series: '',
+        coverRef: _coverRefFor(group) ?? '',
+        totalProblems: usable.length,
+        gradedCount: 0,
+        correctCount: 0,
+        completedCount: 0,
+        firstWrongCount: 0,
+        correctedCount: 0,
+        stageProgress: const {},
+      );
+
+      final scope = HomeworkSolveScope(
+        groupId: group.groupId,
+        title: group.title,
+        cropIds: usable.map((problem) => problem.cropId).toSet(),
+        rawPages: usable.map((problem) => problem.rawPage!).toSet(),
+      );
+      if (!group.running && (group.phase == 1 || group.phase == 2)) {
+        final result = await StudentApi.instance.groupTransition(
+          groupId: group.groupId,
+          fromPhase: 1,
+        );
+        if (result['ok'] != true && result['error'] != 'phase_mismatch') {
+          if (mounted) {
+            TopGlassSnackBar.show(
+              context,
+              message: '숙제 수행을 시작하지 못했어요.',
+              icon: Icons.error_outline_rounded,
+            );
+          }
+          return true;
+        }
+        await HomeworkSession.instance.refresh();
+      }
+      if (!mounted) return true;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => TextbookSolveScreen(
+            book: book!,
+            homework: scope,
+          ),
         ),
       );
+      await HomeworkSession.instance.refresh();
+      return true;
+    } catch (_) {
+      // 문항 RPC가 없거나 legacy 과제면 기존 phase 타이머로 폴백한다.
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -344,13 +442,12 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       builder: (context, _) => _GroupCard(
         group: group,
         coverRef: _coverRefFor(group),
-        showEqualizer:
-            HomeworkSession.instance.isRunningGroup(group.groupId),
+        showEqualizer: HomeworkSession.instance.isRunningGroup(group.groupId),
         // 제출됨 → 흰 원형 로딩, 대기중 → 초록 체크
         coverBadge: group.phase == 4
             ? _CoverBadge.waiting
             : (group.phase == 3 ? _CoverBadge.submitted : null),
-        onTap: () => _onGroupTap(group),
+        onTap: () => unawaited(_onGroupTap(group)),
       ),
     );
   }
@@ -388,17 +485,17 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         ),
       );
     } else {
-      final priority = groups.take(2).toList(growable: false);
-      final waiting = groups.length > 2
-          ? groups.sublist(2)
-          : const <HomeworkGroup>[];
+      final inClass =
+          groups.where((group) => group.isInClass).toList(growable: false);
+      final homework =
+          groups.where((group) => group.isHomework).toList(growable: false);
       children.addAll([
-        const _HomeworkSectionHeader(title: '우선 과제'),
-        if (priority.isEmpty)
+        const _HomeworkSectionHeader(title: '오늘 수업'),
+        if (inClass.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(22, 8, 20, 4),
             child: Text(
-              '우선 과제가 없어요.',
+              '오늘 수업 과제가 없어요.',
               style: TextStyle(
                 fontSize: 15,
                 color: Theme.of(context)
@@ -411,21 +508,21 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         else
           _HomeworkHorizontalRow(
             children: [
-              for (final group in priority) _groupCardFor(group),
+              for (final group in inClass) _groupCardFor(group),
             ],
           ),
         // 카드 줄 ↔ 다음 섹션 타이틀 (헤더 top padding 없음)
         const SizedBox(height: 28),
-        const _HomeworkSectionHeader(title: '대기 과제'),
+        const _HomeworkSectionHeader(title: '숙제'),
         // 2줄 지그재그 + 세 번째 줄에 과제 추가 카드.
         _HomeworkZigzagRow(
-          children: [
-            for (final group in waiting) _groupCardFor(group),
-          ],
           trailingThirdRow: _AddHomeworkCard(
             enabled: !_busy,
             onTap: _openAddHomework,
           ),
+          children: [
+            for (final group in homework) _groupCardFor(group),
+          ],
         ),
       ]);
     }
@@ -501,6 +598,7 @@ class _HomeworkHorizontalRow extends StatelessWidget {
 
   static const double _cardHeight = 152;
   static const double _gap = 12;
+
   /// 이전 스크롤 카드폭 비율(0.88)에서 20% 축소.
   static const double _cardWidthFactor = 0.88 * 0.8;
 
@@ -555,6 +653,7 @@ class _HomeworkZigzagRow extends StatelessWidget {
   static const double _cardHeight = 152;
   static const double _gap = 12;
   static const double _cardWidthFactor = 0.88 * 0.8;
+
   /// 과제카드 표지와 동일 (_GroupCard._coverSize / 좌측 패딩).
   static const double _coverSize = 126.72;
   static const double _coverInset = 6;
@@ -568,8 +667,7 @@ class _HomeworkZigzagRow extends StatelessWidget {
       builder: (context, constraints) {
         final available = constraints.maxWidth - 40;
         final cardWidth = available * _cardWidthFactor;
-        final columnCount =
-            children.isEmpty ? 0 : (children.length + 1) ~/ 2;
+        final columnCount = children.isEmpty ? 0 : (children.length + 1) ~/ 2;
 
         Widget cardAt(int index) {
           return SizedBox(
@@ -895,8 +993,6 @@ class _DailyAverageDummySection extends StatefulWidget {
 
 class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
   bool _expanded = false;
-  DateTime? _arrival;
-  StudentNextClass? _nextClass;
   StudentClassDurationWeek? _weekDuration;
   bool _loadingWeek = false;
   DateTime? _weekFetchedAt;
@@ -910,37 +1006,28 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
   @override
   void initState() {
     super.initState();
-    unawaited(_loadSchedule());
+    StudentAttendanceSession.instance.addListener(_onAttendanceChanged);
+    // 세션이 아직 hydrate 전이면 한 번 더 당겨 온다.
+    unawaited(
+      StudentAttendanceSession.instance.refresh(includeNextClass: true),
+    );
     // 분 단위로 진행 시간 갱신.
     _tick = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted && _arrival != null) setState(() {});
+      if (mounted && StudentAttendanceSession.instance.arrival != null) {
+        setState(() {});
+      }
     });
   }
 
   @override
   void dispose() {
     _tick?.cancel();
+    StudentAttendanceSession.instance.removeListener(_onAttendanceChanged);
     super.dispose();
   }
 
-  Future<void> _loadSchedule() async {
-    try {
-      final results = await Future.wait([
-        StudentApi.instance.todayAttendance(),
-        StudentApi.instance.nextClass(),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _arrival = (results[0] as TodayAttendance).arrival;
-        _nextClass = results[1] as StudentNextClass?;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _arrival = null;
-        _nextClass = null;
-      });
-    }
+  void _onAttendanceChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _ensureWeekLoaded({bool force = false}) async {
@@ -968,7 +1055,7 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
 
   /// 등원 시각 → 지금까지. 예: "6시간 23분째", "42분째".
   String _elapsedLabel() {
-    final arrival = _arrival;
+    final arrival = StudentAttendanceSession.instance.arrival;
     if (arrival == null) return '등원 전';
     final now = DateTime.now();
     var minutes = now.difference(arrival).inMinutes;
@@ -982,7 +1069,7 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
 
   /// 다음 회차 — "수 16:00".
   String _nextClassLabel() {
-    final next = _nextClass?.classDateTime;
+    final next = StudentAttendanceSession.instance.nextClass?.classDateTime;
     if (next == null) return '일정 없음';
     final wd = _weekdays[next.weekday - 1];
     final hh = next.hour.toString().padLeft(2, '0');
@@ -993,9 +1080,7 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
   String _updatedLabel() {
     final at = _weekFetchedAt;
     if (at == null) {
-      return _loadingWeek
-          ? '수업시간 기록을 불러오는 중…'
-          : '펼치면 주간 수업시간이 표시돼요';
+      return _loadingWeek ? '수업시간 기록을 불러오는 중…' : '펼치면 주간 수업시간이 표시돼요';
     }
     final ampm = at.hour < 12 ? '오전' : '오후';
     final hour12 = at.hour % 12 == 0 ? 12 : at.hour % 12;
@@ -1032,14 +1117,12 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final surface = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : Colors.white;
+    final surface =
+        isDark ? theme.colorScheme.surfaceContainerHigh : Colors.white;
     final text = theme.colorScheme.onSurface;
     final subText = theme.colorScheme.onSurface.withValues(alpha: 0.55);
-    final divider = isDark
-        ? Colors.white.withValues(alpha: 0.12)
-        : const Color(0xFFC6C6C8);
+    final divider =
+        isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFC6C6C8);
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.45);
     final yMax = _weekDuration?.yMaxMinutes ?? 240;
 
@@ -1460,6 +1543,7 @@ class _TodayHomeworkProgressSectionState
   List<TodayCompletedHomework>? _completed;
   bool _loadingCompleted = false;
   String? _completedError;
+
   /// 과제 세션 목록 변화 감지용 (완료로 목록에서 빠지면 수행속도 갱신).
   Set<String> _trackedGroupIds = const {};
   Timer? _completedRefreshDebounce;
@@ -1468,7 +1552,8 @@ class _TodayHomeworkProgressSectionState
   void initState() {
     super.initState();
     _trackedGroupIds = {
-      for (final g in HomeworkSession.instance.lastGroups ?? const <HomeworkGroup>[])
+      for (final g
+          in HomeworkSession.instance.lastGroups ?? const <HomeworkGroup>[])
         g.groupId,
     };
     HomeworkSession.instance.addListener(_onHomeworkSessionChanged);
@@ -1648,15 +1733,40 @@ class _TodayHomeworkDetailCard extends StatelessWidget {
 
   /// 최근 14일 (마지막이 오늘) — 간격 축소로 더 많은 막대 표시.
   static const _weekLabels = [
-    '수', '목', '금', '토', '일', '월', '화',
-    '수', '목', '금', '토', '일', '월', '화',
+    '수',
+    '목',
+    '금',
+    '토',
+    '일',
+    '월',
+    '화',
+    '수',
+    '목',
+    '금',
+    '토',
+    '일',
+    '월',
+    '화',
   ];
   static const _weekValues = [
-    0.42, 0.55, 0.48, 0.30, 0.22, 0.60, 0.58,
-    0.55, 0.62, 0.48, 0.70, 0.58, 0.66, 0.84,
+    0.42,
+    0.55,
+    0.48,
+    0.30,
+    0.22,
+    0.60,
+    0.58,
+    0.55,
+    0.62,
+    0.48,
+    0.70,
+    0.58,
+    0.66,
+    0.84,
   ];
 
   static const _iosBlue = Color(0xFF007AFF);
+
   /// 상단 요약 카드와 동일.
   static const _cardRadius = 22.0;
 
@@ -1664,20 +1774,16 @@ class _TodayHomeworkDetailCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final surface = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : Colors.white;
+    final surface =
+        isDark ? theme.colorScheme.surfaceContainerHigh : Colors.white;
     final text = theme.colorScheme.onSurface;
     final subText = theme.colorScheme.onSurface.withValues(alpha: 0.45);
-    final divider = isDark
-        ? Colors.white.withValues(alpha: 0.12)
-        : const Color(0xFFC6C6C8);
-    final track = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : const Color(0xFFE5E5EA);
-    final barIdle = isDark
-        ? Colors.white.withValues(alpha: 0.28)
-        : const Color(0xFFAEAEB2);
+    final divider =
+        isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFC6C6C8);
+    final track =
+        isDark ? Colors.white.withValues(alpha: 0.10) : const Color(0xFFE5E5EA);
+    final barIdle =
+        isDark ? Colors.white.withValues(alpha: 0.28) : const Color(0xFFAEAEB2);
     final todayIndex = _weekValues.length - 1;
 
     return DecoratedBox(
@@ -1737,7 +1843,7 @@ class _TodayHomeworkDetailCard extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
+                          const Text(
                             '오늘',
                             style: TextStyle(
                               fontSize: 13,
@@ -1748,7 +1854,7 @@ class _TodayHomeworkDetailCard extends StatelessWidget {
                           const SizedBox(height: 2),
                           Text(
                             '$todayPercent%',
-                            style: TextStyle(
+                            style: const TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.w400,
                               letterSpacing: -0.6,
@@ -1922,9 +2028,7 @@ class _ChartLegendDot extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: border == null
-            ? null
-            : Border.all(color: border!, width: 0.8),
+        border: border == null ? null : Border.all(color: border!, width: 0.8),
       ),
     );
   }
@@ -2101,11 +2205,14 @@ class _HomeworkDetailListTile extends StatelessWidget {
   final Color subText;
 
   static const _fontSize = 20.0;
+
   /// 아래 과제 리스트 표지와 같은 양식(72 → +20%).
   static const double _coverSize = 86.4;
   static const double _coverRadius = 12.6;
+
   /// 표지↔텍스트 간격 (14 → +30%).
   static const double _coverToTextGap = 18.2;
+
   /// 텍스트 줄 간격 (4 → +30%).
   static const double _lineGap = 5.2;
 
@@ -2241,17 +2348,39 @@ class _GroupCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.4,
-                        color: dlg.text,
-                        height: 1.2,
-                      ),
+                    Row(
+                      children: [
+                        if (group.inspectionLabel.isNotEmpty) ...[
+                          _AssignmentOriginBadge(
+                            label: group.inspectionLabel,
+                            carryover: group.absenceCarryover,
+                          ),
+                          const SizedBox(width: 7),
+                        ],
+                        if (group.isHomework &&
+                            group.assignmentOriginLabel.isNotEmpty) ...[
+                          _AssignmentOriginBadge(
+                            label: group.assignmentOriginLabel,
+                            carryover: group.assignmentOrigin ==
+                                HomeworkAssignmentOrigin.classCarryover,
+                          ),
+                          const SizedBox(width: 7),
+                        ],
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.4,
+                              color: dlg.text,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 10.6),
                     Text(
@@ -2294,6 +2423,40 @@ class _GroupCard extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AssignmentOriginBadge extends StatelessWidget {
+  const _AssignmentOriginBadge({
+    required this.label,
+    required this.carryover,
+  });
+
+  final String label;
+  final bool carryover;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        carryover ? const Color(0xFF5E5CE6) : YggGlassTokens.confirmActionColor;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            height: 1,
           ),
         ),
       ),
@@ -2430,8 +2593,10 @@ class _HomeworkCoverThumb extends StatelessWidget {
                             fontWeight: FontWeight.w800,
                             height: 1.05,
                             letterSpacing: -0.35,
-                            fontFamily:
-                                Theme.of(context).textTheme.titleLarge?.fontFamily,
+                            fontFamily: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.fontFamily,
                           ),
                         ),
                       if (book.isNotEmpty && course.isNotEmpty)
@@ -2447,8 +2612,10 @@ class _HomeworkCoverThumb extends StatelessWidget {
                             fontWeight: FontWeight.w500,
                             height: 1.05,
                             letterSpacing: -0.35,
-                            fontFamily:
-                                Theme.of(context).textTheme.bodyMedium?.fontFamily,
+                            fontFamily: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.fontFamily,
                           ),
                         ),
                     ],

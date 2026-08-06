@@ -162,3 +162,34 @@ String mergeHomeworkItemPageRanges(
   }
   return compressHomeworkPageNumbers(pages);
 }
+
+/// 과제 문항수.
+///
+/// `homework_items.count`가 비어 있어도 `unitMappings.pageCounts` /
+/// `problemCrops`로부터 복원한다. (개념원리·프리셋 과제 등)
+int homeworkItemProblemCount({
+  int? count,
+  List<Map<String, dynamic>>? unitMappings,
+}) {
+  if (count != null && count > 0) return count;
+  if (unitMappings == null || unitMappings.isEmpty) return 0;
+
+  var fromPageCounts = 0;
+  var fromCrops = 0;
+  for (final raw in unitMappings) {
+    final mapping = Map<String, dynamic>.from(raw);
+    final pageCounts = mapping['pageCounts'] ?? mapping['page_counts'];
+    if (pageCounts is Map) {
+      for (final value in pageCounts.values) {
+        final n = _positiveIntFromDynamic(value) ?? 0;
+        fromPageCounts += n;
+      }
+    }
+    final crops = mapping['problemCrops'] ?? mapping['problem_crops'];
+    if (crops is List) {
+      fromCrops += crops.length;
+    }
+  }
+  if (fromPageCounts > 0) return fromPageCounts;
+  return fromCrops;
+}

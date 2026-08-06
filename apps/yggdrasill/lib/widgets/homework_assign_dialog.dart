@@ -14,6 +14,7 @@ import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/homework_store.dart';
+import '../services/next_class_start_resolver.dart';
 import '../services/print_routing_service.dart';
 import '../services/resource_service.dart';
 import '../services/student_behavior_assignment_store.dart';
@@ -30,6 +31,7 @@ class HomeworkAssignSelection {
   final List<String> selectedBehaviorIds;
   final Map<String, int> irregularBehaviorCounts;
   final Map<String, DateTime> dueDateByItemId;
+  final List<String> planHomeworkItemIds;
   const HomeworkAssignSelection({
     required this.itemIds,
     required this.dueDate,
@@ -38,6 +40,7 @@ class HomeworkAssignSelection {
     this.selectedBehaviorIds = const <String>[],
     this.irregularBehaviorCounts = const <String, int>{},
     this.dueDateByItemId = const <String, DateTime>{},
+    this.planHomeworkItemIds = const <String>[],
   });
 }
 
@@ -50,17 +53,21 @@ class _SessionOption {
 class _TodoListEntry {
   final String primary;
   final String? secondary;
+  final String? tertiary;
   final String? bookTitle;
   final String? itemTitle;
   final String? rightPrimary;
   final String? rightSecondary;
+  final String? rightTertiary;
   const _TodoListEntry({
     required this.primary,
     this.secondary,
+    this.tertiary,
     this.bookTitle,
     this.itemTitle,
     this.rightPrimary,
     this.rightSecondary,
+    this.rightTertiary,
   });
 }
 
@@ -75,6 +82,8 @@ class _CheckRateEntry {
   final DateTime? assignedAt;
   final DateTime? dueDate;
   final DateTime? checkedAt;
+  final String? outcome;
+  final String? reason;
 
   /// 학생이 자의로 미리 해온 과제(추가검사 마커)인지 여부.
   /// 검사율 합계에서 분자(오늘 추가분)에는 포함하되 분모(남은%)에서는 제외한다.
@@ -90,6 +99,8 @@ class _CheckRateEntry {
     required this.assignedAt,
     this.dueDate,
     this.checkedAt,
+    this.outcome,
+    this.reason,
     this.isExtra = false,
   });
 }
@@ -206,6 +217,8 @@ Future<HomeworkAssignSelection?> buildDefaultHomeworkAssignSelection(
   String studentId, {
   DateTime? anchorTime,
   Set<String>? initialSelectedGroupIds,
+  Set<String>? initialSelectedItemIds,
+  Set<String> excludedItemIds = const <String>{},
   Map<String, DateTime> initialDueDateByGroupId = const <String, DateTime>{},
 }) async {
   final allItems = HomeworkStore.instance.items(studentId);
@@ -227,12 +240,15 @@ Future<HomeworkAssignSelection?> buildDefaultHomeworkAssignSelection(
         .itemsInGroup(studentId, group.id, includeCompleted: true)
         .where((e) => e.status != HomeworkStatus.completed)
         .where((e) => !hiddenAssignedItemIds.contains(e.id))
+        .where((e) => !excludedItemIds.contains(e.id))
         .toList();
     for (final c in children) {
       allGroupChildIds.add(c.id);
       groupIdByChildId[c.id] = group.id;
-      if (initialSelectedGroupIds == null ||
-          initialSelectedGroupIds.contains(group.id)) {
+      if (initialSelectedItemIds != null
+          ? initialSelectedItemIds.contains(c.id)
+          : (initialSelectedGroupIds == null ||
+              initialSelectedGroupIds.contains(group.id))) {
         selectedGroupChildIds.add(c.id);
       }
     }
@@ -303,7 +319,10 @@ Future<HomeworkAssignSelection?> buildDefaultHomeworkAssignSelection(
   }
 
   optionTimes.sort((a, b) => a.compareTo(b));
-  final DateTime? dueDate = optionTimes.isNotEmpty ? optionTimes.first : null;
+  final DateTime? dueDate = NextClassStartResolver.next(
+    studentId,
+    after: anchor,
+  );
 
   final selectedBehaviorIds = behaviorAssignments
       .where((b) => !b.isIrregular)
@@ -324,6 +343,11 @@ Future<HomeworkAssignSelection?> buildDefaultHomeworkAssignSelection(
               (initialDueDateByGroupId[groupIdByChildId[itemId]] ?? dueDate)!,
     },
     selectableItemIds: List<String>.from(allGroupChildIds),
+    planHomeworkItemIds: initialSelectedItemIds == null
+        ? const <String>[]
+        : selectedGroupChildIds
+            .where(initialSelectedItemIds.contains)
+            .toList(growable: false),
     printTodoOnConfirm: true,
     selectedBehaviorIds: selectedBehaviorIds,
     irregularBehaviorCounts: irregularBehaviorCounts,
@@ -335,6 +359,9 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   String studentId, {
   DateTime? anchorTime,
   Set<String>? initialSelectedGroupIds,
+  Set<String>? initialSelectedItemIds,
+  Set<String> excludedItemIds = const <String>{},
+  Set<String> additionalHomeworkIds = const <String>{},
   Map<String, DateTime> initialDueDateByGroupId = const <String, DateTime>{},
 }) async {
   final allItems = HomeworkStore.instance.items(studentId);
@@ -354,6 +381,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
         .itemsInGroup(studentId, group.id, includeCompleted: true)
         .where((e) => e.status != HomeworkStatus.completed)
         .where((e) => !hiddenAssignedItemIds.contains(e.id))
+        .where((e) => !excludedItemIds.contains(e.id))
         .toList();
     if (children.isEmpty) continue;
     groupEntries.add((group: group, children: children));
@@ -446,6 +474,17 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
     addOption(dt, order: order ?? (i + 1));
   }
 
+  options
+    ..clear()
+    ..addAll(
+      NextClassStartResolver.upcoming(
+        studentId,
+        after: anchor,
+      ).map((dateTime) => _SessionOption(
+            dateTime,
+            formatSessionLabel(dateTime),
+          )),
+    );
   options.sort((a, b) => a.dateTime.compareTo(b.dateTime));
   final nextSessions = options.length > 12 ? options.sublist(0, 12) : options;
   DateTime? selectedDueDate =
@@ -453,14 +492,20 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   bool dueDateChanged = false;
   final Map<String, bool> selectedGroups = {
     for (final entry in groupEntries)
-      entry.group.id: initialSelectedGroupIds == null ||
-          initialSelectedGroupIds.contains(entry.group.id),
+      entry.group.id: initialSelectedItemIds != null
+          ? entry.children.every(
+              (child) => initialSelectedItemIds.contains(child.id),
+            )
+          : initialSelectedGroupIds == null ||
+              initialSelectedGroupIds.contains(entry.group.id),
   };
   final Map<String, bool> selected = {
     for (final entry in groupEntries)
       for (final c in entry.children)
-        c.id: initialSelectedGroupIds == null ||
-            initialSelectedGroupIds.contains(entry.group.id),
+        c.id: initialSelectedItemIds != null
+            ? initialSelectedItemIds.contains(c.id)
+            : initialSelectedGroupIds == null ||
+                initialSelectedGroupIds.contains(entry.group.id),
   };
   final Map<String, bool> selectedBehaviors = {
     for (final b in behaviorAssignments) b.id: !b.isIrregular,
@@ -946,6 +991,10 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                           arrivalTime: arrival,
                                           departureTime: DateTime.now(),
                                           selectedHomeworkIds: ids,
+                                          additionalHomeworkIds:
+                                              additionalHomeworkIds.toList(
+                                            growable: false,
+                                          ),
                                           selectedBehaviorIds:
                                               selectedBehaviorIds,
                                           irregularBehaviorCounts:
@@ -1031,6 +1080,11 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                     selectedDueDate!)),
                     },
                     selectableItemIds: allGroupChildIds.toList(),
+                    planHomeworkItemIds: initialSelectedItemIds == null
+                        ? const <String>[]
+                        : ids
+                            .where(initialSelectedItemIds.contains)
+                            .toList(growable: false),
                     printTodoOnConfirm: printTodoOnConfirm,
                     selectedBehaviorIds: selectedBehaviorIds,
                     irregularBehaviorCounts: irregularCounts,
@@ -1054,6 +1108,7 @@ Future<void> printHomeworkTodoSheet({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  List<String>? additionalHomeworkIds,
   List<String>? selectedBehaviorIds,
   Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
@@ -1068,6 +1123,7 @@ Future<void> printHomeworkTodoSheet({
     arrivalTime: arrivalTime,
     departureTime: departureTime,
     selectedHomeworkIds: selectedHomeworkIds,
+    additionalHomeworkIds: additionalHomeworkIds,
     selectedBehaviorIds: selectedBehaviorIds,
     irregularBehaviorCounts: irregularBehaviorCounts,
     dueDate: dueDate,
@@ -1087,6 +1143,7 @@ Future<void> previewHomeworkTodoSheet({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  List<String>? additionalHomeworkIds,
   List<String>? selectedBehaviorIds,
   Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
@@ -1101,6 +1158,7 @@ Future<void> previewHomeworkTodoSheet({
     arrivalTime: arrivalTime,
     departureTime: departureTime,
     selectedHomeworkIds: selectedHomeworkIds,
+    additionalHomeworkIds: additionalHomeworkIds,
     selectedBehaviorIds: selectedBehaviorIds,
     irregularBehaviorCounts: irregularBehaviorCounts,
     dueDate: dueDate,
@@ -1619,6 +1677,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  List<String>? additionalHomeworkIds,
   List<String>? selectedBehaviorIds,
   Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
@@ -1663,6 +1722,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     DateTime? earliestAssigned;
     DateTime? groupDueDate;
     DateTime? groupCheckedAt;
+    String? groupOutcome;
+    String? groupReason;
     String? firstBookAndCourse;
     for (final hw in children) {
       coveredDueItemIds.add(hw.id);
@@ -1722,8 +1783,10 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       // 검사일: 오늘 검사 중 가장 늦은 시각.
       for (final c in checks) {
         if (_isSameDay(c.checkedAt, classDateTime)) {
-          if (groupCheckedAt == null || c.checkedAt.isAfter(groupCheckedAt!)) {
+          if (groupCheckedAt == null || c.checkedAt.isAfter(groupCheckedAt)) {
             groupCheckedAt = c.checkedAt;
+            groupOutcome = c.outcome;
+            groupReason = c.reason;
           }
         }
       }
@@ -1755,6 +1818,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         assignedAt: earliestAssigned,
         dueDate: groupDueDate,
         checkedAt: groupCheckedAt,
+        outcome: groupOutcome,
+        reason: groupReason,
         isExtra: !groupHasRegularDue,
       ),
     );
@@ -1792,10 +1857,14 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         ? math.max(window.current, latestDueProgress)
         : previousProgress;
     DateTime? checkedAt;
+    String? checkOutcome;
+    String? checkReason;
     for (final c in checks) {
       if (_isSameDay(c.checkedAt, classDateTime)) {
         if (checkedAt == null || c.checkedAt.isAfter(checkedAt)) {
           checkedAt = c.checkedAt;
+          checkOutcome = c.outcome;
+          checkReason = c.reason;
         }
       }
     }
@@ -1814,6 +1883,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         assignedAt: repAssign?.assignedAt,
         dueDate: repAssign?.dueDate,
         checkedAt: checkedAt,
+        outcome: checkOutcome,
+        reason: checkReason,
         isExtra: isExtraEntry,
       ),
     );
@@ -2150,30 +2221,113 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     }
   }
 
-  final todoEntries = <_TodoListEntry>[];
+  // 계획에서 '오늘'로 둔 과제는 하원 선택 목록에서 제외되고 하원 확정 RPC가
+  // 자동으로 숙제로 넘긴다. 그 항목도 오늘 내준 숙제이므로 알림장에 함께 찍는다.
+  final printableHomeworkIds = <String>[];
+  final printedHomeworkIds = <String>{};
+  void addPrintableHomeworkId(String rawId) {
+    final id = rawId.trim();
+    if (id.isEmpty || !printedHomeworkIds.add(id)) return;
+    final hw = HomeworkStore.instance.getById(studentId, id);
+    if (hw == null || hw.status == HomeworkStatus.completed) return;
+    printableHomeworkIds.add(id);
+  }
+
   for (final id in selectedHomeworkIds) {
+    addPrintableHomeworkId(id);
+  }
+  for (final id in additionalHomeworkIds ?? const <String>[]) {
+    addPrintableHomeworkId(id);
+  }
+  for (final entry in assignmentsByItem.entries) {
+    if (printedHomeworkIds.contains(entry.key)) continue;
+    final assignedToday = entry.value.any((assignment) {
+      final isActive = assignment.status == 'assigned' ||
+          assignment.status == 'in_progress';
+      if (!isActive) return false;
+      // 기존 assignment를 재사용한 자동숙제(assigned_at이 과거)도 포함.
+      if (assignment.note == '__session_plan_departure__') return true;
+      return _isSameDay(assignment.assignedAt, departureTime) ||
+          _isSameDay(assignment.assignedAt, classDateTime);
+    });
+    final deferredToday =
+        (checksByItem[entry.key] ?? const <HomeworkAssignmentCheck>[]).any(
+      (check) =>
+          (_isSameDay(check.checkedAt, departureTime) ||
+              _isSameDay(check.checkedAt, classDateTime)) &&
+          (check.outcome == 'not_done' || check.outcome == 'left_behind'),
+    );
+    if (!assignedToday && !deferredToday) continue;
+    addPrintableHomeworkId(entry.key);
+  }
+
+  // 숙제 리스트는 하위과제(아이템)가 아니라 그룹 과제 단위로 표시한다.
+  final todoEntries = <_TodoListEntry>[];
+  final todoGroupOrder = <String>[];
+  final todoGroupChildren = <String, List<HomeworkItem>>{};
+  for (final id in printableHomeworkIds) {
     final hw = HomeworkStore.instance.getById(studentId, id);
     if (hw == null) continue;
-    final title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-    final pageRaw = (hw.page ?? '').trim();
-    final bookAndCourse = _formatBookAndCourseFromHomework(hw);
-    final countText =
-        (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
-    final assignedAt = latestAssignmentByItem[id]?.assignedAt ?? classDateTime;
+    final groupId = (HomeworkStore.instance.groupIdOfItem(id) ?? '').trim();
+    final key = groupId.isNotEmpty ? groupId : id;
+    if (!todoGroupChildren.containsKey(key)) {
+      todoGroupOrder.add(key);
+      todoGroupChildren[key] = <HomeworkItem>[];
+    }
+    todoGroupChildren[key]!.add(hw);
+  }
+  for (final key in todoGroupOrder) {
+    final children = todoGroupChildren[key] ?? const <HomeworkItem>[];
+    if (children.isEmpty) continue;
+    final group = HomeworkStore.instance.groupById(studentId, key);
+    final groupTitle = (() {
+      final fromGroup = (group?.title ?? '').trim();
+      if (fromGroup.isNotEmpty) return fromGroup;
+      final fromItem = children.first.title.trim();
+      return fromItem.isEmpty ? '(제목 없음)' : fromItem;
+    })();
+    String? bookAndCourse;
+    int totalCount = 0;
+    final memos = <String>[];
+    DateTime? earliestAssigned;
+    for (final hw in children) {
+      bookAndCourse ??= _formatBookAndCourseFromHomework(hw);
+      totalCount += homeworkItemProblemCount(
+        count: hw.count,
+        unitMappings: hw.unitMappings,
+      );
+      final memo = (hw.memo ?? '').trim();
+      if (memo.isNotEmpty && !memos.contains(memo)) memos.add(memo);
+      final assignedAt = latestAssignmentByItem[hw.id]?.assignedAt;
+      if (assignedAt != null &&
+          (earliestAssigned == null || assignedAt.isBefore(earliestAssigned))) {
+        earliestAssigned = assignedAt;
+      }
+    }
+    final mergedPages = mergeHomeworkItemPageRanges(
+      children.map(
+        (hw) => (page: hw.page, unitMappings: hw.unitMappings),
+      ),
+    );
+    final bookText = (bookAndCourse ?? '').trim().isEmpty
+        ? '교재 미기재'
+        : bookAndCourse!.trim();
+    final assignedAt = earliestAssigned ?? classDateTime;
     final assignedDateText = _formatMonthDay(assignedAt);
-    final memoText = (hw.memo ?? '').trim();
+    final countText = totalCount > 0 ? totalCount.toString() : '-';
     final details = [
-      _formatPageTextCompact(pageRaw),
+      _formatPageTextCompact(mergedPages.isEmpty ? '-' : mergedPages),
       _formatCountText(countText),
     ].join(' · ');
+    final memoText = memos.join(', ');
     todoEntries.add(
       _TodoListEntry(
-        primary: '□ $bookAndCourse · $title',
-        secondary: details,
-        bookTitle: bookAndCourse,
-        itemTitle: title,
+        primary: '□ $bookText',
+        secondary: groupTitle,
+        tertiary: details,
+        bookTitle: bookText,
         rightPrimary: assignedDateText.isEmpty ? null : assignedDateText,
-        rightSecondary: memoText.isEmpty ? null : memoText,
+        rightTertiary: memoText.isEmpty ? null : memoText,
       ),
     );
   }
@@ -2844,10 +2998,16 @@ Future<String> _buildHomeworkTodoPdf({
         final previousPct = cr.previousProgress ?? 0;
         // 2번째 줄: 페이지(좌) | 문항수 · +퍼센트(우)
         final line2Left = _formatPageText(cr.page);
-        final line2Right = [
-          if (_formatCountText(cr.count) != '-') _formatCountText(cr.count),
-          '+$todayPct%',
-        ].join(' · ');
+        final missedLabel = switch (cr.outcome) {
+          'left_behind' => '숙제 안 함 (두고 옴) · 0%',
+          'not_done' => '숙제 안 함 · 0%',
+          _ => null,
+        };
+        final line2Right = missedLabel ??
+            [
+              if (_formatCountText(cr.count) != '-') _formatCountText(cr.count),
+              '+$todayPct%',
+            ].join(' · ');
         // 3번째 줄: 내준 날짜 · 마감 날짜(좌) | 검사일(우)
         final line3Left = [
           '내준 ${cr.assignedAt != null ? _formatMonthDay(cr.assignedAt!) : '-'}',
@@ -2919,80 +3079,91 @@ Future<String> _buildHomeworkTodoPdf({
   graphics.drawLine(weakLinePen, Offset(rightColX - (colGap / 2), todoTop),
       Offset(rightColX - (colGap / 2), contentBottom));
 
+  // 숙제 검사 내역과 동일한 줄간격: 1줄=0, 2줄=+14, 3줄=+27, 항목 높이≈40(+여백).
+  // 체크박스(□)만 왼쪽, 1·2·3줄 본문 시작 X는 동일 세로선으로 맞춘다.
   double leftY = todoTop + 24;
+  const todoLine1H = 14.0;
+  const todoLine2Y = 14.0;
+  const todoLine3Y = 27.0;
+  const todoItemBodyH = 40.0;
+  const todoItemGap = 8.0;
   for (final entry in payload.todoEntries) {
     final prim = entry.primary;
     final bx = leftColX + 2;
     final bw = colWidth - 4;
+    final hasCheckbox = prim.startsWith('□');
+    final prefix = hasCheckbox ? '□ ' : '';
+    final prefixW =
+        prefix.isEmpty ? 0.0 : bodyFont.measureString(prefix).width;
+    const checkboxGap = 4.0;
+    final textX = bx + (prefixW > 0 ? prefixW + checkboxGap : 0.0);
+    final textW = math.max(0.0, bw - (textX - bx));
     final rightPrimary = (entry.rightPrimary ?? '').trim();
     final rightPrimaryW =
-        rightPrimary.isEmpty ? 0.0 : math.min(62.0, bw * 0.28);
-    final line1LeftW =
-        rightPrimaryW > 0 ? math.max(0.0, bw - rightPrimaryW - 6) : bw;
+        rightPrimary.isEmpty ? 0.0 : math.min(62.0, textW * 0.28);
+    final line1TextW =
+        rightPrimaryW > 0 ? math.max(0.0, textW - rightPrimaryW - 6) : textW;
     final bookTitle = (entry.bookTitle ?? '').trim();
-    final itemTitle = (entry.itemTitle ?? '').trim();
+    final itemTop = leftY;
+
+    // 1줄: □ (bx) + 교재/과정 (textX) · 내준날짜 (우)
+    if (hasCheckbox) {
+      graphics.drawString(prefix, bodyFont,
+          brush: textBrush,
+          bounds: Rect.fromLTWH(bx, itemTop, math.min(prefixW + 2, bw), todoLine1H));
+    }
     if (bookTitle.isNotEmpty) {
-      final prefix = prim.startsWith('□') ? '□ ' : '';
-      final prefixW =
-          prefix.isEmpty ? 0.0 : bodyFont.measureString(prefix).width;
-      if (prefix.isNotEmpty) {
-        graphics.drawString(prefix, bodyFont,
-            brush: textBrush,
-            bounds: Rect.fromLTWH(
-                bx, leftY, math.min(prefixW + 2, line1LeftW), 14));
-      }
-      const checkboxGap = 4.0;
-      final gap = prefixW > 0 ? checkboxGap : 0.0;
-      final leftStart = bx + prefixW + gap;
-      final leftAvail = math.max(0.0, line1LeftW - prefixW - gap);
-      final bookW =
-          math.min(bodyBoldFont.measureString(bookTitle).width, leftAvail);
       graphics.drawString(bookTitle, bodyBoldFont,
           brush: textBrush,
-          bounds: Rect.fromLTWH(leftStart, leftY, leftAvail, 14));
-      if (itemTitle.isNotEmpty) {
-        final itemText = ' · $itemTitle';
-        final remainW = math.max(0.0, leftAvail - bookW);
-        if (remainW > 4) {
-          graphics.drawString(itemText, bodyFont,
-              brush: textBrush,
-              bounds: Rect.fromLTWH(leftStart + bookW, leftY, remainW, 14));
-        }
-      }
+          bounds: Rect.fromLTWH(textX, itemTop, line1TextW, todoLine1H));
     } else {
-      graphics.drawString(prim, bodyFont,
-          brush: textBrush, bounds: Rect.fromLTWH(bx, leftY, line1LeftW, 14));
+      final fallback =
+          hasCheckbox ? prim.replaceFirst(RegExp(r'^□\s*'), '') : prim;
+      graphics.drawString(fallback, bodyFont,
+          brush: textBrush,
+          bounds: Rect.fromLTWH(textX, itemTop, line1TextW, todoLine1H));
     }
     if (rightPrimaryW > 0) {
       graphics.drawString(rightPrimary, subFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(bx + line1LeftW + 6, leftY, rightPrimaryW, 14),
+          bounds: Rect.fromLTWH(
+              textX + line1TextW + 6, itemTop, rightPrimaryW, todoLine1H),
           format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
     }
-    leftY += 14;
-    if (entry.secondary != null && entry.secondary!.trim().isNotEmpty) {
-      final rightSecondary = (entry.rightSecondary ?? '').trim();
-      const line2Indent = 10.0;
-      final line2BaseX = leftColX + 2 + line2Indent;
-      final line2TotalW = math.max(0.0, bw - line2Indent);
-      final rightSecondaryW =
-          rightSecondary.isEmpty ? 0.0 : math.min(112.0, line2TotalW * 0.46);
-      final line2LeftW = rightSecondaryW > 0
-          ? math.max(0.0, line2TotalW - rightSecondaryW - 6)
-          : line2TotalW;
-      graphics.drawString(entry.secondary!, subFont,
+
+    // 2줄: 그룹 과제 제목 (검사내역과 동일 +14)
+    final secondary = (entry.secondary ?? '').trim();
+    if (secondary.isNotEmpty) {
+      graphics.drawString(secondary, subFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(line2BaseX, leftY, line2LeftW, 13));
-      if (rightSecondaryW > 0) {
-        graphics.drawString(rightSecondary, subFont,
+          bounds: Rect.fromLTWH(textX, itemTop + todoLine2Y, textW, 13));
+    }
+
+    // 3줄: 페이지 · 문항수 (좌) + 메모 (우) (검사내역과 동일 +27)
+    final tertiary = (entry.tertiary ?? '').trim();
+    final rightTertiary = (entry.rightTertiary ?? '').trim();
+    if (tertiary.isNotEmpty || rightTertiary.isNotEmpty) {
+      final rightTertiaryW =
+          rightTertiary.isEmpty ? 0.0 : math.min(112.0, textW * 0.46);
+      final line3LeftW = rightTertiaryW > 0
+          ? math.max(0.0, textW - rightTertiaryW - 6)
+          : textW;
+      if (tertiary.isNotEmpty) {
+        graphics.drawString(tertiary, subFont,
             brush: subBrush,
-            bounds: Rect.fromLTWH(
-                line2BaseX + line2LeftW + 6, leftY, rightSecondaryW, 13),
+            bounds:
+                Rect.fromLTWH(textX, itemTop + todoLine3Y, line3LeftW, 13));
+      }
+      if (rightTertiaryW > 0) {
+        graphics.drawString(rightTertiary, subFont,
+            brush: subBrush,
+            bounds: Rect.fromLTWH(textX + line3LeftW + 6,
+                itemTop + todoLine3Y, rightTertiaryW, 13),
             format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
       }
-      leftY += 13;
     }
-    leftY += 8;
+
+    leftY = itemTop + todoItemBodyH + todoItemGap;
     if (leftY > contentBottom - 8) break;
   }
 

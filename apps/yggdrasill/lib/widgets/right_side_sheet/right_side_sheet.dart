@@ -2872,6 +2872,7 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final Future<void> Function() onOpenSolution;
   final VoidCallback onReportIssue;
   final VoidCallback onToggleState;
+  final VoidCallback onMarkBlank;
   final VoidCallback onShowSourceInfo;
   final Widget answerChild;
 
@@ -2898,6 +2899,7 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     required this.onOpenSolution,
     required this.onReportIssue,
     required this.onToggleState,
+    required this.onMarkBlank,
     required this.onShowSourceInfo,
     required this.answerChild,
     this.setPartCount = 0,
@@ -2928,7 +2930,6 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
 
   bool get _isOpen => _ctrl.value > 0.01;
 
-  void _open() => _ctrl.animateTo(1, curve: Curves.easeOutCubic);
   void _close() => _ctrl.animateTo(0, curve: Curves.easeOutCubic);
 
   void _handleHorizontalDragUpdate(DragUpdateDetails details) {
@@ -2938,19 +2939,13 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
 
   void _handleHorizontalDragEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0.0;
-    if (velocity > 250) {
-      _open();
+    final flungRight = velocity > 250;
+    final flungLeft = velocity < -250;
+    if (flungRight || (!flungLeft && _ctrl.value >= 0.45)) {
+      _markBlank();
       return;
     }
-    if (velocity < -250) {
-      _close();
-      return;
-    }
-    if (_ctrl.value >= 0.45) {
-      _open();
-    } else {
-      _close();
-    }
+    _close();
   }
 
   void _runFrontAction(VoidCallback action) {
@@ -2961,9 +2956,9 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
     action();
   }
 
-  void _showInfo() {
+  void _markBlank() {
     _close();
-    widget.onShowSourceInfo();
+    widget.onMarkBlank();
   }
 
   Future<void> _openSolution() async {
@@ -2982,7 +2977,6 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(_cardRadius);
     final questionLabel = widget.questionLabel;
-    final infoColor = widget.hasSourceInfo ? _rsAccent : _rsTextSub;
     final correctionBadgeLabel = widget.correctionAttemptNumber > 0
         ? '수정 ${widget.correctionAttemptNumber}'
         : '수정';
@@ -2997,6 +2991,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
           onTap: widget.solutionOpenBlocked
               ? null
               : () => unawaited(_openSolution()),
+          onDoubleTap: widget.hasSourceInfo ? widget.onShowSourceInfo : null,
           onLongPress: widget.solutionOpenBlocked ? null : widget.onReportIssue,
           child: SizedBox(
             width: _questionColumnWidth,
@@ -3086,11 +3081,23 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                   child: SizedBox(
                     height: widget.answerSlotHeight,
                     child: Opacity(
-                      opacity: widget.state == 'unsolved' ? 0.42 : 1.0,
+                      opacity: widget.state == 'not_performed' ? 0.42 : 1.0,
                       child: widget.answerChild,
                     ),
                   ),
                 ),
+                if (widget.state == 'blank') ...[
+                  const SizedBox(width: 10),
+                  const Text(
+                    '빈칸',
+                    style: TextStyle(
+                      color: Color(0xFFE54848),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      height: 1.0,
+                    ),
+                  ),
+                ],
                 if (widget.setPartCount > 0) ...[
                   const SizedBox(width: 8),
                   Icon(
@@ -3137,7 +3144,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
       color: Colors.transparent,
       child: Tooltip(
         message: widget.correctedRetry
-            ? '$questionLabel번 · 첫 시도 ${widget.baselineState == 'unsolved' ? '미풀이' : '오답'} → 수정됨'
+            ? '$questionLabel번 · 첫 시도 ${widget.baselineState == 'not_performed' ? '미수행' : widget.baselineState == 'blank' ? '빈칸' : '오답'} → 수정됨'
             : widget.editLocked
                 ? '$questionLabel번 · 저장된 채점 결과'
                 : '$questionLabel번',
@@ -3164,17 +3171,18 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           child: Material(
-                            color: infoColor.withValues(alpha: 0.18),
+                            color:
+                                const Color(0xFFE54848).withValues(alpha: 0.18),
                             borderRadius: BorderRadius.circular(11),
-                            child: InkWell(
-                              onTap: _showInfo,
-                              borderRadius: BorderRadius.circular(11),
-                              splashFactory: NoSplash.splashFactory,
-                              child: SizedBox.expand(
-                                child: Icon(
-                                  Icons.info_outline_rounded,
-                                  size: 21,
-                                  color: infoColor,
+                            child: const SizedBox.expand(
+                              child: Center(
+                                child: Text(
+                                  '미풀이',
+                                  style: TextStyle(
+                                    color: Color(0xFFE54848),
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w900,
+                                  ),
                                 ),
                               ),
                             ),
@@ -3425,7 +3433,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   String _normalizeState(String? raw) {
     final value = (raw ?? '').trim().toLowerCase();
     if (value == 'wrong') return 'wrong';
-    if (value == 'unsolved') return 'unsolved';
+    if (value == 'blank' || value == 'unsolved') return 'blank';
+    if (value == 'not_performed') return 'not_performed';
     return 'correct';
   }
 
@@ -3459,7 +3468,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final baselineStates = <String, String>{};
     session.baselineStates.forEach((key, value) {
       final normalized = _normalizeState(value);
-      if (normalized == 'wrong' || normalized == 'unsolved') {
+      if (normalized == 'wrong' ||
+          normalized == 'blank' ||
+          normalized == 'not_performed') {
         baselineStates[key] = normalized;
       }
     });
@@ -4106,8 +4117,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       case 'correct':
         return 'wrong';
       case 'wrong':
-        return 'unsolved';
-      case 'unsolved':
+        return 'not_performed';
+      case 'not_performed':
+      case 'blank':
         return 'correct';
       default:
         return 'correct';
@@ -4122,29 +4134,29 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   bool _isBaselineRetryKey(String key) {
     final state = _baselineStates[key];
-    return state == 'wrong' || state == 'unsolved';
+    return state == 'wrong' || state == 'blank' || state == 'not_performed';
   }
 
   /// '틀린것만 보기'를 쓸 수 있는지. 재채점(베이스라인) 세션이 아니어도
-  /// 현재 채점 상태에 오답/미풀이가 있으면 켤 수 있다 (교재출처 채점 포함).
+  /// 현재 채점 상태에 오답/미풀이/미수행이 있으면 켤 수 있다.
   bool get _wrongOnlyAvailable {
     if (_baselineStates.isNotEmpty) return true;
     return _gradingStates.values.any((raw) {
       final state = _normalizeState(raw);
-      return state == 'wrong' || state == 'unsolved';
+      return state == 'wrong' || state == 'blank' || state == 'not_performed';
     });
   }
 
   /// '틀린것만 보기'가 켜졌을 때 이 셀을 숨겨야 하는지.
   /// - 베이스라인(첫 채점 결과)이 있으면 기존 규칙: 첫 채점에서 틀렸거나
-  ///   미풀이였던 문항만 남기고, 이미 수정 완료된 문항은 숨긴다.
-  /// - 없으면(교재출처 등) 현재 상태가 오답/미풀이인 문항만 남긴다.
+  ///   미풀이/미수행이었던 문항만 남기고, 이미 수정 완료된 문항은 숨긴다.
+  /// - 없으면 현재 상태가 오답/미풀이/미수행인 문항만 남긴다.
   bool _hideCellForWrongOnly(String key) {
     if (_baselineStates.isNotEmpty) {
       return !_isBaselineRetryKey(key) || _isCorrectedRetryKey(key);
     }
     final state = _normalizeState(_gradingStates[key]);
-    return state != 'wrong' && state != 'unsolved';
+    return state != 'wrong' && state != 'blank' && state != 'not_performed';
   }
 
   bool _isCorrectedRetryKey(String key) {
@@ -4192,6 +4204,25 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _emitStateChanged();
   }
 
+  Future<void> _markCellBlank(
+    String key, {
+    List<String> partLabels = const <String>[],
+  }) async {
+    if (_answerListReadOnly) return;
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
+    }
+    setState(() {
+      _gradingStates[key] = 'blank';
+      _applyStateToParts(key, partLabels);
+      if (_isBaselineRetryKey(key)) {
+        _correctionStates.remove(key);
+      }
+    });
+    _emitStateChanged();
+  }
+
   // ------------------------------------------------------- 세트형 파트 채점
 
   /// 파트 상태 키 — 셀 키 뒤에 '#(1)'을 붙인다. 저장 시 part_states로 분리.
@@ -4217,20 +4248,24 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   /// 파트 상태에서 셀 상태를 유도한다 —
-  /// 하나라도 오답이면 오답, 오답 없이 미풀이가 있으면 미풀이, 아니면 정답.
+  /// 오답 > 미풀이 > 미수행 > 정답 순으로 셀 대표 상태를 유도한다.
   void _syncSetCellStateFromParts(String cellKey, List<String> partLabels) {
     var anyWrong = false;
-    var anyUnsolved = false;
+    var anyBlank = false;
+    var anyNotPerformed = false;
     for (final label in partLabels) {
       final state = _partState(cellKey, label);
       if (state == 'wrong') anyWrong = true;
-      if (state == 'unsolved') anyUnsolved = true;
+      if (state == 'blank') anyBlank = true;
+      if (state == 'not_performed') anyNotPerformed = true;
     }
     final derived = anyWrong
         ? 'wrong'
-        : anyUnsolved
-            ? 'unsolved'
-            : 'correct';
+        : anyBlank
+            ? 'blank'
+            : anyNotPerformed
+                ? 'not_performed'
+                : 'correct';
     _gradingStates[cellKey] = derived;
     if (_isBaselineRetryKey(cellKey)) {
       if (derived == 'correct') {
@@ -4833,7 +4868,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
   }
 
-  List<_RightSheetGradingPageVm> _visiblePages() {
+  List<_RightSheetGradingPageVm> _visiblePages({
+    bool applyWrongOnly = true,
+  }) {
     final session = widget.session;
     if (session == null) return const <_RightSheetGradingPageVm>[];
     final pages = <_RightSheetGradingPageVm>[];
@@ -4848,7 +4885,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (rawCell is! Map) continue;
         final key = '${rawCell['key'] ?? ''}'.trim();
         if (key.isEmpty) continue;
-        if (_wrongOnly && _hideCellForWrongOnly(key)) {
+        if (applyWrongOnly && _wrongOnly && _hideCellForWrongOnly(key)) {
           continue;
         }
         final questionIndex = (rawCell['questionIndex'] is int)
@@ -6443,12 +6480,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             text: const Color(0xFF8F1F2B),
             label: '오답',
           );
-        case 'unsolved':
+        case 'blank':
+          return (
+            border: const Color(0xFFE54848),
+            background: background,
+            text: const Color(0xFF8F1F2B),
+            label: '빈칸',
+          );
+        case 'not_performed':
           return (
             border: const Color(0xFF9AAAB3),
             background: background,
             text: const Color(0xFF5A6B74),
-            label: '미풀이',
+            label: '미수행',
           );
         default:
           return (
@@ -6467,12 +6511,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           text: const Color(0xFFFFD7DE),
           label: '오답',
         );
-      case 'unsolved':
+      case 'blank':
+        return (
+          border: const Color(0xFFE54848),
+          background: background,
+          text: const Color(0xFFFFD7DE),
+          label: '빈칸',
+        );
+      case 'not_performed':
         return (
           border: const Color(0xFF4F626B),
           background: background,
           text: const Color(0xFFA9BAC4),
-          label: '미풀이',
+          label: '미수행',
         );
       default:
         return (
@@ -7128,6 +7179,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 }
               })
           : () => unawaited(_toggleCellState(cell.key)),
+      onMarkBlank: () => unawaited(
+        _markCellBlank(
+          cell.key,
+          partLabels: [for (final part in setParts) part.label],
+        ),
+      ),
       onShowSourceInfo: () => unawaited(_openQuestionSourceInfoDialog(cell)),
       answerChild: isSetCell
           ? _buildSetSummaryContent(cell, setParts)
@@ -7191,7 +7248,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final state = _partState(cell.key, partLabel);
     final color = switch (state) {
       'wrong' => const Color(0xFFE54848),
-      'unsolved' => const Color(0xFF4F626B),
+      'blank' => const Color(0xFFE54848),
+      'not_performed' => const Color(0xFF4F626B),
       _ => _rsAccent,
     };
     // 정오는 색상만으로 표시. OX 기호는 생략하고 괄호 번호만 얇게.
@@ -7284,7 +7342,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   /// 세트형 파트 카드 — 본 카드를 탭하면 아래로 펼쳐지고, 각 카드를 탭하면
-  /// 그 파트만 정답→오답→미풀이 순환한다.
+  /// 그 파트만 정답→오답→미수행 순환한다.
   Widget _buildSetPartCard(
     _RightSheetGradingCellVm cell,
     ({String label, String value}) part,
@@ -7294,7 +7352,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final colors = _resolveAnswerRowStyle(state);
     final statusColor = switch (state) {
       'wrong' => const Color(0xFFE54848),
-      'unsolved' => const Color(0xFF4F626B),
+      'blank' => const Color(0xFFE54848),
+      'not_performed' => const Color(0xFF4F626B),
       _ => _rsAccent,
     };
     final shape = RoundedRectangleBorder(
@@ -7345,7 +7404,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               const SizedBox(width: 4),
               Expanded(
                 child: Opacity(
-                  opacity: state == 'unsolved' ? 0.42 : 1.0,
+                  opacity: state == 'not_performed' ? 0.42 : 1.0,
                   child: _buildSetPartAnswerContent(cell, part),
                 ),
               ),
@@ -7360,6 +7419,156 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _pageHasDetailedMarks(_RightSheetGradingPageVm page) {
+    for (final cell in page.cells) {
+      final state = _normalizeState(_gradingStates[cell.key]);
+      if (state == 'wrong' || state == 'blank') return true;
+      final prefix = '${cell.key}#';
+      for (final entry in _gradingStates.entries) {
+        if (!entry.key.startsWith(prefix)) continue;
+        final partState = _normalizeState(entry.value);
+        if (partState == 'wrong' || partState == 'blank') return true;
+      }
+    }
+    return false;
+  }
+
+  Future<bool> _confirmPageBulkChange({
+    required int firstPage,
+    required int lastPage,
+    required int questionCount,
+    required String targetState,
+    required bool isRange,
+  }) async {
+    final targetLabel = targetState == 'not_performed' ? '미수행' : '모두 정답';
+    final pageLabel =
+        firstPage == lastPage ? 'p.$firstPage' : 'p.$firstPage–p.$lastPage';
+    final confirmed = await showDialog<bool>(
+      context: _navigatorContext,
+      useRootNavigator: true,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: _rsPanelBg,
+        title: Text(
+          isRange ? '이후 페이지를 미수행 처리할까요?' : '기존 채점을 덮어쓸까요?',
+          style: const TextStyle(
+            color: _rsText,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        content: Text(
+          '$pageLabel · $questionCount문항을 $targetLabel 상태로 바꿉니다.'
+          '${isRange ? '\n현재 페이지부터 배정 범위의 마지막 페이지까지 적용됩니다.' : ''}',
+          style: const TextStyle(
+            color: _rsTextSub,
+            fontWeight: FontWeight.w700,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext, rootNavigator: true).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext, rootNavigator: true).pop(true),
+            child: Text(targetLabel),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _applyPageBulkState(
+    _RightSheetGradingPageVm sourcePage, {
+    required String targetState,
+    bool includeFollowing = false,
+  }) async {
+    if (_answerListReadOnly) return;
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
+    }
+
+    final allPages = _visiblePages(applyWrongOnly: false);
+    final startIndex =
+        allPages.indexWhere((page) => page.pageNumber == sourcePage.pageNumber);
+    if (startIndex < 0) return;
+    final targetPages = includeFollowing
+        ? allPages.sublist(startIndex)
+        : <_RightSheetGradingPageVm>[allPages[startIndex]];
+    final hasDetailedMarks = targetPages.any(_pageHasDetailedMarks);
+    final questionCount = targetPages.fold<int>(
+      0,
+      (sum, page) => sum + page.cells.length,
+    );
+    if (questionCount <= 0) return;
+
+    if (includeFollowing || hasDetailedMarks) {
+      final confirmed = await _confirmPageBulkChange(
+        firstPage: targetPages.first.pageNumber,
+        lastPage: targetPages.last.pageNumber,
+        questionCount: questionCount,
+        targetState: targetState,
+        isRange: includeFollowing,
+      );
+      if (!confirmed || !mounted) return;
+    }
+
+    setState(() {
+      for (final page in targetPages) {
+        for (final cell in page.cells) {
+          _gradingStates[cell.key] = targetState;
+          _applyStateToParts(
+            cell.key,
+            [for (final part in _setPartsOf(cell)) part.label],
+          );
+          if (_isBaselineRetryKey(cell.key) && targetState == 'correct') {
+            _correctionStates[cell.key] = 'corrected';
+          } else {
+            _correctionStates.remove(cell.key);
+          }
+        }
+      }
+    });
+    _emitStateChanged();
+  }
+
+  Widget _buildPageBulkAction({
+    required String label,
+    required VoidCallback? onTap,
+    VoidCallback? onLongPress,
+    bool emphasized = false,
+  }) {
+    final color = emphasized ? _rsTextSub : _rsAccent;
+    return Tooltip(
+      message: onLongPress == null ? label : '$label · 길게 눌러 이후 페이지까지',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Text(
+              label,
+              style: TextStyle(
+                color:
+                    onTap == null ? _rsTextSub.withValues(alpha: 0.45) : color,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w900,
+                height: 1,
+              ),
+            ),
           ),
         ),
       ),
@@ -7392,6 +7601,34 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               fontSize: 13,
               height: 1.0,
             ),
+          ),
+          const SizedBox(width: 8),
+          _buildPageBulkAction(
+            label: '모두 정답',
+            onTap: _answerListReadOnly
+                ? null
+                : () => unawaited(
+                      _applyPageBulkState(page, targetState: 'correct'),
+                    ),
+          ),
+          const SizedBox(width: 2),
+          _buildPageBulkAction(
+            label: '미수행',
+            emphasized: true,
+            onTap: _answerListReadOnly
+                ? null
+                : () => unawaited(
+                      _applyPageBulkState(page, targetState: 'not_performed'),
+                    ),
+            onLongPress: _answerListReadOnly
+                ? null
+                : () => unawaited(
+                      _applyPageBulkState(
+                        page,
+                        targetState: 'not_performed',
+                        includeFollowing: true,
+                      ),
+                    ),
           ),
         ],
       ),
@@ -7526,8 +7763,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     child: Text(
                       _wrongOnly
                           ? (_baselineStates.isNotEmpty
-                              ? '첫 채점에서 틀렸거나 미풀이였던 문항이 없습니다.'
-                              : '오답/미풀이로 표시된 문항이 없습니다.')
+                              ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
+                              : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
                           : '검색 결과가 없습니다.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(

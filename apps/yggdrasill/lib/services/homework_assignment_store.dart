@@ -17,6 +17,10 @@ class HomeworkAssignmentDetail {
   final DateTime? dueDate;
   final int orderIndex;
   final String status;
+  final DateTime? originalDueDate;
+  final DateTime? dueForCheckAt;
+  final bool absenceCarryover;
+  final int deferCount;
   final String? note;
   final int progress;
   final String? issueType;
@@ -44,6 +48,10 @@ class HomeworkAssignmentDetail {
     required this.dueDate,
     required this.orderIndex,
     required this.status,
+    required this.originalDueDate,
+    required this.dueForCheckAt,
+    required this.absenceCarryover,
+    required this.deferCount,
     this.note,
     required this.progress,
     required this.issueType,
@@ -86,6 +94,10 @@ class HomeworkAssignmentBrief {
   final int splitParts;
   final int splitRound;
   final String? note;
+  final String? issueType;
+  final String? issueNote;
+  final DateTime? originalDueDate;
+  final bool absenceCarryover;
 
   const HomeworkAssignmentBrief({
     required this.id,
@@ -99,6 +111,10 @@ class HomeworkAssignmentBrief {
     required this.splitParts,
     required this.splitRound,
     this.note,
+    this.issueType,
+    this.issueNote,
+    this.originalDueDate,
+    this.absenceCarryover = false,
   });
 
   /// 학생이 자의로 미리 해온 과제를 검사하기 위해 생성된 assignment 여부.
@@ -128,6 +144,11 @@ class HomeworkAssignmentCheck {
   final String? assignmentId;
   final DateTime checkedAt;
   final int progress;
+  final String outcome;
+  final String? reason;
+  final DateTime? scheduledDueAt;
+  final DateTime? nextDueAt;
+  final String? groupCheckId;
 
   const HomeworkAssignmentCheck({
     required this.id,
@@ -135,7 +156,33 @@ class HomeworkAssignmentCheck {
     required this.assignmentId,
     required this.checkedAt,
     required this.progress,
+    this.outcome = 'legacy',
+    this.reason,
+    this.scheduledDueAt,
+    this.nextDueAt,
+    this.groupCheckId,
   });
+}
+
+enum HomeworkAssignmentOutcome {
+  graded('graded'),
+  notDone('not_done'),
+  leftBehind('left_behind');
+
+  const HomeworkAssignmentOutcome(this.dbValue);
+  final String dbValue;
+}
+
+class HomeworkAssignmentOutcomeResult {
+  const HomeworkAssignmentOutcomeResult({
+    required this.groupCheckId,
+    required this.processedCount,
+    required this.nextDueAt,
+  });
+
+  final String groupCheckId;
+  final int processedCount;
+  final DateTime? nextDueAt;
 }
 
 class HomeworkAssignmentStore {
@@ -185,6 +232,18 @@ class HomeworkAssignmentStore {
     final key = studentId.trim();
     if (key.isEmpty) return false;
     return _activeAssignmentsLoadCompletedForStudent.contains(key);
+  }
+
+  /// 서버 RPC가 assignment 행을 직접 만들거나 바꾼 뒤 호출한다. peek 캐시는 남겨
+  /// 첫 프레임 깜빡임을 막고, revision만 올려 활성 목록을 다시 불러오게 한다.
+  void invalidateActiveAssignments([String? studentId]) {
+    final key = (studentId ?? '').trim();
+    if (key.isEmpty) {
+      _activeAssignmentsLoadCompletedForStudent.clear();
+    } else {
+      _activeAssignmentsLoadCompletedForStudent.remove(key);
+    }
+    _bump();
   }
 
   void clearActiveAssignmentsCache() {
@@ -312,6 +371,10 @@ class HomeworkAssignmentStore {
           dueDate: null,
           orderIndex: 0,
           status: 'assigned',
+          originalDueDate: null,
+          dueForCheckAt: null,
+          absenceCarryover: false,
+          deferCount: 0,
           note: reservationNote,
           progress: 0,
           issueType: null,
@@ -1103,7 +1166,10 @@ class HomeworkAssignmentStore {
             .select(selectClause)
             .eq('academy_id', academyId)
             .eq('student_id', studentId)
-            .eq('status', 'assigned')
+            .inFilter(
+              'status',
+              const ['assigned', 'in_progress', 'carried_to_class'],
+            )
             .order('due_date', ascending: true)
             .order('order_index', ascending: true)
             .order('assigned_at', ascending: false);
@@ -1111,13 +1177,13 @@ class HomeworkAssignmentStore {
       }
 
       const selectWithGroupAndLiveRelease =
-          'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
+          'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
       const selectWithGroupLegacyLiveRelease =
-          'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+          'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
       const selectLegacyWithLiveRelease =
-          'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
+          'id,homework_item_id,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
       const selectLegacy =
-          'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+          'id,homework_item_id,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
 
       late final List<dynamic> rows;
       try {
@@ -1186,9 +1252,13 @@ class HomeworkAssignmentStore {
             groupTitleSnapshot:
                 groupTitleSnapshot.isEmpty ? null : groupTitleSnapshot,
             assignedAt: parseTs(r['assigned_at']) ?? DateTime.now(),
-            dueDate: parseTs(r['due_date']),
+            dueDate: parseTs(r['due_at']) ?? parseTs(r['due_date']),
             orderIndex: parseInt(r['order_index']),
             status: (r['status'] as String?) ?? 'assigned',
+            originalDueDate: parseTs(r['original_due_at']),
+            dueForCheckAt: parseTs(r['due_for_check_at']),
+            absenceCarryover: r['absence_carryover'] == true,
+            deferCount: parseInt(r['defer_count']),
             note: (r['note'] as String?)?.trim(),
             progress: parseInt(r['progress']),
             issueType: r['issue_type'] as String?,
@@ -1266,6 +1336,36 @@ class HomeworkAssignmentStore {
     }
   }
 
+  Future<void> updateActiveDueDateForItems({
+    required String studentId,
+    required Iterable<String> homeworkItemIds,
+    required DateTime dueDate,
+  }) async {
+    final normalizedStudentId = studentId.trim();
+    final itemIds = homeworkItemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (normalizedStudentId.isEmpty || itemIds.isEmpty) return;
+
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    await Supabase.instance.client
+        .from('homework_assignments')
+        .update({
+          'due_date': _dueDateIso(dueDate),
+          'due_at': dueDate.toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId)
+        .eq('student_id', normalizedStudentId)
+        .inFilter('homework_item_id', itemIds)
+        .inFilter('status', const ['assigned', 'in_progress']);
+    _activeAssignmentsCacheByStudent.remove(normalizedStudentId);
+    _activeAssignmentsLoadCompletedForStudent.remove(normalizedStudentId);
+    _bump();
+  }
+
   Future<bool> saveAssignmentCheck({
     required String assignmentId,
     required String studentId,
@@ -1334,6 +1434,111 @@ class HomeworkAssignmentStore {
       );
     }
     return updateOk && checkOk;
+  }
+
+  /// 그룹 숙제의 검사 결과와 생명주기 전이를 한 트랜잭션으로 기록한다.
+  Future<HomeworkAssignmentOutcomeResult?> recordGroupOutcome({
+    required String studentId,
+    required String groupId,
+    required Iterable<String> homeworkItemIds,
+    required HomeworkAssignmentOutcome outcome,
+    int progress = 0,
+    String? idempotencyKey,
+  }) async {
+    final ids = homeworkItemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final sid = studentId.trim();
+    final gid = groupId.trim();
+    if (sid.isEmpty || gid.isEmpty || ids.isEmpty) return null;
+    final requestId = (idempotencyKey ?? const Uuid().v4()).trim();
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'homework_record_assignment_outcome',
+        params: <String, dynamic>{
+          'p_student_id': sid,
+          'p_group_id': gid,
+          'p_homework_item_ids': ids,
+          'p_outcome': outcome.dbValue,
+          'p_progress': progress.clamp(0, 150),
+          'p_idempotency_key': requestId,
+          'p_checked_at': DateTime.now().toUtc().toIso8601String(),
+        },
+      );
+      final row = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      final nextDueRaw = '${row['next_due_at'] ?? ''}'.trim();
+      _activeAssignmentsCacheByStudent.remove(sid);
+      _activeAssignmentsLoadCompletedForStudent.remove(sid);
+      _bump();
+      return HomeworkAssignmentOutcomeResult(
+        groupCheckId: '${row['group_check_id'] ?? requestId}'.trim(),
+        processedCount: (row['processed_count'] as num?)?.toInt() ?? ids.length,
+        nextDueAt: nextDueRaw.isEmpty
+            ? null
+            : DateTime.tryParse(nextDueRaw)?.toLocal(),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[HW_ASSIGN][outcome][ERROR] $error\n$stackTrace');
+      return null;
+    }
+  }
+
+  /// 문항 채점 결과를 숙제 검사 진행률로 반영한다. 같은 날 검사 기록이 있으면
+  /// 새 기록을 만들지 않고 그 기록의 진행률만 올려, 알림장이 채점 결과를 그대로
+  /// 읽게 한다.
+  Future<bool> syncCheckProgressFromGrading({
+    required String studentId,
+    required String homeworkItemId,
+    required String assignmentId,
+    required int progress,
+  }) async {
+    final normalized = progress.clamp(0, 150);
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
+      final supa = Supabase.instance.client;
+      final dayStart = DateTime.now();
+      final since = DateTime(dayStart.year, dayStart.month, dayStart.day)
+          .toUtc()
+          .toIso8601String();
+      final rows = await supa
+          .from('homework_assignment_checks')
+          .select('id,progress')
+          .eq('academy_id', academyId)
+          .eq('assignment_id', assignmentId)
+          .gte('checked_at', since)
+          .order('checked_at', ascending: false)
+          .limit(1);
+      final existing = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+      if (existing.isEmpty) {
+        final inserted = await recordAssignmentCheck(
+          studentId: studentId,
+          homeworkItemId: homeworkItemId,
+          assignmentId: assignmentId,
+          progress: normalized,
+        );
+        if (!inserted) return false;
+      } else {
+        final checkId = '${existing.first['id'] ?? ''}'.trim();
+        if (checkId.isEmpty) return false;
+        await supa
+            .from('homework_assignment_checks')
+            .update({'progress': normalized})
+            .eq('academy_id', academyId)
+            .eq('id', checkId);
+      }
+      await updateAssignment(assignmentId, progress: normalized);
+      _bump();
+      return true;
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][check-sync][ERROR] $e\n$st');
+      return false;
+    }
   }
 
   Future<bool> recordAssignmentCheck({
@@ -1488,7 +1693,9 @@ class HomeworkAssignmentStore {
       final rows = await supa
           .from('homework_assignments')
           .select(
-            'id,homework_item_id,assigned_at,due_date,order_index,status,progress,repeat_index,split_parts,split_round,note',
+            'id,homework_item_id,assigned_at,due_date,due_at,original_due_at,'
+            'absence_carryover,order_index,status,progress,issue_type,issue_note,'
+            'repeat_index,split_parts,split_round,note',
           )
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
@@ -1524,7 +1731,7 @@ class HomeworkAssignmentStore {
                 id: (r['id'] as String?) ?? '',
                 homeworkItemId: itemId,
                 assignedAt: parseTs(r['assigned_at']),
-                dueDate: parseDate(r['due_date']),
+                dueDate: parseDate(r['due_at']) ?? parseDate(r['due_date']),
                 orderIndex: parseInt(r['order_index']),
                 status: (r['status'] as String?) ?? 'assigned',
                 progress: parseInt(r['progress']),
@@ -1532,6 +1739,10 @@ class HomeworkAssignmentStore {
                 splitParts: splitParts,
                 splitRound: _normalizeSplitRound(r['split_round'], splitParts),
                 note: r['note'] as String?,
+                issueType: (r['issue_type'] as String?)?.trim(),
+                issueNote: (r['issue_note'] as String?)?.trim(),
+                originalDueDate: parseDate(r['original_due_at']),
+                absenceCarryover: r['absence_carryover'] == true,
               ),
             );
       }
@@ -1559,7 +1770,10 @@ class HomeworkAssignmentStore {
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignment_checks')
-          .select('id,homework_item_id,assignment_id,checked_at,progress')
+          .select(
+            'id,homework_item_id,assignment_id,checked_at,progress,'
+            'outcome,reason,scheduled_due_at,next_due_at,group_check_id',
+          )
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .order('checked_at', ascending: true);
@@ -1587,6 +1801,14 @@ class HomeworkAssignmentStore {
                 assignmentId: r['assignment_id'] as String?,
                 checkedAt: parseTs(r['checked_at']),
                 progress: parseInt(r['progress']),
+                outcome: '${r['outcome'] ?? 'legacy'}',
+                reason: (r['reason'] as String?)?.trim(),
+                scheduledDueAt: r['scheduled_due_at'] == null
+                    ? null
+                    : parseTs(r['scheduled_due_at']),
+                nextDueAt:
+                    r['next_due_at'] == null ? null : parseTs(r['next_due_at']),
+                groupCheckId: (r['group_check_id'] as String?)?.trim(),
               ),
             );
       }
@@ -1780,9 +2002,10 @@ class HomeworkAssignmentStore {
             resolvedLiveReleaseIdByItem[item.id] ?? safeLiveReleaseId;
         final String newAssignmentId = const Uuid().v4();
         final int? seedProgressRaw = initialProgressByItemId?[item.id];
-        final int? seedProgress = (seedProgressRaw != null && seedProgressRaw > 0)
-            ? seedProgressRaw.clamp(0, 150).toInt()
-            : null;
+        final int? seedProgress =
+            (seedProgressRaw != null && seedProgressRaw > 0)
+                ? seedProgressRaw.clamp(0, 150).toInt()
+                : null;
         final seedIssue = initialIssueByItemId?[item.id];
         rows.add({
           'id': newAssignmentId,
@@ -1802,6 +2025,7 @@ class HomeworkAssignmentStore {
               : item.learningTrackCode.trim().toUpperCase(),
           'assigned_at': now.toUtc().toIso8601String(),
           'due_date': dueDateIso,
+          'due_at': dueDate?.toUtc().toIso8601String(),
           'order_index': nextOrder++,
           'status': 'assigned',
           'note': note,

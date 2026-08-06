@@ -1364,6 +1364,48 @@ class ProblemBankService {
         .toList(growable: false);
   }
 
+  Future<List<ProblemBankDocument>> listAllTextbookDocuments({
+    required String academyId,
+  }) async {
+    const pageSize = 1000;
+    var offset = 0;
+    final documents = <ProblemBankDocument>[];
+    while (true) {
+      final rows = await _client
+          .from('pb_documents')
+          .select('*')
+          .eq('academy_id', academyId)
+          .order('created_at', ascending: false)
+          .range(offset, offset + pageSize - 1);
+      final rawRows = rows as List<dynamic>;
+      final page = rawRows
+          .map((row) => ProblemBankDocument.fromMap(
+                Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+              ))
+          .where((document) {
+        if (document.isTextbookPdfOnly) return true;
+        for (final raw in <dynamic>[
+          document.meta['textbook_scope'],
+          document.classificationDetail['textbook_scope'],
+          document.meta['source_classification'] is Map
+              ? (document.meta['source_classification'] as Map)['textbook']
+              : null,
+        ]) {
+          if (raw is Map &&
+              ('${raw['book_id'] ?? ''}'.trim().isNotEmpty ||
+                  '${raw['book_name'] ?? ''}'.trim().isNotEmpty)) {
+            return true;
+          }
+        }
+        return false;
+      }).toList(growable: false);
+      documents.addAll(page);
+      if (rawRows.length < pageSize) break;
+      offset += pageSize;
+    }
+    return documents;
+  }
+
   /// 문서별 실제 저장 문항 수를 배치로 집계한다.
   ///
   /// PostgREST 응답 기본 상한(1000행)을 넘는 교재도 정확히 세기 위해
@@ -2048,6 +2090,65 @@ class ProblemBankService {
               Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
             ))
         .toList(growable: false);
+  }
+
+  Future<List<ProblemBankQuestion>> listQuestionsForDocuments({
+    required String academyId,
+    required Iterable<String> documentIds,
+  }) async {
+    final ids = documentIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return const <ProblemBankQuestion>[];
+
+    const idChunkSize = 80;
+    const pageSize = 1000;
+    final questions = <ProblemBankQuestion>[];
+    for (var start = 0; start < ids.length; start += idChunkSize) {
+      final end = math.min(start + idChunkSize, ids.length);
+      final chunk = ids.sublist(start, end);
+      var offset = 0;
+      while (true) {
+        final rows = await _client
+            .from('pb_questions')
+            .select('*')
+            .eq('academy_id', academyId)
+            .inFilter('document_id', chunk)
+            .order('source_page', ascending: true)
+            .order('source_order', ascending: true)
+            .range(offset, offset + pageSize - 1);
+        final rawRows = rows as List<dynamic>;
+        questions.addAll(
+          rawRows.map(
+            (row) => ProblemBankQuestion.fromMap(
+              Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+            ),
+          ),
+        );
+        if (rawRows.length < pageSize) break;
+        offset += pageSize;
+      }
+    }
+    int displayPageOf(ProblemBankQuestion question) {
+      final cropPage = question.meta['textbook_crop_page'];
+      if (cropPage is Map) {
+        final raw = cropPage['display_page'] ?? cropPage['raw_page'];
+        final page = raw is num ? raw.toInt() : int.tryParse('$raw');
+        if (page != null && page > 0) return page;
+      }
+      return question.sourcePage;
+    }
+
+    questions.sort((a, b) {
+      final byPage = displayPageOf(a).compareTo(displayPageOf(b));
+      if (byPage != 0) return byPage;
+      final byOrder = a.sourceOrder.compareTo(b.sourceOrder);
+      if (byOrder != 0) return byOrder;
+      return a.questionNumber.compareTo(b.questionNumber);
+    });
+    return questions;
   }
 
   Future<ProblemBankExportJob> createReviewPdfExport({

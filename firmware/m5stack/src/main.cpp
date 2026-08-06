@@ -76,6 +76,14 @@ static uint32_t g_last_mqtt_rx_homeworks_ms = 0;
 static uint32_t g_last_mqtt_rx_student_info_ms = 0;
 static uint32_t g_last_watchdog_soft_ms = 0;
 static uint32_t g_last_watchdog_hard_ms = 0;
+static bool g_has_homeworks_sync_state = false;
+static uint32_t g_last_homeworks_sync_seq = 0;
+static char g_last_homeworks_sync_fp[65] = {0};
+static char g_last_homeworks_sync_source[48] = {0};
+static unsigned int g_last_homeworks_group_count = 0;
+static uint32_t g_last_homeworks_sync_status_ms = 0;
+static const uint32_t HOMEWORKS_SYNC_STATUS_INTERVAL_MS = 30000;
+static void publish_last_homeworks_sync_status(const char* reason);
 // LittleFS 복원 등으로 studentId만 있고 bind MQTT를 아직 안 보낸 상태 — 첫 연결에서 등원(m5_record_arrival) 처리되도록 함
 static bool g_mqtt_bind_announced = false;
 static const uint32_t MQTT_STALE_SOFT_MS = 45000;
@@ -496,6 +504,12 @@ void fw_clear_local_binding_state(void) {
   persist_student_id_nvs("");
   persist_bind_date_nvs(0);
   studentId = "";
+  g_has_homeworks_sync_state = false;
+  g_last_homeworks_sync_seq = 0;
+  g_last_homeworks_sync_fp[0] = '\0';
+  g_last_homeworks_sync_source[0] = '\0';
+  g_last_homeworks_group_count = 0;
+  g_last_homeworks_sync_status_ms = 0;
   g_mqtt_bind_announced = false;
   g_group_transition_pending = false;
   g_group_transition_pending_group_id.remove(0);
@@ -534,6 +548,7 @@ void onMqttConnect(bool sessionPresent) {
   deviceAckTopic = String("academies/") + academyId + "/devices/" + deviceId + "/ack";
   mqtt.subscribe(deviceAckTopic.c_str(), 1);
   Serial.printf("MQTT connected & subscribed (sessionPresent=%d)\n", sessionPresent ? 1 : 0);
+  publish_last_homeworks_sync_status("mqtt_reconnect");
 
   // [WIFI-DIAG] WiFi 연결 진단을 원격 수집(최초 1회). 무선 상태에서만 재현되는
   // fallback/멈춤 증상의 근본 원인(RSSI 약화/AP 다중/연결 지연)을 확인하기 위함.
@@ -1071,32 +1086,50 @@ void fw_publish_create_descriptive_writing() {
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 
-static void publish_homeworks_sync_ack(JsonObject meta, unsigned int groupCount) {
-  const char* syncFp = meta["sync_fp"] | "";
-  if (!syncFp || !syncFp[0]) return;
-
+static void publish_last_homeworks_sync_status(const char* reason) {
+  if (!mqtt.connected() || !g_has_homeworks_sync_state ||
+      !g_last_homeworks_sync_fp[0]) {
+    return;
+  }
   DynamicJsonDocument doc(320);
   doc["type"] = "homeworks_apply";
   doc["ok"] = true;
   doc["device_id"] = deviceId;
   doc["student_id"] = studentId;
-  doc["meta_student_id"] = meta["student_id"] | "";
-  doc["sync_seq"] = meta["sync_seq"] | 0;
-  doc["sync_fp"] = syncFp;
-  doc["source"] = meta["source"] | "";
-  doc["group_count"] = groupCount;
+  doc["sync_seq"] = g_last_homeworks_sync_seq;
+  doc["sync_fp"] = g_last_homeworks_sync_fp;
+  doc["source"] = g_last_homeworks_sync_source;
+  doc["group_count"] = g_last_homeworks_group_count;
+  doc["report_reason"] = reason ? reason : "status";
   doc["at"] = "";
 
   String payload;
   serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/sync_ack";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
-  Serial.printf("[M5SYNC][ack] device=%s student=%s sync_seq=%lu sync_fp=%s groups=%u\n",
+  g_last_homeworks_sync_status_ms = millis();
+  Serial.printf("[M5SYNC][ack] device=%s student=%s sync_seq=%lu sync_fp=%s groups=%u reason=%s\n",
                 deviceId.c_str(),
                 studentId.c_str(),
-                (unsigned long)(meta["sync_seq"] | 0),
-                syncFp,
-                groupCount);
+                (unsigned long)g_last_homeworks_sync_seq,
+                g_last_homeworks_sync_fp,
+                g_last_homeworks_group_count,
+                reason ? reason : "status");
+}
+
+static void publish_homeworks_sync_ack(JsonObject meta, unsigned int groupCount) {
+  const char* syncFp = meta["sync_fp"] | "";
+  if (!syncFp || !syncFp[0]) return;
+  g_last_homeworks_sync_seq = meta["sync_seq"] | 0;
+  snprintf(g_last_homeworks_sync_fp, sizeof(g_last_homeworks_sync_fp), "%s", syncFp);
+  snprintf(
+      g_last_homeworks_sync_source,
+      sizeof(g_last_homeworks_sync_source),
+      "%s",
+      (const char*)(meta["source"] | ""));
+  g_last_homeworks_group_count = groupCount;
+  g_has_homeworks_sync_state = true;
+  publish_last_homeworks_sync_status("apply");
 }
 
 // OTA 다운로드는 loop()를 수 분간 점유하므로 그동안 워치독 감시에서 제외한다.
@@ -1577,6 +1610,14 @@ void loop() {
       Serial.println("[MQTT][WATCHDOG] students list not received -> re-request list_today");
       fw_request_list_today();
     }
+  }
+
+  if (mqtt.connected() && studentId.length() > 0 &&
+      g_has_homeworks_sync_state &&
+      (g_last_homeworks_sync_status_ms == 0 ||
+       (now - g_last_homeworks_sync_status_ms) >=
+           HOMEWORKS_SYNC_STATUS_INTERVAL_MS)) {
+    publish_last_homeworks_sync_status("periodic");
   }
 
   if (now - lastPresence > 15000) {

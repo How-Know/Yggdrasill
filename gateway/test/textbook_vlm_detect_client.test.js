@@ -10,6 +10,7 @@ import {
   buildDetectProblemsPrompt,
   buildItemGeometryRepairPrompt,
   buildRpmSetHeaderPrompt,
+  buildSsenBasicDrillRescuePrompt,
   buildWonriPageClassPrompt,
 } from '../src/textbook/vlm_detect_prompt.js';
 
@@ -24,6 +25,17 @@ test('RPM A prompt describes alternating concept and problem pages', () => {
   assert.match(prompt, /개념 설명 1페이지 → 교과서문제 정복하기 문제 1페이지/);
   assert.match(prompt, /개념 페이지만 두 페이지 연속으로 나오지 않는다/);
   assert.match(prompt, /세로형·독립형 세트/);
+});
+
+test('ssen A rescue prompt forces visible four-digit items to problem page', () => {
+  const prompt = buildSsenBasicDrillRescuePrompt({
+    rawPage: 87,
+    displayPage: 87,
+  });
+  assert.match(prompt, /4자리 문항번호/);
+  assert.match(prompt, /반드시 problem_page/);
+  assert.match(prompt, /is_set_header=true/);
+  assert.match(prompt, /label은 항상 ""/);
 });
 
 test('RPM set-header prompt targets green bracketed ranges', () => {
@@ -272,6 +284,33 @@ test('ssen A keeps flexible item geometry when sequential page evidence is stron
     ['0131', '0132', '0133'],
   );
   assert.equal(result.page_kind, 'problem_page');
+});
+
+test('ssen A keeps valid sequential items when model contradicts them with concept_page', () => {
+  const result = normalizeDetectResult({
+    section: 'basic_drill',
+    page_kind: 'concept_page',
+    page_layout: 'two_column',
+    items: ['1247', '1248', '1249'].map((number, index) => ({
+      number,
+      // A단계에 존재하지 않는 라벨을 모델이 잘못 붙여도 제거해야 한다.
+      label: '대표 문제',
+      is_set_header: false,
+      column: index < 2 ? 1 : 2,
+      // 실제 실패 응답처럼 좌표가 한 번 더 감싸져 있어도 번호 증거로
+      // concept_page 조기 반환을 먼저 풀고, 정규화 단계에서 좌표를 복구한다.
+      bbox: [[100 + index * 180, 50, 122 + index * 180, 105]],
+      item_region: [[80 + index * 180, 40, 530 + index * 180, 460]],
+    })),
+    notes: 'concept_page',
+  }, { series: 'ssen', sectionHint: 'basic_drill' });
+
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['1247', '1248', '1249'],
+  );
+  assert.equal(result.page_kind, 'problem_page');
+  assert.match(result.notes, /concept_page_overridden_by_valid_basic_numbers/);
 });
 
 test('ssen A still rejects a lone flexible-geometry false positive', () => {

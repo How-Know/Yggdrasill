@@ -9,6 +9,7 @@ import '../widgets/homework_assign_dialog.dart'
     show buildDefaultHomeworkAssignSelection, printHomeworkTodoSheet;
 import 'data_manager.dart';
 import 'homework_departure_draft_service.dart';
+import 'homework_session_plan_service.dart';
 import 'homework_store.dart';
 import 'print_routing_service.dart';
 import 'realtime_reconciler.dart';
@@ -202,8 +203,13 @@ class KioskNoticePrintService {
       final className = m['class_name'] as String?;
       final setId = m['set_id'] as String?;
 
-      final departureDraft = HomeworkDepartureDraft.fromRow(m);
+      var departureDraft = HomeworkDepartureDraft.fromRow(m);
       HomeworkDepartureDraftService.instance.cacheFromAttendanceRow(m);
+      departureDraft = await HomeworkDepartureDraftService.instance.load(
+            attendanceId,
+            force: true,
+          ) ??
+          departureDraft;
 
       // 저장된 초안이 있으면 정확히 그 그룹만, 없으면 기존처럼 전체 그룹을 선택한다.
       final selection = await buildDefaultHomeworkAssignSelection(
@@ -211,15 +217,24 @@ class KioskNoticePrintService {
         anchorTime: classDateTime,
         initialSelectedGroupIds:
             departureDraft.isSaved ? departureDraft.groupIds : null,
+        initialSelectedItemIds: departureDraft.hasPlanClassification
+            ? departureDraft.planHomeworkItemIds
+            : null,
+        excludedItemIds: departureDraft.autoManagedPlanItemIds,
         initialDueDateByGroupId: departureDraft.isSaved
             ? departureDraft.dueDateByGroupId
             : const <String, DateTime>{},
       );
 
       // 하원 시 PC 수동 흐름과 동일한 전처리.
+      await HomeworkSessionPlanService.instance.finalizeDeparture(
+        attendanceId: attendanceId,
+      );
       if (selection != null) {
         if (selection.itemIds.isNotEmpty) {
+          final planItemIds = selection.planHomeworkItemIds.toSet();
           for (final itemId in selection.itemIds) {
+            if (planItemIds.contains(itemId)) continue;
             HomeworkStore.instance.markItemsAsHomework(
               studentId,
               <String>[itemId],
@@ -235,6 +250,12 @@ class KioskNoticePrintService {
         if (unselected.isNotEmpty) {
           HomeworkStore.instance.restoreItemsToWaiting(studentId, unselected);
         }
+        if (selection.planHomeworkItemIds.isNotEmpty) {
+          await HomeworkSessionPlanService.instance.confirmDepartureHomework(
+            attendanceId: attendanceId,
+            homeworkItemIds: selection.planHomeworkItemIds,
+          );
+        }
       }
       HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(studentId);
 
@@ -245,6 +266,10 @@ class KioskNoticePrintService {
         arrivalTime: arrivalTime,
         departureTime: departureTime,
         selectedHomeworkIds: selection?.itemIds ?? const <String>[],
+        additionalHomeworkIds:
+            departureDraft.autoRolloverToHomeworkItemIds.toList(
+          growable: false,
+        ),
         selectedBehaviorIds: selection?.selectedBehaviorIds,
         irregularBehaviorCounts: selection?.irregularBehaviorCounts,
         dueDate: selection?.dueDate,

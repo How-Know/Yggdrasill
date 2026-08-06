@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'homework_session_plan_service.dart';
 import 'tenant_service.dart';
 
 class HomeworkDepartureDraft {
@@ -9,12 +10,25 @@ class HomeworkDepartureDraft {
     required this.groupIds,
     required this.dueDateByGroupId,
     required this.savedAt,
+    this.planHomeworkItemIds = const <String>{},
+    this.autoManagedPlanItemIds = const <String>{},
+    this.autoRolloverToHomeworkItemIds = const <String>{},
+    this.hasPlanClassification = false,
   });
 
   final String attendanceId;
   final Set<String> groupIds;
   final Map<String, DateTime> dueDateByGroupId;
   final DateTime? savedAt;
+  final Set<String> planHomeworkItemIds;
+
+  /// 하원 RPC가 자동으로 숙제 전환 또는 일시정지 이월할 계획 항목.
+  final Set<String> autoManagedPlanItemIds;
+
+  /// '오늘' 계획 중 하원 시 자동으로 다음 수업까지 숙제로 넘길 항목
+  /// (`in_class` + `to_homework`). 알림장 숙제 리스트에 포함한다.
+  final Set<String> autoRolloverToHomeworkItemIds;
+  final bool hasPlanClassification;
 
   bool get isSaved => savedAt != null;
 
@@ -79,7 +93,7 @@ class HomeworkDepartureDraftService {
     final row = await Supabase.instance.client
         .from('attendance_records')
         .select(
-          'id,homework_draft_group_ids,homework_draft_group_due_dates,homework_draft_saved_at',
+          'id,student_id,homework_draft_group_ids,homework_draft_group_due_dates,homework_draft_saved_at',
         )
         .eq('academy_id', academyId)
         .eq('id', key)
@@ -88,7 +102,42 @@ class HomeworkDepartureDraftService {
       _cache.remove(key);
       return null;
     }
-    final draft = HomeworkDepartureDraft.fromRow(row);
+    final baseDraft = HomeworkDepartureDraft.fromRow(row);
+    final studentId = '${row['student_id'] ?? ''}'.trim();
+    final plans = studentId.isEmpty
+        ? const <HomeworkSessionPlanItem>[]
+        : await HomeworkSessionPlanService.instance.load(
+            key,
+            studentId: studentId,
+            force: force,
+          );
+    final draft = HomeworkDepartureDraft(
+      attendanceId: baseDraft.attendanceId,
+      groupIds: baseDraft.groupIds,
+      dueDateByGroupId: baseDraft.dueDateByGroupId,
+      savedAt: baseDraft.savedAt,
+      planHomeworkItemIds: plans
+          .where((plan) =>
+              plan.destination == HomeworkPlanDestination.homework &&
+              plan.isPendingHomework)
+          .map((plan) => plan.homeworkItemId)
+          .where((id) => id.isNotEmpty)
+          .toSet(),
+      autoManagedPlanItemIds: plans
+          .where(
+              (plan) => plan.uiDestination != HomeworkPlanDestination.homework)
+          .map((plan) => plan.homeworkItemId)
+          .where((id) => id.isNotEmpty)
+          .toSet(),
+      autoRolloverToHomeworkItemIds: plans
+          .where((plan) =>
+              plan.destination == HomeworkPlanDestination.inClass &&
+              plan.rolloverPolicy == HomeworkPlanRolloverPolicy.toHomework)
+          .map((plan) => plan.homeworkItemId)
+          .where((id) => id.isNotEmpty)
+          .toSet(),
+      hasPlanClassification: plans.isNotEmpty,
+    );
     _cache[key] = draft;
     return draft;
   }
@@ -130,7 +179,20 @@ class HomeworkDepartureDraftService {
     if (typedRows.isEmpty) {
       throw StateError('ATTENDANCE_SESSION_CLOSED');
     }
-    final draft = HomeworkDepartureDraft.fromRow(typedRows.first);
+    final savedDraft = HomeworkDepartureDraft.fromRow(typedRows.first);
+    final previous = _cache[key];
+    final draft = HomeworkDepartureDraft(
+      attendanceId: savedDraft.attendanceId,
+      groupIds: savedDraft.groupIds,
+      dueDateByGroupId: savedDraft.dueDateByGroupId,
+      savedAt: savedDraft.savedAt,
+      planHomeworkItemIds: previous?.planHomeworkItemIds ?? const <String>{},
+      autoManagedPlanItemIds:
+          previous?.autoManagedPlanItemIds ?? const <String>{},
+      autoRolloverToHomeworkItemIds:
+          previous?.autoRolloverToHomeworkItemIds ?? const <String>{},
+      hasPlanClassification: previous?.hasPlanClassification ?? false,
+    );
     _cache[key] = draft;
     revision.value = revision.value + 1;
     return draft;

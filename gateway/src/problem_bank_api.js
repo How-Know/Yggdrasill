@@ -61,6 +61,7 @@ import {
   detectItemGeometryOnPage,
   detectProblemsOnPage,
   detectRpmSetHeadersOnPage,
+  detectSsenBasicDrillOnPage,
   detectSuryeokMarksOnPage,
   classifyWonriPage,
   mergeSuryeokMarks,
@@ -6570,7 +6571,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   const academyId = String(body?.academy_id || '').trim();
   const bookId = String(body?.book_id || '').trim();
   const gradeLabel = String(body?.grade_label || '').trim();
-  const expectedStartNumber = normalizeTextbookExpectedStartNumber(
+  const requestedExpectedStartNumber = normalizeTextbookExpectedStartNumber(
     body?.expected_start_number ?? body?.expectedStartNumber,
   );
   const rawSectionHint = String(body?.section_hint || '').trim();
@@ -6600,6 +6601,12 @@ async function handleTextbookVlmDetectProblems(body, res) {
   // 교재 시리즈 (ssen | rpm | wonri | gaeyu | suryeok).
   // 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
   const series = String(body?.series || '').trim().toLowerCase();
+  // 쎈 A의 4자리 번호는 지면에서 충분히 선명하다. 첫 문제 지면에 이전 단원의
+  // 다음 번호 힌트를 함께 주면 실제 문항을 모두 읽고도 concept_page로 판정하는
+  // 회귀가 재현됐다(공통수학2 p185: 힌트 없음 24개, 힌트 있음 0개).
+  // RPM A의 교대 지면 보조에는 계속 사용하되 쎈에서는 서버가 무시한다.
+  const expectedStartNumber =
+    series === 'ssen' ? '' : requestedExpectedStartNumber;
   const contentGroupRequired =
     sectionHint === 'type_practice' &&
     (series === 'ssen' || series === 'rpm');
@@ -6698,7 +6705,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
     }
   }
 
-  const normalized = normalizeDetectResult(result.parsedJson, {
+  let normalized = normalizeDetectResult(result.parsedJson, {
     sectionHint,
     expectedStartNumber,
     series,
@@ -6706,6 +6713,62 @@ async function handleTextbookVlmDetectProblems(body, res) {
     displayPage,
     rawPage,
   });
+  // 쎈 A에서 모델이 수천 토큰의 문항 JSON을 반환했는데 공통 정규화 결과만
+  // 0개가 되는 모순 응답이 일부 지면에서 반복된다(p169, p185, 확통 p87).
+  // 실제 개념 페이지 응답은 약 50토큰으로 짧으므로, 원본 items가 있거나 긴
+  // 응답인데 0개가 된 경우에만 A 전용 짧은 프롬프트로 즉시 한 번 재판독한다.
+  const primaryRawItems = Array.isArray(result?.parsedJson?.items)
+    ? result.parsedJson.items
+    : [];
+  const primaryOutputTokens = Number(
+    result?.usageMetadata?.candidatesTokenCount ??
+      result?.usageMetadata?.candidates_token_count ??
+      0,
+  );
+  if (
+    series === 'ssen' &&
+    sectionHint === 'basic_drill' &&
+    normalized.items.length === 0 &&
+    (primaryRawItems.length > 0 || primaryOutputTokens >= 500)
+  ) {
+    try {
+      const rescued = await detectSsenBasicDrillOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      });
+      const rescuedNormalized = normalizeDetectResult(rescued.parsedJson, {
+        sectionHint: 'basic_drill',
+        series: 'ssen',
+        displayPage,
+        rawPage,
+      });
+      console.warn(
+        '[textbook-vlm-detect] ssen_basic_rescue',
+        JSON.stringify({
+          rawPage,
+          primaryRawItems: primaryRawItems.length,
+          primaryOutputTokens,
+          rescuedItems: rescuedNormalized.items.length,
+        }),
+      );
+      if (rescuedNormalized.items.length > 0) {
+        normalized = rescuedNormalized;
+        result = rescued;
+        usedFallbackPrompt = true;
+      }
+    } catch (err) {
+      console.warn(
+        '[textbook-vlm-detect] ssen_basic_rescue_failed',
+        JSON.stringify({ rawPage, message: compact(err?.message || err) }),
+      );
+    }
+  }
   // 수력충전은 (1) 도움말 아래의 초록 번호를 개념 설명으로 오인하거나,
   // (2) 단원 마무리의 작고 복수인 특수 배지를 누락하는 경우가 있다.
   // 의심스러운 유형 지면과 모든 마무리 지면은 번호·배지만 묻는 짧은 2차

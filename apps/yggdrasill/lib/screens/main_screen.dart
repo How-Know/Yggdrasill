@@ -33,6 +33,7 @@ import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/homework_departure_draft_service.dart';
+import '../services/homework_session_plan_service.dart';
 import '../services/consult_trial_lesson_service.dart';
 import '../services/student_flow_store.dart';
 import '../services/student_behavior_assignment_store.dart';
@@ -4065,7 +4066,8 @@ class _MainScreenState extends State<MainScreen>
                                                                 child:
                                                                     ScrollConfiguration(
                                                                   behavior:
-                                                                      ScrollConfiguration.of(
+                                                                      ScrollConfiguration
+                                                                          .of(
                                                                     context,
                                                                   ).copyWith(
                                                                     scrollbars:
@@ -4079,17 +4081,16 @@ class _MainScreenState extends State<MainScreen>
                                                                         EdgeInsets
                                                                             .zero,
                                                                     children: [
-                                                                      for (final t
-                                                                          in (<DateTime>{
+                                                                      for (final t in (<DateTime>{
                                                                         ...waitingByTime
                                                                             .keys,
                                                                         ...trialWaitingByTime
                                                                             .keys,
                                                                       }.toList()
-                                                                            ..sort(
-                                                                              (a, b) =>
-                                                                                  a.compareTo(b),
-                                                                            ))) ...[
+                                                                        ..sort(
+                                                                          (a, b) =>
+                                                                              a.compareTo(b),
+                                                                        ))) ...[
                                                                         Padding(
                                                                           padding:
                                                                               const EdgeInsets.only(
@@ -4101,8 +4102,7 @@ class _MainScreenState extends State<MainScreen>
                                                                             child:
                                                                                 Text(
                                                                               _formatTime(t),
-                                                                              style:
-                                                                                  TextStyle(
+                                                                              style: TextStyle(
                                                                                 color: sideSheetPalette.labelUnselected,
                                                                                 fontSize: 14 * sideSheetScale,
                                                                                 fontWeight: FontWeight.bold,
@@ -4120,8 +4120,7 @@ class _MainScreenState extends State<MainScreen>
                                                                             runSpacing:
                                                                                 _sideSheetWaitingCardSpacing * sideSheetScale,
                                                                             children: [
-                                                                              for (final w
-                                                                                  in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
+                                                                              for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
                                                                                 _buildAttendanceCard(
                                                                                   w,
                                                                                   status: 'waiting',
@@ -4132,8 +4131,7 @@ class _MainScreenState extends State<MainScreen>
                                                                                   arrival: arrivalBySet[w.setId],
                                                                                   departure: departureBySet[w.setId],
                                                                                 ),
-                                                                              for (final s
-                                                                                  in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
+                                                                              for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
                                                                                 _buildTrialLessonAttendanceCard(
                                                                                   s,
                                                                                   status: 'waiting',
@@ -4146,8 +4144,8 @@ class _MainScreenState extends State<MainScreen>
                                                                           ),
                                                                         ),
                                                                         SizedBox(
-                                                                          height: 12 *
-                                                                              sideSheetScale,
+                                                                          height:
+                                                                              12 * sideSheetScale,
                                                                         ),
                                                                       ],
                                                                     ],
@@ -4553,6 +4551,16 @@ class _MainScreenState extends State<MainScreen>
                         initialSelectedGroupIds: departureDraft?.isSaved == true
                             ? departureDraft!.groupIds
                             : null,
+                        initialSelectedItemIds:
+                            departureDraft?.hasPlanClassification == true
+                                ? departureDraft!.planHomeworkItemIds
+                                : null,
+                        excludedItemIds:
+                            departureDraft?.autoManagedPlanItemIds ??
+                                const <String>{},
+                        additionalHomeworkIds:
+                            departureDraft?.autoRolloverToHomeworkItemIds ??
+                                const <String>{},
                         initialDueDateByGroupId: departureDraft?.isSaved == true
                             ? departureDraft!.dueDateByGroupId
                             : const <String, DateTime>{},
@@ -4582,14 +4590,21 @@ class _MainScreenState extends State<MainScreen>
                     setId: t.setId,
                     sessionTypeId: t.classInfo?.id,
                   );
+                  if (attendanceId.isNotEmpty) {
+                    await HomeworkSessionPlanService.instance.finalizeDeparture(
+                      attendanceId: attendanceId,
+                    );
+                  }
                   // 하원 시 숙제 선택 다이얼로그
                   if (selection.itemIds.isNotEmpty) {
+                    final planItemIds = selection.planHomeworkItemIds.toSet();
                     final selectedItemIds = selection.itemIds
                         .map((e) => e.trim())
                         .where((e) => e.isNotEmpty)
                         .toSet()
                         .toList(growable: false);
                     for (final itemId in selectedItemIds) {
+                      if (planItemIds.contains(itemId)) continue;
                       HomeworkStore.instance.markItemsAsHomework(
                         t.student.id,
                         <String>[itemId],
@@ -4598,6 +4613,14 @@ class _MainScreenState extends State<MainScreen>
                         cloneCompletedItems: true,
                       );
                     }
+                  }
+                  if (attendanceId.isNotEmpty &&
+                      selection.planHomeworkItemIds.isNotEmpty) {
+                    await HomeworkSessionPlanService.instance
+                        .confirmDepartureHomework(
+                      attendanceId: attendanceId,
+                      homeworkItemIds: selection.planHomeworkItemIds,
+                    );
                   }
                   final selectedIds = selection.itemIds
                       .map((e) => e.trim())
@@ -4628,6 +4651,10 @@ class _MainScreenState extends State<MainScreen>
                         arrivalTime: arrival2,
                         departureTime: now,
                         selectedHomeworkIds: selection.itemIds,
+                        additionalHomeworkIds: (departureDraft
+                                    ?.autoRolloverToHomeworkItemIds ??
+                                const <String>{})
+                            .toList(growable: false),
                         selectedBehaviorIds: selection.selectedBehaviorIds,
                         irregularBehaviorCounts:
                             selection.irregularBehaviorCounts,

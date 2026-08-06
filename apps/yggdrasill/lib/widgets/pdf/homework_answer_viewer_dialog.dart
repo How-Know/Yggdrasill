@@ -15,7 +15,12 @@ enum HomeworkAnswerViewerAction { confirm, complete }
 enum HomeworkAnswerCellState {
   correct,
   wrong,
-  unsolved,
+
+  /// 답을 비운 문항. 점수와 통계에서는 오답으로 처리한다.
+  blank,
+
+  /// 학생이 수행 범위로 선언하지 않은 문항.
+  notPerformed,
 }
 
 class HomeworkAnswerGradingCell {
@@ -924,8 +929,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       case HomeworkAnswerCellState.correct:
         return HomeworkAnswerCellState.wrong;
       case HomeworkAnswerCellState.wrong:
-        return HomeworkAnswerCellState.unsolved;
-      case HomeworkAnswerCellState.unsolved:
+        return HomeworkAnswerCellState.notPerformed;
+      case HomeworkAnswerCellState.notPerformed:
+      case HomeworkAnswerCellState.blank:
         return HomeworkAnswerCellState.correct;
     }
   }
@@ -1850,11 +1856,18 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         textColor = const Color(0xFFFFB3B3);
         text = 'X';
         break;
-      case HomeworkAnswerCellState.unsolved:
+      case HomeworkAnswerCellState.blank:
+        // 미풀이는 점수상 오답이므로 오답과 같은 빨간 계열로 표시한다.
+        borderColor = const Color(0xFFA84A4A);
+        backgroundColor = const Color(0xFF3A2323);
+        textColor = const Color(0xFFFFB3B3);
+        text = '빈칸';
+        break;
+      case HomeworkAnswerCellState.notPerformed:
         borderColor = const Color(0xFF596565);
         backgroundColor = const Color(0xFF202929);
         textColor = const Color(0xFF8FA1A1);
-        text = '-';
+        text = '미수행';
         break;
     }
     return Tooltip(

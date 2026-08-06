@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_api.dart';
+import '../services/student_attendance_session.dart';
 import '../widgets/student_attendance_score_card.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_recent_attendance_panel.dart';
@@ -61,7 +62,22 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
   @override
   void initState() {
     super.initState();
+    _attendance = StudentAttendanceSession.instance.today;
+    StudentAttendanceSession.instance.addListener(_onAttendanceSessionChanged);
     unawaited(_loadScore());
+  }
+
+  @override
+  void dispose() {
+    StudentAttendanceSession.instance.removeListener(_onAttendanceSessionChanged);
+    super.dispose();
+  }
+
+  void _onAttendanceSessionChanged() {
+    if (!mounted) return;
+    setState(() {
+      _attendance = StudentAttendanceSession.instance.today;
+    });
   }
 
   Future<void> refresh() async {
@@ -109,14 +125,13 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       _attendanceError = null;
     });
     try {
-      final results = await Future.wait([
-        StudentApi.instance.todayAttendance(),
-        StudentApi.instance.listRecentAttendance(limit: 10),
-      ]);
+      await StudentAttendanceSession.instance.refresh();
+      final recent =
+          await StudentApi.instance.listRecentAttendance(limit: 10);
       if (!mounted) return;
       setState(() {
-        _attendance = results[0] as TodayAttendance;
-        _recent = results[1] as List<RecentAttendanceSession>;
+        _attendance = StudentAttendanceSession.instance.today;
+        _recent = recent;
         _loadingAttendance = false;
       });
     } catch (_) {

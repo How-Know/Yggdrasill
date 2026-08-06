@@ -46,6 +46,7 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final List<StudentFlow> flows;
   final String? initialFlowId;
   final bool childAddMode;
+  final bool requirePlanDestination;
   final String? lockedGroupTitle;
   final String? lockedBookId;
   final String? lockedGradeLabel;
@@ -56,6 +57,7 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
     this.initialColor,
     this.initialFlowId,
     this.childAddMode = false,
+    this.requirePlanDestination = false,
     this.lockedGroupTitle,
     this.lockedBookId,
     this.lockedGradeLabel,
@@ -121,6 +123,7 @@ class HomeworkQuickAddProxyDialogState
   /// 출제 옵션(시간 분할) UI 제거 후 고정값. API 호환을 위해 전송 필드만 유지.
   static const int _defaultSplitParts = 1;
   bool _detailsPanelExpanded = false;
+  String? _selectedPlanDestination;
   final List<_DraftGroupItem> _draftGroupItems = <_DraftGroupItem>[];
   int _draftGroupItemSeq = 0;
 
@@ -2772,20 +2775,24 @@ class HomeworkQuickAddProxyDialogState
           final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
           final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
           // 개념원리 crop.sub_key 는 A~E(카테고리)라 소단원 키가 될 수 없다.
-          // displaySubKey(U*) / smallOrder / smallName 으로 실제 소단원을 구분한다.
-          final displaySubKey =
-              '${m['displaySubKey'] ?? m['display_sub_key'] ?? ''}'.trim();
+          // 개념 페이지 초안은 displaySubKey 형식이 달라질 수 있으므로
+          // 소단원명(smallName)을 1순위로 동일 소단원을 묶는다.
+          final displaySubKey = _normalizedWonriDisplaySubKey(
+            '${m['displaySubKey'] ?? m['display_sub_key'] ?? ''}'.trim(),
+          );
           final midName = '${m['midName'] ?? m['mid_name'] ?? ''}'.trim();
           final smallName = '${m['smallName'] ?? m['small_name'] ?? ''}'.trim();
           if (bigOrder == null || midOrder == null) continue;
           final midKey = '$bigOrder|$midOrder';
           midKeys.add(midKey);
           if (midName.isNotEmpty) midNames[midKey] = midName;
-          final smallKey = displaySubKey.isNotEmpty
-              ? '$bigOrder|$midOrder|$displaySubKey'
-              : (smallOrder != null
-                  ? '$bigOrder|$midOrder|$smallOrder'
-                  : '$bigOrder|$midOrder|${smallName.isEmpty ? item.title : smallName}');
+          final smallKey = smallName.isNotEmpty
+              ? '$bigOrder|$midOrder|n:$smallName'
+              : (displaySubKey.isNotEmpty
+                  ? '$bigOrder|$midOrder|k:$displaySubKey'
+                  : (smallOrder != null
+                      ? '$bigOrder|$midOrder|o:$smallOrder'
+                      : '$bigOrder|$midOrder|t:${item.title.trim()}'));
           smallKeys.add(smallKey);
           final resolvedSmall =
               smallName.isNotEmpty ? smallName : item.title.trim();
@@ -4297,6 +4304,36 @@ class HomeworkQuickAddProxyDialogState
     return items;
   }
 
+  /// 탐색기 소단원 key(`big|mid|U*`)에서 실제 소단원 subKey(U*)만 추출.
+  String _explorerSmallSubKey(String smallKey) {
+    final trimmed = smallKey.trim();
+    if (trimmed.isEmpty) return '';
+    final parts = trimmed.split('|');
+    return parts.isEmpty ? trimmed : parts.last.trim();
+  }
+
+  /// 개념원리 그룹제목용 displaySubKey 정규화.
+  /// `0|1|U2`처럼 이미 경로가 붙은 값은 마지막 토큰만 쓴다.
+  String _normalizedWonriDisplaySubKey(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    if (!trimmed.contains('|')) return trimmed;
+    return _explorerSmallSubKey(trimmed);
+  }
+
+  /// 마이그레이션 개념/문항 초안을 같은 소단원으로 묶는 키.
+  String? _migratedConceptUnitKey({
+    required int bigOrder,
+    required int midOrder,
+    required String smallName,
+    int? smallOrder,
+  }) {
+    final name = smallName.trim();
+    if (name.isNotEmpty) return '$bigOrder|$midOrder|n:$name';
+    if (smallOrder != null) return '$bigOrder|$midOrder|o:$smallOrder';
+    return null;
+  }
+
   /// 문항 기반: 선택 문항을 유형 그룹(소단원·유형)별 하위과제로 만든다.
   List<_DraftGroupItem> _buildProblemSubtaskDraftItems(_LinkedTextbook book) {
     final selected = _selectedProblemRegions();
@@ -4306,8 +4343,18 @@ class HomeworkQuickAddProxyDialogState
     }
     final smallNodes = _smallNodeByUnitKey();
     final conceptPagesByUnit = <String, List<_SelectedMigratedConceptPage>>{};
+    final orphanConceptPages = <_SelectedMigratedConceptPage>[];
     for (final page in selectedConceptPages) {
-      final key = '${page.bigOrder}|${page.midOrder}|${page.smallOrder}';
+      final key = _migratedConceptUnitKey(
+        bigOrder: page.bigOrder,
+        midOrder: page.midOrder,
+        smallName: page.smallName,
+        smallOrder: page.smallOrder,
+      );
+      if (key == null) {
+        orphanConceptPages.add(page);
+        continue;
+      }
       conceptPagesByUnit
           .putIfAbsent(key, () => <_SelectedMigratedConceptPage>[])
           .add(page);
@@ -4324,10 +4371,13 @@ class HomeworkQuickAddProxyDialogState
       final regions = groups[key]!;
       final smallNode = _resolveSmallNodeForRegions(regions, smallNodes);
       final first = regions.first;
-      final conceptUnitKey = smallNode == null
-          ? ''
-          : '${first.bigOrder}|${first.midOrder}|${smallNode.orderIndex}';
-      final conceptPages = conceptUnitKey.isEmpty
+      final conceptUnitKey = _migratedConceptUnitKey(
+        bigOrder: first.bigOrder,
+        midOrder: first.midOrder,
+        smallName: (smallNode?.name ?? first.smallName),
+        smallOrder: smallNode?.orderIndex,
+      );
+      final conceptPages = conceptUnitKey == null
           ? const <_SelectedMigratedConceptPage>[]
           : (conceptPagesByUnit.remove(conceptUnitKey) ??
               const <_SelectedMigratedConceptPage>[]);
@@ -4339,6 +4389,15 @@ class HomeworkQuickAddProxyDialogState
           draftKey: 'auto_prob_$key',
           extraConceptPages:
               conceptPages.map((page) => page.displayPage).toSet(),
+        ),
+      );
+    }
+    if (orphanConceptPages.isNotEmpty) {
+      items.add(
+        _buildMigratedConceptPageDraftItem(
+          book,
+          orphanConceptPages,
+          draftKey: 'auto_concept_orphan',
         ),
       );
     }
@@ -4371,14 +4430,15 @@ class HomeworkQuickAddProxyDialogState
     final pageCounts = <String, int>{
       for (final page in sortedPages) '$page': 0,
     };
+    final unitSubKey = _explorerSmallSubKey(first.smallKey);
     final mapping = <String, dynamic>{
       'selectionMode': 'page',
       'sourceScope': 'migrated_concept_pages',
       'bigOrder': first.bigOrder,
       'midOrder': first.midOrder,
       'smallOrder': first.smallOrder,
-      'subKey': first.smallKey,
-      'displaySubKey': first.smallKey,
+      'subKey': unitSubKey.isNotEmpty ? unitSubKey : first.smallKey,
+      'displaySubKey': unitSubKey.isNotEmpty ? unitSubKey : first.smallKey,
       'bigName': first.bigName,
       'midName': first.midName,
       'smallName': first.smallName,
@@ -5970,8 +6030,7 @@ class HomeworkQuickAddProxyDialogState
 
   Widget _buildMigratedGroupSummaryInfo() {
     final pages = _draftUsedPages();
-    final pageText =
-        pages.isEmpty ? '-' : 'p.${_pagesToCompactText(pages)}';
+    final pageText = pages.isEmpty ? '-' : 'p.${_pagesToCompactText(pages)}';
     var totalCount = 0;
     for (final item in _draftGroupItems) {
       totalCount += _parsePositiveIntText(item.count) ?? 0;
@@ -7549,6 +7608,8 @@ class HomeworkQuickAddProxyDialogState
         'groupTitle': groupTitle,
         'flowId': _flowId,
         'action': resolvedAction,
+        if (widget.requirePlanDestination)
+          'planDestination': _selectedPlanDestination,
         'items':
             normalizedDraftItems.map((e) => e.toJson()).toList(growable: false),
       });
@@ -7593,6 +7654,8 @@ class HomeworkQuickAddProxyDialogState
         'studentId': widget.studentId,
         'flowId': _flowId,
         'action': resolvedAction,
+        if (widget.requirePlanDestination)
+          'planDestination': _selectedPlanDestination,
         'type': linkedType,
         'title': title,
         'page': page,
@@ -7657,6 +7720,8 @@ class HomeworkQuickAddProxyDialogState
         'groupTitle': fallbackGroupTitle,
         'flowId': _flowId,
         'action': resolvedAction,
+        if (widget.requirePlanDestination)
+          'planDestination': _selectedPlanDestination,
         'items': groupItems.map((e) => e.toJson()).toList(growable: false),
       });
       return;
@@ -7715,6 +7780,8 @@ class HomeworkQuickAddProxyDialogState
       'studentId': widget.studentId,
       'flowId': _flowId,
       'action': resolvedAction,
+      if (widget.requirePlanDestination)
+        'planDestination': _selectedPlanDestination,
       'type': linkedType,
       'title': title,
       'page': mergedTask.page,
@@ -9248,8 +9315,9 @@ class HomeworkQuickAddProxyDialogState
 
     Widget confirmButton({
       required String label,
-      required VoidCallback onTap,
+      required VoidCallback? onTap,
     }) {
+      final enabled = onTap != null;
       return Material(
         color: Colors.transparent,
         child: InkWell(
@@ -9260,13 +9328,48 @@ class HomeworkQuickAddProxyDialogState
             padding: const EdgeInsets.symmetric(horizontal: 20),
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: kDlgAccent,
+              color: enabled ? kDlgAccent : dlgColors.chipBg,
               borderRadius: BorderRadius.circular(actionButtonHeight / 2),
             ),
             child: Text(
               label,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: enabled ? Colors.white : dlgColors.chipText,
+                fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget destinationChip({
+      required String label,
+      required String value,
+    }) {
+      final selected = _selectedPlanDestination == value;
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(actionButtonHeight / 2),
+          onTap: () => setState(() => _selectedPlanDestination = value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            height: actionButtonHeight,
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? kDlgAccent : dlgColors.chipBg,
+              borderRadius: BorderRadius.circular(actionButtonHeight / 2),
+              border: Border.all(
+                color: selected ? kDlgAccent : kDlgBorder,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : dlgColors.chipText,
                 fontSize: FabTabBarTokens.fabBarLabelFontSize,
                 fontWeight: FontWeight.w700,
               ),
@@ -9291,14 +9394,24 @@ class HomeworkQuickAddProxyDialogState
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          actionChip(
-            label: '취소',
-            onTap: () => Navigator.pop(context, null),
-          ),
+          if (widget.requirePlanDestination) ...[
+            destinationChip(label: '오늘', value: 'in_class'),
+            const SizedBox(width: 8),
+            destinationChip(label: '숙제', value: 'homework'),
+            const SizedBox(width: 8),
+            destinationChip(label: '다음', value: 'next_session'),
+          ] else
+            actionChip(
+              label: '취소',
+              onTap: () => Navigator.pop(context, null),
+            ),
           const Spacer(),
           confirmButton(
             label: _isChildAddMode ? '하위 과제 추가' : '과제 내기',
-            onTap: () => _submit(action: 'add'),
+            onTap: widget.requirePlanDestination &&
+                    _selectedPlanDestination == null
+                ? null
+                : () => _submit(action: 'add'),
           ),
         ],
       );

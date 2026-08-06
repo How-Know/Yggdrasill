@@ -122,9 +122,13 @@ class _HomeworkNowPlayingBarState extends State<HomeworkNowPlayingBar> {
     final barHeight = HomeworkNowPlayingBar.height * s;
     final radius = BorderRadius.circular(barHeight / 2);
     final running = _running;
-    final title =
-        widget.group.title.isEmpty ? '(제목 없음)' : widget.group.title;
-    final subtitle = widget.group.primaryMetaLine;
+    final title = widget.group.title.isEmpty ? '(제목 없음)' : widget.group.title;
+    final kindLabel = widget.group.isHomework ? '숙제' : '오늘 수업';
+    final origin = widget.group.assignmentOriginLabel;
+    final contextLabel = origin.isEmpty ? kindLabel : '$kindLabel · $origin';
+    final meta = widget.group.primaryMetaLine;
+    final subtitle =
+        meta.isEmpty || meta == '-' ? contextLabel : '$contextLabel · $meta';
     final coverUri = Uri.tryParse(widget.coverRef ?? '');
     final hasCover = !widget.group.isPrintSource &&
         coverUri != null &&
@@ -137,8 +141,7 @@ class _HomeworkNowPlayingBarState extends State<HomeworkNowPlayingBar> {
         (widget.inline
             ? StudentBottomNavTokens.nowPlayingCompactMaxWidth
             : HomeworkNowPlayingBar._maxWidth);
-    final elapsedLabel =
-        HomeworkNowPlayingBar.formatCycleElapsed(_cycleSec);
+    final elapsedLabel = HomeworkNowPlayingBar.formatCycleElapsed(_cycleSec);
 
     return SizedBox(
       width: barWidth,
@@ -237,7 +240,7 @@ class _HomeworkNowPlayingBarState extends State<HomeworkNowPlayingBar> {
                       onTap: widget.onPlayPause,
                     ),
                     _IconButton(
-                      tooltip: '제출',
+                      tooltip: '$kindLabel 제출',
                       size: 44 * s,
                       onTap: widget.busy ? null : widget.onSubmit,
                       child: Icon(
@@ -346,8 +349,8 @@ class _AnimatedPlayPauseButtonState extends State<_AnimatedPlayPauseButton>
   void didUpdateWidget(covariant _AnimatedPlayPauseButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 상태 반영(또는 busy 종료) 후 줄어든 상태에서 다시 커지며 아이콘 전환.
-    final settled = widget.running != oldWidget.running ||
-        (oldWidget.busy && !widget.busy);
+    final settled =
+        widget.running != oldWidget.running || (oldWidget.busy && !widget.busy);
     if (settled && _press.isCompleted) {
       _press.reverse();
     }
@@ -505,7 +508,7 @@ mixin HomeworkNowPlayingActions<T extends StatefulWidget> on State<T> {
       if (!mounted) return;
       TopGlassSnackBar.show(
         context,
-        message: '과제를 일시정지했어요.',
+        message: '${group.isHomework ? '숙제' : '수업 과제'}를 일시정지했어요.',
         icon: Icons.pause_circle_outline_rounded,
       );
       return;
@@ -521,7 +524,7 @@ mixin HomeworkNowPlayingActions<T extends StatefulWidget> on State<T> {
     } else if (result['error'] == 'phase_mismatch') {
       TopGlassSnackBar.show(
         context,
-        message: '과제 상태가 바뀌었어요. 다시 시도해 주세요.',
+        message: '${group.isHomework ? '숙제' : '수업 과제'} 상태가 바뀌었어요. 다시 시도해 주세요.',
         icon: Icons.sync_rounded,
       );
     } else {
@@ -541,7 +544,7 @@ mixin HomeworkNowPlayingActions<T extends StatefulWidget> on State<T> {
     if (result['ok'] == true) {
       TopGlassSnackBar.show(
         context,
-        message: '과제를 제출했어요!',
+        message: '${group.isHomework ? '숙제' : '수업 과제'}를 제출했어요!',
         icon: Icons.check_circle_outline_rounded,
       );
     } else if (result['error'] == 'phase_mismatch') {

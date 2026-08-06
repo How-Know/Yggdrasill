@@ -701,6 +701,16 @@ function isDailyQuotaExceededMessage(input) {
   );
 }
 
+export function isRetryableVlmChunkError(input) {
+  const message = String(input || '');
+  return (
+    !isDailyQuotaExceededMessage(message) &&
+    /aborted|abort|timeout|deadline|fetch failed|network|econnreset|econnrefused|etimedout|socket hang up|429|500|502|503|504|missing_expected_questions|parse_failed/i.test(
+      message,
+    )
+  );
+}
+
 function normalizeCompactFractionCommands(input) {
   let out = String(input || '');
   for (let i = 0; i < 4; i += 1) {
@@ -1068,11 +1078,7 @@ async function callGeminiChunkWithRetry({
       return result;
     } catch (err) {
       const msg = compact(err?.message || err);
-      const retryable =
-        !isDailyQuotaExceededMessage(msg) &&
-        /aborted|abort|timeout|deadline|429|500|502|503|504|missing_expected_questions|parse_failed/i.test(
-          msg,
-        );
+      const retryable = isRetryableVlmChunkError(msg);
       if (typeof log === 'function') {
         log('vlm_chunk_call_error', {
           chunkIndex: input.chunkIndex,

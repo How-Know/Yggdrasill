@@ -9,16 +9,20 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../../services/problem_bank_service.dart';
 import '../../services/textbook_course_catalog.dart';
+import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_unit_progress_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'grading_equiv_tab.dart';
 import 'handwriting_review_tab.dart';
 import 'problem_bank_models.dart';
+import 'review/problem_bank_review_mode.dart';
+import 'review/problem_bank_review_panes.dart';
 import 'widgets/figure_compare_dialog.dart';
 import 'widgets/figure_horizontal_groups_editor.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_export_preset_dialog.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
+import 'widgets/problem_bank_question_card.dart';
 import 'widgets/problem_bank_synced_list_dialog.dart';
 import 'widgets/question_revision_reason_dialog.dart';
 import 'widgets/objective_choices_edit_dialog.dart';
@@ -176,7 +180,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   final String _syncedListDetailedCourse = '전체';
 
   List<ProblemBankDocument> _documents = <ProblemBankDocument>[];
+  List<ProblemBankDocument> _allTextbookDocuments = <ProblemBankDocument>[];
   ProblemBankDocument? _activeDocument;
+  int? _requestedTextbookPage;
+  final Set<String> _expandedTextbookSwitchGroups = <String>{};
   ProblemBankExtractJob? _activeExtractJob;
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
   final List<_PipelineLogEntry> _pipelineLogs = <_PipelineLogEntry>[];
@@ -205,6 +212,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   final TextEditingController _classificationSchoolFilterCtrl =
       TextEditingController();
   final Set<String> _dirtyQuestionIds = <String>{};
+  final Set<String> _savingQuestionIds = <String>{};
   final Set<String> _reextractingQuestionIds = <String>{};
   bool _isSavingQuestionChanges = false;
   bool _isDeletingCurrentQuestions = false;
@@ -237,11 +245,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   int get _checkedCount => _questions.where((q) => q.isChecked).length;
   int get _lowConfidenceCount => _questions.where(_isLowConfidence).length;
-  int get _unuploadedCount {
-    if (!_documentDbReady) return _questions.length;
-    if (_needsPublish) return _questions.length;
-    return _questions.where((q) => _dirtyQuestionIds.contains(q.id)).length;
-  }
 
   List<ProblemBankQuestion> get _visibleQuestions => _showUnuploadedOnly
       ? _questions.where(_isUnuploadedQuestion).toList(growable: false)
@@ -1479,27 +1482,37 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       });
     }
 
-    final questionIds = ordered
-        .map((q) => q.questionUid.trim().isNotEmpty
-            ? q.questionUid.trim()
-            : q.id.trim())
-        .where((id) => id.isNotEmpty)
-        .toList(growable: false);
-    if (questionIds.isEmpty) return;
-
-    final activeDocument = _activeDocument;
-    final documentId = activeDocument?.id.trim() ?? '';
+    final questionsByDocument = <String, List<ProblemBankQuestion>>{};
+    for (final question in ordered) {
+      questionsByDocument
+          .putIfAbsent(question.documentId.trim(), () => [])
+          .add(question);
+    }
     const profile = 'naesin';
     const paperSize = 'A4';
 
     try {
-      final urlMap = await _service.batchRenderThumbnails(
-        academyId: academyId,
-        questionIds: questionIds,
-        documentId: documentId,
-        templateProfile: profile,
-        paperSize: paperSize,
+      final urlMap = <String, String>{};
+      final batches = await Future.wait(
+        questionsByDocument.entries.map((entry) {
+          final questionIds = entry.value
+              .map((question) => question.questionUid.trim().isNotEmpty
+                  ? question.questionUid.trim()
+                  : question.id.trim())
+              .where((id) => id.isNotEmpty)
+              .toList(growable: false);
+          return _service.batchRenderThumbnails(
+            academyId: academyId,
+            questionIds: questionIds,
+            documentId: entry.key,
+            templateProfile: profile,
+            paperSize: paperSize,
+          );
+        }),
       );
+      for (final batch in batches) {
+        urlMap.addAll(batch);
+      }
       if (!mounted) return;
 
       final uidToId = <String, String>{};
@@ -1748,7 +1761,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   Future<void> _openFigureCompareDialog(ProblemBankQuestion q) async {
     final academyId = _academyId;
     if (academyId == null) return;
-    final doc = _activeDocument;
+    final doc = _documentForQuestion(q);
     if (doc == null) return;
 
     final originalAssets = List<Map<String, dynamic>>.from(
@@ -2027,16 +2040,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final academyId = await _service.resolveAcademyId();
       _appendPipelineLog('init', 'academy_id 확인: $academyId');
       final docs = await _service.listRecentDocuments(academyId: academyId);
+      final textbookDocs =
+          await _service.listAllTextbookDocuments(academyId: academyId);
       if (!mounted) return;
       setState(() {
         _academyId = academyId;
         _schemaMissing = false;
         _academyMissing = false;
         _documents = docs;
+        _allTextbookDocuments = textbookDocs;
         _activeDocument = docs.isNotEmpty ? docs.first : null;
         _statusText = docs.isEmpty ? '업로드할 HWPX를 선택하세요.' : '문서를 선택해 주세요.';
       });
-      _appendPipelineLog('init', '최근 문서 ${docs.length}건 로드');
+      _appendPipelineLog(
+        'init',
+        '최근 문서 ${docs.length}건 · 전체 교재 문서 ${textbookDocs.length}건 로드',
+      );
       if (_activeDocument != null) {
         await _loadDocumentContext(_activeDocument!.id);
       }
@@ -2078,17 +2097,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     try {
       _appendPipelineLog('doc', '문서 목록 새로고침 시작');
       final docs = await _service.listRecentDocuments(academyId: academyId);
+      final textbookDocs =
+          await _service.listAllTextbookDocuments(academyId: academyId);
       if (!mounted) return;
       setState(() {
         _documents = docs;
+        _allTextbookDocuments = textbookDocs;
         if (_activeDocument == null && docs.isNotEmpty) {
           _activeDocument = docs.first;
         } else if (_activeDocument != null &&
-            !docs.any((d) => d.id == _activeDocument!.id)) {
+            !docs.any((d) => d.id == _activeDocument!.id) &&
+            !textbookDocs.any((d) => d.id == _activeDocument!.id)) {
           _activeDocument = docs.isEmpty ? null : docs.first;
         }
       });
-      _appendPipelineLog('doc', '문서 목록 ${docs.length}건 갱신');
+      _appendPipelineLog(
+        'doc',
+        '최근 문서 ${docs.length}건 · 전체 교재 문서 ${textbookDocs.length}건 갱신',
+      );
       if (_topTabController.index == 1) {
         unawaited(_runClassificationSearch());
       } else if (_topTabController.index == 2) {
@@ -2210,9 +2236,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
-  Future<void> _loadDocumentContext(String documentId) async {
+  Future<void> _loadDocumentContext(
+    String documentId, {
+    int? textbookPage,
+    bool preferFirstTextbookQuestion = false,
+  }) async {
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) return;
+    final nextTextbookPage = textbookPage ??
+        (_activeDocument?.id == documentId ? _requestedTextbookPage : null);
     try {
       _appendPipelineLog('doc', '문서 컨텍스트 로드: $documentId');
       final summary = await _service.loadDocumentSummary(
@@ -2226,11 +2258,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         });
         return;
       }
-      final questions = await _service.listQuestions(
-        academyId: academyId,
-        documentId: documentId,
-      );
+      final textbookReview = problemBankReviewModeOf(summary.document) ==
+          ProblemBankReviewMode.textbookPdf;
+      final textbookDocuments = textbookReview
+          ? _textbookDocumentsForBook(summary.document)
+          : const <ProblemBankDocument>[];
+      final questions = textbookReview
+          ? await _service.listQuestionsForDocuments(
+              academyId: academyId,
+              documentIds: textbookDocuments.map((document) => document.id),
+            )
+          : await _service.listQuestions(
+              academyId: academyId,
+              documentId: documentId,
+            );
       if (!mounted) return;
+      final questionPages = textbookPagesOf(questions);
+      final resolvedTextbookPage =
+          preferFirstTextbookQuestion && questionPages.isNotEmpty
+              ? questionPages.first
+              : nextTextbookPage;
       final extractStatus = summary.latestExtractJob?.status ?? '';
       final documentStatus = summary.document.status.trim();
       final isDraftDocument = documentStatus.startsWith('draft_');
@@ -2245,7 +2292,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           summary.document,
           ..._documents.where((doc) => doc.id != summary.document.id),
         ];
+        if (textbookReview) {
+          _allTextbookDocuments = <ProblemBankDocument>[
+            summary.document,
+            ..._allTextbookDocuments
+                .where((doc) => doc.id != summary.document.id),
+          ];
+          _expandedTextbookSwitchGroups
+              .add(_textbookSwitchGroupLabel(summary.document));
+          _showUnuploadedOnly = false;
+        }
         _activeDocument = summary.document;
+        _requestedTextbookPage = resolvedTextbookPage;
         _activeExtractJob = summary.latestExtractJob;
         _questions = questions;
         _dirtyQuestionIds.clear();
@@ -2273,10 +2331,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       });
       _appendPipelineLog(
         'doc',
-        '문서 로드 완료: 문항 ${questions.length}건, extract=$extractStatus',
+        textbookReview
+            ? '교재 통합 로드 완료: 문서 ${textbookDocuments.length}건 · 문항 ${questions.length}건'
+            : '문서 로드 완료: 문항 ${questions.length}건, extract=$extractStatus',
       );
-      unawaited(_prefetchQuestionPreviewUrls(questions));
-      unawaited(_prefetchFigurePreviewUrls(questions));
+      final initialQuestions = textbookReview && resolvedTextbookPage != null
+          ? textbookQuestionsOnPage(questions, resolvedTextbookPage)
+          : questions;
+      unawaited(_prefetchQuestionPreviewUrls(initialQuestions));
+      unawaited(_prefetchFigurePreviewUrls(initialQuestions));
       unawaited(_syncFigurePollingForActiveDocument());
       _ensurePolling();
     } catch (e) {
@@ -2828,7 +2891,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       );
       return;
     }
-    final doc = _activeDocument;
+    final targetDocumentIds =
+        targets.map((question) => question.documentId).toSet();
+    final doc = targetDocumentIds.length == 1
+        ? _documentForQuestion(targets.first)
+        : _activeDocument;
     if (doc == null) {
       _showSnack('먼저 HWPX를 업로드하고 문서를 선택해주세요.', error: true);
       return;
@@ -2848,6 +2915,36 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('재추출할 문항 ID를 찾지 못했습니다.', error: true);
       return;
     }
+    final dirtyTargetCount = targetIds.where(_dirtyQuestionIds.contains).length;
+    if (dirtyTargetCount > 0) {
+      final discard = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: _panel,
+              title: const Text(
+                '미저장 수정사항 폐기',
+                style: TextStyle(color: _text),
+              ),
+              content: Text(
+                '재추출 대상 중 $dirtyTargetCount개 문항에 저장하지 않은 수정사항이 있습니다.\n'
+                '수정사항을 폐기하고 재추출할까요?',
+                style: const TextStyle(color: _textSub, fontSize: 13),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('폐기 후 재추출'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!discard || !mounted) return;
+    }
     final extract = _activeExtractJob;
     if (extract != null &&
         extract.documentId == doc.id &&
@@ -2857,7 +2954,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
 
     final targetLabel = fromCheckedBulk
-        ? '체크 문항 ${targetIds.length}건'
+        ? '검수 완료 문항 ${targetIds.length}건'
         : '${targets.first.questionNumber}번 문항';
     _appendPipelineLog('extract', '부분 재추출 요청: $targetLabel');
     if (!mounted) return;
@@ -3352,10 +3449,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
-  Future<void> _saveQuestionsToServer() async {
+  Future<void> _publishDocument() async {
     if (_isSavingQuestionChanges || _isDeletingCurrentQuestions) return;
+    if (_dirtyQuestionIds.isNotEmpty) {
+      _showSnack(
+        '수정 중인 ${_dirtyQuestionIds.length}개 문항을 카드의 저장 버튼으로 먼저 저장해주세요.',
+        error: true,
+      );
+      return;
+    }
     if (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta && !_needsPublish) {
-      _showSnack('업로드할 변경사항이 없습니다.');
+      _showSnack('확정할 변경사항이 없습니다.');
       return;
     }
     if (_isSchoolPastSource && _sourceExamTerm.isEmpty) {
@@ -3378,7 +3482,33 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('고등 내신 기출은 과목을 선택해주세요.', error: true);
       return;
     }
-    final dirtyIds = _dirtyQuestionIds.toList(growable: false);
+    final unreviewedCount = _questions.where((q) => !q.isChecked).length;
+    if ((_activeDocument?.status ?? '').trim().toLowerCase() != 'ready') {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: _panel,
+              title: const Text('문서 확정', style: TextStyle(color: _text)),
+              content: Text(
+                '이 문서를 학습 앱에 노출합니다.\n'
+                '미검수 문항 $unreviewedCount개도 함께 노출되며, 문항별 검수 상태는 그대로 유지됩니다.',
+                style: const TextStyle(color: _textSub, height: 1.45),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('확정'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed || !mounted) return;
+    }
     final doc = _activeDocument;
     final academyId = _academyId;
     final curriculumCode = _selectedCurriculumCode;
@@ -3408,68 +3538,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _isSavingQuestionChanges = true;
     });
     try {
-      for (final id in dirtyIds) {
-        final match = _questions.where((q) => q.id == id);
-        if (match.isEmpty) continue;
-        final q = match.first;
-        final mergedMeta = Map<String, dynamic>.from(q.meta);
-        final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
-        if (parsedScore == null) {
-          mergedMeta.remove('score_point');
-        } else {
-          final rounded = parsedScore.roundToDouble();
-          mergedMeta['score_point'] =
-              rounded == parsedScore ? rounded.toInt() : parsedScore;
-        }
-        if (!q.allowSubjective) {
-          mergedMeta.remove('subjective_answer');
-          mergedMeta.remove('answer_parts');
-        }
-        final normalizedMeta =
-            _metaWithSuppressedAutoTypesNormalized(q, mergedMeta);
-        if (!q.allowSubjective) {
-          normalizedMeta.remove('subjective_answer');
-          normalizedMeta.remove('answer_parts');
-        }
-        _syncFigureMetaWithStem(stem: q.stem, meta: normalizedMeta);
-        final normalizedSubjectiveAnswer = !q.allowSubjective
-            ? ''
-            : (q.subjectiveAnswer.trim().isNotEmpty
-                ? q.subjectiveAnswer
-                : '${normalizedMeta['subjective_answer'] ?? ''}');
-        final saveFigureRefs = _figureRefsForSave(q);
-        await _service.updateQuestionReview(
-          questionId: q.id,
-          isChecked: q.isChecked,
-          reviewerNotes: q.reviewerNotes,
-          questionType: q.questionType,
-          stem: q.stem,
-          choices: q.choices,
-          allowObjective: q.allowObjective,
-          allowSubjective: q.allowSubjective,
-          objectiveChoices: q.objectiveChoices,
-          objectiveAnswerKey: q.objectiveAnswerKey,
-          subjectiveAnswer: normalizedSubjectiveAnswer,
-          objectiveGenerated: q.objectiveGenerated,
-          figureRefs: saveFigureRefs,
-          equations: q.equations,
-          curriculumCode: curriculumCode,
-          sourceTypeCode: sourceTypeCode,
-          schoolLevel: schoolLevel,
-          gradeKey: gradeKey,
-          courseKey: courseKey,
-          courseLabel: courseLabel,
-          gradeLabel: gradeLabel,
-          examYear: examYear,
-          semesterLabel: semesterLabel,
-          examTermLabel: examTermLabel,
-          schoolName: schoolName,
-          publisherName: publisherName,
-          materialName: materialName,
-          classificationDetail: classificationDetail,
-          meta: normalizedMeta,
-        );
-      }
       if (doc != null) {
         // 추출 단계는 draft 이므로 분류 정보를 DB 에 저장하지 않는다.
         // 따라서 '업로드(확정)' 버튼 시점에는 사용자가 상단에 입력한 분류를
@@ -3527,20 +3595,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _needsPublish = false;
         _scoreDrafts.clear();
       });
-      _showSnack('문항을 확정 업로드했습니다. (학습 앱 반영)');
-      if (dirtyIds.isNotEmpty && academyId != null && academyId.isNotEmpty) {
-        final dirtyQuestions = _questions
-            .where((q) => dirtyIds.contains(q.id.trim()))
-            .toList(growable: false);
-        unawaited(_prefetchQuestionPreviewUrls(dirtyQuestions));
-      }
+      _showSnack(
+        '문서를 확정했습니다. (학습 앱 반영 · 미검수 ${_questions.where((q) => !q.isChecked).length}문항)',
+      );
       if (doc != null) {
         await _loadDocumentContext(doc.id);
       } else {
         await _reloadQuestions();
       }
     } catch (e) {
-      _showSnack('업로드 저장 실패: $e', error: true);
+      _showSnack('문서 확정 실패: $e', error: true);
     } finally {
       if (mounted) {
         setState(() {
@@ -3683,24 +3747,152 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Future<void> _setAllChecked(bool checked) async {
-    if (_questions.isEmpty) return;
-    if (!mounted) return;
+    final academyId = _academyId;
+    final document = _activeDocument;
+    if (_questions.isEmpty ||
+        academyId == null ||
+        academyId.isEmpty ||
+        document == null ||
+        _isSavingQuestionChanges) {
+      return;
+    }
+    final previous = _questions;
     setState(() {
       _questions = _questions
           .map((q) => q.copyWith(isChecked: checked))
           .toList(growable: false);
-      _dirtyQuestionIds.addAll(_questions.map((q) => q.id));
+      _isSavingQuestionChanges = true;
     });
+    try {
+      final documentIds =
+          problemBankReviewModeOf(document) == ProblemBankReviewMode.textbookPdf
+              ? _questions.map((question) => question.documentId).toSet()
+              : <String>{document.id};
+      await Future.wait(
+        documentIds.map(
+          (documentId) => _service.bulkSetChecked(
+            academyId: academyId,
+            documentId: documentId,
+            isChecked: checked,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _dirtyQuestionIds.removeAll(_questions.map((q) => q.id));
+      });
+      _showSnack(checked ? '모든 문항을 검수 완료로 표시했습니다.' : '모든 문항의 검수를 취소했습니다.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _questions = previous);
+      _showSnack('검수 상태 저장 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _isSavingQuestionChanges = false);
+    }
   }
 
   Future<void> _toggleChecked(ProblemBankQuestion q, bool value) async {
-    if (!mounted) return;
+    if (!mounted || _savingQuestionIds.contains(q.id)) return;
+    final previous = q;
+    final updated = q.copyWith(isChecked: value);
     setState(() {
       _questions = _questions
-          .map((e) => e.id == q.id ? e.copyWith(isChecked: value) : e)
+          .map((e) => e.id == q.id ? updated : e)
           .toList(growable: false);
-      _dirtyQuestionIds.add(q.id);
+      _savingQuestionIds.add(q.id);
     });
+    try {
+      await _service.updateQuestionReview(
+        questionId: q.id,
+        isChecked: value,
+      );
+      if (!mounted) return;
+      setState(() => _dirtyQuestionIds.remove(q.id));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _questions = _questions
+            .map((item) => item.id == q.id ? previous : item)
+            .toList(growable: false);
+      });
+      _showSnack('검수 상태 저장 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _savingQuestionIds.remove(q.id));
+    }
+  }
+
+  Future<void> _saveQuestion(ProblemBankQuestion question) async {
+    final id = question.id.trim();
+    if (id.isEmpty || _savingQuestionIds.contains(id)) return;
+    final matches = _questions.where((item) => item.id == id);
+    if (matches.isEmpty) return;
+    final current = matches.first;
+    setState(() => _savingQuestionIds.add(id));
+    try {
+      await _saveAndRefreshPreview(current);
+      if (!mounted) return;
+      if (!_dirtyQuestionIds.contains(id)) {
+        _showSnack('${current.questionNumber}번 문항을 저장했습니다.');
+      }
+    } finally {
+      if (mounted) setState(() => _savingQuestionIds.remove(id));
+    }
+  }
+
+  Future<void> _deleteQuestion(ProblemBankQuestion question) async {
+    if (_isDeletingCurrentQuestions ||
+        _isSavingQuestionChanges ||
+        _savingQuestionIds.contains(question.id)) {
+      return;
+    }
+    final academyId = _academyId;
+    final document = _documentForQuestion(question);
+    if (academyId == null || academyId.isEmpty || document == null) return;
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: _panel,
+            title: const Text('문항 삭제', style: TextStyle(color: _text)),
+            content: Text(
+              '${question.questionNumber}번 문항을 삭제할까요?\n이 작업은 되돌릴 수 없습니다.',
+              style: const TextStyle(color: _textSub, fontSize: 13),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _danger),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('삭제'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    setState(() => _isDeletingCurrentQuestions = true);
+    try {
+      await _service.deleteQuestionsByIds(
+        academyId: academyId,
+        documentId: document.id,
+        questionIds: <String>[question.id],
+      );
+      if (!mounted) return;
+      setState(() {
+        _questions =
+            _questions.where((item) => item.id != question.id).toList();
+        _dirtyQuestionIds.remove(question.id);
+        _scoreDrafts.remove(question.id);
+        _questionPreviewUrls.remove(question.id);
+      });
+      _showSnack('${question.questionNumber}번 문항을 삭제했습니다.');
+    } catch (e) {
+      _showSnack('문항 삭제 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _isDeletingCurrentQuestions = false);
+    }
   }
 
   bool _allowEssayOf(ProblemBankQuestion q) => q.meta['allow_essay'] == true;
@@ -9556,12 +9748,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     Widget previewCore(BoxConstraints constraints) {
       final width =
           constraints.maxWidth.isFinite ? constraints.maxWidth : 420.0;
-      final fillCompact = compact && !expanded;
       Widget netImage() {
         return Image.network(
           previewUrl,
           width: width,
-          fit: fillCompact ? BoxFit.cover : BoxFit.fitWidth,
+          fit: compact && !expanded ? BoxFit.contain : BoxFit.fitWidth,
           alignment: Alignment.topCenter,
           errorBuilder: (_, __, ___) => _buildLocalPdfPreviewFallback(
             q,
@@ -9576,22 +9767,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
       final scrollChild = netImage();
       if (innerConstraints != null) {
-        if (fillCompact) {
-          return ConstrainedBox(
-            constraints: innerConstraints,
-            child: SizedBox(
-              width: double.infinity,
-              child: scrollChild,
-            ),
-          );
-        }
         return ConstrainedBox(
           constraints: innerConstraints,
-          child: ListView(
-            shrinkWrap: true,
-            physics: const ClampingScrollPhysics(),
-            padding: EdgeInsets.zero,
-            children: [scrollChild],
+          child: SizedBox(
+            width: double.infinity,
+            child: scrollChild,
           ),
         );
       }
@@ -13623,6 +13803,33 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  ProblemBankDocument? _documentForQuestion(ProblemBankQuestion question) {
+    final active = _activeDocument;
+    if (active?.id == question.documentId) return active;
+    for (final document in _allTextbookDocuments) {
+      if (document.id == question.documentId) return document;
+    }
+    for (final document in _documents) {
+      if (document.id == question.documentId) return document;
+    }
+    return active;
+  }
+
+  String _textbookSectionLabelOf(ProblemBankQuestion question) {
+    final scope = question.meta['textbook_scope'];
+    final crop = question.meta['textbook_crop_page'];
+    for (final candidate in <dynamic>[
+      scope is Map ? scope['sub_name'] : null,
+      crop is Map ? crop['item_name'] : null,
+      crop is Map ? crop['content_group'] : null,
+      crop is Map ? crop['section'] : null,
+    ]) {
+      final label = '$candidate'.trim();
+      if (label.isNotEmpty && label != 'null') return label;
+    }
+    return '';
+  }
+
   Widget _buildQuestionGridCard(ProblemBankQuestion q) {
     final confidenceColor = q.confidence >= 0.9
         ? const Color(0xFF41B883)
@@ -13649,8 +13856,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final scoreDraft = _scoreDraftFor(q);
     final previewChoices = _previewChoicesOf(q);
     final objectiveChoiceCount = previewChoices.length;
+    final isSavingThisQuestion = _savingQuestionIds.contains(q.id);
     final isReextractingThisQuestion = _reextractingQuestionIds.contains(q.id);
-    final doc = _activeDocument;
+    final doc = _documentForQuestion(q);
+    final textbookSection = _textbookSectionLabelOf(q);
     final canUsePartialReextractSource = (doc?.hasPdfSource ?? false) &&
         ((doc?.hasHwpxSource ?? false) || (doc?.isTextbookPdfOnly ?? false));
     final docStatus = (_activeDocument?.status ?? '').trim().toLowerCase();
@@ -13665,7 +13874,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         !_isExtracting &&
         !_isSavingQuestionChanges &&
         !_isDeletingCurrentQuestions;
-    final metaFooter = 'p.${q.sourcePage}'
+    final pageNumber =
+        problemBankReviewModeOf(doc) == ProblemBankReviewMode.textbookPdf
+            ? textbookDisplayPageOf(q)
+            : q.sourcePage;
+    final metaFooter = 'p.$pageNumber'
         ' · 보기 $objectiveChoiceCount개'
         ' · 수식 ${q.equations.length}개'
         '${isViewBlock ? ' · 보기형' : ''}'
@@ -13673,19 +13886,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         '${isImageChoice ? ' · 그림선지형' : ''}'
         '${q.figureRefs.isNotEmpty ? ' · 그림 포함' : ''}';
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
-      decoration: BoxDecoration(
-        color: _field,
-        borderRadius: BorderRadius.circular(10),
-        border:
-            Border.all(color: _isLowConfidence(q) ? confidenceColor : _border),
-      ),
+    return ProblemBankQuestionCard(
+      key: ValueKey<String>('question-card-${q.id}'),
+      backgroundColor: _field,
+      borderColor: _isLowConfidence(q) ? confidenceColor : _border,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            alignment: WrapAlignment.start,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Checkbox(
                 value: q.isChecked,
@@ -13705,6 +13918,41 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   fontWeight: FontWeight.w700,
                 ),
               ),
+              if (textbookSection.isNotEmpty)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF21334D),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xFF506F9E)),
+                  ),
+                  child: Text(
+                    textbookSection,
+                    style: const TextStyle(
+                      color: Color(0xFFB9D3FF),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (q.isChecked ? _accent : _textSub)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: q.isChecked ? _accent : _border),
+                ),
+                child: Text(
+                  q.isChecked ? '관리자 검수 완료' : '미검수',
+                  style: TextStyle(
+                    color: q.isChecked ? _accent : _textSub,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
               const SizedBox(width: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
@@ -13722,7 +13970,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   ),
                 ),
               ),
-              const Spacer(),
               Tooltip(
                 message: '탭하여 유형 순환: 객관식 → 주관식 → 서술형',
                 child: Material(
@@ -13799,7 +14046,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   border: Border.all(color: confidenceColor),
                 ),
                 child: Text(
-                  '${(q.confidence * 100).round()}%',
+                  'AI ${(q.confidence * 100).round()}%',
                   style: TextStyle(
                     color: confidenceColor,
                     fontSize: 11,
@@ -14054,7 +14301,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ),
           ),
           const SizedBox(height: 4),
-          Row(
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               IconButton(
                 tooltip: '이 문항 재추출',
@@ -14104,7 +14355,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 const SizedBox(width: 2),
                 _buildSetRenderModeButton(q),
               ],
-              const Spacer(),
+              IconButton(
+                tooltip:
+                    _dirtyQuestionIds.contains(q.id) ? '이 문항 저장' : '저장된 문항',
+                iconSize: 18,
+                onPressed:
+                    !_dirtyQuestionIds.contains(q.id) || isSavingThisQuestion
+                        ? null
+                        : () => unawaited(_saveQuestion(q)),
+                icon: isSavingThisQuestion
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 1.8),
+                      )
+                    : Icon(
+                        Icons.save_outlined,
+                        color: _dirtyQuestionIds.contains(q.id)
+                            ? _accent
+                            : _textSub,
+                      ),
+              ),
               IconButton(
                 tooltip: '검수 편집',
                 iconSize: 18,
@@ -14113,6 +14384,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   Icons.edit_note,
                   color: _textSub,
                 ),
+              ),
+              IconButton(
+                tooltip: '이 문항 삭제',
+                iconSize: 18,
+                onPressed: _isDeletingCurrentQuestions || isSavingThisQuestion
+                    ? null
+                    : () => unawaited(_deleteQuestion(q)),
+                icon: const Icon(Icons.delete_outline, color: _danger),
               ),
             ],
           ),
@@ -14177,41 +14456,30 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-  /// GridView는 자식에게 세로 tight 제약을 주어 카드 하단에 빈 칸이 생긴다.
-  /// `maxCrossAxisExtent: 420`과 유사한 열 수로 [Wrap]에 맡겨 높이는 내용만큼만 쓴다.
   Widget _buildQuestionGridWrap() {
-    const maxCard = 420.0;
-    const gap = 10.0;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        if (!w.isFinite || w <= 0) {
-          return const SizedBox.shrink();
-        }
-        var cols = 1;
-        while (cols < 50) {
-          final cw = (w - gap * (cols - 1)) / cols;
-          if (cw <= maxCard + 1e-9) break;
-          cols++;
-        }
-        final cardW = (w - gap * (cols - 1)) / cols;
-        return SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Wrap(
-              spacing: gap,
-              runSpacing: gap,
-              children: [
-                for (final q in _visibleQuestions)
-                  SizedBox(
-                    width: cardW,
-                    child: _buildQuestionGridCard(q),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
+    final mode = problemBankReviewModeOf(_activeDocument);
+    if (mode == ProblemBankReviewMode.textbookPdf) {
+      final active = _activeDocument!;
+      return TextbookPageReviewPane(
+        key: ValueKey<String>(
+          'textbook-review-${_textbookFolderKey(active)}',
+        ),
+        questions: _visibleQuestions,
+        questionBuilder: (_, question) => _buildQuestionGridCard(question),
+        panelColor: _panel,
+        fieldColor: _field,
+        borderColor: _border,
+        textColor: _text,
+        textSubColor: _textSub,
+        accentColor: _accent,
+        availablePages: _textbookPagesForBook(active),
+        initialPage: _requestedTextbookPage,
+        onPageRequested: (page) => unawaited(_openTextbookPage(page)),
+      );
+    }
+    return ExamPaperReviewPane(
+      questions: _visibleQuestions,
+      questionBuilder: (_, question) => _buildQuestionGridCard(question),
     );
   }
 
@@ -14295,17 +14563,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ],
           ),
           const SizedBox(height: 10),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
-                '총 ${_questions.length}문항 · 선택 $_checkedCount문항 · 미업로드 $_unuploadedCount문항 · 저신뢰 $_lowConfidenceCount문항'
+                '총 ${_questions.length}문항 · 검수 완료 $_checkedCount문항 · 미검수 ${_questions.length - _checkedCount}문항 · 저신뢰 $_lowConfidenceCount문항'
                 '${unsavedCount > 0 ? ' · 저장대기 $unsavedCount건' : ''}',
                 style: const TextStyle(
                   color: _textSub,
                   fontSize: 12,
                 ),
               ),
-              const Spacer(),
               OutlinedButton.icon(
                 onPressed: _activeDocument == null ||
                         (_dirtyQuestionIds.isEmpty &&
@@ -14314,7 +14584,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         _isSavingQuestionChanges ||
                         _isDeletingCurrentQuestions
                     ? null
-                    : () => unawaited(_saveQuestionsToServer()),
+                    : () => unawaited(_publishDocument()),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _accent,
                   side: const BorderSide(color: _accent),
@@ -14329,7 +14599,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       )
                     : const Icon(Icons.cloud_upload_outlined, size: 16),
-                label: const Text('업로드'),
+                label: const Text('문서 확정'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
@@ -14377,7 +14647,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       )
                     : const Icon(Icons.refresh, size: 16),
-                label: const Text('체크 재추출'),
+                label: const Text('검수 문항 재추출'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
@@ -14402,8 +14672,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       )
                     : const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                label:
-                    Text(_isCreatingReviewPdf ? 'PDF 생성 중...' : '검토 PDF 만들기'),
+                label: Text(_isCreatingReviewPdf ? 'PDF 생성 중...' : '검수 문항 PDF'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
@@ -14426,7 +14695,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       )
                     : const Icon(Icons.delete_outline, size: 16),
-                label: const Text('체크 문항 삭제'),
+                label: const Text('검수 문항 삭제'),
               ),
               const SizedBox(width: 8),
               OutlinedButton(
@@ -14437,7 +14706,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   foregroundColor: _accent,
                   side: const BorderSide(color: _accent),
                 ),
-                child: const Text('전체 선택'),
+                child: const Text('전체 검수 완료'),
               ),
               const SizedBox(width: 8),
               OutlinedButton(
@@ -14448,7 +14717,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   foregroundColor: _textSub,
                   side: const BorderSide(color: _border),
                 ),
-                child: const Text('선택 해제'),
+                child: const Text('전체 검수 취소'),
               ),
               const SizedBox(width: 8),
               OutlinedButton(
@@ -14600,15 +14869,31 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   String _documentBookName(ProblemBankDocument doc) {
     final candidates = <String>[
-      doc.materialName.trim(),
       '${doc.meta['textbook_scope'] is Map ? (doc.meta['textbook_scope'] as Map)['book_name'] : ''}'
           .trim(),
       '${doc.classificationDetail['textbook_scope'] is Map ? (doc.classificationDetail['textbook_scope'] as Map)['book_name'] : ''}'
           .trim(),
       '${doc.meta['source_classification'] is Map ? ((doc.meta['source_classification'] as Map)['textbook'] is Map ? ((doc.meta['source_classification'] as Map)['textbook'] as Map)['book_name'] : '') : ''}'
           .trim(),
+      doc.materialName.trim(),
     ];
-    return candidates.firstWhere((name) => name.isNotEmpty, orElse: () => '');
+    final publisher =
+        doc.publisherName.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    for (final name in candidates) {
+      final normalized = name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+      if (normalized.isEmpty ||
+          normalized == publisher ||
+          normalized == '신사고' ||
+          normalized == '좋은책신사고') {
+        continue;
+      }
+      return name;
+    }
+    final scope = _documentTextbookScope(doc);
+    return textbookSeriesByKey('${scope['series'] ?? ''}'.trim())
+            ?.displayName
+            .trim() ??
+        '';
   }
 
   Map<String, dynamic> _documentTextbookScope(ProblemBankDocument doc) {
@@ -15507,7 +15792,256 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  String _textbookSwitchGroupLabel(ProblemBankDocument document) {
+    final scope = _documentTextbookScope(document);
+    final seriesName = '${scope['series_name'] ?? ''}'.trim();
+    if (seriesName.isNotEmpty) return seriesName;
+    final seriesKey = '${scope['series'] ?? ''}'.trim();
+    final catalogName =
+        textbookSeriesByKey(seriesKey)?.displayName.trim() ?? '';
+    if (catalogName.isNotEmpty) return catalogName;
+    return seriesKey.isEmpty ? '기타 교재' : seriesKey;
+  }
+
+  List<ProblemBankDocument> _textbookQuickSwitchDocuments() {
+    final byBook = <String, ProblemBankDocument>{};
+    for (final document in <ProblemBankDocument>[
+      ..._allTextbookDocuments,
+      if (_activeDocument != null) _activeDocument!,
+    ]) {
+      if (problemBankReviewModeOf(document) !=
+          ProblemBankReviewMode.textbookPdf) {
+        continue;
+      }
+      final key = _textbookFolderKey(document);
+      final current = byBook[key];
+      final documentPages = textbookDocumentPagesOf(document);
+      final currentPages =
+          current == null ? const <int>[] : textbookDocumentPagesOf(current);
+      final firstPage = documentPages.isEmpty ? null : documentPages.first;
+      final currentFirstPage = currentPages.isEmpty ? null : currentPages.first;
+      if (current == null ||
+          (firstPage != null &&
+              (currentFirstPage == null || firstPage < currentFirstPage))) {
+        byBook[key] = document;
+      }
+    }
+    final documents = byBook.values.toList();
+    documents.sort(
+      (a, b) => _documentBookName(a).compareTo(_documentBookName(b)),
+    );
+    return documents;
+  }
+
+  List<ProblemBankDocument> _textbookDocumentsForBook(
+    ProblemBankDocument document,
+  ) {
+    final key = _textbookFolderKey(document);
+    final byId = <String, ProblemBankDocument>{
+      for (final candidate in _allTextbookDocuments)
+        if (_textbookFolderKey(candidate) == key) candidate.id: candidate,
+      if (_textbookFolderKey(document) == key) document.id: document,
+    };
+    return byId.values.toList(growable: false);
+  }
+
+  List<int> _textbookPagesForBook(ProblemBankDocument document) {
+    final pages = <int>{};
+    for (final candidate in _textbookDocumentsForBook(document)) {
+      pages.addAll(textbookDocumentPagesOf(candidate));
+    }
+    if (_textbookFolderKey(_activeDocument ?? document) ==
+        _textbookFolderKey(document)) {
+      pages.addAll(textbookPagesOf(_questions));
+    }
+    final sorted = pages.toList()..sort();
+    return sorted;
+  }
+
+  Future<void> _switchTextbookDocument(ProblemBankDocument document) async {
+    if (_dirtyQuestionIds.isNotEmpty || _dirtyDocumentMeta) {
+      _showSnack('현재 교재의 문항 수정사항을 저장한 뒤 교재를 전환해주세요.', error: true);
+      return;
+    }
+    final extractedPages = _textbookPagesForBook(document);
+    final firstPage = extractedPages.isEmpty ? null : extractedPages.first;
+    if (_textbookFolderKey(document) ==
+        _textbookFolderKey(_activeDocument ?? document)) {
+      setState(() => _requestedTextbookPage = firstPage);
+      return;
+    }
+    await _loadDocumentContext(
+      document.id,
+      textbookPage: firstPage,
+      preferFirstTextbookQuestion: true,
+    );
+  }
+
+  Future<void> _openTextbookPage(int page) async {
+    if (!mounted) return;
+    setState(() => _requestedTextbookPage = page);
+    final pageQuestions = textbookQuestionsOnPage(_questions, page);
+    unawaited(_prefetchQuestionPreviewUrls(pageQuestions));
+    unawaited(_prefetchFigurePreviewUrls(pageQuestions));
+  }
+
+  Widget _buildTextbookQuickSwitchPanel() {
+    final documents = _textbookQuickSwitchDocuments();
+    final activeKey =
+        _activeDocument == null ? '' : _textbookFolderKey(_activeDocument!);
+    final grouped = <String, List<ProblemBankDocument>>{};
+    for (final document in documents) {
+      grouped
+          .putIfAbsent(_textbookSwitchGroupLabel(document), () => [])
+          .add(document);
+    }
+    final groupLabels = grouped.keys.toList()..sort();
+    final activeDocumentCount = _activeDocument == null
+        ? 0
+        : _textbookDocumentsForBook(_activeDocument!).length;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.library_books_outlined, color: _accent, size: 18),
+              SizedBox(width: 7),
+              Text(
+                '빠른 교재 전환',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            activeDocumentCount == 0
+                ? '교재를 선택하면 페이지별 문항을 통합해 표시합니다.'
+                : '선택 교재: 문서 $activeDocumentCount개 · 문항 ${_questions.length}개 통합',
+            style: const TextStyle(
+              color: _textSub,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (documents.isEmpty)
+            const Text(
+              '추출된 시중교재가 없습니다.',
+              style: TextStyle(color: _textSub, fontSize: 12),
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final groupLabel in groupLabels) ...[
+                  InkWell(
+                    key: ValueKey<String>('textbook-tree-$groupLabel'),
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => setState(() {
+                      if (_expandedTextbookSwitchGroups.contains(groupLabel)) {
+                        _expandedTextbookSwitchGroups.remove(groupLabel);
+                      } else {
+                        _expandedTextbookSwitchGroups.add(groupLabel);
+                      }
+                    }),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 7,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _expandedTextbookSwitchGroups.contains(groupLabel)
+                                ? Icons.expand_more
+                                : Icons.chevron_right,
+                            color: _textSub,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              '$groupLabel · ${grouped[groupLabel]!.length}권',
+                              style: const TextStyle(
+                                color: _text,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_expandedTextbookSwitchGroups.contains(groupLabel))
+                    Padding(
+                      padding: const EdgeInsets.only(left: 18, bottom: 8),
+                      child: Wrap(
+                        spacing: 7,
+                        runSpacing: 7,
+                        children: [
+                          for (final document in grouped[groupLabel]!)
+                            ChoiceChip(
+                              key: ValueKey<String>(
+                                'textbook-chip-${_textbookFolderKey(document)}',
+                              ),
+                              selected:
+                                  _textbookFolderKey(document) == activeKey,
+                              showCheckmark: false,
+                              selectedColor: _accent.withValues(alpha: 0.22),
+                              backgroundColor: _field,
+                              side: BorderSide(
+                                color: _textbookFolderKey(document) == activeKey
+                                    ? _accent
+                                    : _border,
+                              ),
+                              label: Text(
+                                [
+                                  _documentBookName(document).isEmpty
+                                      ? document.sourceFilename
+                                      : _documentBookName(document),
+                                  if (document.gradeLabel.trim().isNotEmpty)
+                                    document.gradeLabel.trim(),
+                                ].join(' · '),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              labelStyle: TextStyle(
+                                color: _textbookFolderKey(document) == activeKey
+                                    ? _text
+                                    : _textSub,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              onSelected: (_) => unawaited(
+                                _switchTextbookDocument(document),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildUploadTabBody() {
+    final textbookReview = problemBankReviewModeOf(_activeDocument) ==
+        ProblemBankReviewMode.textbookPdf;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -15517,7 +16051,44 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildUploadPanel(),
+                if (textbookReview)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _panel,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _border),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '시중교재 페이지 검수',
+                          style: TextStyle(
+                            color: _text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'PDF 추출 문항을 페이지별로 검수합니다. 미검수 문항이 있어도 문서 확정이 가능합니다.',
+                          style: TextStyle(
+                            color: _textSub,
+                            fontSize: 12,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  _buildUploadPanel(),
+                if (textbookReview) ...[
+                  const SizedBox(height: 12),
+                  _buildTextbookQuickSwitchPanel(),
+                ],
                 const SizedBox(height: 12),
                 _buildDocumentClassificationPanel(),
               ],
@@ -15533,6 +16104,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Widget _buildClassificationTabBody() {
+    final textbookReview = problemBankReviewModeOf(_activeDocument) ==
+        ProblemBankReviewMode.textbookPdf;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -15542,6 +16115,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (textbookReview) ...[
+                  _buildTextbookQuickSwitchPanel(),
+                  const SizedBox(height: 12),
+                ],
                 ProblemBankClassificationFilterPanel(
                   panelColor: _panel,
                   fieldColor: _field,

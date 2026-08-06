@@ -29,6 +29,7 @@ const pages = arg('page', '136')
 const hint = arg('hint', '');
 const series = arg('series', 'gaeyu');
 const localPdf = arg('pdf', '');
+const expectedStartNumber = arg('expected', '');
 
 const gateway = String(process.env.PB_GATEWAY_URL || 'http://localhost:8787').trim();
 const gatewayApiKey = String(
@@ -85,6 +86,9 @@ for (const page of pages) {
       grade_label: gradeLabel,
       series,
       ...(hint ? { section_hint: hint } : {}),
+      ...(expectedStartNumber
+        ? { expected_start_number: expectedStartNumber }
+        : {}),
     }),
   });
   const json = await res.json().catch(() => ({}));
