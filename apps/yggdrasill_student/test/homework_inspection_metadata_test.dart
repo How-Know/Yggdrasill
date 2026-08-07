@@ -21,10 +21,14 @@ void main() {
       };
 
   test('반환된 숙제는 오늘 검사 표식을 노출한다', () {
+    final today = DateTime.now();
+    final todayIso = DateTime(today.year, today.month, today.day, 10)
+        .toUtc()
+        .toIso8601String();
     final row = baseRow()
       ..addAll(<String, dynamic>{
         'inspection_status': 'due_for_check',
-        'original_due_at': '2026-08-06T01:00:00Z',
+        'original_due_at': todayIso,
         'absence_carryover': false,
         'defer_count': 0,
       });
@@ -51,5 +55,19 @@ void main() {
     expect(group.inspectionLabel, '결석 이월 · 오늘 검사');
     expect(group.deferCount, 1);
     expect(group.lastInspectionOutcome, 'left_behind');
+  });
+
+  test('등원했는데 검사가 밀린 숙제는 미검사 이월 표식을 노출한다', () {
+    final row = baseRow()
+      ..addAll(<String, dynamic>{
+        'inspection_status': 'due_for_check',
+        'original_due_at': '2026-08-06T01:00:00Z',
+        'absence_carryover': false,
+        'defer_count': 0,
+      });
+
+    final group = HomeworkGroup.fromRow(row);
+
+    expect(group.inspectionLabel, '미검사 이월 · 오늘 검사');
   });
 }

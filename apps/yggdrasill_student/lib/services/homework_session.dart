@@ -137,9 +137,11 @@ class HomeworkSession extends ChangeNotifier {
       }
     }
     // 일시정지 후에도 같은 과제를 미니바에 남겨 바로 재개할 수 있게 한다.
+    // 완료 예약 후 대기(1)로 내려가는 순간은 미니바에 다시 올리지 않는다.
     if (next == null && _preferredGroupId != null) {
       for (final g in groups) {
-        if (g.groupId == _preferredGroupId && (g.phase == 1 || g.phase == 2)) {
+        if (g.groupId != _preferredGroupId) continue;
+        if (g.phase == 2 || (g.phase == 1 && !g.pendingComplete)) {
           next = g;
           break;
         }

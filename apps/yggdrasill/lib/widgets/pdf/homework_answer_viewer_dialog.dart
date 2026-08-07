@@ -21,6 +21,10 @@ enum HomeworkAnswerCellState {
 
   /// 학생이 수행 범위로 선언하지 않은 문항.
   notPerformed,
+
+  /// 이번 과제 범위에서 제외한 문항. 채점 이력은 남기되 점수·진행률
+  /// 분모와 다음 수행 범위에서는 제외한다.
+  abandoned,
 }
 
 class HomeworkAnswerGradingCell {
@@ -932,6 +936,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         return HomeworkAnswerCellState.notPerformed;
       case HomeworkAnswerCellState.notPerformed:
       case HomeworkAnswerCellState.blank:
+      case HomeworkAnswerCellState.abandoned:
         return HomeworkAnswerCellState.correct;
     }
   }
@@ -1868,6 +1873,12 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         backgroundColor = const Color(0xFF202929);
         textColor = const Color(0xFF8FA1A1);
         text = '미수행';
+        break;
+      case HomeworkAnswerCellState.abandoned:
+        borderColor = const Color(0xFF795333);
+        backgroundColor = const Color(0xFF30271F);
+        textColor = const Color(0xFFE2B58F);
+        text = '포기';
         break;
     }
     return Tooltip(

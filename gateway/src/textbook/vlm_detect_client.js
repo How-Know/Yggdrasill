@@ -626,6 +626,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   repairSuryeokItemRegions(out, series);
   repairGaeyuNumberBboxes(out, series);
   validateBasicDrillItems(out, series);
+  validateTypePracticeItems(out, series);
   annotateExpectedBasicDrillStart(out, opts?.expectedStartNumber);
   return out;
 }
@@ -1181,6 +1182,62 @@ function validateBasicDrillItems(result, series = '') {
     const suffix = 'concept_page:auto_no_valid_basic_number';
     result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
   }
+}
+
+// 쎈/RPM B·C 파트의 "유형 NN" 배지 숫자가 문항으로 새어 들어오는 것을 막는다.
+// (예: 쎈 1-2 p53 은 0308~0313 사이에 유형 배지 숫자 "10" 이 섞여 저장됐다.)
+// 이 구간의 문항번호는 A에서 이어지는 4자리 연속 번호이거나, 4자리를 쓰지 않는
+// 판본에서는 일반 번호다. 두 판본을 모두 지키기 위해 지면이 4자리 방식임이
+// 분명할 때와, 번호가 자기 유형 배지 숫자와 같을 때만 걸러낸다.
+function validateTypePracticeItems(result, series = '') {
+  if (
+    (series !== 'ssen' && series !== 'rpm') ||
+    !result ||
+    !['type_practice', 'mastery'].includes(result.section) ||
+    !Array.isArray(result.items) ||
+    result.items.length === 0
+  ) {
+    return;
+  }
+
+  const fourDigitCount = result.items.filter(
+    (item) =>
+      item?.is_set_header !== true && /^\d{4}$/.test(String(item?.number || '')),
+  ).length;
+
+  const kept = [];
+  let dropped = 0;
+  for (const item of result.items) {
+    const number = String(item?.number || '').trim();
+    const isFourDigit = /^\d{4}$/.test(number);
+    const isFourDigitRange =
+      item?.is_set_header === true && Boolean(parseBasicDrillRange(number));
+    const matchesOwnTypeBadge =
+      !isFourDigit && typeBadgeNumberOf(item) === Number.parseInt(number, 10);
+    if (
+      isFourDigit ||
+      isFourDigitRange ||
+      (!matchesOwnTypeBadge && fourDigitCount < 2)
+    ) {
+      kept.push(item);
+    } else {
+      dropped += 1;
+    }
+  }
+  if (dropped > 0) {
+    result.items = kept;
+    const suffix = `type_practice_candidate_filtered=${dropped}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+}
+
+function typeBadgeNumberOf(item) {
+  const group = item?.content_group;
+  if (!group || group.kind !== 'type') return null;
+  const match = String(group.label || '').match(/\d+/);
+  if (!match) return null;
+  const value = Number.parseInt(match[0], 10);
+  return Number.isFinite(value) ? value : null;
 }
 
 function hasStrongBasicDrillPageEvidence(items) {

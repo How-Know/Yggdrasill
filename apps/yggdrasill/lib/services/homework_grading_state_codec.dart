@@ -10,6 +10,8 @@ String encodeHomeworkGradingUiState(HomeworkAnswerCellState state) {
       return 'blank';
     case HomeworkAnswerCellState.notPerformed:
       return 'not_performed';
+    case HomeworkAnswerCellState.abandoned:
+      return 'abandoned';
   }
 }
 
@@ -28,6 +30,8 @@ HomeworkAnswerCellState decodeHomeworkGradingUiState(
       return HomeworkAnswerCellState.blank;
     case 'not_performed':
       return HomeworkAnswerCellState.notPerformed;
+    case 'abandoned':
+      return HomeworkAnswerCellState.abandoned;
     case 'correct':
     default:
       return HomeworkAnswerCellState.correct;
@@ -43,6 +47,8 @@ String encodeHomeworkGradingStoredState(HomeworkAnswerCellState state) {
       return 'wrong';
     case HomeworkAnswerCellState.notPerformed:
       return 'not_performed';
+    case HomeworkAnswerCellState.abandoned:
+      return 'abandoned';
   }
 }
 
@@ -54,10 +60,12 @@ String? homeworkGradingIncorrectKind(HomeworkAnswerCellState state) {
       return 'blank';
     case HomeworkAnswerCellState.correct:
     case HomeworkAnswerCellState.notPerformed:
+    case HomeworkAnswerCellState.abandoned:
       return null;
   }
 }
 
 bool isHomeworkGradingRetryState(HomeworkAnswerCellState state) {
-  return state != HomeworkAnswerCellState.correct;
+  return state != HomeworkAnswerCellState.correct &&
+      state != HomeworkAnswerCellState.abandoned;
 }

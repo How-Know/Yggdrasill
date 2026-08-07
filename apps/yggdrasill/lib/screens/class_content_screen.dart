@@ -26,6 +26,7 @@ import '../services/learning_problem_bank_service.dart';
 import '../services/next_class_start_resolver.dart';
 import '../services/print_routing_service.dart';
 import '../services/right_sheet_answer_preload_service.dart';
+import '../services/resource_service.dart';
 import '../services/textbook_pdf_service.dart';
 import '../utils/naesin_exam_context.dart';
 import '../models/attendance_record.dart';
@@ -1390,9 +1391,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             final saved = draft?.isSaved == true;
             final count = draft?.groupIds.length ?? 0;
             final active = expanded || saved;
-            final tooltip = saved
-                ? '수업 계획 저장됨 · $count그룹'
-                : '수업 계획';
+            final tooltip = saved ? '수업 계획 저장됨 · $count그룹' : '수업 계획';
             return Tooltip(
               message: tooltip,
               child: SizedBox(
@@ -1658,8 +1657,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     const double contentW = ClassContentScreen._studentColumnContentWidth;
     const double extW = _homeworkDraftExtensionWidth;
     // 과제카드 확장과 같은 시작선 (칩 left inset + contentW).
-    const double extensionLeft =
-        _homeworkChipOuterLeftInset + contentW;
+    const double extensionLeft = _homeworkChipOuterLeftInset + contentW;
     final bool draftActive = draftEditor != null &&
         (isHomeworkDraftExpanded ||
             _homeworkDraftVisuallyOpenStudentIds.contains(student.id));
@@ -1780,8 +1778,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 final keys = submittedItems
                     .map((e) => (studentId: sid, itemId: e.id))
                     .toList(growable: false);
-                final allSelected = keys.isNotEmpty &&
-                    keys.every(_pendingConfirms.containsKey);
+                final allSelected =
+                    keys.isNotEmpty && keys.every(_pendingConfirms.containsKey);
                 if (allSelected) {
                   for (final key in keys) {
                     _pendingConfirms.remove(key);
@@ -2655,6 +2653,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         if (groupId.isEmpty) continue;
         itemsByGroupId.putIfAbsent(groupId, () => <HomeworkItem>[]).add(item);
       }
+      // 숙제/다음은 수업 계획 패널과 동일하게 Dart 다음 수업 시각을 명시 전달한다.
+      // (미전달 시 SQL이 당일 후속 블록·자정 planned 출석을 고를 수 있음)
+      DateTime? targetClassAt;
+      if (planDestination == HomeworkPlanDestination.homework ||
+          planDestination == HomeworkPlanDestination.nextSession) {
+        AttendanceRecord? attendance;
+        for (final record in DataManager.instance.attendanceRecords) {
+          if ((record.id ?? '').trim() == attendanceKey) {
+            attendance = record;
+            break;
+          }
+        }
+        final anchor = attendance?.classDateTime ??
+            attendance?.arrivalTime ??
+            DateTime.now();
+        targetClassAt = NextClassStartResolver.next(
+          studentId,
+          after: anchor,
+        );
+      }
       if (itemsByGroupId.isNotEmpty) {
         try {
           for (final entry in itemsByGroupId.entries) {
@@ -2667,6 +2685,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               origin: planDestination == HomeworkPlanDestination.homework
                   ? HomeworkPlanOrigin.directHomework
                   : HomeworkPlanOrigin.plannedToday,
+              targetClassAt: targetClassAt,
             );
           }
         } catch (error) {
@@ -3858,11 +3877,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       presetId: presetId,
     );
     if (preset == null) return null;
-    final selectedUids = preset.selectedQuestionUids
+    var selectedUids = preset.selectedQuestionUids
         .map((uid) => uid.trim())
         .where((uid) => uid.isNotEmpty)
         .toList(growable: false);
     if (selectedUids.isEmpty) return null;
+
+    final activeSnapshots =
+        await ResourceService.instance.loadHomeworkItemProblemSnapshots(
+      homeworkItemIds: <String>[baseItem.id],
+    );
+    final activeQuestionUids = activeSnapshots
+        .map((row) => '${row['pb_question_uid'] ?? ''}'.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toSet();
+    if (activeQuestionUids.isNotEmpty) {
+      selectedUids = selectedUids
+          .where(activeQuestionUids.contains)
+          .toList(growable: false);
+      if (selectedUids.isEmpty) return null;
+    }
 
     final questions = await _problemBankService.loadQuestionsByQuestionUids(
       academyId: academyId,
@@ -4973,6 +5007,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       baselineStates: _toRightSheetStateMap(baselineStates),
       wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
       gradingLocked: hasSavedGrading,
+      smartConfirmAction: true,
       onRequestEditReset: () async {
         final reset = await _gradingResultService.resetAttemptsForHomework(
           homeworkItemId: payload.homeworkId,
@@ -5221,6 +5256,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           baselineStates: _toRightSheetStateMap(baselineStates),
           wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
           gradingLocked: hasSavedGrading,
+          smartConfirmAction: true,
           onRequestEditReset: () async {
             final reset = await _gradingResultService.resetAttemptsForHomework(
               homeworkItemId: payload.homeworkId,
@@ -5389,6 +5425,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         baselineStates: _toRightSheetStateMap(baselineStates),
         wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
         gradingLocked: hasSavedGrading,
+        smartConfirmAction: true,
         onRequestEditReset: () async {
           final reset = await _gradingResultService.resetAttemptsForHomework(
             homeworkItemId: textbookProblemPayload.homeworkId,
@@ -5757,12 +5794,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final targets = assignments
         .where((assignment) => ids.contains(assignment.homeworkItemId));
     DateTime? dueDate;
+    DateTime? dueForCheckAt;
     var absenceCarryover = false;
     for (final target in targets) {
       final candidate = target.originalDueDate ?? target.dueDate;
       if (candidate != null &&
           (dueDate == null || candidate.isBefore(dueDate))) {
         dueDate = candidate;
+      }
+      final checkAt = target.dueForCheckAt;
+      if (checkAt != null &&
+          (dueForCheckAt == null || checkAt.isAfter(dueForCheckAt))) {
+        dueForCheckAt = checkAt;
       }
       absenceCarryover = absenceCarryover || target.absenceCarryover;
     }
@@ -5774,6 +5817,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       title: title,
       dueDate: dueDate,
       absenceCarryover: absenceCarryover,
+      missedInspection: !absenceCarryover &&
+          _isHomeworkInspectionDeferred(
+            originalDue: dueDate,
+            dueForCheckAt: dueForCheckAt,
+          ),
     );
     if (choice == null || !context.mounted) return;
 
@@ -5883,11 +5931,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         .map((cell) => cell.key)
         .toSet();
     if (keys.isEmpty) return 0;
-    final performed = keys.where((key) {
+    final effectiveKeys = keys.where((key) {
+      final state = states[key] ?? HomeworkAnswerCellState.correct;
+      return state != HomeworkAnswerCellState.abandoned;
+    }).toList(growable: false);
+    if (effectiveKeys.isEmpty) return 0;
+    final performed = effectiveKeys.where((key) {
       final state = states[key] ?? HomeworkAnswerCellState.correct;
       return state != HomeworkAnswerCellState.notPerformed;
     }).length;
-    return ((performed * 100) / keys.length).round().clamp(0, 100);
+    return ((performed * 100) / effectiveKeys.length).round().clamp(0, 100);
   }
 
   /// 채점 화면을 어떤 경로로 열었든, 활성 숙제가 있는 문항은 채점 결과를 검사
@@ -6633,6 +6686,32 @@ String _formatDateShort(DateTime dt) {
   return '${two(dt.month)}.${two(dt.day)}';
 }
 
+/// 원래 검사일이 이번 검사 시점보다 이전이면 이월(미검사/결석)로 본다.
+bool _isHomeworkInspectionDeferred({
+  required DateTime? originalDue,
+  required DateTime? dueForCheckAt,
+}) {
+  if (originalDue == null) return false;
+  final cutoff = dueForCheckAt ?? DateTime.now();
+  return originalDue.isBefore(cutoff);
+}
+
+String _homeworkCarriedCheckChipLabel({
+  required DateTime? originalDue,
+  required DateTime? dueForCheckAt,
+  required bool absenceCarryover,
+}) {
+  if (originalDue == null) return '오늘 검사';
+  if (!_isHomeworkInspectionDeferred(
+    originalDue: originalDue,
+    dueForCheckAt: dueForCheckAt,
+  )) {
+    return '오늘 검사';
+  }
+  final day = _formatDateShort(originalDue);
+  return absenceCarryover ? '$day 결석' : '$day 미검사';
+}
+
 String _formatDateWithWeekdayShort(DateTime dt) {
   const week = ['월', '화', '수', '목', '금', '토', '일'];
   return '${_formatDateShort(dt)} (${week[dt.weekday - 1]})';
@@ -6704,9 +6783,13 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
   required String title,
   required DateTime? dueDate,
   required bool absenceCarryover,
+  bool missedInspection = false,
 }) {
   final dueLabel =
       dueDate == null ? '검사일 미정' : '${_formatDateWithWeekdayShort(dueDate)} 검사';
+  final dueMetaLabel = absenceCarryover
+      ? '$dueLabel · 결석 이월'
+      : (missedInspection ? '$dueLabel · 미검사 이월' : dueLabel);
   final homeworkTitle = title.trim().isEmpty ? '그룹 숙제' : title.trim();
   return showModalBottomSheet<_HomeworkInspectionChoice>(
     context: context,
@@ -6793,7 +6876,7 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
             ),
             const SizedBox(height: 4),
             Text(
-              absenceCarryover ? '$dueLabel · 결석 이월' : dueLabel,
+              dueMetaLabel,
               style: TextStyle(
                 color: dlg.textSub,
                 fontSize: 14,
@@ -7271,9 +7354,8 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
                       child: Material(
                         type: MaterialType.transparency,
                         child: Column(
-                          mainAxisSize: shrinkWrap
-                              ? MainAxisSize.min
-                              : MainAxisSize.max,
+                          mainAxisSize:
+                              shrinkWrap ? MainAxisSize.min : MainAxisSize.max,
                           children: [
                             Padding(
                               padding: const EdgeInsets.fromLTRB(
@@ -11659,27 +11741,27 @@ Widget _buildHomeworkChipsReactiveForStudent(
                       continue;
                     }
                     final dueDate = assignment.dueDate;
-                    final dueDateOnly =
-                        dueDate == null ? null : _dateOnly(dueDate);
                     final assignmentGroupId = (assignment.groupId ?? '').trim();
                     if (assignmentGroupId.isNotEmpty) {
                       assignmentDueByGroupId[assignmentGroupId] =
                           _mergeHomeworkDueDate(
                         assignmentDueByGroupId[assignmentGroupId],
-                        dueDateOnly,
+                        dueDate,
                       );
                       if (assignment.status == 'carried_to_class') {
                         final original =
                             assignment.originalDueDate ?? assignment.dueDate;
                         assignmentCheckLabelByGroupId[assignmentGroupId] =
-                            assignment.absenceCarryover && original != null
-                                ? '${_formatDateShort(original)} 결석 미검사'
-                                : '오늘 검사';
+                            _homeworkCarriedCheckChipLabel(
+                          originalDue: original,
+                          dueForCheckAt: assignment.dueForCheckAt,
+                          absenceCarryover: assignment.absenceCarryover,
+                        );
                       }
                     }
                     assignmentDueByItemId[hwId] = _mergeHomeworkDueDate(
                       assignmentDueByItemId[hwId],
-                      dueDateOnly,
+                      dueDate,
                     );
                   }
                   hiddenItemIds.addAll(
@@ -12049,7 +12131,10 @@ Future<void> _deleteReservedHomeworkGroup({
 }
 
 String _formatHomeworkDueChipLabel(DateTime dueDate) {
-  return '${dueDate.month}월 ${dueDate.day}일까지';
+  final local = dueDate.toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${local.month}월 ${local.day}일 '
+      '${two(local.hour)}:${two(local.minute)}까지';
 }
 
 DateTime? _mergeHomeworkDueDate(DateTime? current, DateTime? candidate) {
@@ -12124,7 +12209,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
       totalAssignmentCount += assignmentCounts[hw.id] ?? 0;
       dueDate = _mergeHomeworkDueDate(
         dueDate,
-        assignment.dueDate == null ? null : _dateOnly(assignment.dueDate!),
+        assignment.dueDate,
       );
     }
     final groupPageSummary = mergeHomeworkItemPageRanges(
@@ -12622,6 +12707,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final children = HomeworkStore.instance
         .itemsInGroup(studentId, group.id)
         .where((e) => e.status != HomeworkStatus.completed)
+        .where((e) => !HomeworkStore.instance.isOptimisticallyCompleting(e.id))
         .where((e) => !hiddenItemIds.contains(e.id))
         .toList();
     if (children.isEmpty) continue;
@@ -17470,8 +17556,11 @@ class _HomeworkProgressIndicatorRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 진행(회색)=수행분/전체, 완료(초록·%)=정답/수행분.
+    // 미수행·미채점 형제가 있으면 진행만 낮고 완료는 100%가 될 수 있다.
+    // 교재 카드처럼 완료를 진행에 클램프하면 전원 정답도 57%처럼 보인다.
     final a = advance.clamp(0.0, 1.0);
-    final c = completion.clamp(0.0, a);
+    final c = completion.clamp(0.0, 1.0);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final labelColor = enabled
         ? textStyle.color

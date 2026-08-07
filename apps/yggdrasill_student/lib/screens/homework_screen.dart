@@ -20,6 +20,7 @@ import '../widgets/student_progress_summary_card.dart';
 ///   2 수행 → 미니바에서 일시정지/제출
 ///   3 제출 → 확인 대기 (조작 없음)
 ///   4 확인 → 탭하면 대기로 복귀
+///       (완료 예약이면 서버는 대기→자동완료를 타지만 UI에는 대기를 비치지 않음)
 class HomeworkScreen extends StatefulWidget {
   const HomeworkScreen({super.key});
 
@@ -108,12 +109,21 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       }
     }
     setState(() {
-      _groups = groups;
+      // 완료 예약 과제가 대기(1)로 잠깐 내려오는 구간은 목록에서 숨긴다.
+      // 서버 자동완료 로직은 그대로 두고, 끝났는지는 상단 진행률로 본다.
+      _groups = groups
+          .where((g) => !_isTransientCompleteWaiting(g))
+          .toList(growable: false);
       if (covers != null && covers.isNotEmpty) {
         _coverByBookKey = covers;
       }
       _error = null;
     });
+  }
+
+  /// 완료 버튼 경로: 확인(4)→대기(1)→자동완료 중 대기 UI만 건너뛴다.
+  bool _isTransientCompleteWaiting(HomeworkGroup group) {
+    return group.pendingComplete && group.phase == 1;
   }
 
   void _notifyNewlyConfirmed(List<HomeworkGroup> groups) {
@@ -134,8 +144,12 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       final title = g.title.isEmpty ? '과제' : g.title;
       TopGlassSnackBar.show(
         context,
-        message: '$title 확인이 끝났어요. 대기중이에요.',
-        icon: Icons.hourglass_top_rounded,
+        message: g.pendingComplete
+            ? '$title 확인이 끝났어요.'
+            : '$title 확인이 끝났어요. 대기중이에요.',
+        icon: g.pendingComplete
+            ? Icons.check_circle_outline_rounded
+            : Icons.hourglass_top_rounded,
       );
     }
   }
@@ -431,9 +445,22 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         ],
       ),
     );
-    if (yes == true) {
-      await _transition(group, 4, successMessage: '대기로 전환했어요.');
+    if (yes != true) return;
+
+    if (group.pendingComplete) {
+      // 서버는 대기→자동완료를 그대로 타되, 목록에 대기 카드가 깜빡이지 않게 즉시 숨긴다.
+      if (mounted) {
+        setState(() {
+          _groups = (_groups ?? const <HomeworkGroup>[])
+              .where((g) => g.groupId != group.groupId)
+              .toList(growable: false);
+        });
+      }
+      await _transition(group, 4);
+      return;
     }
+
+    await _transition(group, 4, successMessage: '대기로 전환했어요.');
   }
 
   Widget _groupCardFor(HomeworkGroup group) {

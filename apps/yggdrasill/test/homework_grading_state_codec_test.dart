@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mneme_flutter/app_overlays.dart';
 import 'package:mneme_flutter/services/homework_grading_state_codec.dart';
 import 'package:mneme_flutter/widgets/pdf/homework_answer_viewer_dialog.dart';
 
@@ -54,6 +55,54 @@ void main() {
       expect(
         homeworkGradingIncorrectKind(HomeworkAnswerCellState.notPerformed),
         isNull,
+      );
+    });
+
+    test('abandoned is persisted but excluded from retry', () {
+      expect(
+        encodeHomeworkGradingStoredState(HomeworkAnswerCellState.abandoned),
+        'abandoned',
+      );
+      expect(
+        decodeHomeworkGradingUiState('abandoned'),
+        HomeworkAnswerCellState.abandoned,
+      );
+      expect(
+        isHomeworkGradingRetryState(HomeworkAnswerCellState.abandoned),
+        isFalse,
+      );
+      expect(
+        homeworkGradingIncorrectKind(HomeworkAnswerCellState.abandoned),
+        isNull,
+      );
+    });
+  });
+
+  group('migrated homework smart confirm', () {
+    test('blocks completion when every question is abandoned', () {
+      expect(
+        resolveMigratedHomeworkGradingAction(
+          effectiveCount: 0,
+          remainingCount: 0,
+        ),
+        isNull,
+      );
+    });
+
+    test('completes only when no effective question remains unresolved', () {
+      expect(
+        resolveMigratedHomeworkGradingAction(
+          effectiveCount: 8,
+          remainingCount: 0,
+        ),
+        'complete',
+      );
+      expect(
+        resolveMigratedHomeworkGradingAction(
+          effectiveCount: 8,
+          remainingCount: 1,
+        ),
+        'confirm',
       );
     });
   });

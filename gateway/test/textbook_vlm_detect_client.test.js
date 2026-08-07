@@ -38,6 +38,72 @@ test('ssen A rescue prompt forces visible four-digit items to problem page', () 
   assert.match(prompt, /label은 항상 ""/);
 });
 
+test('ssen B drops the 유형 badge number that leaked in as an item', () => {
+  const items = ['0308', '0309', '0310', '0311', '0312', '0313', '10'].map(
+    (number, index) => ({
+      number,
+      label: '',
+      is_set_header: false,
+      column: 1,
+      bbox: [80 + index * 100, 50, 100 + index * 100, 110],
+      item_region: [100 + index * 100, 40, 170 + index * 100, 460],
+      content_group: {
+        kind: 'type',
+        label: '유형 10',
+        title: '평행선에서의 활용 (2)',
+        order: 10,
+      },
+    }),
+  );
+  const result = normalizeDetectResult(
+    {
+      section: 'type_practice',
+      page_kind: 'problem_page',
+      page_layout: 'two_column',
+      items,
+      notes: '',
+    },
+    { series: 'ssen', sectionHint: 'type_practice' },
+  );
+
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['0308', '0309', '0310', '0311', '0312', '0313'],
+  );
+  assert.match(result.notes, /type_practice_candidate_filtered=1/);
+});
+
+test('ssen B keeps plain numbering when the page never uses four digits', () => {
+  const result = normalizeDetectResult(
+    {
+      section: 'type_practice',
+      page_kind: 'problem_page',
+      page_layout: 'two_column',
+      items: ['12', '13', '14'].map((number, index) => ({
+        number,
+        label: '중',
+        is_set_header: false,
+        column: 1,
+        bbox: [80 + index * 100, 50, 100 + index * 100, 110],
+        item_region: [100 + index * 100, 40, 170 + index * 100, 460],
+        content_group: {
+          kind: 'type',
+          label: '유형 07',
+          title: '평행선',
+          order: 7,
+        },
+      })),
+      notes: '',
+    },
+    { series: 'ssen', sectionHint: 'type_practice' },
+  );
+
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['12', '13', '14'],
+  );
+});
+
 test('RPM set-header prompt targets green bracketed ranges', () => {
   const prompt = buildRpmSetHeaderPrompt({ rawPage: 23, displayPage: 23 });
   assert.match(prompt, /\[0113~0116\]/);

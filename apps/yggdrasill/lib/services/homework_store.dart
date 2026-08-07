@@ -348,6 +348,9 @@ class HomeworkStore {
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
   // 확인 단계 이후, 다음 '대기' 진입 시 자동 완료 처리할 항목 ID들
   final Set<String> _autoCompleteOnNextWaiting = <String>{};
+  // 완료 예정 카드를 더블클릭한 직후 서버 왕복 동안 UI에서 즉시 숨긴다.
+  final Set<String> _optimisticallyCompletingItemIds = <String>{};
+  final Map<String, int> _reloadGenerationByStudentId = <String, int>{};
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
   final math.Random _assignmentCodeRandom = math.Random();
@@ -373,8 +376,7 @@ class HomeworkStore {
   bool _rtHealthy = false;
   int _rtPollGeneration = 0;
   static const Duration _rtHealthyPollInterval = Duration(seconds: 15);
-  static const Duration _rtDegradedPollInterval =
-      Duration(milliseconds: 1200);
+  static const Duration _rtDegradedPollInterval = Duration(milliseconds: 1200);
 
   static final RegExp _uuidTextPattern = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
@@ -2111,9 +2113,7 @@ class HomeworkStore {
     final generation = ++_rtPollGeneration;
     final delay = immediate
         ? Duration.zero
-        : (_rtHealthy
-            ? _rtHealthyPollInterval
-            : _rtDegradedPollInterval);
+        : (_rtHealthy ? _rtHealthyPollInterval : _rtDegradedPollInterval);
     _rtFallbackPollTimer = Timer(delay, () async {
       await _pollRecentHomeworkUpdates(academyId);
       if (generation != _rtPollGeneration) return;
@@ -3842,6 +3842,9 @@ class HomeworkStore {
     bool changed = false;
     for (final id in targetIds) {
       final item = byId[id];
+      if (_optimisticallyCompletingItemIds.remove(id)) {
+        changed = true;
+      }
       if (item == null || item.status == HomeworkStatus.completed) continue;
       if (item.runStart != null) {
         item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
@@ -3854,7 +3857,10 @@ class HomeworkStore {
       changed = true;
       completedIds.add(id);
     }
-    if (completedIds.isEmpty) return;
+    if (completedIds.isEmpty) {
+      if (changed) _bump();
+      return;
+    }
 
     if (changed) {
       _sortStudentList(list);
@@ -4363,6 +4369,10 @@ class HomeworkStore {
 
   void clearAutoCompleteOnNextWaiting(String id) {
     _autoCompleteOnNextWaiting.remove(id);
+  }
+
+  bool isOptimisticallyCompleting(String id) {
+    return _optimisticallyCompletingItemIds.contains(id);
   }
 
   HomeworkItem continueAdd(
@@ -5147,6 +5157,18 @@ class HomeworkStore {
       for (final child in beforeChildren)
         child.id: (child.count != null && child.count! > 0) ? child.count! : 1,
     };
+    final optimisticallyHiddenIds = normalizedFromPhase == 4
+        ? beforeChildren
+            .where(
+              (child) => _autoCompleteOnNextWaiting.contains(child.id),
+            )
+            .map((child) => child.id)
+            .toSet()
+        : const <String>{};
+    if (optimisticallyHiddenIds.isNotEmpty) {
+      _optimisticallyCompletingItemIds.addAll(optimisticallyHiddenIds);
+      _bump();
+    }
     int groupCycleDeltaMs = 0;
     for (final child in beforeChildren) {
       final childRunningMs = child.runStart != null
@@ -5192,8 +5214,17 @@ class HomeworkStore {
           _maybeAutoCompleteOnWaiting(studentId, child);
         }
       }
-      return _parseInt(raw);
+      final transitionCount = _parseInt(raw);
+      if (transitionCount <= 0 && optimisticallyHiddenIds.isNotEmpty) {
+        _optimisticallyCompletingItemIds.removeAll(optimisticallyHiddenIds);
+        _bump();
+      }
+      return transitionCount;
     } catch (_) {
+      if (optimisticallyHiddenIds.isNotEmpty) {
+        _optimisticallyCompletingItemIds.removeAll(optimisticallyHiddenIds);
+        _bump();
+      }
       return 0;
     }
   }
@@ -6178,6 +6209,8 @@ class HomeworkStore {
   }
 
   Future<void> _reloadStudent(String studentId) async {
+    final reloadGeneration = (_reloadGenerationByStudentId[studentId] ?? 0) + 1;
+    _reloadGenerationByStudentId[studentId] = reloadGeneration;
     try {
       final oldCodes = <String, String>{};
       final oldMappings = <String, List<Map<String, dynamic>>>{};
@@ -6256,6 +6289,8 @@ class HomeworkStore {
         }
       }
 
+      // 더 늦게 시작된 조회가 있으면 이 응답은 오래된 상태일 수 있으므로 버린다.
+      if (_reloadGenerationByStudentId[studentId] != reloadGeneration) return;
       _sortStudentList(list);
       _byStudentId[studentId] = list;
       await _hydratePageMappingsFromServer(

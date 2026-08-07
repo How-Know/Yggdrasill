@@ -11,6 +11,7 @@ import 'homework_grading_state_codec.dart';
 import 'homework_test_grading_result_service.dart';
 import 'homework_store.dart';
 import 'learning_problem_bank_service.dart';
+import 'resource_service.dart';
 import 'tenant_service.dart';
 import 'textbook_pdf_service.dart';
 
@@ -318,6 +319,7 @@ class RightSheetGradingSearchService {
       baselineStates: _toRightSheetStateMap(baselineStates),
       wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
       gradingLocked: lockGrading,
+      smartConfirmAction: !readOnly,
       onRequestEditReset: readOnly
           ? null
           : () async {
@@ -568,11 +570,26 @@ class RightSheetGradingSearchService {
       presetId: presetId,
     );
     if (preset == null) return null;
-    final selectedUids = preset.selectedQuestionUids
+    var selectedUids = preset.selectedQuestionUids
         .map((uid) => uid.trim())
         .where((uid) => uid.isNotEmpty)
         .toList(growable: false);
     if (selectedUids.isEmpty) return null;
+
+    final activeSnapshots =
+        await ResourceService.instance.loadHomeworkItemProblemSnapshots(
+      homeworkItemIds: <String>[baseItem.id],
+    );
+    final activeQuestionUids = activeSnapshots
+        .map((row) => '${row['pb_question_uid'] ?? ''}'.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toSet();
+    if (activeQuestionUids.isNotEmpty) {
+      selectedUids = selectedUids
+          .where(activeQuestionUids.contains)
+          .toList(growable: false);
+      if (selectedUids.isEmpty) return null;
+    }
 
     final questions = await _problemBankService.loadQuestionsByQuestionUids(
       academyId: academyId,

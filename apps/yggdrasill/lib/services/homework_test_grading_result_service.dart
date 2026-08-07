@@ -24,7 +24,7 @@ class HomeworkTestLatestScore {
 /// 학생앱 교재 카드와 같은 진행률/완료율.
 ///
 /// - 진행률 = (전체 - 미수행) / 전체
-/// - 완료율 = 정답 / 전체
+/// - 완료율 = 정답 / 수행분(미수행 제외)
 /// 교사 채점 attempt가 우선이며, 없으면 0으로 둔다.
 class HomeworkGradingProgressRate {
   final int total;
@@ -59,7 +59,9 @@ class HomeworkGradingProgressRate {
 
   double get advanceRate => total <= 0 ? 0 : graded / total;
 
-  double get completionRate => total <= 0 ? 0 : completed / total;
+  /// 수행분(미수행 제외) 중 정답 비율. 전원 정답이면 미수행이 있어도 100%.
+  double get completionRate =>
+      graded <= 0 ? 0 : (completed.clamp(0, graded) / graded);
 
   HomeworkGradingProgressRate merge(HomeworkGradingProgressRate other) {
     if (!enabled && !other.enabled) return disabled;
@@ -820,7 +822,7 @@ class HomeworkTestGradingResultService {
         final rows = await Supabase.instance.client
             .from('homework_test_grading_attempts')
             .select(
-              'homework_item_id,score_correct,score_total,'
+              'homework_item_id,score_correct,score_total,wrong_count,'
               'not_performed_count,graded_at',
             )
             .eq('academy_id', academyId)
@@ -832,12 +834,16 @@ class HomeworkTestGradingResultService {
           final itemId = '${map['homework_item_id'] ?? ''}'.trim();
           if (itemId.isEmpty || !resolved.add(itemId)) continue;
           final total = math.max(0, _doubleOf(map['score_total']).round());
-          final completed = math
-              .max(0, _doubleOf(map['score_correct']).round())
-              .clamp(0, total);
           final notPerformed =
               math.max(0, _intOf(map['not_performed_count'])).clamp(0, total);
           final graded = math.max(0, total - notPerformed);
+          final wrong = math.max(0, _intOf(map['wrong_count']));
+          final completedFromScore = math
+              .max(0, _doubleOf(map['score_correct']).round())
+              .clamp(0, graded);
+          // 오답이 없으면 수행분은 전부 정답. score_correct(배점)와
+          // score_total 불일치로 전원 정답이 57%처럼 보이는 것을 막는다.
+          final completed = wrong <= 0 ? graded : completedFromScore;
           out[itemId] = HomeworkGradingProgressRate(
             total: total > 0 ? total : (fallbackTotalByItemId[itemId] ?? 0),
             graded: total > 0 ? graded : 0,
@@ -895,7 +901,10 @@ class HomeworkTestGradingResultService {
         });
         final earnedPoint =
             state == HomeworkAnswerCellState.correct ? pointValue : 0.0;
-        scoreTotal += pointValue;
+        // 포기는 이번 과제 범위에서 제외되므로 분모에도 넣지 않는다.
+        if (state != HomeworkAnswerCellState.abandoned) {
+          scoreTotal += pointValue;
+        }
         scoreCorrect += earnedPoint;
         if (state == HomeworkAnswerCellState.wrong) {
           wrongCount += 1;

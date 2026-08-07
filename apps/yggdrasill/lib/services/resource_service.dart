@@ -1279,15 +1279,18 @@ class ResourceService {
         if (imageAnswerRefs.isNotEmpty) {
           final pathsByBucket = <String, Set<String>>{};
           for (final ref in imageAnswerRefs.values) {
-            pathsByBucket.putIfAbsent(ref.bucket, () => <String>{}).add(ref.path);
+            pathsByBucket
+                .putIfAbsent(ref.bucket, () => <String>{})
+                .add(ref.path);
           }
           final signedByKey = <String, String>{};
           await Future.wait(pathsByBucket.entries.map((entry) async {
             try {
-              final signed = await supa.storage.from(entry.key).createSignedUrls(
-                    entry.value.toList(growable: false),
-                    60 * 60,
-                  );
+              final signed =
+                  await supa.storage.from(entry.key).createSignedUrls(
+                        entry.value.toList(growable: false),
+                        60 * 60,
+                      );
               for (final item in signed) {
                 signedByKey['${entry.key}\n${item.path}'] = item.signedUrl;
               }
@@ -1368,6 +1371,7 @@ class ResourceService {
             )
             .eq('academy_id', academyId)
             .inFilter('homework_item_id', ids)
+            .isFilter('excluded_at', null)
             .order('homework_item_id')
             .order('sort_order');
         for (final row in rows) {

@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
@@ -33,6 +34,7 @@ import '../../services/tenant_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../memo_dialogs.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../utility_glass_dialog_shell.dart';
 
 const Color _rsPanelBg = Color(0xFF10171A);
 const Color _rsFieldBg = Color(0xFF15171C);
@@ -2873,6 +2875,7 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final VoidCallback onReportIssue;
   final VoidCallback onToggleState;
   final VoidCallback onMarkBlank;
+  final VoidCallback onToggleAbandoned;
   final VoidCallback onShowSourceInfo;
   final Widget answerChild;
 
@@ -2900,6 +2903,7 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     required this.onReportIssue,
     required this.onToggleState,
     required this.onMarkBlank,
+    required this.onToggleAbandoned,
     required this.onShowSourceInfo,
     required this.answerChild,
     this.setPartCount = 0,
@@ -3064,6 +3068,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
         child: InkWell(
           customBorder: shape,
           onTap: () => _runFrontAction(widget.onToggleState),
+          onLongPress: widget.onToggleAbandoned,
           splashFactory: NoSplash.splashFactory,
           splashColor: Colors.transparent,
           highlightColor: Colors.transparent,
@@ -3081,11 +3086,26 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                   child: SizedBox(
                     height: widget.answerSlotHeight,
                     child: Opacity(
-                      opacity: widget.state == 'not_performed' ? 0.42 : 1.0,
+                      opacity: widget.state == 'not_performed' ||
+                              widget.state == 'abandoned'
+                          ? 0.42
+                          : 1.0,
                       child: widget.answerChild,
                     ),
                   ),
                 ),
+                if (widget.state == 'abandoned') ...[
+                  const SizedBox(width: 10),
+                  const Text(
+                    '포기',
+                    style: TextStyle(
+                      color: Color(0xFF9B6A45),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      height: 1.0,
+                    ),
+                  ),
+                ],
                 if (widget.state == 'blank') ...[
                   const SizedBox(width: 10),
                   const Text(
@@ -3212,6 +3232,104 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
   }
 }
 
+/// 세트형 하위 문항용 미풀이 슬라이드. 본 문항 카드와 같은 오른쪽 드래그
+/// 제스처를 제공하되, 파트 카드 레이아웃은 그대로 유지한다.
+class _RightSheetSetPartSwipeCard extends StatefulWidget {
+  const _RightSheetSetPartSwipeCard({
+    required this.child,
+    required this.onMarkBlank,
+  });
+
+  final Widget child;
+  final VoidCallback onMarkBlank;
+
+  @override
+  State<_RightSheetSetPartSwipeCard> createState() =>
+      _RightSheetSetPartSwipeCardState();
+}
+
+class _RightSheetSetPartSwipeCardState
+    extends State<_RightSheetSetPartSwipeCard>
+    with SingleTickerProviderStateMixin {
+  static const double _actionPaneWidth = 62;
+  static const Duration _snapDuration = Duration(milliseconds: 170);
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: _snapDuration);
+
+  void _close() => _ctrl.animateTo(0, curve: Curves.easeOutCubic);
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+    final next = _ctrl.value + (details.delta.dx / _actionPaneWidth);
+    _ctrl.value = next.clamp(0.0, 1.0);
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0.0;
+    final flungRight = velocity > 250;
+    final flungLeft = velocity < -250;
+    if (flungRight || (!flungLeft && _ctrl.value >= 0.45)) {
+      _close();
+      widget.onMarkBlank();
+      return;
+    }
+    _close();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+      onHorizontalDragEnd: _handleHorizontalDragEnd,
+      onHorizontalDragCancel: _close,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: _actionPaneWidth,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Material(
+                  color: const Color(0xFFE54848).withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(11),
+                  child: const Center(
+                    child: Text(
+                      '미풀이',
+                      style: TextStyle(
+                        color: Color(0xFFE54848),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            AnimatedBuilder(
+              animation: _ctrl,
+              builder: (context, child) => Transform.translate(
+                offset: Offset(_actionPaneWidth * _ctrl.value, 0),
+                child: child,
+              ),
+              child: widget.child,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AnswerKeyGradingTabPanel extends StatefulWidget {
   final RightSideSheetTestGradingSession? session;
   final BuildContext? dialogContext;
@@ -3257,6 +3375,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   final FocusNode _searchFocus = FocusNode();
   final GlobalKey _searchHeaderFieldKey = GlobalKey();
   final GlobalKey _gradingSearchOverlayKey = GlobalKey();
+  final ScrollController _gradingScrollController = ScrollController();
+  final Map<int, GlobalKey> _gradingPageHeaderKeys = <int, GlobalKey>{};
+  bool _gradingPageSnapInProgress = false;
   double _gradingSearchOverlayHeight =
       _topBarTopInset + _searchFieldHeight + 24;
   Timer? _searchSuggestDebounce;
@@ -3344,6 +3465,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _searchFocus.removeListener(_handleSearchFocusChanged);
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    _gradingScrollController.dispose();
     super.dispose();
   }
 
@@ -3435,6 +3557,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (value == 'wrong') return 'wrong';
     if (value == 'blank' || value == 'unsolved') return 'blank';
     if (value == 'not_performed') return 'not_performed';
+    if (value == 'abandoned') return 'abandoned';
     return 'correct';
   }
 
@@ -4223,6 +4346,26 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _emitStateChanged();
   }
 
+  Future<void> _toggleCellAbandoned(
+    String key, {
+    List<String> partLabels = const <String>[],
+  }) async {
+    if (_answerListReadOnly) return;
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
+    }
+    setState(() {
+      final next = _normalizeState(_gradingStates[key]) == 'abandoned'
+          ? 'correct'
+          : 'abandoned';
+      _gradingStates[key] = next;
+      _applyStateToParts(key, partLabels);
+      _correctionStates.remove(key);
+    });
+    _emitStateChanged();
+  }
+
   // ------------------------------------------------------- 세트형 파트 채점
 
   /// 파트 상태 키 — 셀 키 뒤에 '#(1)'을 붙인다. 저장 시 part_states로 분리.
@@ -4253,19 +4396,24 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     var anyWrong = false;
     var anyBlank = false;
     var anyNotPerformed = false;
+    var effectivePartCount = 0;
     for (final label in partLabels) {
       final state = _partState(cellKey, label);
+      if (state == 'abandoned') continue;
+      effectivePartCount += 1;
       if (state == 'wrong') anyWrong = true;
       if (state == 'blank') anyBlank = true;
       if (state == 'not_performed') anyNotPerformed = true;
     }
-    final derived = anyWrong
-        ? 'wrong'
-        : anyBlank
-            ? 'blank'
-            : anyNotPerformed
-                ? 'not_performed'
-                : 'correct';
+    final derived = effectivePartCount == 0
+        ? 'abandoned'
+        : anyWrong
+            ? 'wrong'
+            : anyBlank
+                ? 'blank'
+                : anyNotPerformed
+                    ? 'not_performed'
+                    : 'correct';
     _gradingStates[cellKey] = derived;
     if (_isBaselineRetryKey(cellKey)) {
       if (derived == 'correct') {
@@ -4300,6 +4448,58 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       }
       final key = _partStateKey(cellKey, partLabel);
       _gradingStates[key] = _nextState(_normalizeState(_gradingStates[key]));
+      _syncSetCellStateFromParts(cellKey, partLabels);
+    });
+    _emitStateChanged();
+  }
+
+  void _materializePartStates(
+    String cellKey,
+    List<String> partLabels,
+  ) {
+    for (final label in partLabels) {
+      final key = _partStateKey(cellKey, label);
+      final raw = _gradingStates[key];
+      if (raw == null || raw.trim().isEmpty) {
+        _gradingStates[key] = _partState(cellKey, label);
+      }
+    }
+  }
+
+  Future<void> _markPartBlank(
+    String cellKey,
+    String partLabel,
+    List<String> partLabels,
+  ) async {
+    if (_answerListReadOnly) return;
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
+    }
+    setState(() {
+      _materializePartStates(cellKey, partLabels);
+      _gradingStates[_partStateKey(cellKey, partLabel)] = 'blank';
+      _syncSetCellStateFromParts(cellKey, partLabels);
+    });
+    _emitStateChanged();
+  }
+
+  Future<void> _togglePartAbandoned(
+    String cellKey,
+    String partLabel,
+    List<String> partLabels,
+  ) async {
+    if (_answerListReadOnly) return;
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
+    }
+    setState(() {
+      _materializePartStates(cellKey, partLabels);
+      final key = _partStateKey(cellKey, partLabel);
+      _gradingStates[key] = _normalizeState(_gradingStates[key]) == 'abandoned'
+          ? 'correct'
+          : 'abandoned';
       _syncSetCellStateFromParts(cellKey, partLabels);
     });
     _emitStateChanged();
@@ -6422,9 +6622,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (rawCell is! Map) continue;
         final key = '${rawCell['key'] ?? ''}'.trim();
         if (key.isEmpty || !seenKeys.add(key)) continue;
+        final state = _normalizeState(_gradingStates[key]);
+        if (state == 'abandoned') continue;
         final pointValue = hasScoreData ? (scoreMap[key] ?? 1.0) : 1.0;
         totalScore += pointValue;
-        final state = _normalizeState(_gradingStates[key]);
         if (state == 'correct') {
           correctScore += pointValue;
         }
@@ -6494,6 +6695,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             text: const Color(0xFF5A6B74),
             label: '미수행',
           );
+        case 'abandoned':
+          return (
+            border: const Color(0xFFC69B78),
+            background: background,
+            text: const Color(0xFF795333),
+            label: '포기',
+          );
         default:
           return (
             border: const Color(0xFFD9E0E4),
@@ -6524,6 +6732,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           background: background,
           text: const Color(0xFFA9BAC4),
           label: '미수행',
+        );
+      case 'abandoned':
+        return (
+          border: const Color(0xFF795333),
+          background: background,
+          text: const Color(0xFFE2B58F),
+          label: '포기',
         );
       default:
         return (
@@ -7185,6 +7400,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           partLabels: [for (final part in setParts) part.label],
         ),
       ),
+      onToggleAbandoned: () => unawaited(
+        _toggleCellAbandoned(
+          cell.key,
+          partLabels: [for (final part in setParts) part.label],
+        ),
+      ),
       onShowSourceInfo: () => unawaited(_openQuestionSourceInfoDialog(cell)),
       answerChild: isSetCell
           ? _buildSetSummaryContent(cell, setParts)
@@ -7250,6 +7471,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       'wrong' => const Color(0xFFE54848),
       'blank' => const Color(0xFFE54848),
       'not_performed' => const Color(0xFF4F626B),
+      'abandoned' => const Color(0xFF9B6A45),
       _ => _rsAccent,
     };
     // 정오는 색상만으로 표시. OX 기호는 생략하고 괄호 번호만 얇게.
@@ -7354,6 +7576,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       'wrong' => const Color(0xFFE54848),
       'blank' => const Color(0xFFE54848),
       'not_performed' => const Color(0xFF4F626B),
+      'abandoned' => const Color(0xFF9B6A45),
       _ => _rsAccent,
     };
     final shape = RoundedRectangleBorder(
@@ -7361,64 +7584,79 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       borderRadius: BorderRadius.circular(14),
       side: BorderSide(color: colors.border, width: 2),
     );
-    return Material(
-      color: colors.background,
-      surfaceTintColor: Colors.transparent,
-      shape: shape,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        customBorder: shape,
-        onTap: _answerListReadOnly
-            ? null
-            : () =>
-                unawaited(_togglePartState(cell.key, part.label, partLabels)),
-        splashFactory: NoSplash.splashFactory,
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-        hoverColor: Colors.transparent,
-        focusColor: Colors.transparent,
-        child: Padding(
-          // 본 카드와 동일: 카드 패딩 13.7 + 콘텐츠 들여쓰기 16.
-          padding: const EdgeInsets.fromLTRB(
-            13.7 + _rsAnswerContentLeftPad,
-            11,
-            13.7,
-            11,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox(
-                width: 44,
-                child: Text(
-                  part.label,
-                  style: TextStyle(
-                    color: _cardInk,
-                    fontFamily: 'ChosunNm',
-                    fontWeight: FontWeight.w900,
-                    fontSize: _rsAnswerQuestionNumberSize,
-                    height: 1.1,
+    return _RightSheetSetPartSwipeCard(
+      onMarkBlank: () =>
+          unawaited(_markPartBlank(cell.key, part.label, partLabels)),
+      child: Material(
+        color: colors.background,
+        surfaceTintColor: Colors.transparent,
+        shape: shape,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: shape,
+          onTap: _answerListReadOnly
+              ? null
+              : () =>
+                  unawaited(_togglePartState(cell.key, part.label, partLabels)),
+          onLongPress: _answerListReadOnly
+              ? null
+              : () => unawaited(
+                    _togglePartAbandoned(
+                      cell.key,
+                      part.label,
+                      partLabels,
+                    ),
+                  ),
+          splashFactory: NoSplash.splashFactory,
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          child: Padding(
+            // 본 카드와 동일: 카드 패딩 13.7 + 콘텐츠 들여쓰기 16.
+            padding: const EdgeInsets.fromLTRB(
+              13.7 + _rsAnswerContentLeftPad,
+              11,
+              13.7,
+              11,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 44,
+                  child: Text(
+                    part.label,
+                    style: TextStyle(
+                      color: _cardInk,
+                      fontFamily: 'ChosunNm',
+                      fontWeight: FontWeight.w900,
+                      fontSize: _rsAnswerQuestionNumberSize,
+                      height: 1.1,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Opacity(
-                  opacity: state == 'not_performed' ? 0.42 : 1.0,
-                  child: _buildSetPartAnswerContent(cell, part),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Opacity(
+                    opacity: state == 'not_performed' || state == 'abandoned'
+                        ? 0.42
+                        : 1.0,
+                    child: _buildSetPartAnswerContent(cell, part),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                colors.label,
-                style: TextStyle(
-                  color: statusColor,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w900,
-                  height: 1.0,
+                const SizedBox(width: 8),
+                Text(
+                  colors.label,
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    height: 1.0,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -7556,16 +7794,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         child: InkWell(
           onTap: onTap,
           onLongPress: onLongPress,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             child: Text(
               label,
               style: TextStyle(
                 color:
                     onTap == null ? _rsTextSub.withValues(alpha: 0.45) : color,
-                fontSize: 12.5,
-                fontWeight: FontWeight.w900,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
                 height: 1,
               ),
             ),
@@ -7579,95 +7817,199 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _RightSheetGradingPageVm page, {
     required bool isFirst,
   }) {
-    return Padding(
-      padding: EdgeInsets.only(
-        top: isFirst ? 0 : 12,
-        bottom: 8,
+    final fabStyle = _rightSheetFabColors(context);
+    return ColoredBox(
+      color: fabStyle.surface,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: SizedBox(
+          height: _gradingPageHeaderHeight - 8,
+          child: Row(
+            children: [
+              if (!isFirst)
+                const Expanded(
+                  child: Divider(height: 1, thickness: 1, color: _rsBorder),
+                )
+              else
+                const Spacer(),
+              const SizedBox(width: 10),
+              Text(
+                'p.${page.pageNumber}',
+                style: const TextStyle(
+                  color: _rsTextSub,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _buildPageBulkAction(
+                label: '모두 정답',
+                onTap: _answerListReadOnly
+                    ? null
+                    : () => unawaited(
+                          _applyPageBulkState(page, targetState: 'correct'),
+                        ),
+              ),
+              const SizedBox(width: 2),
+              _buildPageBulkAction(
+                label: '미수행',
+                emphasized: true,
+                onTap: _answerListReadOnly
+                    ? null
+                    : () => unawaited(
+                          _applyPageBulkState(
+                            page,
+                            targetState: 'not_performed',
+                          ),
+                        ),
+                onLongPress: _answerListReadOnly
+                    ? null
+                    : () => unawaited(
+                          _applyPageBulkState(
+                            page,
+                            targetState: 'not_performed',
+                            includeFollowing: true,
+                          ),
+                        ),
+              ),
+            ],
+          ),
+        ),
       ),
-      child: Row(
-        children: [
-          if (!isFirst)
-            const Expanded(
-              child: Divider(height: 1, thickness: 1, color: _rsBorder),
-            )
-          else
-            const Spacer(),
-          const SizedBox(width: 10),
-          Text(
-            'p.${page.pageNumber}',
-            style: const TextStyle(
-              color: _rsTextSub,
-              fontWeight: FontWeight.w800,
-              fontSize: 13,
-              height: 1.0,
-            ),
-          ),
-          const SizedBox(width: 8),
-          _buildPageBulkAction(
-            label: '모두 정답',
-            onTap: _answerListReadOnly
-                ? null
-                : () => unawaited(
-                      _applyPageBulkState(page, targetState: 'correct'),
-                    ),
-          ),
-          const SizedBox(width: 2),
-          _buildPageBulkAction(
-            label: '미수행',
-            emphasized: true,
-            onTap: _answerListReadOnly
-                ? null
-                : () => unawaited(
-                      _applyPageBulkState(page, targetState: 'not_performed'),
-                    ),
-            onLongPress: _answerListReadOnly
-                ? null
-                : () => unawaited(
-                      _applyPageBulkState(
-                        page,
-                        targetState: 'not_performed',
-                        includeFollowing: true,
+    );
+  }
+
+  ({int effective, int remaining}) _smartConfirmCounts() {
+    var effective = 0;
+    var remaining = 0;
+    final pages = _visiblePages(applyWrongOnly: false);
+    for (final page in pages) {
+      for (final cell in page.cells) {
+        final parts = _setPartsOf(cell);
+        if (parts.length >= 2) {
+          for (final part in parts) {
+            final state = _partState(cell.key, part.label);
+            if (state == 'abandoned') continue;
+            effective += 1;
+            if (state != 'correct') remaining += 1;
+          }
+          continue;
+        }
+        final state = _normalizeState(_gradingStates[cell.key]);
+        if (state == 'abandoned') continue;
+        effective += 1;
+        if (state != 'correct') remaining += 1;
+      }
+    }
+    return (effective: effective, remaining: remaining);
+  }
+
+  Future<void> _runSmartConfirmAction() async {
+    final counts = _smartConfirmCounts();
+    final action = resolveMigratedHomeworkGradingAction(
+      effectiveCount: counts.effective,
+      remainingCount: counts.remaining,
+    );
+    if (action == null) {
+      await _showSmartConfirmGlassDialog(
+        title: '완료할 문항이 없습니다',
+        icon: Icons.info_outline_rounded,
+        message: '모든 문항이 포기 상태입니다.\n과제 카드가 필요 없다면 홈 메뉴에서 삭제해 주세요.',
+        confirmLabel: '확인',
+        showCancel: false,
+      );
+      return;
+    }
+    if (action == 'confirm') {
+      await _runAction(action);
+      return;
+    }
+
+    final complete = await _showSmartConfirmGlassDialog(
+      title: '과제를 완료할까요?',
+      icon: Icons.task_alt_rounded,
+      message: '포기 문항을 제외한 ${counts.effective}문항이 모두 정답입니다.\n확인하면 과제가 완료됩니다.',
+      confirmLabel: '완료',
+    );
+    if (complete == true) {
+      await _runAction(action);
+    }
+  }
+
+  Future<bool?> _showSmartConfirmGlassDialog({
+    required String title,
+    required IconData icon,
+    required String message,
+    required String confirmLabel,
+    bool showCancel = true,
+  }) {
+    return _showTopOverlayDialog<bool>(
+      builder: (overlayContext, close) {
+        final fabStyle = _rightSheetFabColors(overlayContext);
+        return SizedBox(
+          width: 470,
+          height: 238,
+          child: UtilityGlassDialogShell(
+            title: title,
+            icon: icon,
+            preferredWidth: 470,
+            maxHeight: 238,
+            onClose: () => close(false),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: TextStyle(
+                        color: fabStyle.subText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        height: 1.5,
+                        decoration: TextDecoration.none,
                       ),
                     ),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (showCancel) ...[
+                        OutlinedButton(
+                          onPressed: () => close(false),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: fabStyle.text,
+                            side: BorderSide(color: fabStyle.border),
+                            minimumSize: const Size(84, 42),
+                          ),
+                          child: const Text('취소'),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      FilledButton(
+                        onPressed: () => close(true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _rsAccent,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(92, 42),
+                        ),
+                        child: Text(confirmLabel),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAnswerPageSection(
-    _RightSheetGradingPageVm page, {
-    required bool isFirst,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _buildPageDividerLabel(
-          page,
-          isFirst: isFirst,
-        ),
-        for (int i = 0; i < page.cells.length; i++) ...[
-          _buildAnswerListRow(page.cells[i], pageNumber: page.pageNumber),
-          if (i != page.cells.length - 1) const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildAnswerList(List<_RightSheetGradingPageVm> pages) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (int i = 0; i < pages.length; i++)
-          _buildAnswerPageSection(
-            pages[i],
-            isFirst: i == 0,
-          ),
-      ],
+        );
+      },
     );
   }
 
   Widget _buildActionButtons() {
+    final session = widget.session;
     final fabStyle = _rightSheetFabColors(context);
     Widget button({
       required String label,
@@ -7697,6 +8039,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       );
     }
 
+    if (session?.smartConfirmAction == true) {
+      return button(
+        label: _actionBusy ? '확인중' : '확인',
+        onTap: () => unawaited(_runSmartConfirmAction()),
+        filled: true,
+      );
+    }
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -7718,7 +8068,63 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _gradingAnswerListBottomInset = 4;
   static const double _gradingBottomBarScrollPadding =
       _gradingBottomBarHeight + _gradingAnswerListBottomInset;
+  static const double _gradingPageHeaderHeight = 62;
   static const double _gradingSheetHorizontalInset = 10;
+
+  GlobalKey _gradingPageHeaderKey(int pageNumber) {
+    return _gradingPageHeaderKeys.putIfAbsent(pageNumber, GlobalKey.new);
+  }
+
+  void _scheduleGradingPageSnap(List<_RightSheetGradingPageVm> pages) {
+    if (_gradingPageSnapInProgress || pages.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _gradingPageSnapInProgress) return;
+      unawaited(_snapNearestGradingPage(pages));
+    });
+  }
+
+  Future<void> _snapNearestGradingPage(
+    List<_RightSheetGradingPageVm> pages,
+  ) async {
+    if (!_gradingScrollController.hasClients) return;
+    final position = _gradingScrollController.position;
+    final currentOffset = position.pixels;
+    double? nearestOffset;
+    var nearestDistance = double.infinity;
+
+    for (final page in pages) {
+      final renderObject = _gradingPageHeaderKey(page.pageNumber)
+          .currentContext
+          ?.findRenderObject();
+      if (renderObject == null || !renderObject.attached) continue;
+      if (renderObject is RenderSliver && renderObject.geometry == null) {
+        continue;
+      }
+      final viewport = RenderAbstractViewport.of(renderObject);
+      final revealed = viewport.getOffsetToReveal(renderObject, 0).offset;
+      final target = revealed.clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      final distance = (target - currentOffset).abs();
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestOffset = target;
+      }
+    }
+
+    if (nearestOffset == null || nearestDistance < 0.5) return;
+    _gradingPageSnapInProgress = true;
+    try {
+      await _gradingScrollController.animateTo(
+        nearestOffset,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    } finally {
+      _gradingPageSnapInProgress = false;
+    }
+  }
 
   Widget _buildGradingBottomBar(RightSideSheetTestGradingSession session) {
     if (_answerListReadOnly) return const SizedBox.shrink();
@@ -7745,37 +8151,88 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Positioned.fill(
-          child: SingleChildScrollView(
-            padding: EdgeInsets.only(
-              top: topScrollPadding,
-              bottom: _gradingBottomBarScrollPadding,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildSessionHeader(session),
-                const SizedBox(height: 22),
-                if (pages.isNotEmpty) _buildAnswerList(pages),
-                if (pages.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 24),
-                    child: Text(
-                      _wrongOnly
-                          ? (_baselineStates.isNotEmpty
-                              ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
-                              : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
-                          : '검색 결과가 없습니다.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: _rsTextSub,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12.5,
+        Positioned(
+          top: topScrollPadding,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // 마지막 페이지 헤더도 스크롤 영역 상단까지 올라오도록 한 화면
+              // 높이만큼 여유를 둔다. 하단 확인 바에 가리는 높이도 포함한다.
+              final trailingSpace = math.max(
+                _gradingBottomBarScrollPadding,
+                constraints.maxHeight -
+                    _gradingPageHeaderHeight +
+                    _gradingBottomBarScrollPadding,
+              );
+              return NotificationListener<ScrollEndNotification>(
+                onNotification: (notification) {
+                  if (notification.depth == 0) {
+                    _scheduleGradingPageSnap(pages);
+                  }
+                  return false;
+                },
+                child: CustomScrollView(
+                  controller: _gradingScrollController,
+                  slivers: [
+                    SliverToBoxAdapter(child: _buildSessionHeader(session)),
+                    const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                    if (pages.isNotEmpty)
+                      for (int pageIndex = 0;
+                          pageIndex < pages.length;
+                          pageIndex++) ...[
+                        SliverToBoxAdapter(
+                          child: _buildPageDividerLabel(
+                            pages[pageIndex],
+                            isFirst: pageIndex == 0,
+                          ),
+                          key: _gradingPageHeaderKey(
+                            pages[pageIndex].pageNumber,
+                          ),
+                        ),
+                        SliverToBoxAdapter(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (int i = 0;
+                                  i < pages[pageIndex].cells.length;
+                                  i++) ...[
+                                _buildAnswerListRow(
+                                  pages[pageIndex].cells[i],
+                                  pageNumber: pages[pageIndex].pageNumber,
+                                ),
+                                if (i != pages[pageIndex].cells.length - 1)
+                                  const SizedBox(height: 8),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    if (pages.isEmpty)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            _wrongOnly
+                                ? (_baselineStates.isNotEmpty
+                                    ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
+                                    : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
+                                : '검색 결과가 없습니다.',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: _rsTextSub,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-              ],
-            ),
+                    SliverToBoxAdapter(child: SizedBox(height: trailingSpace)),
+                  ],
+                ),
+              );
+            },
           ),
         ),
         Positioned(

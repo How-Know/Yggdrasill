@@ -15,6 +15,16 @@ typedef RightSheetTestGradingAction = Future<void> Function(
 );
 typedef RightSheetTestGradingEditResetAction = Future<bool> Function();
 
+/// 마이그레이션 과제의 단일 확인 버튼이 실행할 서버 액션.
+/// 유효 문항이 하나도 없으면 null로 완료를 막는다.
+String? resolveMigratedHomeworkGradingAction({
+  required int effectiveCount,
+  required int remainingCount,
+}) {
+  if (effectiveCount <= 0) return null;
+  return remainingCount <= 0 ? 'complete' : 'confirm';
+}
+
 class RightSheetGradingSearchResult {
   final String studentId;
   final String homeworkItemId;
@@ -66,6 +76,12 @@ class RightSideSheetTestGradingSession {
   final bool gradingLocked;
   final RightSheetTestGradingEditResetAction? onRequestEditReset;
   final bool closeSheetOnAction;
+
+  /// 마이그레이션 과제용 단일 확인 버튼.
+  ///
+  /// 유효 문항이 모두 정답이면 완료 확인 후 complete, 남은 문항이 있으면
+  /// confirm을 실행한다. 레거시 경로는 false로 두어 기존 두 버튼을 유지한다.
+  final bool smartConfirmAction;
   final Map<String, double> scoreByQuestionKey;
   final String answerPathRaw;
   final String solutionPathRaw;
@@ -90,6 +106,7 @@ class RightSideSheetTestGradingSession {
     this.gradingLocked = false,
     this.onRequestEditReset,
     this.closeSheetOnAction = true,
+    this.smartConfirmAction = false,
     this.scoreByQuestionKey = const <String, double>{},
     this.answerPathRaw = '',
     this.solutionPathRaw = '',

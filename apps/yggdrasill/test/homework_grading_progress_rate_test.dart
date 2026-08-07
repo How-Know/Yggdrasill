@@ -18,7 +18,27 @@ void main() {
         enabled: true,
       );
       expect(rate.advanceRate, 0.8);
-      expect(rate.completionRate, 0.5);
+      expect(rate.completionRate, 5 / 8);
+    });
+
+    test('수행분이 모두 정답이면 미수행이 있어도 완료율 100%', () {
+      const rate = HomeworkGradingProgressRate(
+        total: 12,
+        graded: 7,
+        completed: 7,
+        enabled: true,
+      );
+      expect(rate.advanceRate, closeTo(7 / 12, 1e-9));
+      expect(rate.completionRate, 1.0);
+      // UI %는 완료율을 쓰며 진행률에 클램프하면 안 된다 (57% 오표기 방지).
+      expect(
+        (rate.completionRate.clamp(0.0, 1.0) * 100).round(),
+        100,
+      );
+      expect(
+        (rate.completionRate.clamp(0.0, rate.advanceRate) * 100).round(),
+        isNot(100),
+      );
     });
 
     test('그룹 합산은 하위 과제를 더한다', () {

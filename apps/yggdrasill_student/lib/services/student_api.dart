@@ -140,7 +140,18 @@ class HomeworkGroup {
 
   String get inspectionLabel {
     if (!isDueForCheck) return '';
-    return absenceCarryover ? '결석 이월 · 오늘 검사' : '오늘 검사';
+    if (absenceCarryover) return '결석 이월 · 오늘 검사';
+    final original = originalDueDate;
+    if (original != null) {
+      final local = original.toLocal();
+      final originalDay = DateTime(local.year, local.month, local.day);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      if (originalDay.isBefore(today)) {
+        return '미검사 이월 · 오늘 검사';
+      }
+    }
+    return '오늘 검사';
   }
 
   String get assignmentOriginLabel {
