@@ -12,6 +12,7 @@ library yggdrasill_ui;
 export 'src/theme/ygg_glass_tokens.dart';
 export 'src/theme/ygg_semantic_colors.dart';
 export 'src/theme/ygg_theme.dart';
+export 'src/widgets/app_time_picker_dialog.dart';
 export 'src/widgets/dialog_tokens.dart';
 export 'src/widgets/top_glass_snack_bar.dart';
 export 'src/widgets/utility_glass_dialog_shell.dart';

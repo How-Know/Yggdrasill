@@ -13,9 +13,12 @@ typedef RightSheetTestGradingAction = Future<void> Function(
   RightSheetTestGradingStates states,
   RightSheetTestGradingStates correctionStates,
 );
-typedef RightSheetTestGradingEditResetAction = Future<bool> Function();
+typedef RightSheetTestGradingCancelRetryAction = Future<bool> Function();
 
 /// 마이그레이션 과제의 단일 확인 버튼이 실행할 서버 액션.
+///
+/// 카드 표시용 완료율([HomeworkGradingProgressRate])과 별개로,
+/// 유효 문항(포기 제외) 중 비정답(오답·빈칸·미수행)이 0일 때만 `complete`다.
 /// 유효 문항이 하나도 없으면 null로 완료를 막는다.
 String? resolveMigratedHomeworkGradingAction({
   required int effectiveCount,
@@ -74,8 +77,9 @@ class RightSideSheetTestGradingSession {
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
   final bool gradingLocked;
-  final RightSheetTestGradingEditResetAction? onRequestEditReset;
+  final RightSheetTestGradingCancelRetryAction? onRequestGradingCancelRetry;
   final bool closeSheetOnAction;
+  final bool closeBeforeActionCompletes;
 
   /// 마이그레이션 과제용 단일 확인 버튼.
   ///
@@ -108,8 +112,9 @@ class RightSideSheetTestGradingSession {
     this.onStatesChanged,
     this.onAction,
     this.gradingLocked = false,
-    this.onRequestEditReset,
+    this.onRequestGradingCancelRetry,
     this.closeSheetOnAction = true,
+    this.closeBeforeActionCompletes = false,
     this.smartConfirmAction = false,
     this.showSearchChrome = true,
     this.scoreByQuestionKey = const <String, double>{},

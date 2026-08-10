@@ -8,6 +8,7 @@ import 'student_api.dart';
 /// 오늘 등원/하원 상태를 앱 전역으로 공유.
 ///
 /// 과제 세션과 같이 Realtime + 짧은 폴백 폴링으로 키오스크 등원을 바로 반영한다.
+/// 학습앱 「계획 저장」도 attendance_records 스냅샷 컬럼으로 감지한다.
 class StudentAttendanceSession extends ChangeNotifier {
   StudentAttendanceSession._();
   static final StudentAttendanceSession instance = StudentAttendanceSession._();
@@ -17,6 +18,9 @@ class StudentAttendanceSession extends ChangeNotifier {
 
   TodayAttendance _today = const TodayAttendance();
   StudentNextClass? _nextClass;
+  DateTime? _planSnapshotAt;
+  int? _planSnapshotMinutes;
+  bool _hydrated = false;
   bool _syncStarted = false;
   bool _refreshInFlight = false;
   bool _pollInFlight = false;
@@ -26,10 +30,19 @@ class StudentAttendanceSession extends ChangeNotifier {
   Timer? _fallbackPollTimer;
   Timer? _reloadDebounceTimer;
 
+  /// 학습앱이 목표를 새로 제시할 때마다 증가. UI는 스낵바·목록 갱신에 사용.
+  final ValueNotifier<int> planGoalPresentedTick = ValueNotifier<int>(0);
+
   TodayAttendance get today => _today;
   DateTime? get arrival => _today.arrival;
   DateTime? get departure => _today.departure;
+  DateTime? get classEndTime => _today.classEndTime;
+  DateTime? get plannedDepartureAt => _today.plannedDepartureAt;
+  String? get earlyLeaveReason => _today.earlyLeaveReason;
   StudentNextClass? get nextClass => _nextClass;
+  DateTime? get planSnapshotAt => _planSnapshotAt;
+  int? get planSnapshotMinutes => _planSnapshotMinutes;
+  bool get hasPlanGoalSnapshot => _planSnapshotAt != null;
 
   /// 로그인 후 셸에서 한 번 호출.
   Future<void> startSync() async {
@@ -131,7 +144,10 @@ class StudentAttendanceSession extends ChangeNotifier {
           .toIso8601String();
       final rows = await Supabase.instance.client
           .from('attendance_records')
-          .select('updated_at, arrival_time, departure_time')
+          .select(
+            'updated_at, arrival_time, departure_time,'
+            'homework_plan_snapshot_at,homework_plan_snapshot_minutes',
+          )
           .eq('student_id', id.studentId)
           .gt('updated_at', since)
           .order('updated_at', ascending: false)
@@ -160,24 +176,48 @@ class StudentAttendanceSession extends ChangeNotifier {
     try {
       final futures = <Future<dynamic>>[
         StudentApi.instance.todayAttendance(),
+        StudentApi.instance.openPlanGoalSnapshot(),
       ];
       if (includeNextClass || _nextClass == null) {
         futures.add(StudentApi.instance.nextClass());
       }
       final results = await Future.wait(futures);
       final next = results[0] as TodayAttendance;
+      final snap = results[1] as StudentPlanGoalSnapshot?;
       StudentNextClass? nextClass = _nextClass;
-      if (results.length > 1) {
-        nextClass = results[1] as StudentNextClass?;
+      if (results.length > 2) {
+        nextClass = results[2] as StudentNextClass?;
       }
+
+      final nextSnapAt = snap?.presentedAt;
+      final nextSnapMinutes = snap?.planMinutes;
+      final snapshotChanged = !_sameInstant(nextSnapAt, _planSnapshotAt) ||
+          nextSnapMinutes != _planSnapshotMinutes;
+      final newlyPresented = _hydrated &&
+          nextSnapAt != null &&
+          (_planSnapshotAt == null ||
+              nextSnapAt.toUtc().isAfter(_planSnapshotAt!.toUtc()));
 
       final changed = !_sameInstant(next.arrival, _today.arrival) ||
           !_sameInstant(next.departure, _today.departure) ||
           !_sameInstant(next.classDateTime, _today.classDateTime) ||
-          !_sameInstant(nextClass?.classDateTime, _nextClass?.classDateTime);
+          !_sameInstant(next.classEndTime, _today.classEndTime) ||
+          !_sameInstant(next.plannedDepartureAt, _today.plannedDepartureAt) ||
+          next.earlyLeaveReason != _today.earlyLeaveReason ||
+          !_sameInstant(nextClass?.classDateTime, _nextClass?.classDateTime) ||
+          snapshotChanged;
       _today = next;
       _nextClass = nextClass;
+      _planSnapshotAt = nextSnapAt;
+      _planSnapshotMinutes = nextSnapMinutes;
+      _hydrated = true;
       if (changed) notifyListeners();
+      if (newlyPresented) {
+        planGoalPresentedTick.value = planGoalPresentedTick.value + 1;
+        debugPrint(
+          '[ATT][plan-goal] presented at=$nextSnapAt minutes=$nextSnapMinutes',
+        );
+      }
     } catch (_) {
       // best-effort
     } finally {

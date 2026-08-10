@@ -193,11 +193,11 @@ class _AppTimePickerDialogState extends State<AppTimePickerDialog> {
                             Align(
                               alignment: Alignment.centerLeft,
                               child: _IconButton(
-                              backgroundColor: headerIconBg,
-                              borderColor: subtleBorder,
-                              icon: Icons.close,
-                              iconColor: titleColor,
-                              onPressed: () => _close(),
+                                backgroundColor: headerIconBg,
+                                borderColor: subtleBorder,
+                                icon: Icons.close,
+                                iconColor: titleColor,
+                                onPressed: () => _close(),
                               ),
                             ),
                             Align(

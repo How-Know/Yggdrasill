@@ -10,6 +10,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/handwriting_candidates.dart';
+import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../widgets/math_expression_editor.dart';
@@ -687,6 +688,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       );
       // 트리의 페이지 현황 갱신
       _loadTree();
+      HomeworkSession.instance.notifyPlanProgress();
       await _maybeCompleteHomework();
     } catch (_) {
       if (mounted) {
@@ -712,6 +714,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       final result =
           await StudentApi.instance.completeHomeworkIfMastered(scope.groupId);
       if (!mounted) return;
+      HomeworkSession.instance.notifyPlanProgress();
       if (result['ok'] != true) {
         final remaining = (result['remaining'] as num?)?.toInt() ?? 0;
         if (remaining > 0) {
@@ -723,6 +726,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         }
         return;
       }
+      unawaited(HomeworkSession.instance.refresh());
       TopGlassSnackBar.show(
         context,
         message: '과제를 모두 맞혔어요! 통과 처리했어요.',
@@ -784,6 +788,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             (_attemptCounts[problem.cropId] ?? 0) + 1;
       });
       _loadTree();
+      HomeworkSession.instance.notifyPlanProgress();
       await _maybeCompleteHomework();
     } catch (_) {
       if (mounted) {
@@ -890,6 +895,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             (_attemptCounts[problem.cropId] ?? 0) + 1;
       });
       _loadTree();
+      HomeworkSession.instance.notifyPlanProgress();
       await _maybeCompleteHomework();
     } catch (_) {
       if (mounted) {

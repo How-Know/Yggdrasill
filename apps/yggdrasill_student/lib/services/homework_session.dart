@@ -40,6 +40,14 @@ class HomeworkSession extends ChangeNotifier {
   bool _refreshInFlight = false;
   bool _syncStarted = false;
 
+  /// 상단 계획 % 갱신용. 채점·목록 refresh 때 증가한다.
+  final ValueNotifier<int> planProgressTick = ValueNotifier<int>(0);
+
+  /// 과제 채점/통과로 완료율이 바뀌었을 때 호출.
+  void notifyPlanProgress() {
+    planProgressTick.value = planProgressTick.value + 1;
+  }
+
   HomeworkGroup? get active {
     final a = _active;
     if (a == null) return null;
@@ -367,6 +375,8 @@ class HomeworkSession extends ChangeNotifier {
       }
       syncFromGroups(groups, covers: covers);
       _pollCursorUtc = DateTime.now().toUtc();
+      // 목록뿐 아니라 계획 진행률(권장×완료율)도 같이 갱신 신호를 보낸다.
+      notifyPlanProgress();
     } catch (_) {
       // best-effort
     } finally {

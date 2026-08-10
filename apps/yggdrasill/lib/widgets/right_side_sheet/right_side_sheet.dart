@@ -3353,6 +3353,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _topBarTopInset = 12;
   static const double _searchFieldHeight = 52;
   static const double _searchIconSize = 18;
+
   /// 펼침/축소 공통 — 돋보기 왼쪽 위치(패널만 변하고 아이콘은 고정).
   static const double _searchIconLeft = 14;
   static const String _historyPrefKey =
@@ -3380,8 +3381,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   final ScrollController _answerListScrollCtrl = ScrollController();
   final GlobalKey _searchHeaderFieldKey = GlobalKey();
   final GlobalKey _gradingSearchOverlayKey = GlobalKey();
+
   /// 원형 돋보기 탭 시 스크롤을 올리며 검색을 펼친다.
   bool _forceSearchExpanded = false;
+
   /// 헤더 스냅/검색 펼침용 animateTo 중에는 재스냅하지 않는다.
   bool _headerSnapInProgress = false;
   Timer? _headerSnapDebounce;
@@ -3437,8 +3440,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   String _boundSessionId = '';
   RightSideSheetTestGradingSession? _boundSessionRef;
   bool _gradingEditLocked = false;
+  bool _savedEditAcknowledged = false;
   bool _wrongOnly = false;
-  bool _editResetBusy = false;
+  bool _savedEditActionBusy = false;
   bool _actionBusy = false;
   bool _answerPdfOpening = false;
   String _openingSolutionCellKey = '';
@@ -3484,8 +3488,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   static const double _sessionHeaderBlockHeight = 78;
 
-  double get _stickyHeaderMinExtent =>
-      _topBarTopInset + _searchFieldHeight + 8;
+  double get _stickyHeaderMinExtent => _topBarTopInset + _searchFieldHeight + 8;
 
   double get _stickyHeaderMaxExtent {
     if (!_showSearchChrome) {
@@ -3539,8 +3542,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   /// 스크롤이 멈추면 검색 헤더를 펼침 / 완전 축소(원형·알약) 중 하나로 붙인다.
   void _snapStickyHeaderIfNeeded() {
     if (!mounted || _headerSnapInProgress) return;
-    if (_showSearchChrome &&
-        (_forceSearchExpanded || _searchFocus.hasFocus)) {
+    if (_showSearchChrome && (_forceSearchExpanded || _searchFocus.hasFocus)) {
       return;
     }
     if (!_answerListScrollCtrl.hasClients) return;
@@ -3686,6 +3688,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         _wrongOnlySettledCorrectionKeys = <String>{};
         _expandedSetCellKeys.clear();
         _gradingEditLocked = false;
+        _savedEditAcknowledged = false;
         _wrongOnly = false;
         _answerRenders = <String, LearningProblemAnswerRender>{};
         _answerRenderFailedKeys = <String>{};
@@ -3734,6 +3737,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           .toSet();
       _expandedSetCellKeys.clear();
       _gradingEditLocked = session.gradingLocked;
+      _savedEditAcknowledged = false;
       _wrongOnly = session.wrongOnlyDefault && baselineStates.isNotEmpty;
       _answerRenders = <String, LearningProblemAnswerRender>{};
       _answerRenderFailedKeys = <String>{};
@@ -4422,8 +4426,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _emitStateChanged();
       return;
     }
-    if (_gradingEditLocked) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked && !_savedEditAcknowledged) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
@@ -4447,8 +4451,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels = const <String>[],
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked && !_savedEditAcknowledged) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
@@ -4466,8 +4470,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels = const <String>[],
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked && !_savedEditAcknowledged) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
@@ -4559,8 +4563,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _emitStateChanged();
       return;
     }
-    if (_gradingEditLocked) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked && !_savedEditAcknowledged) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
@@ -4594,8 +4598,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked && !_isBaselineRetryKey(cellKey)) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked &&
+        !_savedEditAcknowledged &&
+        !_isBaselineRetryKey(cellKey)) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
@@ -4612,8 +4618,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked && !_isBaselineRetryKey(cellKey)) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked &&
+        !_savedEditAcknowledged &&
+        !_isBaselineRetryKey(cellKey)) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
     setState(() {
@@ -4627,10 +4635,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _emitStateChanged();
   }
 
-  Future<bool> _confirmResetForEdit() async {
+  Future<bool> _confirmSavedGradingEdit() async {
     final session = widget.session;
-    if (session == null || _editResetBusy) return false;
-    final confirmed = await showDialog<bool>(
+    if (session == null || _savedEditActionBusy) return false;
+    final cancelRetry = session.onRequestGradingCancelRetry;
+    final selected = await showDialog<String>(
       context: _navigatorContext,
       useRootNavigator: true,
       builder: (dialogContext) {
@@ -4644,7 +4653,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ),
           ),
           content: const Text(
-            '이미 저장된 첫 채점 결과가 있습니다.\n수정하면 저장된 점수와 오답 기록이 리셋되고, 다시 확인할 때 새 결과로 저장됩니다.',
+            '이미 저장된 채점 결과가 있습니다.\n수정하면 기존 기록은 보존되고, 다시 확인할 때 새 수정본으로 저장됩니다.',
             style: TextStyle(
               color: _rsTextSub,
               fontWeight: FontWeight.w700,
@@ -4654,47 +4663,57 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           actions: [
             TextButton(
               onPressed: () =>
-                  Navigator.of(dialogContext, rootNavigator: true).pop(false),
+                  Navigator.of(dialogContext, rootNavigator: true).pop(),
               child: const Text('취소'),
             ),
+            if (cancelRetry != null)
+              TextButton(
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                  rootNavigator: true,
+                ).pop('retry_cancel'),
+                child: const Text('채점 취소 다시 시도'),
+              ),
             FilledButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext, rootNavigator: true).pop(true),
-              child: const Text('수정하고 리셋'),
+              onPressed: () => Navigator.of(
+                dialogContext,
+                rootNavigator: true,
+              ).pop('edit'),
+              child: const Text('수정 계속'),
             ),
           ],
         );
       },
     );
-    if (confirmed != true || !mounted) return false;
+    if (!mounted) return false;
+    if (selected == 'edit') {
+      setState(() {
+        _savedEditAcknowledged = true;
+      });
+      return true;
+    }
+    if (selected != 'retry_cancel' || cancelRetry == null) return false;
+
     setState(() {
-      _editResetBusy = true;
+      _savedEditActionBusy = true;
     });
-    var ok = true;
+    var ok = false;
     try {
-      final resetAction = session.onRequestEditReset;
-      if (resetAction != null) {
-        ok = await resetAction();
-      }
+      ok = await cancelRetry();
     } finally {
       if (mounted) {
         setState(() {
-          _editResetBusy = false;
+          _savedEditActionBusy = false;
         });
       }
     }
     if (!ok || !mounted) return false;
-    setState(() {
-      _gradingEditLocked = false;
-      _gradingStates = <String, String>{};
-      _baselineStates = <String, String>{};
-      _correctionStates = <String, String>{};
-      _correctionAttemptNumbers = <String, int>{};
-      _wrongOnlySettledCorrectionKeys = <String>{};
-      _wrongOnly = false;
-    });
-    _emitStateChanged();
-    return true;
+    widget.onClearSession();
+    final closeAction = closeRightSideSheetAction;
+    if (closeAction != null) {
+      await closeAction();
+    }
+    return false;
   }
 
   /// 오버플로 정답 리스트 전용 변환.
@@ -5171,16 +5190,28 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     });
     _emitStateChanged();
     try {
-      await session.onAction?.call(
+      final actionFuture = session.onAction?.call(
         action,
         Map<String, String>.from(_gradingStates),
         Map<String, String>.from(_correctionStates),
       );
-      widget.onClearSession();
-      if (session.closeSheetOnAction) {
-        final closeAction = closeRightSideSheetAction;
-        if (closeAction != null) {
-          await closeAction();
+      if (session.closeBeforeActionCompletes) {
+        widget.onClearSession();
+        if (session.closeSheetOnAction) {
+          final closeAction = closeRightSideSheetAction;
+          if (closeAction != null) {
+            await closeAction();
+          }
+        }
+      }
+      await actionFuture;
+      if (!session.closeBeforeActionCompletes) {
+        widget.onClearSession();
+        if (session.closeSheetOnAction) {
+          final closeAction = closeRightSideSheetAction;
+          if (closeAction != null) {
+            await closeAction();
+          }
         }
       }
     } finally {
@@ -5715,42 +5746,43 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           spacing: 8,
           runSpacing: 8,
           children: [
-          for (int i = 0; i < _recentSearches.length; i++)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: chipDecoration,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  InkWell(
-                    onTap: () =>
-                        unawaited(_openRecentSearch(_recentSearches[i])),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 320),
-                      child: Text(
-                        _recentSearchChipLabel(_recentSearches[i]),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: fabStyle.text,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
+            for (int i = 0; i < _recentSearches.length; i++)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: chipDecoration,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    InkWell(
+                      onTap: () =>
+                          unawaited(_openRecentSearch(_recentSearches[i])),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        child: Text(
+                          _recentSearchChipLabel(_recentSearches[i]),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: fabStyle.text,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  InkWell(
-                    onTap: () => unawaited(_removeRecentAt(i)),
-                    child: Icon(
-                      Icons.close_rounded,
-                      size: 16,
-                      color: fabStyle.subText,
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: () => unawaited(_removeRecentAt(i)),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: fabStyle.subText,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -5938,7 +5970,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     required _RightSheetFabColors fabStyle,
   }) {
     // 왼쪽 패널은 접힘 초반에 원형까지 끝내, 중간 rest에서 길쭉한 알약이 남지 않게 한다.
-    final searchPanelT = Curves.easeInCubic.transform((t / 0.55).clamp(0.0, 1.0));
+    final searchPanelT =
+        Curves.easeInCubic.transform((t / 0.55).clamp(0.0, 1.0));
     final fieldOpacity = (1.0 - (searchPanelT * 1.35)).clamp(0.0, 1.0);
     final pillOpacity = ((t - 0.08) / 0.55).clamp(0.0, 1.0);
     final circleSize = _searchFieldHeight;
@@ -6008,8 +6041,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                                                   if (value.trim().isEmpty) {
                                                     if (!mounted) return;
                                                     setState(() {
-                                                      _searchResults = const <
-                                                          RightSheetGradingSearchResult>[];
+                                                      _searchResults =
+                                                          const <RightSheetGradingSearchResult>[];
                                                       _searchError = null;
                                                       _searchBusy = false;
                                                     });
@@ -6059,12 +6092,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                                                   setState(() {
                                                     _searchCtrl.clear();
                                                     _searchSuggestions =
-                                                        const <
-                                                            RightSheetGradingSearchResult>[];
+                                                        const <RightSheetGradingSearchResult>[];
                                                     _searchSuggestError = null;
                                                     _searchSuggestBusy = false;
-                                                    _searchResults = const <
-                                                        RightSheetGradingSearchResult>[];
+                                                    _searchResults =
+                                                        const <RightSheetGradingSearchResult>[];
                                                     _searchError = null;
                                                     _searchBusy = false;
                                                   });
@@ -6157,10 +6189,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     required double collapseT,
   }) {
     final fabStyle = _rightSheetFabColors(context);
-    final t = (_showSearchChrome &&
-            (_forceSearchExpanded || _searchFocus.hasFocus))
-        ? 0.0
-        : Curves.easeInOutCubic.transform(collapseT.clamp(0.0, 1.0));
+    final t =
+        (_showSearchChrome && (_forceSearchExpanded || _searchFocus.hasFocus))
+            ? 0.0
+            : Curves.easeInOutCubic.transform(collapseT.clamp(0.0, 1.0));
 
     if (!session.showSearchChrome) {
       return Material(
@@ -6220,10 +6252,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         child: _buildRecentSearchChips(
                           fabStyle: fabStyle,
                           chipDecoration: BoxDecoration(
-                            color: Theme.of(context).brightness ==
-                                    Brightness.light
-                                ? Colors.black.withValues(alpha: 0.05)
-                                : Colors.white.withValues(alpha: 0.08),
+                            color:
+                                Theme.of(context).brightness == Brightness.light
+                                    ? Colors.black.withValues(alpha: 0.05)
+                                    : Colors.white.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(999),
                           ),
                         ),
@@ -6714,8 +6746,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final cacheKey = session.answerViewerCacheKey.trim().isEmpty
         ? 'right_sheet_answer:${session.sessionId}'
         : session.answerViewerCacheKey.trim();
-    final title =
-        session.title.trim().isEmpty ? '답지 확인' : session.title.trim();
+    final title = session.title.trim().isEmpty ? '답지 확인' : session.title.trim();
     final overlayEntries = session.overlayEntries
         .map(
           (entry) => <String, String>{
@@ -6737,8 +6768,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ? (preloaded?.answerPath ?? '')
             : (preloaded?.solutionPath ?? ''))
         .trim();
-    final hasWarmLocalPdf = warmAnswerCandidate.toLowerCase().endsWith('.pdf') &&
-        File(warmAnswerCandidate).existsSync();
+    final hasWarmLocalPdf =
+        warmAnswerCandidate.toLowerCase().endsWith('.pdf') &&
+            File(warmAnswerCandidate).existsSync();
 
     // 캐시 miss면 왼쪽 로딩 패널을 먼저 띄우고, 준비되면 PDF로 교체한다.
     // 이미 로컬 캐시가 있으면 로딩 플래시 없이 바로 resolve 경로로 간다.
@@ -6775,9 +6807,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       // solution PDF (143~318MB). Falls back to the full PDF on any failure.
       String solutionPageFile = '';
       int effectiveFocusPage = focusPageNumber;
-      if (needsSolutionNow &&
-          focusPageNumber > 0 &&
-          solutionRaw.isNotEmpty) {
+      if (needsSolutionNow && focusPageNumber > 0 && solutionRaw.isNotEmpty) {
         final solRef = _textbookPdfRefFromStoragePath(solutionRaw, kind: 'sol');
         if (solRef != null) {
           try {
@@ -8352,8 +8382,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final targetLabel = targetState == 'not_performed' ? '미수행' : '모두 정답';
     final pageLabel =
         firstPage == lastPage ? 'p.$firstPage' : 'p.$firstPage–p.$lastPage';
-    final title =
-        isRange ? '이후 페이지를 미수행 처리할까요?' : '기존 채점을 덮어쓸까요?';
+    final title = isRange ? '이후 페이지를 미수행 처리할까요?' : '기존 채점을 덮어쓸까요?';
     final message = '$pageLabel · $questionCount문항을 $targetLabel 상태로 바꿉니다.'
         '${isRange ? '\n현재 페이지부터 배정 범위의 마지막 페이지까지 적용됩니다.' : ''}';
     // PDF 뷰어 Overlay 위에 뜨도록 일반 showDialog가 아니라 top overlay 사용.
@@ -8428,8 +8457,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     bool includeFollowing = false,
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked) {
-      final unlocked = await _confirmResetForEdit();
+    if (_gradingEditLocked && !_savedEditAcknowledged) {
+      final unlocked = await _confirmSavedGradingEdit();
       if (!unlocked || !mounted) return;
     }
 
@@ -8778,13 +8807,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       children: [
         _buildGradingBottomBarButton(
           label: _actionBusy ? '완료중' : '완료',
-          onPressed: _actionBusy ? null : () => unawaited(_runAction('complete')),
+          onPressed:
+              _actionBusy ? null : () => unawaited(_runAction('complete')),
           width: _gradingBottomActionButtonWidth,
         ),
         const SizedBox(width: 8),
         _buildGradingBottomBarButton(
           label: _actionBusy ? '확인중' : '확인',
-          onPressed: _actionBusy ? null : () => unawaited(_runAction('confirm')),
+          onPressed:
+              _actionBusy ? null : () => unawaited(_runAction('confirm')),
           width: _gradingBottomActionButtonWidth,
           filled: true,
         ),
@@ -8829,8 +8860,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     required List<_RightSheetGradingPageVm> pages,
   }) {
     final maxExtent = _stickyHeaderMaxExtent;
-    final forceExpanded = _showSearchChrome &&
-        (_forceSearchExpanded || _searchFocus.hasFocus);
+    final forceExpanded =
+        _showSearchChrome && (_forceSearchExpanded || _searchFocus.hasFocus);
     final minExtent = forceExpanded ? maxExtent : _stickyHeaderMinExtent;
     return Stack(
       clipBehavior: Clip.none,
@@ -8846,86 +8877,86 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               return false;
             },
             child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(context).copyWith(
-              scrollbars: false,
-            ),
-            child: CustomScrollView(
-              controller: _answerListScrollCtrl,
-              slivers: [
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _GradingMorphHeaderDelegate(
-                    minExtent: minExtent,
-                    maxExtent: maxExtent,
-                    rebuildToken: Object.hash(
-                      session.sessionId,
-                      session.studentName,
-                      session.groupHomeworkTitle,
-                      session.assignmentCode,
-                      session.showSearchChrome,
-                      _wrongOnly,
-                      _wrongOnlyAvailable,
-                      _recentSearches.length,
-                      forceExpanded,
-                      _searchCtrl.text,
-                      Theme.of(context).brightness,
-                    ),
-                    builder: (collapseT) => _buildGradingStickyHeaderContent(
-                      session,
-                      collapseT: forceExpanded ? 0 : collapseT,
-                    ),
-                  ),
-                ),
-                const SliverToBoxAdapter(child: SizedBox(height: 10)),
-                if (pages.isNotEmpty)
-                  for (int pageIndex = 0;
-                      pageIndex < pages.length;
-                      pageIndex++) ...[
-                    SliverToBoxAdapter(
-                      child: _buildPageDividerLabel(pages[pageIndex]),
-                    ),
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (int i = 0;
-                              i < pages[pageIndex].cells.length;
-                              i++) ...[
-                            _buildAnswerListRow(
-                              pages[pageIndex].cells[i],
-                              pageNumber: pages[pageIndex].pageNumber,
-                            ),
-                            if (i != pages[pageIndex].cells.length - 1)
-                              const SizedBox(height: 8),
-                          ],
-                        ],
+              behavior: ScrollConfiguration.of(context).copyWith(
+                scrollbars: false,
+              ),
+              child: CustomScrollView(
+                controller: _answerListScrollCtrl,
+                slivers: [
+                  SliverPersistentHeader(
+                    pinned: true,
+                    delegate: _GradingMorphHeaderDelegate(
+                      minExtent: minExtent,
+                      maxExtent: maxExtent,
+                      rebuildToken: Object.hash(
+                        session.sessionId,
+                        session.studentName,
+                        session.groupHomeworkTitle,
+                        session.assignmentCode,
+                        session.showSearchChrome,
+                        _wrongOnly,
+                        _wrongOnlyAvailable,
+                        _recentSearches.length,
+                        forceExpanded,
+                        _searchCtrl.text,
+                        Theme.of(context).brightness,
+                      ),
+                      builder: (collapseT) => _buildGradingStickyHeaderContent(
+                        session,
+                        collapseT: forceExpanded ? 0 : collapseT,
                       ),
                     ),
-                  ],
-                if (pages.isEmpty)
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 24),
-                      child: Text(
-                        _wrongOnly
-                            ? (_baselineStates.isNotEmpty
-                                ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
-                                : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
-                            : '검색 결과가 없습니다.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: _rsTextSub,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12.5,
+                  ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 10)),
+                  if (pages.isNotEmpty)
+                    for (int pageIndex = 0;
+                        pageIndex < pages.length;
+                        pageIndex++) ...[
+                      SliverToBoxAdapter(
+                        child: _buildPageDividerLabel(pages[pageIndex]),
+                      ),
+                      SliverToBoxAdapter(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (int i = 0;
+                                i < pages[pageIndex].cells.length;
+                                i++) ...[
+                              _buildAnswerListRow(
+                                pages[pageIndex].cells[i],
+                                pageNumber: pages[pageIndex].pageNumber,
+                              ),
+                              if (i != pages[pageIndex].cells.length - 1)
+                                const SizedBox(height: 8),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  if (pages.isEmpty)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Text(
+                          _wrongOnly
+                              ? (_baselineStates.isNotEmpty
+                                  ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
+                                  : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
+                              : '검색 결과가 없습니다.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: _rsTextSub,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
+                          ),
                         ),
                       ),
                     ),
+                  const SliverToBoxAdapter(
+                    child: SizedBox(height: _gradingBottomBarScrollPadding),
                   ),
-                const SliverToBoxAdapter(
-                  child: SizedBox(height: _gradingBottomBarScrollPadding),
-                ),
-              ],
-            ),
+                ],
+              ),
             ),
           ),
         ),

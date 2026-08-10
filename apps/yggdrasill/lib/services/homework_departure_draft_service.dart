@@ -17,6 +17,7 @@ class HomeworkDepartureDraft {
     this.hasPlanClassification = false,
     this.planSnapshotItemIds = const <String>{},
     this.planSnapshotAt,
+    this.planSnapshotMinutes,
   });
 
   final String attendanceId;
@@ -39,6 +40,9 @@ class HomeworkDepartureDraft {
   /// 목표 제시 시점에 고정한 오늘+다음 item id.
   final Set<String> planSnapshotItemIds;
   final DateTime? planSnapshotAt;
+
+  /// 목표 제시 시점에 고정한 남은 권장분(오늘+대기).
+  final int? planSnapshotMinutes;
 
   bool get isSaved => savedAt != null;
   bool get hasGoalSnapshot => planSnapshotAt != null;
@@ -79,6 +83,10 @@ class HomeworkDepartureDraft {
       }
     }
     final rawSnapshotAt = row['homework_plan_snapshot_at'];
+    final rawSnapshotMinutes = row['homework_plan_snapshot_minutes'];
+    final parsedSnapshotMinutes = rawSnapshotMinutes is num
+        ? rawSnapshotMinutes.toInt()
+        : int.tryParse('$rawSnapshotMinutes');
     return HomeworkDepartureDraft(
       attendanceId: '${row['id'] ?? ''}'.trim(),
       groupIds: groupIds,
@@ -90,6 +98,9 @@ class HomeworkDepartureDraft {
       planSnapshotAt: rawSnapshotAt == null
           ? null
           : DateTime.tryParse('$rawSnapshotAt')?.toLocal(),
+      planSnapshotMinutes: parsedSnapshotMinutes == null
+          ? null
+          : (parsedSnapshotMinutes < 0 ? 0 : parsedSnapshotMinutes),
     );
   }
 }
@@ -107,7 +118,7 @@ class HomeworkDepartureDraftService {
   static const _attendanceDraftSelect =
       'id,student_id,homework_draft_group_ids,homework_draft_group_due_dates,'
       'homework_draft_saved_at,homework_plan_snapshot_item_ids,'
-      'homework_plan_snapshot_at';
+      'homework_plan_snapshot_at,homework_plan_snapshot_minutes';
 
   HomeworkDepartureDraft? peek(String attendanceId) {
     final key = attendanceId.trim();
@@ -161,6 +172,7 @@ class HomeworkDepartureDraftService {
       savedAt: baseDraft.savedAt,
       planSnapshotItemIds: baseDraft.planSnapshotItemIds,
       planSnapshotAt: baseDraft.planSnapshotAt,
+      planSnapshotMinutes: baseDraft.planSnapshotMinutes,
       planHomeworkItemIds: plans
           .where((plan) =>
               plan.destination == HomeworkPlanDestination.homework &&
@@ -201,12 +213,13 @@ class HomeworkDepartureDraftService {
     });
   }
 
-  /// [presentGoalSnapshot]이 true이면 오늘+다음 item 스냅샷을 함께 기록한다.
+  /// [presentGoalSnapshot]이 true이면 오늘+다음 item·잔여 권장분 스냅샷을 함께 기록한다.
   Future<HomeworkDepartureDraft> save({
     required String attendanceId,
     required Iterable<String> groupIds,
     required Map<String, DateTime> dueDateByGroupId,
     Iterable<String> planSnapshotItemIds = const <String>[],
+    int? planSnapshotMinutes,
     bool presentGoalSnapshot = false,
   }) async {
     final key = attendanceId.trim();
@@ -238,6 +251,8 @@ class HomeworkDepartureDraftService {
       payload['homework_plan_snapshot_item_ids'] = normalizedSnapshotIds;
       payload['homework_plan_snapshot_at'] =
           savedAt.toUtc().toIso8601String();
+      payload['homework_plan_snapshot_minutes'] =
+          (planSnapshotMinutes ?? 0) < 0 ? 0 : (planSnapshotMinutes ?? 0);
     }
     final rows = await Supabase.instance.client
         .from('attendance_records')

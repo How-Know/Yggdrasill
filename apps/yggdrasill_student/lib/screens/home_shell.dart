@@ -38,12 +38,14 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     super.initState();
     HomeworkSession.instance.addListener(_onSessionChanged);
     StudentShellChrome.instance.addListener(_onChromeChanged);
+    StudentAttendanceSession.instance.planGoalPresentedTick
+        .addListener(_onPlanGoalPresented);
     // Realtime + 1.2s 폴백 (학습앱과 동일 패턴).
     unawaited(HomeworkSession.instance.startSync());
     // 등원/하원 Realtime + 폴백 (키오스크 등원 즉시 반영).
     unawaited(StudentAttendanceSession.instance.startSync());
     // 학습앱에 학원/집 로그인 상태를 보여 주는 presence heartbeat.
-    // iOS 는 다른 iPad 로그인 시 이 기기를 로그아웃아웃.
+    // iOS 는 다른 iPad 로그인 시 이 기기를 로그아웃.
     StudentPresenceSession.instance.setOnIosDeviceReplaced(() async {
       await StudentPresenceSession.instance.stop(markOffline: false);
       await StudentApi.instance.signOut();
@@ -63,6 +65,8 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     unawaited(StudentPresenceSession.instance.stop(markOffline: true));
     HomeworkSession.instance.removeListener(_onSessionChanged);
     StudentShellChrome.instance.removeListener(_onChromeChanged);
+    StudentAttendanceSession.instance.planGoalPresentedTick
+        .removeListener(_onPlanGoalPresented);
     super.dispose();
   }
 
@@ -72,6 +76,33 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
 
   void _onChromeChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// 학습앱 「계획 저장」→ attendance 스냅샷 Realtime. 목록·진행률 갱신 + 스낵바.
+  void _onPlanGoalPresented() {
+    if (!mounted) return;
+    unawaited(HomeworkSession.instance.refresh());
+    final minutes =
+        StudentAttendanceSession.instance.planSnapshotMinutes ?? 0;
+    final planLabel = _formatPlanMinutesCompact(minutes);
+    TopGlassSnackBar.show(
+      context,
+      title: '오늘 수업 목표',
+      message: planLabel == null
+          ? '선생님이 오늘 수업 계획을 제시했어요.'
+          : '선생님이 오늘 수업 계획을 제시했어요. ($planLabel)',
+      icon: Icons.assignment_turned_in_rounded,
+      duration: const Duration(seconds: 3),
+    );
+  }
+
+  String? _formatPlanMinutesCompact(int minutes) {
+    if (minutes <= 0) return null;
+    final hours = minutes ~/ 60;
+    final remain = minutes % 60;
+    if (hours <= 0) return '${remain}분';
+    if (remain == 0) return '${hours}시간';
+    return '${hours}시간 $remain분';
   }
 
   void _setSearchExpanded(bool expanded) {

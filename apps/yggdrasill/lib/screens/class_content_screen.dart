@@ -142,6 +142,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       <({String studentId, String itemId})>{};
   final Set<({String studentId, String itemId})> _structuredPendingConfirmKeys =
       <({String studentId, String itemId})>{};
+  final Set<({String studentId, String itemId})>
+      _structuredGradingInFlightKeys = <({String studentId, String itemId})>{};
   Timer? _rightSheetPreloadDebounce;
   String _lastRightSheetPreloadKey = '';
   bool? _memoFloatingHiddenBeforeGrading;
@@ -311,6 +313,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         context: context,
         attendingStudentIds: attendingStudentIds,
         studentNamesById: studentNamesById,
+        onCancelGrading: ({
+          required dialogContext,
+          required keys,
+        }) =>
+            _cancelPendingStructuredGrading(
+          context: dialogContext,
+          keys: keys,
+        ),
       );
     };
   }
@@ -1499,78 +1509,99 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Widget _buildHomeworkDraftPlanSummary(
     _HomeworkDraftEditorController editor,
   ) {
-    return AnimatedBuilder(
-      animation: editor,
-      builder: (context, _) {
-        final todayTotal = editor.totalForTodayPlan();
-        final elapsedMinutes = editor.elapsedMinutesForToday();
-        final remainingMinutes =
-            (todayTotal.minutes - elapsedMinutes).clamp(0, 1 << 30).toInt();
-        final todayPlanLabel = todayTotal.minutes <= 0
-            ? (todayTotal.hasUnestimated ? '미산정' : '0분')
-            : '${_formatRecommendedMinutesCompact(todayTotal.minutes)}'
-                '${todayTotal.hasUnestimated ? '+' : ''}';
-        final homeworkTotal = editor.totalFor(HomeworkPlanDestination.homework);
-        final homeworkLabel = homeworkTotal.minutes <= 0
-            ? '숙제 ${homeworkTotal.hasUnestimated ? '미산정' : '0분'}'
-            : '숙제 ${_formatRecommendedMinutesCompact(homeworkTotal.minutes)}'
-                '${homeworkTotal.hasUnestimated ? '+' : ''}';
+    final progressFuture = _gradingProgressFutureByStudent.putIfAbsent(
+      editor.studentId,
+      () => _loadHomeworkProgressRatesForStudent(editor.studentId),
+    );
+    return FutureBuilder<Map<String, HomeworkGradingProgressRate>>(
+      future: progressFuture,
+      builder: (context, progressSnapshot) {
+        final progressRatesByItem = progressSnapshot.data ??
+            const <String, HomeworkGradingProgressRate>{};
+        return AnimatedBuilder(
+          animation: editor,
+          builder: (context, _) {
+            // 계획 저장 후에는 스냅샷 분을 고정 분모로 쓰고, 그 전에는 잔여 권장분을 산다.
+            final liveTotal = editor.totalForTodayPlan(
+              progressRatesByItem: progressRatesByItem,
+            );
+            final frozenMinutes = editor.goalSnapshotMinutes;
+            final useFrozen = editor.hasGoalSnapshot && frozenMinutes != null;
+            final planMinutes = useFrozen ? frozenMinutes : liveTotal.minutes;
+            final planHasUnestimated =
+                useFrozen ? false : liveTotal.hasUnestimated;
+            final elapsedMinutes = editor.elapsedMinutesForToday();
+            final remainingMinutes =
+                (planMinutes - elapsedMinutes).clamp(0, 1 << 30).toInt();
+            final todayPlanLabel = planMinutes <= 0
+                ? (planHasUnestimated ? '미산정' : '0분')
+                : '${_formatRecommendedMinutesCompact(planMinutes)}'
+                    '${planHasUnestimated ? '+' : ''}';
+            final homeworkTotal = editor.totalFor(
+              HomeworkPlanDestination.homework,
+            );
+            final homeworkLabel = homeworkTotal.minutes <= 0
+                ? '숙제 ${homeworkTotal.hasUnestimated ? '미산정' : '0분'}'
+                : '숙제 ${_formatRecommendedMinutesCompact(homeworkTotal.minutes)}'
+                    '${homeworkTotal.hasUnestimated ? '+' : ''}';
 
-        // 학생카드 우측 메타와 동일: 14pt / height 1.2 / 72 높이 3줄 spaceBetween.
-        final brightness = Theme.of(context).brightness;
-        final isDark = brightness == Brightness.dark;
-        final panelStyle =
-            FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-        const infoFontSize = 14.0;
-        final primaryStyle = TextStyle(
-          color: panelStyle.label,
-          fontSize: infoFontSize,
-          height: 1.2,
-          fontWeight: FontWeight.w600,
-        );
-        final secondaryStyle = TextStyle(
-          color: isDark ? Colors.white54 : const Color(0xFF8E8E93),
-          fontSize: infoFontSize,
-          height: 1.2,
-          fontWeight: FontWeight.w600,
-        );
+            // 학생카드 우측 메타와 동일: 14pt / height 1.2 / 72 높이 3줄 spaceBetween.
+            final brightness = Theme.of(context).brightness;
+            final isDark = brightness == Brightness.dark;
+            final panelStyle =
+                FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+            const infoFontSize = 14.0;
+            final primaryStyle = TextStyle(
+              color: panelStyle.label,
+              fontSize: infoFontSize,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+            );
+            final secondaryStyle = TextStyle(
+              color: isDark ? Colors.white54 : const Color(0xFF8E8E93),
+              fontSize: infoFontSize,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+            );
 
-        return SizedBox(
-          width: _homeworkDraftExtensionWidth,
-          height: ClassContentScreen._attendingCardHeight,
-          child: Center(
-            child: SizedBox(
-              height: 72,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '계획 $todayPlanLabel',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: primaryStyle,
+            return SizedBox(
+              width: _homeworkDraftExtensionWidth,
+              height: ClassContentScreen._attendingCardHeight,
+              child: Center(
+                child: SizedBox(
+                  height: 72,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '계획 $todayPlanLabel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: primaryStyle,
+                        ),
+                        Text(
+                          '진행 ${_formatRecommendedMinutesCompact(elapsedMinutes)}'
+                          ' · 남은 ${_formatRecommendedMinutesCompact(remainingMinutes)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: secondaryStyle,
+                        ),
+                        Text(
+                          homeworkLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: secondaryStyle,
+                        ),
+                      ],
                     ),
-                    Text(
-                      '진행 ${_formatRecommendedMinutesCompact(elapsedMinutes)}'
-                      ' · 남은 ${_formatRecommendedMinutesCompact(remainingMinutes)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: secondaryStyle,
-                    ),
-                    Text(
-                      homeworkLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: secondaryStyle,
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
@@ -5434,24 +5465,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       gradingLocked: hasSavedGrading,
       smartConfirmAction: true,
       showSearchChrome: false,
-      onRequestEditReset: () async {
-        final reset = await _gradingResultService.resetAttemptsForHomework(
-          homeworkItemId: payload.homeworkId,
-        );
-        if (!mounted) return false;
-        if (!reset) {
-          _showHomeworkChipSnackBar(this.context, '기존 채점 결과 리셋에 실패했습니다.');
-          return false;
-        }
-        _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
-        _testGradingSerializedDraftByHomeworkId.remove(payload.homeworkId);
-        _testGradingSavedHomeworkIds.remove(payload.homeworkId);
-        _showHomeworkChipSnackBar(
-          this.context,
-          '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.',
-        );
-        return true;
-      },
+      closeBeforeActionCompletes: true,
+      onRequestGradingCancelRetry: () => _cancelPendingStructuredGrading(
+        context: this.context,
+        keys: keys,
+        gradingHomeworkItemIds: <String>[payload.homeworkId],
+      ),
       onStatesChanged: (states) {
         final decoded = _fromRightSheetStateMap(states);
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -5474,8 +5493,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           gradingPages: payload.gradingPages,
           states: decoded,
         );
+        final shouldPersist = action == 'complete' || action == 'confirm';
+        final persistenceKeys = <HomeworkBatchConfirmKey>{
+          ...keys,
+          (studentId: studentId, itemId: payload.homeworkId),
+        };
+        if (shouldPersist) {
+          _structuredGradingInFlightKeys.addAll(persistenceKeys);
+        }
+        final optimisticSnapshot = shouldPersist
+            ? _markStructuredPendingOptimistically(
+                keys: keys,
+                action: action,
+              )
+            : null;
         var savedGrading = true;
-        if (action == 'complete' || action == 'confirm') {
+        if (shouldPersist) {
           final targetItem = HomeworkStore.instance.getById(
                 studentId,
                 payload.homeworkId,
@@ -5496,6 +5529,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           if (!mounted) return;
           if (!saved) {
             savedGrading = false;
+            if (optimisticSnapshot != null) {
+              _restoreStructuredPendingSnapshot(
+                keys: keys,
+                snapshot: optimisticSnapshot,
+              );
+            }
             _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
           } else {
             _testGradingSavedHomeworkIds.add(payload.homeworkId);
@@ -5503,7 +5542,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             _gradingProgressFutureByStudent.remove(studentId);
           }
         }
-        if (savedGrading && (action == 'complete' || action == 'confirm')) {
+        if (savedGrading && shouldPersist) {
           savedGrading = await _finalizeDirectStructuredHomeworkCheck(
             studentId: studentId,
             keys: keys,
@@ -5516,14 +5555,27 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             ),
           );
           if (!savedGrading && mounted) {
+            if (optimisticSnapshot != null) {
+              _restoreStructuredPendingSnapshot(
+                keys: keys,
+                snapshot: optimisticSnapshot,
+              );
+            }
             _showHomeworkChipSnackBar(
               this.context,
               '숙제 검사 이력 저장에 실패했습니다.',
             );
           }
         }
+        if (shouldPersist) {
+          _structuredGradingInFlightKeys.removeAll(persistenceKeys);
+        }
         if (!mounted || !savedGrading) return;
-        _markPendingConfirms(keys: keys, action: action);
+        _markPendingConfirms(
+          keys: keys,
+          action: action,
+          structuredGrading: shouldPersist,
+        );
       },
     );
     blockRightSideSheetOpen.value = false;
@@ -5693,24 +5745,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           gradingLocked: hasSavedGrading,
           smartConfirmAction: true,
           showSearchChrome: false,
-          onRequestEditReset: () async {
-            final reset = await _gradingResultService.resetAttemptsForHomework(
-              homeworkItemId: payload.homeworkId,
-            );
-            if (!mounted) return false;
-            if (!reset) {
-              _showHomeworkChipSnackBar(this.context, '기존 채점 결과 리셋에 실패했습니다.');
-              return false;
-            }
-            _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
-            _testGradingSerializedDraftByHomeworkId.remove(payload.homeworkId);
-            _testGradingSavedHomeworkIds.remove(payload.homeworkId);
-            _showHomeworkChipSnackBar(
-              this.context,
-              '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.',
-            );
-            return true;
-          },
+          closeBeforeActionCompletes: true,
+          onRequestGradingCancelRetry: () => _cancelPendingStructuredGrading(
+            context: this.context,
+            keys: keys,
+            gradingHomeworkItemIds: <String>[payload.homeworkId],
+          ),
           onStatesChanged: (states) {
             final decoded = _fromRightSheetStateMap(states);
             _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -5733,8 +5773,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               gradingPages: payload.gradingPages,
               states: decoded,
             );
+            final shouldPersist = action == 'complete' || action == 'confirm';
+            final persistenceKeys = <HomeworkBatchConfirmKey>{
+              ...keys,
+              (studentId: studentId, itemId: payload.homeworkId),
+            };
+            if (shouldPersist) {
+              _structuredGradingInFlightKeys.addAll(persistenceKeys);
+            }
+            final optimisticSnapshot = shouldPersist
+                ? _markStructuredPendingOptimistically(
+                    keys: keys,
+                    action: action,
+                  )
+                : null;
             var savedGrading = true;
-            if (action == 'complete' || action == 'confirm') {
+            if (shouldPersist) {
               final targetItem = HomeworkStore.instance.getById(
                     studentId,
                     payload.homeworkId,
@@ -5755,6 +5809,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               if (!mounted) return;
               if (!saved) {
                 savedGrading = false;
+                if (optimisticSnapshot != null) {
+                  _restoreStructuredPendingSnapshot(
+                    keys: keys,
+                    snapshot: optimisticSnapshot,
+                  );
+                }
                 _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
               } else {
                 _testGradingSavedHomeworkIds.add(payload.homeworkId);
@@ -5762,7 +5822,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 _gradingProgressFutureByStudent.remove(studentId);
               }
             }
-            if (savedGrading && (action == 'complete' || action == 'confirm')) {
+            if (savedGrading && shouldPersist) {
               savedGrading = await _finalizeDirectStructuredHomeworkCheck(
                 studentId: studentId,
                 keys: keys,
@@ -5775,14 +5835,27 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 ),
               );
               if (!savedGrading && mounted) {
+                if (optimisticSnapshot != null) {
+                  _restoreStructuredPendingSnapshot(
+                    keys: keys,
+                    snapshot: optimisticSnapshot,
+                  );
+                }
                 _showHomeworkChipSnackBar(
                   this.context,
                   '숙제 검사 이력 저장에 실패했습니다.',
                 );
               }
             }
+            if (shouldPersist) {
+              _structuredGradingInFlightKeys.removeAll(persistenceKeys);
+            }
             if (!mounted || !savedGrading) return;
-            _markPendingConfirms(keys: keys, action: action);
+            _markPendingConfirms(
+              keys: keys,
+              action: action,
+              structuredGrading: shouldPersist,
+            );
           },
         );
         blockRightSideSheetOpen.value = false;
@@ -5864,29 +5937,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         gradingLocked: hasSavedGrading,
         smartConfirmAction: true,
         showSearchChrome: false,
-        onRequestEditReset: () async {
-          final reset = await _gradingResultService.resetAttemptsForHomework(
-            homeworkItemId: textbookProblemPayload.homeworkId,
-          );
-          if (!mounted) return false;
-          if (!reset) {
-            _showHomeworkChipSnackBar(this.context, '기존 채점 결과 리셋에 실패했습니다.');
-            return false;
-          }
-          _testGradingDraftStatesByHomeworkId.remove(
+        closeBeforeActionCompletes: true,
+        onRequestGradingCancelRetry: () => _cancelPendingStructuredGrading(
+          context: this.context,
+          keys: keys,
+          gradingHomeworkItemIds: <String>[
             textbookProblemPayload.homeworkId,
-          );
-          _testGradingSerializedDraftByHomeworkId.remove(
-            textbookProblemPayload.homeworkId,
-          );
-          _testGradingSavedHomeworkIds
-              .remove(textbookProblemPayload.homeworkId);
-          _showHomeworkChipSnackBar(
-            this.context,
-            '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.',
-          );
-          return true;
-        },
+          ],
+        ),
         onStatesChanged: (states) {
           final decoded = _fromRightSheetStateMap(states);
           _testGradingDraftStatesByHomeworkId[textbookProblemPayload
@@ -5909,8 +5967,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             gradingPages: textbookProblemPayload.gradingPages,
             states: decoded,
           );
+          final shouldPersist = action == 'complete' || action == 'confirm';
+          final persistenceKeys = <HomeworkBatchConfirmKey>{
+            ...keys,
+            (
+              studentId: studentId,
+              itemId: textbookProblemPayload.homeworkId,
+            ),
+          };
+          if (shouldPersist) {
+            _structuredGradingInFlightKeys.addAll(persistenceKeys);
+          }
+          final optimisticSnapshot = shouldPersist
+              ? _markStructuredPendingOptimistically(
+                  keys: keys,
+                  action: action,
+                )
+              : null;
           var savedGrading = true;
-          if (action == 'complete' || action == 'confirm') {
+          if (shouldPersist) {
             final targetItem = HomeworkStore.instance.getById(
                   studentId,
                   textbookProblemPayload.homeworkId,
@@ -5931,6 +6006,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             if (!mounted) return;
             if (!saved) {
               savedGrading = false;
+              if (optimisticSnapshot != null) {
+                _restoreStructuredPendingSnapshot(
+                  keys: keys,
+                  snapshot: optimisticSnapshot,
+                );
+              }
               _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
             } else {
               _testGradingSavedHomeworkIds
@@ -5939,7 +6020,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               _gradingProgressFutureByStudent.remove(studentId);
             }
           }
-          if (savedGrading && (action == 'complete' || action == 'confirm')) {
+          if (savedGrading && shouldPersist) {
             savedGrading = await _finalizeDirectStructuredHomeworkCheck(
               studentId: studentId,
               keys: keys,
@@ -5952,14 +6033,27 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               ),
             );
             if (!savedGrading && mounted) {
+              if (optimisticSnapshot != null) {
+                _restoreStructuredPendingSnapshot(
+                  keys: keys,
+                  snapshot: optimisticSnapshot,
+                );
+              }
               _showHomeworkChipSnackBar(
                 this.context,
                 '숙제 검사 이력 저장에 실패했습니다.',
               );
             }
           }
+          if (shouldPersist) {
+            _structuredGradingInFlightKeys.removeAll(persistenceKeys);
+          }
           if (!mounted || !savedGrading) return;
-          _markPendingConfirms(keys: keys, action: action);
+          _markPendingConfirms(
+            keys: keys,
+            action: action,
+            structuredGrading: shouldPersist,
+          );
         },
       );
       blockRightSideSheetOpen.value = false;
@@ -6433,21 +6527,85 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     _batchConfirmService.syncPendingCount();
   }
 
-  Future<void> _cancelPendingStructuredGrading({
+  ({
+    Map<HomeworkBatchConfirmKey, bool> pending,
+    Set<HomeworkBatchConfirmKey> structured,
+  }) _markStructuredPendingOptimistically({
+    required List<HomeworkBatchConfirmKey> keys,
+    required String action,
+  }) {
+    final snapshot = (
+      pending: <HomeworkBatchConfirmKey, bool>{
+        for (final key in keys)
+          if (_pendingConfirms.containsKey(key)) key: _pendingConfirms[key]!,
+      },
+      structured: keys.where(_structuredPendingConfirmKeys.contains).toSet(),
+    );
+    _markPendingConfirms(
+      keys: keys,
+      action: action,
+      structuredGrading: true,
+    );
+    return snapshot;
+  }
+
+  void _restoreStructuredPendingSnapshot({
+    required List<HomeworkBatchConfirmKey> keys,
+    required ({
+      Map<HomeworkBatchConfirmKey, bool> pending,
+      Set<HomeworkBatchConfirmKey> structured,
+    }) snapshot,
+  }) {
+    if (!mounted) return;
+    setState(() {
+      for (final key in keys) {
+        final previous = snapshot.pending[key];
+        if (previous == null) {
+          _pendingConfirms.remove(key);
+        } else {
+          _pendingConfirms[key] = previous;
+        }
+        if (!snapshot.structured.contains(key)) {
+          _structuredPendingConfirmKeys.remove(key);
+        }
+      }
+    });
+    _batchConfirmService.syncPendingCount();
+  }
+
+  Future<bool> _cancelPendingStructuredGrading({
     required BuildContext context,
     required List<({String studentId, String itemId})> keys,
+    Iterable<String> gradingHomeworkItemIds = const <String>[],
   }) async {
-    if (keys.isEmpty) return;
+    if (keys.isEmpty) return false;
     final studentIds = keys.map((key) => key.studentId).toSet();
-    if (studentIds.length != 1) return;
+    if (studentIds.length != 1) return false;
     final studentId = studentIds.single;
+    final gradingIds = gradingHomeworkItemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final trackedKeys = <HomeworkBatchConfirmKey>{
+      ...keys,
+      for (final itemId in gradingIds) (studentId: studentId, itemId: itemId),
+    };
+    if (trackedKeys.any(_structuredGradingInFlightKeys.contains)) {
+      if (mounted && context.mounted) {
+        _showHomeworkChipSnackBar(
+          context,
+          '채점 결과를 저장 중입니다. 잠시 후 체크 취소를 다시 눌러 주세요.',
+        );
+      }
+      return false;
+    }
 
     var rollbackOk = true;
-    var restoredCount = 0;
+    var cancelledCount = 0;
+    final recoveredAttemptIds = <String>{};
     final keysByGroup = <String, List<({String studentId, String itemId})>>{};
     final fallbackKeys = <({String studentId, String itemId})>[];
     for (final key in keys) {
-      HomeworkStore.instance.clearAutoCompleteOnNextWaiting(key.itemId);
       final groupId =
           (HomeworkStore.instance.groupIdOfItem(key.itemId) ?? '').trim();
       if (groupId.isEmpty) {
@@ -6468,8 +6626,31 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         // 타임아웃 뒤 서버 트랜잭션이 커밋됐을 수 있으므로 이 경로에서는
         // 오래된 검사 이력을 임의로 지우는 클라이언트 폴백을 실행하지 않는다.
         rollbackOk = false;
+      } else if (rolledBack.checkNotFound) {
+        // 체크는 이미 없어졌지만 채점 저장 ID가 달라 attempt만 남은
+        // 부분 성공을 복구한다. 실제 저장본이 있는 ID만 최신 1건 삭제한다.
+        final recoveryIds = gradingIds.isNotEmpty
+            ? gradingIds
+            : entry.value.map((key) => key.itemId.trim()).toSet();
+        for (final itemId in recoveryIds) {
+          if (itemId.isEmpty || !recoveredAttemptIds.add(itemId)) continue;
+          final saved =
+              await _gradingResultService.loadLatestSavedSessionForHomework(
+            homeworkItemId: itemId,
+          );
+          if (saved == null) continue;
+          final attemptRollback =
+              await _gradingResultService.rollbackLatestAttemptForHomework(
+            homeworkItemId: itemId,
+          );
+          if (attemptRollback) {
+            cancelledCount += 1;
+          } else {
+            rollbackOk = false;
+          }
+        }
       } else {
-        restoredCount += rolledBack;
+        cancelledCount += rolledBack.rolledBackCount;
       }
     }
 
@@ -6484,24 +6665,34 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           await _gradingResultService.rollbackLatestAttemptForHomework(
         homeworkItemId: key.itemId,
       );
-      if (checkRollback == null || !attemptRollback) rollbackOk = false;
+      if (checkRollback == null || !attemptRollback) {
+        rollbackOk = false;
+      } else {
+        cancelledCount += 1;
+      }
     }
-    if (fallbackKeys.isNotEmpty) {
-      restoredCount +=
-          await HomeworkStore.instance.restoreItemsAfterGradingCancel(
-        studentId,
-        fallbackKeys.map((key) => key.itemId).toList(growable: false),
+    final keyItemIds = keys.map((key) => key.itemId.trim()).toSet();
+    final extraGradingItemIds = gradingIds
+        .where(
+          (id) => !keyItemIds.contains(id) && !recoveredAttemptIds.contains(id),
+        )
+        .toSet();
+    for (final itemId in extraGradingItemIds) {
+      final attemptRollback =
+          await _gradingResultService.rollbackLatestAttemptForHomework(
+        homeworkItemId: itemId,
       );
-    } else {
-      await HomeworkStore.instance.reloadStudentHomework(studentId);
+      if (!attemptRollback) rollbackOk = false;
     }
-    if (!mounted || !context.mounted) return;
-    if (!rollbackOk || restoredCount == 0) {
+    // 체크·채점 기록만 취소한다. 과제는 phase 3 제출 상태를 유지한다.
+    await HomeworkStore.instance.reloadStudentHomework(studentId);
+    if (!mounted || !context.mounted) return false;
+    if (!rollbackOk || cancelledCount == 0) {
       _showHomeworkChipSnackBar(
         context,
         '채점 취소를 완료하지 못했습니다. 다시 시도해 주세요.',
       );
-      return;
+      return false;
     }
 
     setState(() {
@@ -6512,14 +6703,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         _testGradingSerializedDraftByHomeworkId.remove(key.itemId);
         _testGradingSavedHomeworkIds.remove(key.itemId);
       }
+      for (final itemId in gradingIds) {
+        _testGradingDraftStatesByHomeworkId.remove(itemId);
+        _testGradingSerializedDraftByHomeworkId.remove(itemId);
+        _testGradingSavedHomeworkIds.remove(itemId);
+      }
     });
     _batchConfirmService.syncPendingCount();
     _gradingProgressRevisionByStudent.remove(studentId);
     _gradingProgressFutureByStudent.remove(studentId);
     _showHomeworkChipSnackBar(
       context,
-      '채점과 검사 기록을 취소하고 대기 상태로 되돌렸어요.',
+      '체크와 채점 기록을 취소했습니다.',
     );
+    return true;
   }
 
   Future<bool> _finalizeDirectStructuredHomeworkCheck({
@@ -9256,6 +9453,9 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
   /// 목표 제시 스냅샷(패널을 닫아도 유지 — 홈 카드 '+' 판정용).
   final Set<String> goalSnapshotItemIds = <String>{};
   DateTime? goalSnapshotAt;
+
+  /// 목표 제시 시 고정한 남은 권장분(오늘+대기). 학생앱 % 분모와 동일.
+  int? goalSnapshotMinutes;
   bool get hasGoalSnapshot => goalSnapshotAt != null;
 
   bool loading = true;
@@ -9364,6 +9564,7 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
           ..clear()
           ..addAll(draft!.planSnapshotItemIds);
         goalSnapshotAt = draft.planSnapshotAt;
+        goalSnapshotMinutes = draft.planSnapshotMinutes;
       }
     } catch (_) {
       selectedGroupIds.clear();
@@ -9566,8 +9767,11 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
   }
 
   ({int minutes, bool hasUnestimated}) totalFor(
-    HomeworkPlanDestination destination,
-  ) {
+    HomeworkPlanDestination destination, {
+    Map<String, HomeworkGradingProgressRate> progressRatesByItem =
+        const <String, HomeworkGradingProgressRate>{},
+    bool useRemaining = false,
+  }) {
     var minutes = 0;
     var hasUnestimated = false;
     for (final group in HomeworkStore.instance.groups(studentId)) {
@@ -9595,16 +9799,30 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
       }
       if (matched.isEmpty) continue;
       // 그룹당 α 1회 — 하위과제마다 α를 더하지 않는다.
-      final groupTotal = _groupRecommendedMinutesOf(matched);
+      // 오늘/대기 계획은 완료율만큼 뺀 잔여 권장분을 쓴다.
+      final groupTotal = useRemaining
+          ? _remainingGroupRecommendedMinutesOf(matched, progressRatesByItem)
+          : _groupRecommendedMinutesOf(matched);
       minutes += groupTotal.minutes;
       hasUnestimated = hasUnestimated || groupTotal.hasUnestimated;
     }
     return (minutes: minutes, hasUnestimated: hasUnestimated);
   }
 
-  ({int minutes, bool hasUnestimated}) totalForTodayPlan() {
-    final today = totalFor(HomeworkPlanDestination.inClass);
-    final carry = totalFor(HomeworkPlanDestination.nextSession);
+  ({int minutes, bool hasUnestimated}) totalForTodayPlan({
+    Map<String, HomeworkGradingProgressRate> progressRatesByItem =
+        const <String, HomeworkGradingProgressRate>{},
+  }) {
+    final today = totalFor(
+      HomeworkPlanDestination.inClass,
+      progressRatesByItem: progressRatesByItem,
+      useRemaining: true,
+    );
+    final carry = totalFor(
+      HomeworkPlanDestination.nextSession,
+      progressRatesByItem: progressRatesByItem,
+      useRemaining: true,
+    );
     return (
       minutes: today.minutes + carry.minutes,
       hasUnestimated: today.hasUnestimated || carry.hasUnestimated,
@@ -9768,20 +9986,27 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
           if (id.isNotEmpty) snapshotItemIds.add(id);
         }
       }
-      await HomeworkDepartureDraftService.instance.save(
+      final progressRates =
+          await _loadHomeworkProgressRatesForStudent(studentId);
+      final snapshotMinutes = totalForTodayPlan(
+        progressRatesByItem: progressRates,
+      ).minutes;
+      final savedDraft = await HomeworkDepartureDraftService.instance.save(
         attendanceId: attendanceId,
         groupIds: savedGroupIds,
         dueDateByGroupId: savedDueDates,
         planSnapshotItemIds: snapshotItemIds,
+        planSnapshotMinutes: snapshotMinutes,
         presentGoalSnapshot: true,
       );
       goalSnapshotItemIds
         ..clear()
         ..addAll(snapshotItemIds);
-      goalSnapshotAt = DateTime.now();
+      goalSnapshotAt = savedDraft.planSnapshotAt ?? DateTime.now();
+      goalSnapshotMinutes = savedDraft.planSnapshotMinutes ?? snapshotMinutes;
       debugPrint(
         '[HW][goal-snapshot] attendance=$attendanceId '
-        'items=${snapshotItemIds.length}',
+        'items=${snapshotItemIds.length} minutes=$goalSnapshotMinutes',
       );
     } finally {
       saving = false;
@@ -9809,6 +10034,7 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
     required this.expanded,
     required this.dueDate,
     required this.existingHomework,
+    required this.progressRate,
     required this.onDestinationChanged,
     required this.onChildDestinationChanged,
     required this.onDueDateChanged,
@@ -9825,6 +10051,7 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
   final bool expanded;
   final DateTime? dueDate;
   final bool existingHomework;
+  final HomeworkGradingProgressRate progressRate;
   final ValueChanged<HomeworkPlanDestination> onDestinationChanged;
   final void Function(String itemId, HomeworkPlanDestination destination)
       onChildDestinationChanged;
@@ -9912,6 +10139,21 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
     return '권장 ${_formatRecommendedMinutesCompact(total.minutes)}$suffix';
   }
 
+  /// 권장분 × (1 - 완료율). 마이그레이션 과제는 카드 완료율과 동일.
+  String _remainingRecommendedLabel() {
+    final total = _groupRecommendedMinutesOf(children);
+    if (total.minutes <= 0) {
+      return total.hasUnestimated ? '남은 미산정' : '남은 0분';
+    }
+    final completion = progressRate.enabled
+        ? progressRate.completionRate.clamp(0.0, 1.0)
+        : 0.0;
+    final remaining =
+        (total.minutes * (1.0 - completion)).round().clamp(0, total.minutes);
+    final suffix = total.hasUnestimated ? '+' : '';
+    return '남은 ${_formatRecommendedMinutesCompact(remaining)}$suffix';
+  }
+
   Future<void> _pickDueDate(BuildContext context) async {
     if (!dueDateEnabled) return;
     final initial = dueDate ?? DateTime.now();
@@ -9944,6 +10186,12 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
     // 과제카드 2번째 줄(그룹명)과 동일 타이포.
     final labelStyle = cardTheme.metaStyle;
     final dueTextStyle = labelStyle;
+    // 과제카드 3번째 줄(날짜·페이지·문항)과 동일 타이포/높이.
+    final row3Style = cardTheme.secondaryRowStyle;
+    final row3LineHeight =
+        (row3Style.fontSize ?? 16) * (row3Style.height ?? 1.1);
+    final showDueDate =
+        destination == HomeworkPlanDestination.homework || existingHomework;
     final groupedCardBackground = FabTabBarTokens.previewAcademyPanelStyleFor(
       Theme.of(context).brightness,
     ).groupedCardBackground;
@@ -10003,6 +10251,7 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
                       return SizedBox(height: gap.clamp(0.0, 64.0));
                     },
                   ),
+                  // row2: 그룹과제명과 동일 Y
                   Row(
                     children: [
                       Expanded(
@@ -10014,24 +10263,42 @@ class _HomeworkDraftCardExtension extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (destination == HomeworkPlanDestination.homework ||
-                          existingHomework)
-                        InkWell(
-                          onTap: dueDateEnabled
-                              ? () => _pickDueDate(context)
-                              : null,
-                          child: Text(
-                            '검사 ${_formatDueDay(dueDate)} '
-                            '${_formatDueTime(dueDate)}',
-                            style: dueTextStyle.copyWith(
-                              color: dueDateEnabled ? kDlgText : kDlgTextSub,
-                              decoration: dueDateEnabled
-                                  ? TextDecoration.underline
-                                  : null,
-                            ),
-                          ),
+                      Text(
+                        _remainingRecommendedLabel(),
+                        textAlign: TextAlign.right,
+                        style: dueTextStyle.copyWith(
+                          color: kDlgTextSub,
+                          fontWeight: FontWeight.w700,
                         ),
+                      ),
                     ],
+                  ),
+                  // 왼쪽 카드 row2→row3 간격(7)과 동일.
+                  const SizedBox(height: 7),
+                  // row3: 날짜·페이지 줄과 동일 Y (숙제가 아니면 높이만 유지).
+                  SizedBox(
+                    height: row3LineHeight,
+                    child: showDueDate
+                        ? Align(
+                            alignment: Alignment.centerLeft,
+                            child: InkWell(
+                              onTap: dueDateEnabled
+                                  ? () => _pickDueDate(context)
+                                  : null,
+                              child: Text(
+                                '검사 ${_formatDueDay(dueDate)} '
+                                '${_formatDueTime(dueDate)}',
+                                style: row3Style.copyWith(
+                                  color:
+                                      dueDateEnabled ? kDlgText : kDlgTextSub,
+                                  decoration: dueDateEnabled
+                                      ? TextDecoration.underline
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
                   ),
                   if (expanded && children.length > 1) ...[
                     const SizedBox(height: 14),
@@ -14110,6 +14377,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                   dueDate: homeworkDraftEditor.dueDateByGroupId[group.id] ??
                       assignmentDueByGroupId[group.id],
                   existingHomework: hasHomeworkAssignment,
+                  progressRate: progressRate,
                   onDestinationChanged: (value) {
                     unawaited(
                       homeworkDraftEditor
@@ -15400,8 +15668,23 @@ HomeworkGradingProgressRate _aggregateHomeworkProgressRates(
   Iterable<HomeworkItem> items,
   Map<String, HomeworkGradingProgressRate> ratesByItem,
 ) {
+  final itemList = items.toList(growable: false);
+  final groupQuestionCount = itemList.fold<int>(
+    0,
+    (sum, item) => sum + math.max(0, item.count ?? 0),
+  );
+  final groupWideRate = findGroupWideHomeworkProgressRate(
+    itemList
+        .map((item) => ratesByItem[item.id])
+        .whereType<HomeworkGradingProgressRate>(),
+    groupQuestionCount: groupQuestionCount,
+  );
+  if (groupWideRate != null) {
+    return groupWideRate;
+  }
+
   var aggregated = HomeworkGradingProgressRate.disabled;
-  for (final item in items) {
+  for (final item in itemList) {
     final rate = ratesByItem[item.id];
     if (rate != null) {
       aggregated = aggregated.merge(rate);
@@ -17827,6 +18110,21 @@ int _homeworkRecommendedMinutesOf(HomeworkItem item) {
   return (minutes: minutes, hasUnestimated: hasUnestimated);
 }
 
+/// 권장분 × (1 - 완료율). 계획시간(오늘+대기) 합산에 사용.
+({int minutes, bool hasUnestimated}) _remainingGroupRecommendedMinutesOf(
+  Iterable<HomeworkItem> items,
+  Map<String, HomeworkGradingProgressRate> ratesByItem,
+) {
+  final total = _groupRecommendedMinutesOf(items);
+  if (total.minutes <= 0) return total;
+  final progress = _aggregateHomeworkProgressRates(items, ratesByItem);
+  final completion =
+      progress.enabled ? progress.completionRate.clamp(0.0, 1.0) : 0.0;
+  final remaining =
+      (total.minutes * (1.0 - completion)).round().clamp(0, total.minutes);
+  return (minutes: remaining, hasUnestimated: total.hasUnestimated);
+}
+
 Widget _buildHomeworkChipVisual(
   BuildContext context,
   String studentId,
@@ -18726,11 +19024,10 @@ class _HomeworkProgressIndicatorRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 진행률(빈 인디케이터 색)=수행분/전체, 수행률(상세 폰트 색·%)=정답/수행분.
-    // 미수행·미채점 형제가 있으면 진행만 낮고 수행은 100%가 될 수 있다.
-    // 교재 카드처럼 수행을 진행에 클램프하면 전원 정답도 57%처럼 보인다.
+    // 진행률(빈 인디케이터 색)=(전체-포기-미수행)/(전체-포기)
+    // 완료율(상세 폰트 색·%)=정답/(전체-포기). 항상 진행률 이하.
     final a = advance.clamp(0.0, 1.0);
-    final c = completion.clamp(0.0, 1.0);
+    final c = completion.clamp(0.0, a);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final detailColor = textStyle.color ?? const Color(0xFF8FA1A1);
     final labelColor =
@@ -18739,7 +19036,7 @@ class _HomeworkProgressIndicatorRow extends StatelessWidget {
     final progressColor = enabled
         ? (isDark ? Colors.white12 : Colors.black12)
         : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06));
-    // 수행률 = 카드 상세 내역과 같은 폰트 색.
+    // 완료율 = 카드 상세 내역과 같은 폰트 색.
     final performanceColor =
         enabled ? detailColor : detailColor.withValues(alpha: 0.28);
     final percentText = enabled ? '${(c * 100).round()}%' : '-';
@@ -19517,6 +19814,10 @@ Future<void> _showGradingHistoryDialog({
   required BuildContext context,
   required List<String> attendingStudentIds,
   required Map<String, String> studentNamesById,
+  required Future<bool> Function({
+    required BuildContext dialogContext,
+    required List<HomeworkBatchConfirmKey> keys,
+  }) onCancelGrading,
 }) async {
   final cancellingKeys = <String>{};
   await showDialog<void>(
@@ -19629,47 +19930,16 @@ Future<void> _showGradingHistoryDialog({
                                           cancellingKeys.add(key);
                                         });
                                         try {
-                                          var rollbackCount = 0;
-                                          for (final itemId in entry.itemIds) {
-                                            HomeworkStore.instance
-                                                .clearAutoCompleteOnNextWaiting(
-                                              itemId,
-                                            );
-                                            final rollbackDecrement =
-                                                await HomeworkAssignmentStore
-                                                    .instance
-                                                    .rollbackLatestCheckForItem(
-                                              studentId: entry.studentId,
-                                              homeworkItemId: itemId,
-                                            );
-                                            if ((rollbackDecrement ?? 0) > 0) {
-                                              rollbackCount +=
-                                                  rollbackDecrement ?? 0;
-                                            }
-                                          }
-                                          await HomeworkStore.instance
-                                              .reloadStudentHomework(
-                                            entry.studentId,
-                                          );
-                                          final restoredCount =
-                                              await HomeworkStore.instance
-                                                  .restoreItemsAfterGradingCancel(
-                                            entry.studentId,
-                                            entry.itemIds,
-                                          );
-                                          if (!dialogContext.mounted) return;
-                                          if (restoredCount == 0) {
-                                            _showHomeworkChipSnackBar(
-                                              dialogContext,
-                                              '되돌릴 채점 대상을 찾지 못했습니다. 다시 시도해 주세요.',
-                                            );
-                                            return;
-                                          }
-                                          _showHomeworkChipSnackBar(
-                                            dialogContext,
-                                            rollbackCount > 0
-                                                ? '채점 ${restoredCount}건을 대기 상태로 되돌렸어요. 검사 기록도 조정했습니다.'
-                                                : '채점 ${restoredCount}건을 대기 상태로 되돌렸어요.',
+                                          await onCancelGrading(
+                                            dialogContext: dialogContext,
+                                            keys: entry.itemIds
+                                                .map(
+                                                  (itemId) => (
+                                                    studentId: entry.studentId,
+                                                    itemId: itemId,
+                                                  ),
+                                                )
+                                                .toList(growable: false),
                                           );
                                         } finally {
                                           if (dialogContext.mounted) {

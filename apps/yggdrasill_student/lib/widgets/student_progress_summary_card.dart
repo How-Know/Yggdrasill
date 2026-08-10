@@ -7,6 +7,7 @@ class StudentProgressSummaryCard extends StatelessWidget {
     required this.percent,
     required this.subtitle,
     this.trailingSubtitle,
+    this.trailingValue,
     this.onTap,
     this.showInfoIcon = true,
     this.infoFilled = false,
@@ -16,6 +17,8 @@ class StudentProgressSummaryCard extends StatelessWidget {
   final String subtitle;
   /// 두 번째 줄 오른쪽(예: 오늘 수행속도). null/빈 문자열이면 왼쪽만.
   final String? trailingSubtitle;
+  /// 첫 줄 오른쪽(예: 총 계획시간). 있으면 i 아이콘 대신 표시.
+  final String? trailingValue;
   final VoidCallback? onTap;
   final bool showInfoIcon;
   final bool infoFilled;
@@ -36,6 +39,7 @@ class StudentProgressSummaryCard extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.78)
         : const Color(0xFF3A3A3C);
     final clamped = percent.clamp(0, 100);
+    final topTrailing = trailingValue?.trim() ?? '';
 
     final content = Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 16, 18),
@@ -72,7 +76,24 @@ class StudentProgressSummaryCard extends StatelessWidget {
                   ),
                 ),
               ),
-              if (showInfoIcon)
+              if (topTrailing.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    topTrailing,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      height: 1.0,
+                      letterSpacing: -0.4,
+                      color: text,
+                    ),
+                  ),
+                )
+              else if (showInfoIcon)
                 Icon(
                   infoFilled
                       ? Icons.info_rounded

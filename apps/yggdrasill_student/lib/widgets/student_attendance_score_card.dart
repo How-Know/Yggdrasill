@@ -1,22 +1,26 @@
 import 'package:flutter/material.dart';
 
-/// 내 정보 상단 출석 점수 카드.
+/// 내 정보 상단 점수 요약 카드 (총점 / 출석 점수 등).
 /// 과제 메뉴 [StudentProgressSummaryCard] 와 같은 탭→펼침 크로마.
 class StudentAttendanceScoreCard extends StatelessWidget {
   const StudentAttendanceScoreCard({
     super.key,
+    required this.title,
     required this.score100,
     required this.subtitle,
     this.onTap,
     this.showInfoIcon = true,
     this.infoFilled = false,
+    this.showProgressBar = true,
   });
 
+  final String title;
   final double? score100;
   final String subtitle;
   final VoidCallback? onTap;
   final bool showInfoIcon;
   final bool infoFilled;
+  final bool showProgressBar;
 
   @override
   Widget build(BuildContext context) {
@@ -38,8 +42,22 @@ class StudentAttendanceScoreCard extends StatelessWidget {
     final clamped = (score100 ?? 0).clamp(0.0, 100.0);
     final scoreLabel = hasScore ? clamped.toStringAsFixed(1) : '—';
 
+    final numberStyle = theme.textTheme.displaySmall?.copyWith(
+      fontSize: 44,
+      fontWeight: FontWeight.w800,
+      letterSpacing: -1.2,
+      height: 1.0,
+      color: text,
+    );
+    final unitStyle = theme.textTheme.titleLarge?.copyWith(
+      fontSize: 22,
+      fontWeight: FontWeight.w700,
+      height: 1.0,
+      color: text,
+    );
+
     final content = Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 16, 18),
+      padding: EdgeInsets.fromLTRB(20, 16, 16, showProgressBar ? 18 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -51,7 +69,7 @@ class StudentAttendanceScoreCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Text(
-                      '출석 점수',
+                      title,
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -60,31 +78,10 @@ class StudentAttendanceScoreCard extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: scoreLabel,
-                            style: theme.textTheme.displaySmall?.copyWith(
-                              fontSize: 44,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -1.2,
-                              height: 1.0,
-                              color: text,
-                            ),
-                          ),
-                          TextSpan(
-                            text: '점',
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              height: 1.0,
-                              color: text,
-                            ),
-                          ),
-                        ],
-                      ),
-                      textAlign: TextAlign.right,
+                    _ScoreValueWithUnit(
+                      value: scoreLabel,
+                      numberStyle: numberStyle,
+                      unitStyle: unitStyle,
                     ),
                   ],
                 ),
@@ -111,16 +108,18 @@ class StudentAttendanceScoreCard extends StatelessWidget {
               height: 1.25,
             ),
           ),
-          const SizedBox(height: 14),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: hasScore ? clamped / 100 : 0,
-              minHeight: 14,
-              backgroundColor: track,
-              valueColor: AlwaysStoppedAnimation<Color>(fill),
+          if (showProgressBar) ...[
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: hasScore ? clamped / 100 : 0,
+                minHeight: 14,
+                backgroundColor: track,
+                valueColor: AlwaysStoppedAnimation<Color>(fill),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -151,6 +150,99 @@ class StudentAttendanceScoreCard extends StatelessWidget {
                 child: content,
               ),
       ),
+    );
+  }
+}
+
+/// 숫자·「점」을 같은 베이스라인에 두고, 「점」이 숫자보다 아래로 처지면 올려서
+/// 글리프 하단을 맞춘다. (아래로 내리는 보정은 하지 않음)
+class _ScoreValueWithUnit extends StatelessWidget {
+  const _ScoreValueWithUnit({
+    required this.value,
+    required this.numberStyle,
+    required this.unitStyle,
+  });
+
+  final String value;
+  final TextStyle? numberStyle;
+  final TextStyle? unitStyle;
+
+  static const _heightBehavior = TextHeightBehavior(
+    applyHeightToFirstAscent: false,
+    applyHeightToLastDescent: false,
+  );
+
+  static double _maxBottom(List<TextBox> boxes) {
+    var bottom = boxes.first.bottom;
+    for (final box in boxes) {
+      if (box.bottom > bottom) bottom = box.bottom;
+    }
+    return bottom;
+  }
+
+  /// 「점」을 위로만 보정 (양수 = 상승 px).
+  static double _liftUnitY({
+    required String value,
+    required TextStyle? numberStyle,
+    required TextStyle? unitStyle,
+    required TextScaler textScaler,
+  }) {
+    final painter = TextPainter(
+      text: TextSpan(
+        children: [
+          TextSpan(text: value, style: numberStyle),
+          TextSpan(text: '점', style: unitStyle),
+        ],
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      textHeightBehavior: _heightBehavior,
+    )..layout();
+
+    final numBoxes = painter.getBoxesForSelection(
+      TextSelection(baseOffset: 0, extentOffset: value.length),
+    );
+    final unitBoxes = painter.getBoxesForSelection(
+      TextSelection(
+        baseOffset: value.length,
+        extentOffset: value.length + 1,
+      ),
+    );
+    if (numBoxes.isEmpty || unitBoxes.isEmpty) return 0;
+
+    final overhang = _maxBottom(unitBoxes) - _maxBottom(numBoxes);
+    // 점이 숫자보다 아래로 더 내려간 만큼만 올린다.
+    return overhang > 0 ? overhang : 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lift = _liftUnitY(
+      value: value,
+      numberStyle: numberStyle,
+      unitStyle: unitStyle,
+      textScaler: MediaQuery.textScalerOf(context),
+    );
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(
+          value,
+          textHeightBehavior: _heightBehavior,
+          style: numberStyle,
+        ),
+        Transform.translate(
+          offset: Offset(0, -lift),
+          child: Text(
+            '점',
+            textHeightBehavior: _heightBehavior,
+            style: unitStyle,
+          ),
+        ),
+      ],
     );
   }
 }

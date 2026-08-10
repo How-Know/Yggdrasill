@@ -554,11 +554,23 @@ class QuickLoginRoster {
 }
 
 class TodayAttendance {
-  const TodayAttendance({this.arrival, this.departure, this.classDateTime});
+  const TodayAttendance({
+    this.arrival,
+    this.departure,
+    this.classDateTime,
+    this.classEndTime,
+    this.plannedDepartureAt,
+    this.earlyLeaveReason,
+  });
 
   final DateTime? arrival;
   final DateTime? departure;
   final DateTime? classDateTime;
+  /// 시간표 기준 수업 종료.
+  final DateTime? classEndTime;
+  /// 오늘 예정 귀가(실하원 `departure`와 별개).
+  final DateTime? plannedDepartureAt;
+  final String? earlyLeaveReason;
 }
 
 /// 학생앱 — 다음 회차 수업 일정.
@@ -756,6 +768,50 @@ class AttendanceScoreInfo {
 }
 
 /// 오늘 완료된 과제 그룹 (진행률 상세 카드용, completed_at 기준).
+/// 열린 등원 세션의 목표 제시(계획 저장) 스냅샷.
+class StudentPlanGoalSnapshot {
+  const StudentPlanGoalSnapshot({
+    this.presentedAt,
+    this.itemIds = const <String>{},
+    this.planMinutes,
+  });
+
+  final DateTime? presentedAt;
+  final Set<String> itemIds;
+  final int? planMinutes;
+
+  bool get isPresented => presentedAt != null;
+}
+
+/// 수업 계획 진행률.
+///
+/// 분모: 계획 저장 스냅샷의 남은 권장분(없으면 현재 권장 합).
+/// 분자: 권장×문항완료율 (과제 전체 완료 전에도 부분 반영).
+class StudentTodayPlanProgress {
+  const StudentTodayPlanProgress({
+    this.planMinutes = 0,
+    this.completedRecommendedMinutes = 0,
+  });
+
+  final int planMinutes;
+  final int completedRecommendedMinutes;
+
+  int get percent {
+    if (planMinutes <= 0) return 0;
+    return ((completedRecommendedMinutes * 100) / planMinutes)
+        .round()
+        .clamp(0, 100);
+  }
+
+  static StudentTodayPlanProgress fromRow(Map<String, dynamic> row) {
+    return StudentTodayPlanProgress(
+      planMinutes: (row['plan_minutes'] as num?)?.toInt() ?? 0,
+      completedRecommendedMinutes:
+          (row['completed_recommended_minutes'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class TodayCompletedHomework {
   const TodayCompletedHomework({
     required this.groupId,
@@ -1172,6 +1228,16 @@ class StudentApi {
         .toList(growable: false);
   }
 
+  /// 오늘 수업 계획 진행률 (계획=오늘+대기 권장분, 완료=완료 과제 권장분).
+  Future<StudentTodayPlanProgress> todayPlanProgress() async {
+    final rows =
+        await _client.rpc('student_today_plan_progress_v1') as List<dynamic>;
+    if (rows.isEmpty) return const StudentTodayPlanProgress();
+    final row = rows.first;
+    if (row is! Map) return const StudentTodayPlanProgress();
+    return StudentTodayPlanProgress.fromRow(Map<String, dynamic>.from(row));
+  }
+
   /// 과제 그룹 목록 (메인 + 하원숙제 + 플래그 병합).
   Future<List<HomeworkGroup>> listHomeworkGroups() async {
     final results = await Future.wait([
@@ -1260,14 +1326,15 @@ class StudentApi {
     return all;
   }
 
-  /// 열린 등원 세션의 목표 제시 스냅샷. (at, itemIds)
-  Future<(DateTime?, Set<String>)?> _loadOpenPlanGoalSnapshot() async {
+  /// 열린 등원 세션의 목표 제시 스냅샷.
+  Future<StudentPlanGoalSnapshot?> openPlanGoalSnapshot() async {
     final id = await identity();
     if (id == null) return null;
     final rows = await _client
         .from('attendance_records')
         .select(
-          'homework_plan_snapshot_at,homework_plan_snapshot_item_ids',
+          'homework_plan_snapshot_at,homework_plan_snapshot_item_ids,'
+          'homework_plan_snapshot_minutes',
         )
         .eq('student_id', id.studentId)
         .not('arrival_time', 'is', null)
@@ -1286,7 +1353,22 @@ class StudentApi {
         if (itemId.isNotEmpty) ids.add(itemId);
       }
     }
-    return (at, ids);
+    final rawMinutes = row['homework_plan_snapshot_minutes'];
+    final minutes = rawMinutes is num
+        ? rawMinutes.toInt()
+        : int.tryParse('$rawMinutes');
+    return StudentPlanGoalSnapshot(
+      presentedAt: at,
+      itemIds: ids,
+      planMinutes: minutes == null ? null : (minutes < 0 ? 0 : minutes),
+    );
+  }
+
+  /// 열린 등원 세션의 목표 제시 스냅샷. (at, itemIds)
+  Future<(DateTime?, Set<String>)?> _loadOpenPlanGoalSnapshot() async {
+    final snap = await openPlanGoalSnapshot();
+    if (snap == null) return null;
+    return (snap.presentedAt, snap.itemIds);
   }
 
   /// 과제 그룹에 배정된 문항 목록. legacy 과제면 빈 목록.
@@ -1383,10 +1465,14 @@ class StudentApi {
       }
     }
     final row = best ?? rows.first;
+    final reason = (row['early_leave_reason'] as String?)?.trim();
     return TodayAttendance(
       arrival: parse(row, 'arrival_time'),
       departure: parse(row, 'departure_time'),
       classDateTime: parse(row, 'class_date_time'),
+      classEndTime: parse(row, 'class_end_time'),
+      plannedDepartureAt: parse(row, 'planned_departure_at'),
+      earlyLeaveReason: (reason == null || reason.isEmpty) ? null : reason,
     );
   }
 
@@ -1436,6 +1522,21 @@ class StudentApi {
   Future<void> recordArrival() => _client.rpc('student_record_arrival');
 
   Future<void> recordDeparture() => _client.rpc('student_record_departure');
+
+  /// 오늘 예정 귀가 시각 설정. [plannedDepartureAt]이 null이면 해제.
+  /// 정규 종료보다 이르면 [reason] 필수(서버 `early_leave_reason_required`).
+  Future<void> setPlannedDeparture({
+    DateTime? plannedDepartureAt,
+    String? reason,
+  }) async {
+    await _client.rpc(
+      'student_set_planned_departure',
+      params: {
+        'p_planned_departure_at': plannedDepartureAt?.toUtc().toIso8601String(),
+        'p_reason': reason,
+      },
+    );
+  }
 }
 
 class StudentApiException implements Exception {

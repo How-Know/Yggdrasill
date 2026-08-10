@@ -485,18 +485,18 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     // 진행률 카드 확장 시 아래 목록을 밀어내며 같은 ListView 스크롤을 쓴다.
     final children = <Widget>[
       // 교재 풀기 탭과 동일 좌우 여백(24) → 진행률 카드 너비 통일.
-      const Padding(
-        padding: EdgeInsets.fromLTRB(24, 20, 24, 0),
-        child: _DailyAverageDummySection(),
-      ),
-      const SizedBox(height: 28),
       Padding(
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
         child: _TodayHomeworkProgressSection(
           coverByBookKey: _coverByBookKey,
         ),
       ),
-      // 진행률 카드 아래는 시각적으로 더 벌어 보이게 넉넉히 둔다.
+      const SizedBox(height: 28),
+      const Padding(
+        padding: EdgeInsets.fromLTRB(24, 0, 24, 0),
+        child: _DailyAverageDummySection(),
+      ),
+      // 수업시간 카드 아래는 시각적으로 더 벌어 보이게 넉넉히 둔다.
       const SizedBox(height: 36),
     ];
 
@@ -1038,9 +1038,11 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
     unawaited(
       StudentAttendanceSession.instance.refresh(includeNextClass: true),
     );
-    // 분 단위로 진행 시간 갱신.
+    // 분 단위로 경과·남은 시간 갱신.
     _tick = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted && StudentAttendanceSession.instance.arrival != null) {
+      final s = StudentAttendanceSession.instance;
+      if (mounted &&
+          (s.arrival != null || s.plannedDepartureAt != null)) {
         setState(() {});
       }
     });
@@ -1080,6 +1082,65 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
     if (next) unawaited(_ensureWeekLoaded(force: true));
   }
 
+  Future<void> _openPlannedDepartureSheet() async {
+    final session = StudentAttendanceSession.instance;
+    final result = await showGeneralDialog<_PlannedDepartureResult>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '희망 하원 시간',
+      barrierColor: Colors.black.withValues(alpha: 0.4),
+      transitionDuration: const Duration(milliseconds: 320),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return _PlannedDepartureDialog(
+          initialTime: session.plannedDepartureAt,
+          initialReason: session.earlyLeaveReason,
+          classEndTime: session.classEndTime,
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curve,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.45),
+              end: Offset.zero,
+            ).animate(curve),
+            child: child,
+          ),
+        );
+      },
+    );
+    if (result == null || !mounted) return;
+
+    try {
+      await StudentApi.instance.setPlannedDeparture(
+        plannedDepartureAt: result.clear ? null : result.plannedAt,
+        reason: result.clear ? null : result.reason,
+      );
+      await session.refresh(includeNextClass: true);
+      if (!mounted) return;
+      TopGlassSnackBar.show(
+        context,
+        message:
+            result.clear ? '희망 하원 시간을 지웠어요.' : '희망 하원 시간을 저장했어요.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString();
+      TopGlassSnackBar.show(
+        context,
+        message: msg.contains('early_leave_reason_required')
+            ? '수업 종료보다 일찍 가면 하원 사유를 적어 주세요.'
+            : '희망 하원 시간을 저장하지 못했어요.',
+      );
+    }
+  }
+
   /// 등원 시각 → 지금까지. 예: "6시간 23분째", "42분째".
   String _elapsedLabel() {
     final arrival = StudentAttendanceSession.instance.arrival;
@@ -1092,6 +1153,34 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
     if (hours <= 0) return '$mins분째';
     if (mins == 0) return '$hours시간째';
     return '$hours시간 $mins분째';
+  }
+
+  /// 예: "오후 5시 30분에 하원예정 (2시간 15분 남음)"
+  String? _plannedDepartureLine() {
+    final planned = StudentAttendanceSession.instance.plannedDepartureAt;
+    if (planned == null) return null;
+    final period = planned.hour < 12 ? '오전' : '오후';
+    final h12 = planned.hour % 12 == 0 ? 12 : planned.hour % 12;
+    final mm = planned.minute;
+    final timePart = mm == 0 ? '$period ${h12}시' : '$period ${h12}시 ${mm}분';
+
+    final now = DateTime.now();
+    var remain = planned.difference(now).inMinutes;
+    String remainPart;
+    if (remain <= 0) {
+      remainPart = '하원 시각이 지났어요';
+    } else {
+      final hours = remain ~/ 60;
+      final mins = remain % 60;
+      if (hours <= 0) {
+        remainPart = '$mins분 남음';
+      } else if (mins == 0) {
+        remainPart = '$hours시간 남음';
+      } else {
+        remainPart = '$hours시간 $mins분 남음';
+      }
+    }
+    return '$timePart에 하원예정 ($remainPart)';
   }
 
   /// 다음 회차 — "수 16:00".
@@ -1153,37 +1242,68 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.45);
     final yMax = _weekDuration?.yMaxMinutes ?? 240;
 
+    // 진행률 카드(StudentProgressSummaryCard)와 동일 셸.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Material(
-          color: surface,
-          borderRadius: BorderRadius.circular(_cardRadius),
-          clipBehavior: Clip.antiAlias,
-          // InkWell 스플래시(회색 퍼짐) 없이 탭만 처리.
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _toggle,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  child: Builder(
-                    builder: (context) {
-                      final labelStyle = TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w400,
-                        letterSpacing: -0.2,
-                        color: muted,
-                      );
-                      final valueStyle = TextStyle(
-                        fontSize: 34,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.8,
-                        height: 1.1,
-                        color: text,
-                      );
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(_cardRadius),
+            boxShadow: isDark
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 18,
+                      offset: Offset(0, 6),
+                    ),
+                  ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(_cardRadius),
+            clipBehavior: Clip.antiAlias,
+            // InkWell 스플래시(회색 퍼짐) 없이 탭만 처리.
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _toggle,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                    child: Builder(
+                      builder: (context) {
+                        // 진행률 카드 부제와 동일.
+                        final labelStyle = theme.textTheme.bodyMedium?.copyWith(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: subText,
+                            height: 1.25,
+                          ) ??
+                          TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: subText,
+                            height: 1.25,
+                          );
+                      // 진행률 카드 숫자(84%)와 동일.
+                      final valueStyle = theme.textTheme.displaySmall?.copyWith(
+                            fontSize: 44,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -1.2,
+                            height: 1.0,
+                            color: text,
+                          ) ??
+                          TextStyle(
+                            fontSize: 44,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -1.2,
+                            height: 1.0,
+                            color: text,
+                          );
+                      final plannedLine = _plannedDepartureLine();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -1220,6 +1340,13 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                               ),
                             ],
                           ),
+                          if (plannedLine != null) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              plannedLine,
+                              style: labelStyle,
+                            ),
+                          ],
                         ],
                       );
                     },
@@ -1234,7 +1361,8 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                              // 상단 시간 수치 ↔ 그래프 여백: 기존 16(헤더 bottom) + 16.
+                              padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
                               child: SizedBox(
                                 height: 196,
                                 child: _loadingWeek && _weekDuration == null
@@ -1269,29 +1397,56 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                               thickness: 0.33,
                               color: divider,
                             ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.fromLTRB(16, 14, 12, 14),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      '수업 기록 모두 보기',
-                                      style: TextStyle(
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.w400,
-                                        letterSpacing: -0.2,
-                                        color: text,
+                            // 2번째 카드 하단 행과 같은 푸터 크로마 +
+                            // 학습앱「선생님 추가」(+ / 강조색) 패턴.
+                            Builder(
+                              builder: (context) {
+                                final hasPlan = StudentAttendanceSession
+                                        .instance.plannedDepartureAt !=
+                                    null;
+                                const accent = Color(0xFF33A373);
+                                return Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () =>
+                                        unawaited(_openPlannedDepartureSheet()),
+                                    borderRadius: const BorderRadius.vertical(
+                                      bottom: Radius.circular(_cardRadius),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        18,
+                                        12,
+                                        18,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            hasPlan
+                                                ? Icons.schedule_rounded
+                                                : Icons.add,
+                                            size: 22,
+                                            color: accent,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            hasPlan
+                                                ? '희망 하원 시간 수정'
+                                                : '희망 하원 시간 추가',
+                                            style: TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.w600,
+                                              letterSpacing: -0.2,
+                                              color: accent,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
-                                  Icon(
-                                    Icons.chevron_right,
-                                    size: 22,
-                                    color: muted,
-                                  ),
-                                ],
-                              ),
+                                );
+                              },
                             ),
                           ],
                         )
@@ -1299,6 +1454,7 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                 ),
               ],
             ),
+          ),
           ),
         ),
         const SizedBox(height: 8),
@@ -1311,6 +1467,372 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PlannedDepartureResult {
+  const _PlannedDepartureResult._({
+    required this.clear,
+    this.plannedAt,
+    this.reason,
+  });
+
+  const _PlannedDepartureResult.save({
+    required DateTime plannedAt,
+    String? reason,
+  }) : this._(clear: false, plannedAt: plannedAt, reason: reason);
+
+  const _PlannedDepartureResult.clear() : this._(clear: true);
+
+  final bool clear;
+  final DateTime? plannedAt;
+  final String? reason;
+}
+
+/// 오늘 예정 귀가 — 프로필 편집(`_NicknameEditDialog`)과 동일 셸·헤더.
+class _PlannedDepartureDialog extends StatefulWidget {
+  const _PlannedDepartureDialog({
+    this.initialTime,
+    this.initialReason,
+    this.classEndTime,
+  });
+
+  final DateTime? initialTime;
+  final String? initialReason;
+  final DateTime? classEndTime;
+
+  @override
+  State<_PlannedDepartureDialog> createState() =>
+      _PlannedDepartureDialogState();
+}
+
+class _PlannedDepartureDialogState extends State<_PlannedDepartureDialog> {
+  late TimeOfDay _time;
+  late final TextEditingController _reasonCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialTime ?? widget.classEndTime ?? DateTime.now();
+    _time = TimeOfDay(hour: initial.hour, minute: initial.minute);
+    _reasonCtrl = TextEditingController(text: widget.initialReason ?? '');
+  }
+
+  @override
+  void dispose() {
+    _reasonCtrl.dispose();
+    super.dispose();
+  }
+
+  DateTime _plannedAtToday() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, _time.hour, _time.minute);
+  }
+
+  bool _isEarlierThanClassEnd(DateTime planned) {
+    final end = widget.classEndTime;
+    if (end == null) return false;
+    final endAt = DateTime(
+      planned.year,
+      planned.month,
+      planned.day,
+      end.hour,
+      end.minute,
+    );
+    return planned.isBefore(endAt);
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await AppTimePickerDialog.show(
+      context: context,
+      title: '귀가 시각',
+      initialTime: _time,
+    );
+    if (picked != null && mounted) setState(() => _time = picked);
+  }
+
+  void _save() {
+    final planned = _plannedAtToday();
+    final reason = _reasonCtrl.text.trim();
+    if (_isEarlierThanClassEnd(planned) && reason.isEmpty) {
+      TopGlassSnackBar.show(
+        context,
+        message: '수업 종료보다 일찍 가면 하원 사유를 적어 주세요.',
+      );
+      return;
+    }
+    Navigator.of(context).pop(
+      _PlannedDepartureResult.save(
+        plannedAt: planned,
+        reason: reason.isEmpty ? null : reason,
+      ),
+    );
+  }
+
+  String _formatTimeOfDay(TimeOfDay t) {
+    final period = t.hour < 12 ? '오전' : '오후';
+    final h12 = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+    final mm = t.minute.toString().padLeft(2, '0');
+    return '$period $h12:$mm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final text = isDark ? Colors.white : Colors.black;
+    final sub = isDark
+        ? Colors.white.withValues(alpha: 0.5)
+        : Colors.black.withValues(alpha: 0.4);
+    final divider = isDark
+        ? Colors.white.withValues(alpha: 0.1)
+        : const Color(0xFFE5E5EA);
+    // 프로필 편집·계정 시트와 동일 surface.
+    final card =
+        isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final media = MediaQuery.of(context);
+    final dialogW = (media.size.width - 32).clamp(360.0, 560.0);
+    final dialogH = (media.size.height * 0.42).clamp(340.0, 460.0);
+    final early = _isEarlierThanClassEnd(_plannedAtToday());
+    final end = widget.classEndTime;
+    final endHint = end == null
+        ? null
+        : '정규 수업 종료 ${_formatTimeOfDay(TimeOfDay.fromDateTime(end))}';
+
+    final valueStyle = TextStyle(
+      color: text,
+      fontSize: 17,
+      fontWeight: FontWeight.w400,
+      letterSpacing: -0.2,
+      height: 1.2,
+      decoration: TextDecoration.none,
+    );
+    final labelStyle = TextStyle(
+      color: text,
+      fontSize: 17,
+      fontWeight: FontWeight.w600,
+      letterSpacing: -0.2,
+      decoration: TextDecoration.none,
+    );
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Center(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            16 + media.viewInsets.bottom,
+          ),
+          child: SizedBox(
+            width: dialogW,
+            height: dialogH,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: card,
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x28000000),
+                    blurRadius: 40,
+                    offset: Offset(0, 16),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    splashColor: Colors.transparent,
+                    highlightColor: Colors.transparent,
+                    splashFactory: NoSplash.splashFactory,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+                        child: SizedBox(
+                          height: 56,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Text(
+                                '희망 하원 시간',
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: -0.3,
+                                  color: text,
+                                  decoration: TextDecoration.none,
+                                ),
+                              ),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: SolidCapsuleActionBar(
+                                  padding: const EdgeInsets.all(8),
+                                  children: [
+                                    SolidCapsuleActionButton(
+                                      tooltip: '닫기',
+                                      icon: Icons.close_rounded,
+                                      onPressed: () =>
+                                          Navigator.of(context).pop(),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: SolidCapsuleActionBar(
+                                  padding: const EdgeInsets.all(8),
+                                  children: [
+                                    SolidCapsuleActionButton(
+                                      tooltip: '완료',
+                                      icon: Icons.check_rounded,
+                                      onPressed: _save,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(28, 12, 28, 0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Divider(height: 1, thickness: 0.5, color: divider),
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _pickTime,
+                                child: SizedBox(
+                                  height: 56,
+                                  child: Row(
+                                    children: [
+                                      SizedBox(
+                                        width: 104,
+                                        child: Text('귀가 시각', style: labelStyle),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          _formatTimeOfDay(_time),
+                                          textAlign: TextAlign.start,
+                                          style: valueStyle,
+                                        ),
+                                      ),
+                                      Icon(
+                                        Icons.chevron_right_rounded,
+                                        size: 22,
+                                        color: sub,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Divider(height: 1, thickness: 0.5, color: divider),
+                            if (early) ...[
+                              SizedBox(
+                                height: 56,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    SizedBox(
+                                      width: 104,
+                                      child: Text('하원 사유', style: labelStyle),
+                                    ),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _reasonCtrl,
+                                        textAlign: TextAlign.start,
+                                        textInputAction: TextInputAction.done,
+                                        onSubmitted: (_) => _save(),
+                                        style: valueStyle,
+                                        cursorColor: text,
+                                        cursorWidth: 1.5,
+                                        decoration: InputDecoration(
+                                          hintText: '필수',
+                                          hintStyle: valueStyle.copyWith(
+                                            color: sub,
+                                          ),
+                                          border: InputBorder.none,
+                                          enabledBorder: InputBorder.none,
+                                          focusedBorder: InputBorder.none,
+                                          filled: false,
+                                          isDense: true,
+                                          contentPadding: EdgeInsets.zero,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Divider(
+                                height: 1,
+                                thickness: 0.5,
+                                color: divider,
+                              ),
+                            ],
+                            if (widget.initialTime != null) ...[
+                              Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: () => Navigator.of(context).pop(
+                                    const _PlannedDepartureResult.clear(),
+                                  ),
+                                  child: SizedBox(
+                                    height: 56,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        '희망 하원 시간 지우기',
+                                        style: labelStyle.copyWith(
+                                          color: const Color(0xFFFF554F),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Divider(
+                                height: 1,
+                                thickness: 0.5,
+                                color: divider,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
+                        child: Text(
+                          endHint == null
+                              ? '오늘 몇 시까지 집에 가는지 적어 주세요. 필수는 아니에요.'
+                              : '$endHint · 수업 종료보다 이르면 사유가 필요해요.',
+                          style: TextStyle(
+                            color: sub,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w400,
+                            height: 1.35,
+                            letterSpacing: -0.1,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1561,15 +2083,14 @@ class _TodayHomeworkProgressSection extends StatefulWidget {
 
 class _TodayHomeworkProgressSectionState
     extends State<_TodayHomeworkProgressSection> {
-  // 요약 카드 수치는 아직 목업. 상세 리스트·수행속도만 실데이터.
-  static const int _percent = 84;
+  // 상세 카드 평균은 아직 목업. 상단 퍼센트·계획시간은 실데이터.
   static const int _averagePercent = 72;
-  static const String _subtitle = '오늘 과제 5개 중 4개 완료';
 
   bool _expanded = false;
   List<TodayCompletedHomework>? _completed;
   bool _loadingCompleted = false;
   String? _completedError;
+  StudentTodayPlanProgress _planProgress = const StudentTodayPlanProgress();
 
   /// 과제 세션 목록 변화 감지용 (완료로 목록에서 빠지면 수행속도 갱신).
   Set<String> _trackedGroupIds = const {};
@@ -1584,6 +2105,10 @@ class _TodayHomeworkProgressSectionState
         g.groupId,
     };
     HomeworkSession.instance.addListener(_onHomeworkSessionChanged);
+    HomeworkSession.instance.planProgressTick
+        .addListener(_onPlanProgressTick);
+    StudentAttendanceSession.instance.planGoalPresentedTick
+        .addListener(_onPlanGoalPresented);
     unawaited(_ensureCompletedLoaded(force: true));
   }
 
@@ -1591,7 +2116,18 @@ class _TodayHomeworkProgressSectionState
   void dispose() {
     _completedRefreshDebounce?.cancel();
     HomeworkSession.instance.removeListener(_onHomeworkSessionChanged);
+    HomeworkSession.instance.planProgressTick
+        .removeListener(_onPlanProgressTick);
+    StudentAttendanceSession.instance.planGoalPresentedTick
+        .removeListener(_onPlanGoalPresented);
     super.dispose();
+  }
+
+  void _scheduleProgressReload({int debounceMs = 300}) {
+    _completedRefreshDebounce?.cancel();
+    _completedRefreshDebounce = Timer(Duration(milliseconds: debounceMs), () {
+      if (mounted) unawaited(_ensureCompletedLoaded(force: true));
+    });
   }
 
   void _onHomeworkSessionChanged() {
@@ -1604,10 +2140,17 @@ class _TodayHomeworkProgressSectionState
     }
     _trackedGroupIds = ids;
     // 목록 변동(완료·배정 등) 직후 완료 RPC를 잠깐 디바운스해 갱신.
-    _completedRefreshDebounce?.cancel();
-    _completedRefreshDebounce = Timer(const Duration(milliseconds: 400), () {
-      if (mounted) unawaited(_ensureCompletedLoaded(force: true));
-    });
+    _scheduleProgressReload(debounceMs: 400);
+  }
+
+  void _onPlanProgressTick() {
+    // 채점/통과로 완료율이 바뀌면 그룹 id가 같아도 %를 다시 받는다.
+    _scheduleProgressReload(debounceMs: 250);
+  }
+
+  void _onPlanGoalPresented() {
+    // 학습앱 계획 저장 → 상단 %·계획시간 즉시 재조회.
+    _scheduleProgressReload(debounceMs: 200);
   }
 
   Future<void> _toggle() async {
@@ -1625,9 +2168,16 @@ class _TodayHomeworkProgressSectionState
     });
     try {
       final rows = await StudentApi.instance.listTodayCompletedHomework();
+      StudentTodayPlanProgress plan = const StudentTodayPlanProgress();
+      try {
+        plan = await StudentApi.instance.todayPlanProgress();
+      } catch (_) {
+        // 계획 RPC 미배포 등 — 완료 목록은 그대로 보여준다.
+      }
       if (!mounted) return;
       setState(() {
         _completed = rows;
+        _planProgress = plan;
         _loadingCompleted = false;
       });
     } catch (e) {
@@ -1637,6 +2187,16 @@ class _TodayHomeworkProgressSectionState
         _loadingCompleted = false;
       });
     }
+  }
+
+  /// 학습앱 `_formatRecommendedMinutesCompact` 와 동일.
+  String _formatPlanMinutes(int minutes) {
+    final safe = math.max(0, minutes);
+    final hours = safe ~/ 60;
+    final remain = safe % 60;
+    if (hours <= 0) return '${remain}분';
+    if (remain == 0) return '${hours}시간';
+    return '${hours}시간 $remain분';
   }
 
   /// completed_at 기준 오늘 완료 과제의 누적 수행시간(초). 서버값 — 재시작해도 유지.
@@ -1686,16 +2246,17 @@ class _TodayHomeworkProgressSectionState
 
   @override
   Widget build(BuildContext context) {
+    final percent = _planProgress.percent;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         StudentProgressSummaryCard(
-          percent: _percent,
-          subtitle: _subtitle,
+          percent: percent,
+          subtitle: '오늘 수업 계획',
           trailingSubtitle: _paceTrailingLabel(),
+          trailingValue: _formatPlanMinutes(_planProgress.planMinutes),
           onTap: () => unawaited(_toggle()),
-          showInfoIcon: true,
-          infoFilled: _expanded,
+          showInfoIcon: false,
         ),
         AnimatedSize(
           duration: const Duration(milliseconds: 320),
@@ -1720,7 +2281,7 @@ class _TodayHomeworkProgressSectionState
                     ),
                     const SizedBox(height: 8),
                     _TodayHomeworkDetailCard(
-                      todayPercent: _percent,
+                      todayPercent: percent,
                       averagePercent: _averagePercent,
                       completed: _completed,
                       loadingCompleted: _loadingCompleted,

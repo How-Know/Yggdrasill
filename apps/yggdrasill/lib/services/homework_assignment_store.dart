@@ -185,6 +185,16 @@ class HomeworkAssignmentOutcomeResult {
   final DateTime? nextDueAt;
 }
 
+class HomeworkStructuredGradingRollbackResult {
+  const HomeworkStructuredGradingRollbackResult({
+    required this.rolledBackCount,
+    this.checkNotFound = false,
+  });
+
+  final int rolledBackCount;
+  final bool checkNotFound;
+}
+
 class HomeworkAssignmentStore {
   HomeworkAssignmentStore._internal();
   static final HomeworkAssignmentStore instance =
@@ -1540,7 +1550,8 @@ class HomeworkAssignmentStore {
   }
 
   /// 가장 최근 구조화 그룹 채점의 검사·attempt·assignment·phase를 원자적으로 롤백한다.
-  Future<int?> rollbackStructuredGroupGrading({
+  Future<HomeworkStructuredGradingRollbackResult?>
+      rollbackStructuredGroupGrading({
     required String studentId,
     required String groupId,
     required Iterable<String> homeworkItemIds,
@@ -1568,9 +1579,19 @@ class HomeworkAssignmentStore {
       _activeAssignmentsCacheByStudent.remove(sid);
       _activeAssignmentsLoadCompletedForStudent.remove(sid);
       _bump();
-      return (row['rolled_back_count'] as num?)?.toInt() ?? 0;
+      return HomeworkStructuredGradingRollbackResult(
+        rolledBackCount: (row['rolled_back_count'] as num?)?.toInt() ?? 0,
+      );
     } catch (error, stackTrace) {
       debugPrint('[HW_ASSIGN][structured_rollback][WARN] $error\n$stackTrace');
+      if (error
+          .toString()
+          .contains('HOMEWORK_STRUCTURED_ROLLBACK_CHECK_NOT_FOUND')) {
+        return const HomeworkStructuredGradingRollbackResult(
+          rolledBackCount: 0,
+          checkNotFound: true,
+        );
+      }
       return null;
     }
   }

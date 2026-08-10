@@ -320,25 +320,6 @@ class RightSheetGradingSearchService {
       wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
       gradingLocked: lockGrading,
       smartConfirmAction: !readOnly,
-      onRequestEditReset: readOnly
-          ? null
-          : () async {
-              final reset =
-                  await _gradingResultService.resetAttemptsForHomework(
-                homeworkItemId: payload.homeworkId,
-              );
-              if (!context.mounted) return false;
-              if (!reset) {
-                _showSnackBar(context, '기존 채점 결과 리셋에 실패했습니다.');
-                return false;
-              }
-              _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
-              _testGradingSerializedDraftByHomeworkId
-                  .remove(payload.homeworkId);
-              _testGradingSavedHomeworkIds.remove(payload.homeworkId);
-              _showSnackBar(context, '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.');
-              return true;
-            },
       closeSheetOnAction: false,
       onStatesChanged: readOnly
           ? null

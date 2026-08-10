@@ -21,21 +21,30 @@ class HomeworkTestLatestScore {
   });
 }
 
-/// 학생앱 교재 카드와 같은 진행률/완료율.
+/// 과제 카드 진행률/완료율.
 ///
-/// - 진행률 = (전체 - 미수행) / 전체
-/// - 완료율 = 정답 / 수행분(미수행 제외)
+/// - [total] = 전체 - 포기 (score_total)
+/// - [graded] = 전체 - 포기 - 미수행 (수행분)
+/// - [completed] = 정답 수
+/// - 진행률 = graded / total
+/// - 완료율 = completed / total  (항상 진행률 이하)
 /// 교사 채점 attempt가 우선이며, 없으면 0으로 둔다.
 class HomeworkGradingProgressRate {
   final int total;
   final int graded;
   final int completed;
+
+  /// 이 attempt에 실제 저장된 문항 행 수(포기 포함).
+  ///
+  /// 그룹 전체를 한 대표 하위 과제에 저장한 기록인지 판별할 때 사용한다.
+  final int recordedQuestionCount;
   final bool enabled;
 
   const HomeworkGradingProgressRate({
     required this.total,
     required this.graded,
     required this.completed,
+    this.recordedQuestionCount = 0,
     required this.enabled,
   });
 
@@ -59,9 +68,9 @@ class HomeworkGradingProgressRate {
 
   double get advanceRate => total <= 0 ? 0 : graded / total;
 
-  /// 수행분(미수행 제외) 중 정답 비율. 전원 정답이면 미수행이 있어도 100%.
+  /// 포기 제외 전체 대비 정답 비율. 미수행이 있으면 진행률보다 같거나 낮다.
   double get completionRate =>
-      graded <= 0 ? 0 : (completed.clamp(0, graded) / graded);
+      total <= 0 ? 0 : (completed.clamp(0, total) / total);
 
   HomeworkGradingProgressRate merge(HomeworkGradingProgressRate other) {
     if (!enabled && !other.enabled) return disabled;
@@ -69,9 +78,33 @@ class HomeworkGradingProgressRate {
       total: total + other.total,
       graded: graded + other.graded,
       completed: completed + other.completed,
+      recordedQuestionCount:
+          recordedQuestionCount + other.recordedQuestionCount,
       enabled: enabled || other.enabled,
     );
   }
+}
+
+/// 그룹 전체 문항을 대표 하위 과제 하나에 저장한 채점 기록을 찾는다.
+///
+/// 이 기록을 다른 하위 과제의 fallback 문항 수와 다시 합치면 같은 문항이
+/// 이중 집계되므로, 그룹 카드에서는 이 기록 하나를 그룹 전체 결과로 사용한다.
+HomeworkGradingProgressRate? findGroupWideHomeworkProgressRate(
+  Iterable<HomeworkGradingProgressRate> rates, {
+  required int groupQuestionCount,
+}) {
+  if (groupQuestionCount <= 0) return null;
+  HomeworkGradingProgressRate? best;
+  for (final rate in rates) {
+    if (!rate.enabled || rate.recordedQuestionCount < groupQuestionCount) {
+      continue;
+    }
+    if (best == null ||
+        rate.recordedQuestionCount > best.recordedQuestionCount) {
+      best = rate;
+    }
+  }
+  return best;
 }
 
 class HomeworkTestGradingAttemptRecord {
@@ -513,34 +546,6 @@ class HomeworkTestGradingResultService {
     }
   }
 
-  Future<bool> resetAttemptsForHomework({
-    required String homeworkItemId,
-  }) async {
-    final academyId = await _resolveAcademyId();
-    final itemId = homeworkItemId.trim();
-    if (academyId.isEmpty || itemId.isEmpty) return false;
-    try {
-      final supa = Supabase.instance.client;
-      await supa
-          .from('homework_test_grading_attempt_items')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('homework_item_id', itemId);
-      await supa
-          .from('homework_test_grading_attempts')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('homework_item_id', itemId);
-      return true;
-    } catch (error, stackTrace) {
-      if (!_isMissingTableError(error)) {
-        debugPrint('resetAttemptsForHomework failed: $error');
-        debugPrintStack(stackTrace: stackTrace);
-      }
-      return false;
-    }
-  }
-
   /// 가장 최근 채점 시도 하나만 삭제한다. attempt_items는 FK cascade로 함께 삭제된다.
   Future<bool> rollbackLatestAttemptForHomework({
     required String homeworkItemId,
@@ -856,11 +861,12 @@ class HomeworkTestGradingResultService {
 
     try {
       final resolved = <String>{};
+      final latestRowByItemId = <String, Map<String, dynamic>>{};
       for (final chunk in _chunk(ids, _idFilterBatchSize)) {
         final rows = await Supabase.instance.client
             .from('homework_test_grading_attempts')
             .select(
-              'homework_item_id,score_correct,score_total,wrong_count,'
+              'id,homework_item_id,score_correct,score_total,wrong_count,'
               'not_performed_count,graded_at',
             )
             .eq('academy_id', academyId)
@@ -871,24 +877,61 @@ class HomeworkTestGradingResultService {
           final map = Map<String, dynamic>.from(raw as Map);
           final itemId = '${map['homework_item_id'] ?? ''}'.trim();
           if (itemId.isEmpty || !resolved.add(itemId)) continue;
-          final total = math.max(0, _doubleOf(map['score_total']).round());
-          final notPerformed =
-              math.max(0, _intOf(map['not_performed_count'])).clamp(0, total);
-          final graded = math.max(0, total - notPerformed);
-          final wrong = math.max(0, _intOf(map['wrong_count']));
-          final completedFromScore = math
-              .max(0, _doubleOf(map['score_correct']).round())
-              .clamp(0, graded);
-          // 오답이 없으면 수행분은 전부 정답. score_correct(배점)와
-          // score_total 불일치로 전원 정답이 57%처럼 보이는 것을 막는다.
-          final completed = wrong <= 0 ? graded : completedFromScore;
-          out[itemId] = HomeworkGradingProgressRate(
-            total: total > 0 ? total : (fallbackTotalByItemId[itemId] ?? 0),
-            graded: total > 0 ? graded : 0,
-            completed: total > 0 ? completed : 0,
-            enabled: true,
-          );
+          latestRowByItemId[itemId] = map;
         }
+      }
+
+      final attemptIds = latestRowByItemId.values
+          .map((row) => '${row['id'] ?? ''}'.trim())
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+      final recordedCountByAttemptId = <String, int>{};
+      for (final chunk in _chunk(attemptIds, _idFilterBatchSize)) {
+        var from = 0;
+        const pageSize = 1000;
+        while (true) {
+          final rows = await Supabase.instance.client
+              .from('homework_test_grading_attempt_items')
+              .select('attempt_id')
+              .inFilter('attempt_id', chunk)
+              .range(from, from + pageSize - 1);
+          for (final raw in rows) {
+            final attemptId = '${(raw as Map)['attempt_id'] ?? ''}'.trim();
+            if (attemptId.isEmpty) continue;
+            recordedCountByAttemptId.update(
+              attemptId,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            );
+          }
+          if (rows.length < pageSize) break;
+          from += pageSize;
+        }
+      }
+
+      for (final entry in latestRowByItemId.entries) {
+        final itemId = entry.key;
+        final map = entry.value;
+        final attemptId = '${map['id'] ?? ''}'.trim();
+        // score_total 은 포기 문항을 분모에서 제외한 값이다.
+        final total = math.max(0, _doubleOf(map['score_total']).round());
+        final notPerformed =
+            math.max(0, _intOf(map['not_performed_count'])).clamp(0, total);
+        final graded = math.max(0, total - notPerformed);
+        final wrong = math.max(0, _intOf(map['wrong_count']));
+        final completedFromScore = math
+            .max(0, _doubleOf(map['score_correct']).round())
+            .clamp(0, graded);
+        // 오답/빈칸이 없으면 수행분은 전부 정답. 배점 불일치로 정답 수만 보정하고
+        // 미수행은 total 분모에 남겨 완료율 ≤ 진행률을 유지한다.
+        final completed = wrong <= 0 ? graded : completedFromScore;
+        out[itemId] = HomeworkGradingProgressRate(
+          total: total > 0 ? total : (fallbackTotalByItemId[itemId] ?? 0),
+          graded: total > 0 ? graded : 0,
+          completed: total > 0 ? completed : 0,
+          recordedQuestionCount: recordedCountByAttemptId[attemptId] ?? 0,
+          enabled: true,
+        );
       }
       return out;
     } catch (error, stackTrace) {

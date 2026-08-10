@@ -180,10 +180,26 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       );
     }
 
+    // 총점: 현재 반영 가능한 개입 지표(출석)만으로 유효 가중치 재정규화.
+    // 과제 점수 등이 붙으면 동일 규칙으로 평균에 합류한다.
+    final totalScore = score?.score100;
+    final totalSubtitle = score == null
+        ? (_loadingScore ? '점수를 불러오는 중…' : '점수를 불러오지 못했어요')
+        : '출석 점수 반영';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         StudentAttendanceScoreCard(
+          title: '총점',
+          score100: totalScore,
+          subtitle: totalSubtitle,
+          showInfoIcon: false,
+          showProgressBar: false,
+        ),
+        const SizedBox(height: 12),
+        StudentAttendanceScoreCard(
+          title: '출석 점수',
           score100: score?.score100,
           subtitle: score == null
               ? (_loadingScore ? '출석 점수를 불러오는 중…' : '출석 점수를 불러오지 못했어요')
