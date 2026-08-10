@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -95,6 +96,7 @@ class HomeworkGroup {
     this.absenceCarryover = false,
     this.deferCount = 0,
     this.lastInspectionOutcome = '',
+    this.isAdditionalAfterSnapshot = false,
   });
 
   final String groupId;
@@ -133,6 +135,10 @@ class HomeworkGroup {
   final bool absenceCarryover;
   final int deferCount;
   final String lastInspectionOutcome;
+
+  /// 목표 제시(스냅샷) 이후에 추가된 오늘 수업 그룹.
+  /// 서버 title은 그대로 두고, 홈 카드 표시에만 '+' 접두를 쓴다.
+  bool isAdditionalAfterSnapshot;
 
   bool get isInClass => listKind == HomeworkListKind.inClass;
   bool get isHomework => listKind == HomeworkListKind.homework;
@@ -347,6 +353,8 @@ class HomeworkGroup {
       absenceCarryover: row['absence_carryover'] == true,
       deferCount: (row['defer_count'] as num?)?.toInt() ?? 0,
       lastInspectionOutcome: '${row['last_outcome'] ?? ''}'.trim(),
+      isAdditionalAfterSnapshot: row['is_additional_after_snapshot'] == true ||
+          row['isAdditionalAfterSnapshot'] == true,
     );
   }
 }
@@ -885,7 +893,50 @@ class StudentApi {
     await signIn(username: username, password: password);
   }
 
-  Future<void> signOut() => _client.auth.signOut();
+  Future<void> signOut() async {
+    try {
+      await presenceOffline();
+    } catch (_) {}
+    await _client.auth.signOut();
+  }
+
+  /// 학생앱 온라인 heartbeat. 서버가 등원중이면 academy, 아니면 home 으로 분류.
+  /// [iosInstallId] 가 있고 다른 iPad 가 클레임했으면 [iosDeviceReplaced] = true.
+  Future<({String? locationKind, bool iosDeviceReplaced})> presenceHeartbeat({
+    String? iosInstallId,
+  }) async {
+    final raw = await _client.rpc(
+      'student_app_heartbeat',
+      params: {
+        'p_ios_install_id': iosInstallId,
+      },
+    );
+    if (raw is! Map) {
+      return (locationKind: null, iosDeviceReplaced: false);
+    }
+    final map = Map<String, dynamic>.from(raw);
+    if (map['ok'] == false && '${map['error']}' == 'ios_device_replaced') {
+      return (locationKind: null, iosDeviceReplaced: true);
+    }
+    final kind = '${map['location_kind'] ?? ''}'.trim();
+    return (
+      locationKind: kind.isEmpty ? null : kind,
+      iosDeviceReplaced: false,
+    );
+  }
+
+  /// iOS 설치를 활성 기기로 클레임 (다른 iPad 세션을 밀어냄).
+  Future<void> claimIosDevice(String iosInstallId) async {
+    final id = iosInstallId.trim();
+    if (id.isEmpty) return;
+    await _client.rpc(
+      'student_app_claim_ios_device',
+      params: {'p_ios_install_id': id},
+    );
+  }
+
+  Future<void> presenceOffline() =>
+      _client.rpc('student_app_presence_offline');
 
   Future<Map<String, dynamic>> _quickLoginRequest(
     Map<String, dynamic> body,
@@ -1177,8 +1228,65 @@ class StudentApi {
       }
       g.pendingComplete = pending[g.groupId] ?? false;
     }
+
+    // RPC에 플래그가 아직 없거나 false만 오면, 열린 출석의 스냅샷으로 클라이언트 보강.
+    final needsClientSnapshot = all.any(
+      (g) => g.isInClass && !g.isAdditionalAfterSnapshot,
+    );
+    if (needsClientSnapshot) {
+      try {
+        final snapshot = await _loadOpenPlanGoalSnapshot();
+        if (snapshot != null) {
+          final snapshotAt = snapshot.$1;
+          final snapshotIds = snapshot.$2;
+          if (snapshotAt != null) {
+            for (final g in all) {
+              if (!g.isInClass || g.children.isEmpty) continue;
+              final anyInSnapshot = g.children.any(
+                (child) => snapshotIds.contains(child.itemId),
+              );
+              if (!anyInSnapshot) {
+                g.isAdditionalAfterSnapshot = true;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('[HW][goal-snapshot] client fallback failed: $e');
+      }
+    }
+
     all.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
     return all;
+  }
+
+  /// 열린 등원 세션의 목표 제시 스냅샷. (at, itemIds)
+  Future<(DateTime?, Set<String>)?> _loadOpenPlanGoalSnapshot() async {
+    final id = await identity();
+    if (id == null) return null;
+    final rows = await _client
+        .from('attendance_records')
+        .select(
+          'homework_plan_snapshot_at,homework_plan_snapshot_item_ids',
+        )
+        .eq('student_id', id.studentId)
+        .not('arrival_time', 'is', null)
+        .isFilter('departure_time', null)
+        .order('arrival_time', ascending: false)
+        .limit(1);
+    if (rows is! List || rows.isEmpty) return null;
+    final row = Map<String, dynamic>.from(rows.first as Map);
+    final atRaw = row['homework_plan_snapshot_at'];
+    final at = atRaw == null ? null : DateTime.tryParse('$atRaw')?.toLocal();
+    final ids = <String>{};
+    final rawIds = row['homework_plan_snapshot_item_ids'];
+    if (rawIds is List) {
+      for (final value in rawIds) {
+        final itemId = '$value'.trim();
+        if (itemId.isNotEmpty) ids.add(itemId);
+      }
+    }
+    return (at, ids);
   }
 
   /// 과제 그룹에 배정된 문항 목록. legacy 과제면 빈 목록.

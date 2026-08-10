@@ -40,6 +40,9 @@ const double _kGradingCardMaxHeight = 620.0;
 const double _kGradingCardMinWidth = 108.0;
 const double _kGradingCardMaxWidth = 396.0;
 const double _kGradingHomeworkRowTopInset = 24.0;
+
+/// 같은 학생·같은 교재로 세로 스택될 때만 쓰는 카드 간격(리스트 inset과 별개).
+const double _kGradingStackedCardGap = 12.0;
 const double _kGradingHomeworkCardMetaFontSize = 22.0;
 const double _kGradingHomeworkCardMetaLineHeightMax = 0.92;
 const double _kGradingHomeworkCardMetaLineHeightMin = 0.72;
@@ -49,6 +52,9 @@ const double _kGradingHomeworkCardCoverDetailFontSize = 22.0;
 const double _kGradingHomeworkCardCoverNameLineHeight = 1.15;
 const double _kGradingHomeworkCardCoverDetailLineHeight = 1.1;
 const double _kGradingHomeworkCardCoverNameVerticalPad = 10.0;
+/// 커버 2번째 줄(경과시간/숙제칩) 고정 높이 — 페이지 줄 Y 정렬용.
+/// 숙제칩(pad 6*2 + 15*1.1 + border)과 경과시간(22*1.1) 중 큰 쪽에 맞춤.
+const double _kGradingCoverSecondLineSlotHeight = 32.0;
 const double _kGradingAnswerRailHorizontalPadding = 24.0;
 const double _kGradingAnswerRailHeaderGap = 12.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(0, 24, 24, 24);
@@ -198,6 +204,10 @@ class _GradingModePageState extends State<GradingModePage> {
                 final homeworkEntries = _buildHomeworkEntries(
                   activeAssignmentsByStudent,
                 );
+                final entryStacks = _buildEntryStacks(
+                  submittedEntries: submittedEntries,
+                  homeworkEntries: homeworkEntries,
+                );
                 return LayoutBuilder(
                   builder: (context, constraints) {
                     final railWidth = _resolveAnswerRailWidth(context);
@@ -218,55 +228,16 @@ class _GradingModePageState extends State<GradingModePage> {
                                       contentConstraints,
                                       MediaQuery.of(context).size.height,
                                     );
-                                    return Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        Expanded(
-                                          child: Align(
-                                            alignment: Alignment.topLeft,
-                                            child: submittedEntries.isNotEmpty
-                                                ? SizedBox(
-                                                    height: cardLayout.height,
-                                                    child:
-                                                        _buildHorizontalEntryStrip(
-                                                      submittedEntries,
-                                                      cardLayout: cardLayout,
-                                                      onCardTap: widget
-                                                          .onSubmittedCardTap,
-                                                      canTapEntry: (entry) =>
-                                                          entry
-                                                              .hasSubmittedChild,
-                                                    ),
-                                                  )
-                                                : _buildEmptyRowSpacer(
-                                                    cardLayout: cardLayout,
-                                                  ),
-                                          ),
-                                        ),
-                                        const SizedBox(
-                                          height: _kGradingHomeworkRowTopInset,
-                                        ),
-                                        Expanded(
-                                          child: Align(
-                                            alignment: Alignment.topLeft,
-                                            child: homeworkEntries.isNotEmpty
-                                                ? SizedBox(
-                                                    height: cardLayout.height,
-                                                    child:
-                                                        _buildHorizontalEntryStrip(
-                                                      homeworkEntries,
-                                                      cardLayout: cardLayout,
-                                                      onCardTap: widget
-                                                          .onHomeworkCardTap,
-                                                    ),
-                                                  )
-                                                : _buildEmptyRowSpacer(
-                                                    cardLayout: cardLayout,
-                                                  ),
-                                          ),
-                                        ),
-                                      ],
+                                    return Align(
+                                      alignment: Alignment.topLeft,
+                                      child: entryStacks.isEmpty
+                                          ? _buildEmptyRowSpacer(
+                                              cardLayout: cardLayout,
+                                            )
+                                          : _buildStackedEntryStrip(
+                                              entryStacks,
+                                              cardLayout: cardLayout,
+                                            ),
                                     );
                                   },
                                 ),
@@ -755,43 +726,65 @@ class _GradingModePageState extends State<GradingModePage> {
     return raw;
   }
 
-  Future<bool> _enqueueMissingAnswerBookDownloads({
+  bool _isRemoteWebPdfPath(String raw) {
+    final path = raw.trim().toLowerCase();
+    return path.startsWith('http://') || path.startsWith('https://');
+  }
+
+  Future<TextbookPdfRef?> _answerBookPdfRef({
+    required String academyId,
     required _GradingAnswerBook book,
     required String gradeLabel,
-    required String answerPathRaw,
+    required String kind,
+    required String rawPath,
+  }) async {
+    final storageKey = _storageKeyFromTextbookPath(rawPath);
+    if (storageKey == null) return null;
+    final label = kind == 'sol' ? '해설' : '정답';
+    return TextbookPdfRef(
+      academyId: academyId,
+      fileId: book.id,
+      gradeLabel: gradeLabel,
+      kind: kind,
+      storageKey: storageKey,
+      displayName: '${book.displayName} · $label',
+    );
+  }
+
+  Future<bool> _enqueueAnswerBookPdfIfMissing({
+    required TextbookPdfRef ref,
+    required String title,
+    VoidCallback? onCompleted,
+  }) async {
+    final cached = await TextbookPdfService.instance.isCached(ref);
+    if (cached) return false;
+    await TextbookDownloadProgressService.instance.enqueue(
+      ref: ref,
+      title: title,
+      onCompleted: onCompleted,
+    );
+    return true;
+  }
+
+  /// 해설은 오픈을 막지 않고 우하단 안내창으로만 데운다.
+  Future<void> _warmAnswerBookSolutionDownload({
+    required String academyId,
+    required _GradingAnswerBook book,
+    required String gradeLabel,
     required String solutionPathRaw,
   }) async {
-    final academyId =
-        (await TenantService.instance.getActiveAcademyId())?.trim() ?? '';
-    if (academyId.isEmpty) return false;
-
-    final candidates = <({String kind, String rawPath, String label})>[
-      if (answerPathRaw.isNotEmpty)
-        (kind: 'ans', rawPath: answerPathRaw, label: '정답'),
-      if (solutionPathRaw.isNotEmpty)
-        (kind: 'sol', rawPath: solutionPathRaw, label: '해설'),
-    ];
-    var enqueued = false;
-    for (final candidate in candidates) {
-      final storageKey = _storageKeyFromTextbookPath(candidate.rawPath);
-      if (storageKey == null) continue;
-      final ref = TextbookPdfRef(
-        academyId: academyId,
-        fileId: book.id,
-        gradeLabel: gradeLabel,
-        kind: candidate.kind,
-        storageKey: storageKey,
-        displayName: '${book.displayName} · ${candidate.label}',
-      );
-      final cached = await TextbookPdfService.instance.isCached(ref);
-      if (cached) continue;
-      await TextbookDownloadProgressService.instance.enqueue(
-        ref: ref,
-        title: '${book.displayName} · $gradeLabel · ${candidate.label}',
-      );
-      enqueued = true;
-    }
-    return enqueued;
+    final ref = await _answerBookPdfRef(
+      academyId: academyId,
+      book: book,
+      gradeLabel: gradeLabel,
+      kind: 'sol',
+      rawPath: solutionPathRaw,
+    );
+    if (ref == null) return;
+    await _enqueueAnswerBookPdfIfMissing(
+      ref: ref,
+      title: '${book.displayName} · $gradeLabel · 해설',
+    );
   }
 
   Future<void> _openAnswerBook(
@@ -807,40 +800,91 @@ class _GradingModePageState extends State<GradingModePage> {
     final gradeLabel = grade.gradeLabel.trim().isNotEmpty
         ? grade.gradeLabel.trim()
         : grade.gradeKey.trim();
-    final downloadStarted = await _enqueueMissingAnswerBookDownloads(
-      book: book,
-      gradeLabel: gradeLabel,
-      answerPathRaw: answerPathRaw,
-      solutionPathRaw: solutionPathRaw,
-    );
-    if (!mounted || downloadStarted) return;
+    final academyId =
+        (await TenantService.instance.getActiveAcademyId())?.trim() ?? '';
+    if (!mounted) return;
 
-    final resolvedPaths = await Future.wait<String>([
-      if (answerPathRaw.isNotEmpty)
-        _resolveAnswerBookPdfPath(
-          bookId: book.id,
+    // 정답이 있으면 정답만 게이트로 쓰고, 해설은 백그라운드 다운로드만 한다.
+    // (이전에는 둘 다 끝나야 열려서, 해설이 길면 정답이 준비돼도 재시도가 막혔다.)
+    final primaryIsAnswer = answerPathRaw.isNotEmpty;
+    final primaryRaw = primaryIsAnswer ? answerPathRaw : solutionPathRaw;
+    final primaryKind = primaryIsAnswer ? 'ans' : 'sol';
+    final primaryLabel = primaryIsAnswer ? '정답' : '해설';
+
+    if (academyId.isNotEmpty &&
+        primaryIsAnswer &&
+        solutionPathRaw.isNotEmpty &&
+        !_isRemoteWebPdfPath(solutionPathRaw)) {
+      unawaited(
+        _warmAnswerBookSolutionDownload(
+          academyId: academyId,
+          book: book,
           gradeLabel: gradeLabel,
-          kind: 'ans',
-          rawPath: answerPathRaw,
-        )
-      else
-        Future<String>.value(''),
-      if (solutionPathRaw.isNotEmpty)
-        _resolveAnswerBookPdfPath(
-          bookId: book.id,
-          gradeLabel: gradeLabel,
-          kind: 'sol',
-          rawPath: solutionPathRaw,
-        )
-      else
-        Future<String>.value(''),
-    ]);
-    var answerPath = resolvedPaths[0];
-    var solutionPath = resolvedPaths[1];
-    // 정답 파일이 없거나 서버에서 해석되지 않으면 해설을 기본 문서로 연다.
-    if (answerPath.isEmpty && solutionPath.isNotEmpty) {
-      answerPath = solutionPath;
-      solutionPath = '';
+          solutionPathRaw: solutionPathRaw,
+        ),
+      );
+    }
+
+    if (academyId.isNotEmpty && !_isRemoteWebPdfPath(primaryRaw)) {
+      final primaryRef = await _answerBookPdfRef(
+        academyId: academyId,
+        book: book,
+        gradeLabel: gradeLabel,
+        kind: primaryKind,
+        rawPath: primaryRaw,
+      );
+      if (primaryRef != null) {
+        final downloadStarted = await _enqueueAnswerBookPdfIfMissing(
+          ref: primaryRef,
+          title: '${book.displayName} · $gradeLabel · $primaryLabel',
+          onCompleted: () {
+            if (!mounted) return;
+            unawaited(_openAnswerBook(book, grade));
+          },
+        );
+        if (!mounted || downloadStarted) return;
+      }
+    }
+
+    // 기본 문서는 정답. 해설은 이미 캐시된 경우에만 같이 넣고, 아니면 빈 채로 연다.
+    var answerPath = '';
+    var solutionPath = '';
+    if (primaryIsAnswer) {
+      answerPath = await _resolveAnswerBookPdfPath(
+        bookId: book.id,
+        gradeLabel: gradeLabel,
+        kind: 'ans',
+        rawPath: answerPathRaw,
+      );
+      if (solutionPathRaw.isNotEmpty) {
+        final solRef = academyId.isEmpty
+            ? null
+            : await _answerBookPdfRef(
+                academyId: academyId,
+                book: book,
+                gradeLabel: gradeLabel,
+                kind: 'sol',
+                rawPath: solutionPathRaw,
+              );
+        final solReady = _isRemoteWebPdfPath(solutionPathRaw) ||
+            (solRef != null &&
+                await TextbookPdfService.instance.isCached(solRef));
+        if (solReady) {
+          solutionPath = await _resolveAnswerBookPdfPath(
+            bookId: book.id,
+            gradeLabel: gradeLabel,
+            kind: 'sol',
+            rawPath: solutionPathRaw,
+          );
+        }
+      }
+    } else {
+      answerPath = await _resolveAnswerBookPdfPath(
+        bookId: book.id,
+        gradeLabel: gradeLabel,
+        kind: 'sol',
+        rawPath: solutionPathRaw,
+      );
     }
     if (!mounted) return;
     if (answerPath.isEmpty) {
@@ -865,59 +909,259 @@ class _GradingModePageState extends State<GradingModePage> {
       solutionPath: solutionPath,
       cacheKey: cacheKey,
     );
+
+    // 해설이 나중에 끝나면 열린 패널에 경로만 보강한다.
+    if (primaryIsAnswer &&
+        solutionPath.isEmpty &&
+        solutionPathRaw.isNotEmpty &&
+        academyId.isNotEmpty) {
+      final solRef = await _answerBookPdfRef(
+        academyId: academyId,
+        book: book,
+        gradeLabel: gradeLabel,
+        kind: 'sol',
+        rawPath: solutionPathRaw,
+      );
+      if (solRef != null) {
+        unawaited(
+          _enqueueAnswerBookPdfIfMissing(
+            ref: solRef,
+            title: '${book.displayName} · $gradeLabel · 해설',
+            onCompleted: () async {
+              if (!mounted) return;
+              final warmed = await _resolveAnswerBookPdfPath(
+                bookId: book.id,
+                gradeLabel: gradeLabel,
+                kind: 'sol',
+                rawPath: solutionPathRaw,
+              );
+              if (!mounted || warmed.isEmpty) return;
+              final current = rightSideSheetPdfPanelSession.value;
+              if (current == null ||
+                  current.sessionId !=
+                      'grading-answer-book:${book.id}:${grade.gradeKey}') {
+                return;
+              }
+              if (current.solutionPath.trim().isNotEmpty) return;
+              RightSheetAnswerPreloadService.instance.putPdfLinks(
+                cacheKey: cacheKey,
+                answerPath: current.answerPath,
+                solutionPath: warmed,
+              );
+              rightSideSheetPdfPanelSession.value =
+                  current.copyWith(solutionPath: warmed);
+            },
+          ),
+        );
+      }
+    }
   }
 
-  Widget _buildHorizontalEntryStrip(
-    List<_GradingGroupEntry> entries, {
+  Widget _buildStackedEntryStrip(
+    List<_GradingEntryStack> stacks, {
     required _GradingCardLayout cardLayout,
-    GradingGroupTapCallback? onCardTap,
-    bool Function(_GradingGroupEntry entry)? canTapEntry,
   }) {
+    // reverse:true 로 오른쪽 정렬(카드가 적을 때도 우측에 붙음).
+    // index 0 = 오래된 스택 → 오른쪽, 마지막 = 최신 스택 → 왼쪽.
     return ListView.separated(
       scrollDirection: Axis.horizontal,
       reverse: true,
       physics: const BouncingScrollPhysics(),
       clipBehavior: Clip.none,
       padding: EdgeInsets.zero,
-      itemCount: entries.length,
+      itemCount: stacks.length,
       separatorBuilder: (_, __) => SizedBox(width: cardLayout.spacing),
       itemBuilder: (context, index) {
-        final entry = entries[index];
+        final stack = stacks[index];
         return SizedBox(
           width: cardLayout.width,
-          height: cardLayout.height,
-          child: _SubmittedHomeworkCard(
-            entry: entry,
-            cardHeight: cardLayout.height,
-            metaHeight: cardLayout.metaHeight,
-            metaDisplayHeight: cardLayout.metaDisplayHeight,
-            isPendingConfirm: _isEntryPending(entry),
-            isCompleteCheckbox: _isEntryPendingComplete(entry),
-            coverPathFuture: (() {
-              final coverSource = _resolveEntryCoverSource(entry);
-              return _resolveCoverPath(
-                bookId: coverSource.bookId,
-                gradeLabel: coverSource.gradeLabel,
-                flowId: coverSource.disableFlowFallback
-                    ? ''
-                    : (entry.summary.flowId ?? '').trim(),
-              );
-            })(),
-            onTap: onCardTap == null
-                ? null
-                : () async {
-                    if (canTapEntry != null && !canTapEntry(entry)) return;
-                    await onCardTap(
-                      entry.studentId,
-                      entry.group,
-                      entry.summary,
-                      entry.children,
-                    );
-                  },
+          child: ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context).copyWith(
+              scrollbars: false,
+            ),
+            child: ListView.separated(
+              padding: EdgeInsets.zero,
+              physics: const BouncingScrollPhysics(),
+              clipBehavior: Clip.none,
+              itemCount: stack.entries.length,
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: _kGradingStackedCardGap),
+              itemBuilder: (context, stackIndex) {
+                final entry = stack.entries[stackIndex];
+                final onCardTap = entry.section == _GradingSection.submitted
+                    ? widget.onSubmittedCardTap
+                    : widget.onHomeworkCardTap;
+                return SizedBox(
+                  width: cardLayout.width,
+                  height: cardLayout.height,
+                  child: _SubmittedHomeworkCard(
+                    entry: entry,
+                    cardHeight: cardLayout.height,
+                    metaHeight: cardLayout.metaHeight,
+                    metaDisplayHeight: cardLayout.metaDisplayHeight,
+                    isPendingConfirm: _isEntryPending(entry),
+                    isCompleteCheckbox: _isEntryPendingComplete(entry),
+                    coverPathFuture: (() {
+                      final coverSource = _resolveEntryCoverSource(entry);
+                      return _resolveCoverPath(
+                        bookId: coverSource.bookId,
+                        gradeLabel: coverSource.gradeLabel,
+                        flowId: coverSource.disableFlowFallback
+                            ? ''
+                            : (entry.summary.flowId ?? '').trim(),
+                      );
+                    })(),
+                    onTap: onCardTap == null
+                        ? null
+                        : () async {
+                            if (entry.section == _GradingSection.submitted &&
+                                !entry.hasSubmittedChild) {
+                              return;
+                            }
+                            await onCardTap(
+                              entry.studentId,
+                              entry.group,
+                              entry.summary,
+                              entry.children,
+                            );
+                          },
+                  ),
+                );
+              },
+            ),
           ),
         );
       },
     );
+  }
+
+  List<_GradingEntryStack> _buildEntryStacks({
+    required List<_GradingGroupEntry> submittedEntries,
+    required List<_GradingGroupEntry> homeworkEntries,
+  }) {
+    final all = <_GradingGroupEntry>[
+      ...submittedEntries,
+      ...homeworkEntries,
+    ];
+    final grouped = <String, List<_GradingGroupEntry>>{};
+    for (final entry in all) {
+      grouped.putIfAbsent(_entryStackKey(entry), () => []).add(entry);
+    }
+    final stacks = <_GradingEntryStack>[];
+    for (final entries in grouped.values) {
+      final sorted = List<_GradingGroupEntry>.from(entries)
+        ..sort(_compareEntriesWithinStack);
+      stacks.add(_GradingEntryStack(entries: List.unmodifiable(sorted)));
+    }
+    // reverse ListView 기준: 오래된 스택이 index 0(오른쪽).
+    stacks.sort(_compareStacksOldestFirst);
+    return stacks;
+  }
+
+  /// 가로 reverse 리스트용: 오래된 스택이 앞(오른쪽), 최신이 뒤(왼쪽).
+  int _compareStacksOldestFirst(
+    _GradingEntryStack a,
+    _GradingEntryStack b,
+  ) {
+    final timeCmp = _stackSortTime(a).compareTo(_stackSortTime(b));
+    if (timeCmp != 0) return timeCmp;
+    final aName = a.entries.isEmpty ? '' : a.entries.first.studentName;
+    final bName = b.entries.isEmpty ? '' : b.entries.first.studentName;
+    final nameCmp = aName.compareTo(bName);
+    if (nameCmp != 0) return nameCmp;
+    final aId = a.entries.isEmpty ? '' : a.entries.first.summary.id;
+    final bId = b.entries.isEmpty ? '' : b.entries.first.summary.id;
+    return aId.compareTo(bId);
+  }
+
+  DateTime _stackSortTime(_GradingEntryStack stack) {
+    DateTime? latest;
+    for (final entry in stack.entries) {
+      final time = _entrySortTime(entry);
+      if (latest == null || time.isAfter(latest)) {
+        latest = time;
+      }
+    }
+    return latest ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _entrySortTime(_GradingGroupEntry entry) {
+    return entry.section == _GradingSection.submitted
+        ? entry.submittedTime
+        : entry.homeworkTime;
+  }
+
+  /// 세로(같은 학생·같은 교재): 앞쪽 페이지가 위, 그다음 제출/대기 시각.
+  int _compareEntriesWithinStack(
+    _GradingGroupEntry a,
+    _GradingGroupEntry b,
+  ) {
+    final aPage = _entryEarliestPage(a);
+    final bPage = _entryEarliestPage(b);
+    if (aPage != null && bPage != null) {
+      final pageCmp = aPage.compareTo(bPage);
+      if (pageCmp != 0) return pageCmp;
+    } else if (aPage != null) {
+      return -1;
+    } else if (bPage != null) {
+      return 1;
+    }
+    final timeCmp = _entrySortTime(a).compareTo(_entrySortTime(b));
+    if (timeCmp != 0) return timeCmp;
+    final nameCmp = a.studentName.compareTo(b.studentName);
+    if (nameCmp != 0) return nameCmp;
+    return a.summary.id.compareTo(b.summary.id);
+  }
+
+  int? _entryEarliestPage(_GradingGroupEntry entry) {
+    final pages = <int>{
+      ...homeworkItemDisplayPages(
+        page: entry.summary.page,
+        unitMappings: entry.summary.unitMappings,
+      ),
+    };
+    for (final child in entry.children) {
+      pages.addAll(
+        homeworkItemDisplayPages(
+          page: child.page,
+          unitMappings: child.unitMappings,
+        ),
+      );
+    }
+    if (pages.isEmpty) return null;
+    return pages.reduce(math.min);
+  }
+
+  String _entryStackKey(_GradingGroupEntry entry) {
+    String bookId = (entry.summary.bookId ?? '').trim().toLowerCase();
+    String gradeLabel = (entry.summary.gradeLabel ?? '').trim().toLowerCase();
+    if (bookId.isEmpty) {
+      for (final child in entry.children) {
+        bookId = (child.bookId ?? '').trim().toLowerCase();
+        if (bookId.isEmpty) continue;
+        gradeLabel = (child.gradeLabel ?? '').trim().toLowerCase();
+        break;
+      }
+    }
+    if (bookId.isNotEmpty) {
+      return '${entry.studentId}|book:$bookId|grade:$gradeLabel';
+    }
+    final bookName = _entryBookNameFallback(entry.summary).trim().toLowerCase();
+    if (bookName.isNotEmpty && bookName != '-') {
+      return '${entry.studentId}|name:$bookName|grade:$gradeLabel';
+    }
+    // 교재 식별자가 없으면 서로 다른 출력물/문제은행 과제를 잘못 묶지 않는다.
+    return '${entry.studentId}|entry:${entry.summary.id}';
+  }
+
+  String _entryBookNameFallback(HomeworkItem item) {
+    final contentRaw = (item.content ?? '').trim();
+    final fromContent = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)')
+        .firstMatch(contentRaw)
+        ?.group(1)
+        ?.trim();
+    if (fromContent != null && fromContent.isNotEmpty) return fromContent;
+    return _normalizedTypeLabel(item);
   }
 
   ({String bookId, String gradeLabel, bool disableFlowFallback})
@@ -1176,6 +1420,7 @@ class _GradingModePageState extends State<GradingModePage> {
         _GradingGroupEntry(
           studentId: studentId,
           studentName: studentName,
+          section: section,
           group: group,
           summary: summary,
           children: children,
@@ -1218,6 +1463,7 @@ class _GradingModePageState extends State<GradingModePage> {
         _GradingGroupEntry(
           studentId: studentId,
           studentName: studentName,
+          section: section,
           group: null,
           summary: item,
           children: <HomeworkItem>[item],
@@ -1406,6 +1652,7 @@ enum _GradingSection { submitted, homework }
 class _GradingGroupEntry {
   final String studentId;
   final String studentName;
+  final _GradingSection section;
   final HomeworkGroup? group;
   final HomeworkItem summary;
   final List<HomeworkItem> children;
@@ -1417,6 +1664,7 @@ class _GradingGroupEntry {
   const _GradingGroupEntry({
     required this.studentId,
     required this.studentName,
+    required this.section,
     required this.group,
     required this.summary,
     required this.children,
@@ -1428,6 +1676,12 @@ class _GradingGroupEntry {
 
   bool get hasSubmittedChild => children.any(
       (child) => child.phase == 3 && child.status != HomeworkStatus.completed);
+}
+
+class _GradingEntryStack {
+  final List<_GradingGroupEntry> entries;
+
+  const _GradingEntryStack({required this.entries});
 }
 
 /// ????????(?? ??) ?????? ??????.
@@ -2376,6 +2630,14 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                   offset: Offset(0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
                 ),
               ];
+        // 페이지·과제번호 공통 (과제번호 스타일 기준).
+        final overlayDetailStyle = TextStyle(
+          color: overlayNameColor,
+          fontSize: overlayDetailFontSize,
+          fontWeight: FontWeight.w700,
+          height: overlayDetailLineHeight,
+          shadows: overlayTextShadows,
+        );
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -2437,22 +2699,27 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                           ),
                         ),
                       ),
-                      if (line4 != '-') ...[
-                        SizedBox(height: overlayBlockGap),
-                        Text(
-                          line4,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: overlayNameColor,
-                            fontSize: overlayDetailFontSize,
-                            fontWeight: FontWeight.w700,
-                            height: overlayDetailLineHeight,
-                            shadows: overlayTextShadows,
-                          ),
+                      // 2번째 줄 높이를 고정해 아래 페이지 줄 Y가 카드마다 같게 유지.
+                      // 제출: 경과 시간 / 숙제: 숙제 칩 / 그 외: 빈 슬롯.
+                      SizedBox(height: overlayBlockGap),
+                      SizedBox(
+                        height: _kGradingCoverSecondLineSlotHeight,
+                        child: Center(
+                          child: line4 != '-'
+                              ? Text(
+                                  line4,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: overlayDetailStyle,
+                                )
+                              : (entry.section != _GradingSection.submitted
+                                  ? _buildHomeworkTypeChip(
+                                      useDarkOverlayText: useDarkOverlayText,
+                                    )
+                                  : const SizedBox.shrink()),
                         ),
-                      ],
+                      ),
                       if (pageLines.isNotEmpty) ...[
                         SizedBox(height: overlayBlockGap),
                         for (int i = 0; i < pageLines.length; i++) ...[
@@ -2461,13 +2728,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.left,
-                            style: TextStyle(
-                              color: overlayNameColor,
-                              fontSize: overlayDetailFontSize,
-                              fontWeight: FontWeight.w700,
-                              height: overlayDetailLineHeight,
-                              shadows: overlayTextShadows,
-                            ),
+                            style: overlayDetailStyle,
                           ),
                           if (i != pageLines.length - 1)
                             SizedBox(height: overlayDetailGap),
@@ -2493,13 +2754,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: overlayNameColor,
-                      fontSize: overlayDetailFontSize,
-                      fontWeight: FontWeight.w700,
-                      height: overlayDetailLineHeight,
-                      shadows: overlayTextShadows,
-                    ),
+                    style: overlayDetailStyle,
                   ),
                 ),
               ),
@@ -2507,6 +2762,40 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
           ],
         );
       },
+    );
+  }
+
+  /// 홈메뉴 숙제칩과 같은 크기·형태 + 커버 위에서 읽히도록 배경 채움.
+  /// 기본 과제 카드에는 배지를 붙이지 않고, 숙제 카드에만 표시한다.
+  Widget _buildHomeworkTypeChip({
+    required bool useDarkOverlayText,
+  }) {
+    final Color borderColor = kDlgAccent;
+    final Color backgroundColor;
+    final Color textColor;
+    if (useDarkOverlayText) {
+      backgroundColor = const Color(0xFFE8F6EF);
+      textColor = kDlgAccent;
+    } else {
+      backgroundColor = const Color(0xFF1A3D2E);
+      textColor = const Color(0xFF9FE3C6);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: borderColor, width: 1.05),
+      ),
+      child: Text(
+        '숙제',
+        style: TextStyle(
+          color: textColor,
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          height: 1.1,
+        ),
+      ),
     );
   }
 
@@ -2523,6 +2812,19 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   }
 
   List<String> _buildOverlayPageLines(_GradingGroupEntry entry) {
+    // 그룹 과제는 하위 과제의 page뿐 아니라 unitMappings에 저장된 페이지도
+    // 합쳐 한 줄로 표시한다. 마이그레이션된 과제는 page가 비어 있고
+    // unitMappings에만 페이지 정보가 남아 있을 수 있다.
+    final merged = mergeHomeworkItemPageRanges(
+      entry.children.map(
+        (child) => (
+          page: child.page,
+          unitMappings: child.unitMappings,
+        ),
+      ),
+    );
+    if (merged.isNotEmpty) return <String>['p.$merged'];
+
     final lines = <String>[];
     final seenLine = <String>{};
     for (final child in entry.children) {

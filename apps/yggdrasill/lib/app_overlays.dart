@@ -82,6 +82,10 @@ class RightSideSheetTestGradingSession {
   /// 유효 문항이 모두 정답이면 완료 확인 후 complete, 남은 문항이 있으면
   /// confirm을 실행한다. 레거시 경로는 false로 두어 기존 두 버튼을 유지한다.
   final bool smartConfirmAction;
+
+  /// false면 상단 검색바·최근 과제칩을 숨긴다.
+  /// 과제카드로 바로 진입한 채점 세션에서 사용한다(검색 시트 진입은 true).
+  final bool showSearchChrome;
   final Map<String, double> scoreByQuestionKey;
   final String answerPathRaw;
   final String solutionPathRaw;
@@ -107,6 +111,7 @@ class RightSideSheetTestGradingSession {
     this.onRequestEditReset,
     this.closeSheetOnAction = true,
     this.smartConfirmAction = false,
+    this.showSearchChrome = true,
     this.scoreByQuestionKey = const <String, double>{},
     this.answerPathRaw = '',
     this.solutionPathRaw = '',
@@ -126,6 +131,9 @@ class RightSideSheetPdfPanelSession {
   final List<int> focusRect1k;
   final List<Map<String, String>> overlayEntries;
 
+  /// true면 왼쪽 패널에 로딩 UI만 표시하고, PDF 경로는 아직 준비 중이다.
+  final bool isLoading;
+
   const RightSideSheetPdfPanelSession({
     required this.sessionId,
     required this.title,
@@ -137,6 +145,7 @@ class RightSideSheetPdfPanelSession {
     this.focusRequestId = 0,
     this.focusRect1k = const <int>[],
     this.overlayEntries = const <Map<String, String>>[],
+    this.isLoading = false,
   });
 
   RightSideSheetPdfPanelSession copyWith({
@@ -150,6 +159,7 @@ class RightSideSheetPdfPanelSession {
     int? focusRequestId,
     List<int>? focusRect1k,
     List<Map<String, String>>? overlayEntries,
+    bool? isLoading,
   }) {
     return RightSideSheetPdfPanelSession(
       sessionId: sessionId ?? this.sessionId,
@@ -162,6 +172,7 @@ class RightSideSheetPdfPanelSession {
       focusRequestId: focusRequestId ?? this.focusRequestId,
       focusRect1k: focusRect1k ?? this.focusRect1k,
       overlayEntries: overlayEntries ?? this.overlayEntries,
+      isLoading: isLoading ?? this.isLoading,
     );
   }
 }

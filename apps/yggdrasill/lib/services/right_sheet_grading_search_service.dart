@@ -574,6 +574,27 @@ class RightSheetGradingSearchService {
         .map((uid) => uid.trim())
         .where((uid) => uid.isNotEmpty)
         .toList(growable: false);
+    if (selectedUids.isEmpty) {
+      List<String> parse(dynamic raw) {
+        if (raw is! List) return const <String>[];
+        return raw
+            .map((e) => '$e'.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(growable: false);
+      }
+
+      final renderConfig = preset.renderConfig;
+      selectedUids = parse(renderConfig['selectedQuestionUidsOrdered']);
+      if (selectedUids.isEmpty) {
+        selectedUids = parse(renderConfig['selectedQuestionIdsOrdered']);
+      }
+      if (selectedUids.isEmpty) {
+        selectedUids = parse(renderConfig['selectedQuestionUids']);
+      }
+      if (selectedUids.isEmpty) {
+        selectedUids = parse(renderConfig['selectedQuestionIds']);
+      }
+    }
     if (selectedUids.isEmpty) return null;
 
     final activeSnapshots =
@@ -585,10 +606,15 @@ class RightSheetGradingSearchService {
         .where((uid) => uid.isNotEmpty)
         .toSet();
     if (activeQuestionUids.isNotEmpty) {
-      selectedUids = selectedUids
+      final filtered = selectedUids
           .where(activeQuestionUids.contains)
           .toList(growable: false);
-      if (selectedUids.isEmpty) return null;
+      if (filtered.isEmpty) return null;
+      final snapshotLooksTruncated = filtered.length < selectedUids.length &&
+          filtered.length * 2 <= selectedUids.length;
+      if (!snapshotLooksTruncated) {
+        selectedUids = filtered;
+      }
     }
 
     final questions = await _problemBankService.loadQuestionsByQuestionUids(

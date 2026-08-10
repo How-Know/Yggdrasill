@@ -2,11 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/rendering.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
@@ -3350,7 +3351,10 @@ class _AnswerKeyGradingTabPanel extends StatefulWidget {
 
 class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _topBarTopInset = 12;
-  static const double _searchFieldHeight = 48;
+  static const double _searchFieldHeight = 52;
+  static const double _searchIconSize = 18;
+  /// 펼침/축소 공통 — 돋보기 왼쪽 위치(패널만 변하고 아이콘은 고정).
+  static const double _searchIconLeft = 14;
   static const String _historyPrefKey =
       'right_sheet_grading_recent_searches_v1';
   static const int _historyLimit = 10;
@@ -3373,13 +3377,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   final TextEditingController _searchCtrl = ImeAwareTextEditingController();
   final FocusNode _searchFocus = FocusNode();
+  final ScrollController _answerListScrollCtrl = ScrollController();
   final GlobalKey _searchHeaderFieldKey = GlobalKey();
   final GlobalKey _gradingSearchOverlayKey = GlobalKey();
-  final ScrollController _gradingScrollController = ScrollController();
-  final Map<int, GlobalKey> _gradingPageHeaderKeys = <int, GlobalKey>{};
-  bool _gradingPageSnapInProgress = false;
-  double _gradingSearchOverlayHeight =
-      _topBarTopInset + _searchFieldHeight + 24;
+  /// 원형 돋보기 탭 시 스크롤을 올리며 검색을 펼친다.
+  bool _forceSearchExpanded = false;
+  /// 헤더 스냅/검색 펼침용 animateTo 중에는 재스냅하지 않는다.
+  bool _headerSnapInProgress = false;
+  Timer? _headerSnapDebounce;
   Timer? _searchSuggestDebounce;
   Timer? _searchBlurHideTimer;
   OverlayEntry? _searchSuggestionOverlayEntry;
@@ -3399,6 +3404,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Map<String, String> _baselineStates = <String, String>{};
   Map<String, String> _correctionStates = <String, String>{};
   Map<String, int> _correctionAttemptNumbers = <String, int>{};
+
+  /// 세션 시작(또는 직전 확인 저장) 시점에 이미 수정완료였던 키.
+  /// 틀린것만 보기 ON이어도, 이번 세션에서 새로 맞음 표시한 문항은
+  /// 확인 전까지 리스트에 남겨 실수·혼란을 줄인다.
+  Set<String> _wrongOnlySettledCorrectionKeys = <String>{};
 
   /// 파트 카드가 펼쳐진 세트형 셀 키 목록.
   final Set<String> _expandedSetCellKeys = <String>{};
@@ -3444,11 +3454,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   void initState() {
     super.initState();
     _searchFocus.addListener(_handleSearchFocusChanged);
+    // Windows 휠 스크롤은 ScrollEnd가 자주 빠져 idle 디바운스로 스냅한다.
+    _answerListScrollCtrl.addListener(_scheduleStickyHeaderSnap);
     _hydrateSessionState(force: true);
     unawaited(_loadRecentSearches().then((_) => _hydrateRecentSearchLabels()));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _syncGradingSearchOverlayHeight();
-    });
   }
 
   @override
@@ -3459,28 +3468,127 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   @override
   void dispose() {
+    _headerSnapDebounce?.cancel();
     _searchSuggestDebounce?.cancel();
     _searchBlurHideTimer?.cancel();
     _removeSuggestionOverlay();
+    _answerListScrollCtrl.removeListener(_scheduleStickyHeaderSnap);
+    _answerListScrollCtrl.dispose();
     _searchFocus.removeListener(_handleSearchFocusChanged);
     _searchCtrl.dispose();
     _searchFocus.dispose();
-    _gradingScrollController.dispose();
     super.dispose();
+  }
+
+  bool get _showSearchChrome => widget.session?.showSearchChrome ?? true;
+
+  static const double _sessionHeaderBlockHeight = 78;
+
+  double get _stickyHeaderMinExtent =>
+      _topBarTopInset + _searchFieldHeight + 8;
+
+  double get _stickyHeaderMaxExtent {
+    if (!_showSearchChrome) {
+      // 과제카드 진입: 펼침=세션 헤더, 접힘=전체 너비 FAB 알약.
+      return math.max(
+        _topBarTopInset + _sessionHeaderBlockHeight + 8,
+        _stickyHeaderMinExtent + 1,
+      );
+    }
+    // 검색 글래스 + 바깥 세션 헤더(수정 전 레이아웃과 동일 구조).
+    var height = _topBarTopInset +
+        _searchFieldHeight +
+        10 + // 글래스↔세션 간격
+        _sessionHeaderBlockHeight + // 세션 이름/과제명/번호
+        8;
+    if (_recentSearches.isNotEmpty) {
+      height += 10 + 40;
+    }
+    return math.max(height, _stickyHeaderMinExtent + 1);
+  }
+
+  double get _stickyHeaderCollapseRange =>
+      math.max(1.0, _stickyHeaderMaxExtent - _stickyHeaderMinExtent);
+
+  Future<void> _animateAnswerListTo(
+    double offset, {
+    Duration duration = const Duration(milliseconds: 200),
+  }) async {
+    if (!_answerListScrollCtrl.hasClients) return;
+    _headerSnapInProgress = true;
+    try {
+      await _answerListScrollCtrl.animateTo(
+        offset.clamp(0.0, _answerListScrollCtrl.position.maxScrollExtent),
+        duration: duration,
+        curve: Curves.easeOutCubic,
+      );
+    } finally {
+      _headerSnapInProgress = false;
+    }
+  }
+
+  void _scheduleStickyHeaderSnap() {
+    if (_headerSnapInProgress) return;
+    _headerSnapDebounce?.cancel();
+    _headerSnapDebounce = Timer(
+      const Duration(milliseconds: 140),
+      _snapStickyHeaderIfNeeded,
+    );
+  }
+
+  /// 스크롤이 멈추면 검색 헤더를 펼침 / 완전 축소(원형·알약) 중 하나로 붙인다.
+  void _snapStickyHeaderIfNeeded() {
+    if (!mounted || _headerSnapInProgress) return;
+    if (_showSearchChrome &&
+        (_forceSearchExpanded || _searchFocus.hasFocus)) {
+      return;
+    }
+    if (!_answerListScrollCtrl.hasClients) return;
+    final range = _stickyHeaderCollapseRange;
+    final offset = _answerListScrollCtrl.offset;
+    // 이미 양 끝이면 그대로 둔다.
+    if (offset <= 1.0 || offset >= range - 1.0) return;
+    // 정보 알약이 보이기 시작하면(축소 쪽) 원형으로, 아니면 펼침으로.
+    final target = (offset / range) >= 0.28 ? range : 0.0;
+    unawaited(_animateAnswerListTo(target));
+  }
+
+  void _expandSearchFromCollapsed() {
+    setState(() => _forceSearchExpanded = true);
+    unawaited(() async {
+      if (_answerListScrollCtrl.hasClients &&
+          _answerListScrollCtrl.offset > 0.5) {
+        await _animateAnswerListTo(
+          0,
+          duration: const Duration(milliseconds: 240),
+        );
+      }
+      if (!mounted) return;
+      _searchFocus.requestFocus();
+    }());
   }
 
   void _handleSearchFocusChanged() {
     _searchBlurHideTimer?.cancel();
     if (_searchFocus.hasFocus) {
       if (!mounted) return;
-      setState(() {});
+      setState(() => _forceSearchExpanded = true);
+      if (_answerListScrollCtrl.hasClients &&
+          _answerListScrollCtrl.offset > 0.5) {
+        unawaited(
+          _animateAnswerListTo(
+            0,
+            duration: const Duration(milliseconds: 220),
+          ),
+        );
+      }
       _scheduleSuggestionOverlaySync();
       return;
     }
     _searchBlurHideTimer = Timer(const Duration(milliseconds: 120), () {
       if (!mounted) return;
       if (_searchDropdownTapInProgress) return;
-      setState(() {});
+      setState(() => _forceSearchExpanded = false);
       _scheduleSuggestionOverlaySync();
     });
   }
@@ -3575,6 +3683,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         _baselineStates = <String, String>{};
         _correctionStates = <String, String>{};
         _correctionAttemptNumbers = <String, int>{};
+        _wrongOnlySettledCorrectionKeys = <String>{};
         _expandedSetCellKeys.clear();
         _gradingEditLocked = false;
         _wrongOnly = false;
@@ -3619,6 +3728,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _baselineStates = baselineStates;
       _correctionStates = correctionStates;
       _correctionAttemptNumbers = correctionAttemptNumbers;
+      _wrongOnlySettledCorrectionKeys = correctionStates.entries
+          .where((e) => e.value.trim() == 'corrected')
+          .map((e) => e.key)
+          .toSet();
       _expandedSetCellKeys.clear();
       _gradingEditLocked = session.gradingLocked;
       _wrongOnly = session.wrongOnlyDefault && baselineStates.isNotEmpty;
@@ -4271,12 +4384,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   /// '틀린것만 보기'가 켜졌을 때 이 셀을 숨겨야 하는지.
-  /// - 베이스라인(첫 채점 결과)이 있으면 기존 규칙: 첫 채점에서 틀렸거나
-  ///   미풀이/미수행이었던 문항만 남기고, 이미 수정 완료된 문항은 숨긴다.
+  /// - 베이스라인(첫 채점 결과)이 있으면: 첫 채점에서 틀렸거나 미풀이/미수행인
+  ///   문항만 남긴다. 이미 확인 저장된 수정완료만 숨기고, 이번 세션에서
+  ///   맞음 표시한 문항은 확인 전까지 리스트에 남긴다.
   /// - 없으면 현재 상태가 오답/미풀이/미수행인 문항만 남긴다.
   bool _hideCellForWrongOnly(String key) {
     if (_baselineStates.isNotEmpty) {
-      return !_isBaselineRetryKey(key) || _isCorrectedRetryKey(key);
+      if (!_isBaselineRetryKey(key)) return true;
+      return _wrongOnlySettledCorrectionKeys.contains(key);
     }
     final state = _normalizeState(_gradingStates[key]);
     return state != 'wrong' && state != 'blank' && state != 'not_performed';
@@ -4430,22 +4545,29 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked) {
-      // 저장된 결과가 잠긴 상태에서는 셀 단위 수정 흐름으로 위임한다.
-      await _toggleCellState(cellKey, partLabels: partLabels);
+    // 재검사(잠금+베이스라인): 파트만 개별 토글. 셀 전체로 위임하면
+    // _applyStateToParts 때문에 하위 문항이 한꺼번에 정답이 된다.
+    if (_gradingEditLocked && _isBaselineRetryKey(cellKey)) {
+      setState(() {
+        _materializePartStates(cellKey, partLabels);
+        final key = _partStateKey(cellKey, partLabel);
+        final current = _normalizeState(_gradingStates[key]);
+        final baseline = _baselineStates[cellKey] ?? 'wrong';
+        _gradingStates[key] = current == 'correct' ? baseline : 'correct';
+        _syncSetCellStateFromParts(cellKey, partLabels);
+      });
+      _emitStateChanged();
       return;
+    }
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
     }
     setState(() {
       // 기록이 없는 파트는 셀 상태를 상속하고 있으므로, 토글 전에 현재
       // 상태를 명시적으로 고정해 둔다. 그러지 않으면 셀 상태가 바뀔 때
       // 나머지 파트가 함께 뒤집힌다(한 파트 오답 → 전체 오답 버그).
-      for (final label in partLabels) {
-        final k = _partStateKey(cellKey, label);
-        final raw = _gradingStates[k];
-        if (raw == null || raw.trim().isEmpty) {
-          _gradingStates[k] = _partState(cellKey, label);
-        }
-      }
+      _materializePartStates(cellKey, partLabels);
       final key = _partStateKey(cellKey, partLabel);
       _gradingStates[key] = _nextState(_normalizeState(_gradingStates[key]));
       _syncSetCellStateFromParts(cellKey, partLabels);
@@ -4472,7 +4594,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked) {
+    if (_gradingEditLocked && !_isBaselineRetryKey(cellKey)) {
       final unlocked = await _confirmResetForEdit();
       if (!unlocked || !mounted) return;
     }
@@ -4490,7 +4612,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked) {
+    if (_gradingEditLocked && !_isBaselineRetryKey(cellKey)) {
       final unlocked = await _confirmResetForEdit();
       if (!unlocked || !mounted) return;
     }
@@ -4568,6 +4690,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _baselineStates = <String, String>{};
       _correctionStates = <String, String>{};
       _correctionAttemptNumbers = <String, int>{};
+      _wrongOnlySettledCorrectionKeys = <String>{};
       _wrongOnly = false;
     });
     _emitStateChanged();
@@ -5398,55 +5521,81 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  Widget _buildSearchHeader() {
+  Widget _buildSearchHeader({
+    bool showBackButton = true,
+    bool embeddedInFabGlass = false,
+    bool showRecentChips = true,
+  }) {
     final fabStyle = _rightSheetFabColors(context);
+    final brightness = Theme.of(context).brightness;
     // 닫기 버튼: 오른쪽으로 12 이동, 아이콘 10% 확대.
     const closeButtonLeftShift = 12.0;
     const closeButtonSlotWidth = 40.0;
     const closeButtonToFieldGap = 4.0;
     const closeIconSize = 24.0 * 1.1;
-    // 최근 과제 칩은 검색바와 같은 왼쪽 선상으로 맞춘다.
-    const recentChipsLeft =
-        closeButtonLeftShift + closeButtonSlotWidth + closeButtonToFieldGap;
+    // 최근 칩은 검색바 왼쪽과 같은 선상. FAB 글래스에 임베드되면 추가 여백 없음.
+    final recentChipsLeft = (!showBackButton || embeddedInFabGlass)
+        ? 0.0
+        : closeButtonLeftShift + closeButtonSlotWidth + closeButtonToFieldGap;
+    // FAB 글래스에 넣을 때는 바깥 패널 테두리만 쓰고, 안쪽 필드는 테두리 없이.
+    final BoxDecoration? fieldDecoration = embeddedInFabGlass
+        ? null
+        : BoxDecoration(
+            color: fabStyle.field,
+            borderRadius: BorderRadius.circular(
+              FabTabBarTokens.fabMenuPillRadius,
+            ),
+            border: Border.all(color: fabStyle.border),
+          );
+    final chipDecoration = embeddedInFabGlass
+        ? BoxDecoration(
+            color: brightness == Brightness.light
+                ? Colors.black.withValues(alpha: 0.05)
+                : Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(999),
+          )
+        : BoxDecoration(
+            color: fabStyle.panel,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: fabStyle.border),
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: _topBarTopInset),
+        if (!embeddedInFabGlass) const SizedBox(height: _topBarTopInset),
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const SizedBox(width: closeButtonLeftShift),
-            SizedBox(
-              width: closeButtonSlotWidth,
-              height: _searchFieldHeight,
-              child: IconButton(
-                tooltip: '닫기',
-                onPressed: widget.onClose,
-                padding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints(),
-                icon: const Icon(Icons.chevron_right, size: closeIconSize),
-                color: fabStyle.subText,
+            if (showBackButton) ...[
+              const SizedBox(width: closeButtonLeftShift),
+              SizedBox(
+                width: closeButtonSlotWidth,
+                height: _searchFieldHeight,
+                child: IconButton(
+                  tooltip: '닫기',
+                  onPressed: widget.onClose,
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(),
+                  icon: const Icon(Icons.chevron_right, size: closeIconSize),
+                  color: fabStyle.subText,
+                ),
               ),
-            ),
-            const SizedBox(width: closeButtonToFieldGap),
+              const SizedBox(width: closeButtonToFieldGap),
+            ],
             Expanded(
               child: Container(
                 key: _searchHeaderFieldKey,
                 height: _searchFieldHeight,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: fabStyle.field,
-                  borderRadius: BorderRadius.circular(
-                    FabTabBarTokens.fabMenuPillRadius,
-                  ),
-                  border: Border.all(color: fabStyle.border),
+                padding: EdgeInsets.symmetric(
+                  horizontal: embeddedInFabGlass ? 4 : 12,
                 ),
+                decoration: fieldDecoration,
                 child: Row(
                   children: [
                     Icon(
                       Icons.search_rounded,
-                      size: 18,
+                      size: _searchIconSize,
                       color: fabStyle.subText,
                     ),
                     const SizedBox(width: 8),
@@ -5536,97 +5685,570 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+            if (showBackButton) const SizedBox(width: 8),
           ],
         ),
-        if (_recentSearches.isNotEmpty) ...[
+        if (showRecentChips && _recentSearches.isNotEmpty) ...[
           const SizedBox(height: 10),
-          Padding(
-            padding: const EdgeInsets.only(left: recentChipsLeft),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (int i = 0; i < _recentSearches.length; i++)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: fabStyle.panel,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: fabStyle.border),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        InkWell(
-                          onTap: () =>
-                              unawaited(_openRecentSearch(_recentSearches[i])),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 320),
-                            child: Text(
-                              _recentSearchChipLabel(_recentSearches[i]),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: fabStyle.text,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        InkWell(
-                          onTap: () => unawaited(_removeRecentAt(i)),
-                          child: Icon(
-                            Icons.close_rounded,
-                            size: 16,
-                            color: fabStyle.subText,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
+          _buildRecentSearchChips(
+            fabStyle: fabStyle,
+            chipDecoration: chipDecoration,
+            leftPadding: recentChipsLeft,
           ),
         ],
       ],
     );
   }
 
-  void _syncGradingSearchOverlayHeight() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final box = _gradingSearchOverlayKey.currentContext?.findRenderObject()
-          as RenderBox?;
-      if (box == null || !box.hasSize) return;
-      final next = box.size.height;
-      if (next <= 0 || (next - _gradingSearchOverlayHeight).abs() < 0.5) {
-        return;
-      }
-      setState(() => _gradingSearchOverlayHeight = next);
-    });
+  Widget _buildRecentSearchChips({
+    required _RightSheetFabColors fabStyle,
+    required BoxDecoration chipDecoration,
+    double leftPadding = 0,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(left: leftPadding),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Wrap(
+          alignment: WrapAlignment.start,
+          crossAxisAlignment: WrapCrossAlignment.start,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+          for (int i = 0; i < _recentSearches.length; i++)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: chipDecoration,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  InkWell(
+                    onTap: () =>
+                        unawaited(_openRecentSearch(_recentSearches[i])),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 320),
+                      child: Text(
+                        _recentSearchChipLabel(_recentSearches[i]),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: fabStyle.text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: () => unawaited(_removeRecentAt(i)),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: fabStyle.subText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _buildGradingSearchOverlay() {
-    final fabStyle = _rightSheetFabColors(context);
-    return NotificationListener<SizeChangedLayoutNotification>(
-      onNotification: (_) {
-        _syncGradingSearchOverlayHeight();
-        return false;
+  Widget _buildCollapsedSessionInfo(
+    RightSideSheetTestGradingSession session,
+    _RightSheetFabColors fabStyle,
+  ) {
+    final studentName =
+        session.studentName.trim().isEmpty ? '학생' : session.studentName.trim();
+    final groupHomeworkTitle = session.groupHomeworkTitle.trim().isEmpty
+        ? (session.title.trim().isEmpty ? '그룹 과제' : session.title.trim())
+        : session.groupHomeworkTitle.trim();
+    final assignmentCode = session.assignmentCode.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                studentName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: fabStyle.subText,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                  height: 1.1,
+                ),
+              ),
+            ),
+            if (assignmentCode.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Text(
+                assignmentCode,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: fabStyle.subText,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12.5,
+                  letterSpacing: 0.2,
+                  height: 1.1,
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          groupHomeworkTitle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: fabStyle.text,
+            fontWeight: FontWeight.w900,
+            fontSize: 13.5,
+            height: 1.15,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWrongOnlyToggle({
+    required _RightSheetFabColors fabStyle,
+    bool compact = false,
+  }) {
+    final available = _wrongOnlyAvailable || _wrongOnly;
+    return Opacity(
+      opacity: available ? 1 : 0,
+      child: IgnorePointer(
+        ignoring: !available,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(9),
+          onTap: () {
+            setState(() {
+              _wrongOnly = !_wrongOnly;
+            });
+          },
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 2 : 6,
+              vertical: 4,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: IgnorePointer(
+                    child: Checkbox(
+                      value: _wrongOnly,
+                      onChanged: (_) {},
+                      activeColor: _rsAccent,
+                      checkColor: Colors.white,
+                      side: BorderSide(color: fabStyle.subText),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                ),
+                if (!compact) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '틀린것만 보기',
+                    style: TextStyle(
+                      color: fabStyle.subText,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 과제카드 진입용: 검색 원형 없이 세션 헤더 ↔ 전체 너비 FAB 알약.
+  Widget _buildMorphSessionOnlyChrome({
+    required RightSideSheetTestGradingSession session,
+    required double t,
+    required _RightSheetFabColors fabStyle,
+  }) {
+    final expandedOpacity = (1.0 - (t * 1.35)).clamp(0.0, 1.0);
+    final pillOpacity = ((t - 0.08) / 0.55).clamp(0.0, 1.0);
+
+    return Stack(
+      alignment: Alignment.topCenter,
+      children: [
+        Opacity(
+          opacity: expandedOpacity,
+          child: IgnorePointer(
+            ignoring: t > 0.45,
+            child: _buildSessionHeader(
+              session,
+              showWrongOnly: true,
+            ),
+          ),
+        ),
+        if (t > 0.02)
+          Opacity(
+            opacity: pillOpacity,
+            child: Transform.translate(
+              offset: Offset(0, 6 * (1.0 - pillOpacity)),
+              child: SizedBox(
+                height: _searchFieldHeight,
+                width: double.infinity,
+                child: FabStyleGlassPanel(
+                  useFabTabBarBackground: true,
+                  borderRadius: BorderRadius.circular(_searchFieldHeight / 2),
+                  padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _buildCollapsedSessionInfo(
+                          session,
+                          fabStyle,
+                        ),
+                      ),
+                      _buildWrongOnlyToggle(
+                        fabStyle: fabStyle,
+                        compact: true,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMorphSearchChrome({
+    required RightSideSheetTestGradingSession session,
+    required double t,
+    required _RightSheetFabColors fabStyle,
+  }) {
+    // 왼쪽 패널은 접힘 초반에 원형까지 끝내, 중간 rest에서 길쭉한 알약이 남지 않게 한다.
+    final searchPanelT = Curves.easeInCubic.transform((t / 0.55).clamp(0.0, 1.0));
+    final fieldOpacity = (1.0 - (searchPanelT * 1.35)).clamp(0.0, 1.0);
+    final pillOpacity = ((t - 0.08) / 0.55).clamp(0.0, 1.0);
+    final circleSize = _searchFieldHeight;
+    final leftRadius = lerpDouble(
+          FabTabBarTokens.fabMenuPillRadius,
+          circleSize / 2,
+          searchPanelT,
+        ) ??
+        FabTabBarTokens.fabMenuPillRadius;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final fullW = constraints.maxWidth;
+        final gap = 8.0 * searchPanelT;
+        final leftW = lerpDouble(fullW, circleSize, searchPanelT)!
+            .clamp(circleSize, fullW);
+        final showPill = t > 0.02 && fullW > leftW + gap + 8;
+
+        return SizedBox(
+          height: _searchFieldHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Row(
+                children: [
+                  SizedBox(
+                    key: _searchHeaderFieldKey,
+                    width: leftW,
+                    height: _searchFieldHeight,
+                    child: FabStyleGlassPanel(
+                      useFabTabBarBackground: true,
+                      borderRadius: BorderRadius.circular(leftRadius),
+                      padding: EdgeInsets.zero,
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          onTap: searchPanelT > 0.55
+                              ? _expandSearchFromCollapsed
+                              : null,
+                          customBorder: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(leftRadius),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(leftRadius),
+                            child: Stack(
+                              children: [
+                                // 입력 영역만 페이드 — 돋보기는 오버레이로 고정.
+                                Positioned.fill(
+                                  child: Opacity(
+                                    opacity: fieldOpacity,
+                                    child: IgnorePointer(
+                                      ignoring: searchPanelT > 0.45,
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(
+                                          left: _searchIconLeft +
+                                              _searchIconSize +
+                                              8,
+                                          right: 10,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: TextField(
+                                                controller: _searchCtrl,
+                                                focusNode: _searchFocus,
+                                                onChanged: (value) {
+                                                  if (value.trim().isEmpty) {
+                                                    if (!mounted) return;
+                                                    setState(() {
+                                                      _searchResults = const <
+                                                          RightSheetGradingSearchResult>[];
+                                                      _searchError = null;
+                                                      _searchBusy = false;
+                                                    });
+                                                  }
+                                                  _scheduleSuggestionSearch(
+                                                    value,
+                                                  );
+                                                },
+                                                style: TextStyle(
+                                                  color: fabStyle.text,
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 14,
+                                                ),
+                                                textInputAction:
+                                                    TextInputAction.search,
+                                                onSubmitted: (_) {
+                                                  _searchFocus.unfocus();
+                                                  unawaited(_submitSearch());
+                                                },
+                                                decoration: InputDecoration(
+                                                  isDense: true,
+                                                  border: InputBorder.none,
+                                                  hintText:
+                                                      '과제번호(뒷4자리)/이름/그룹 검색',
+                                                  hintStyle: TextStyle(
+                                                    color: fabStyle.subText
+                                                        .withValues(
+                                                      alpha: 0.82,
+                                                    ),
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            if (_searchCtrl.text
+                                                .trim()
+                                                .isNotEmpty)
+                                              InkWell(
+                                                borderRadius:
+                                                    BorderRadius.circular(999),
+                                                onTap: () {
+                                                  _searchFocus.unfocus();
+                                                  _searchSuggestDebounce
+                                                      ?.cancel();
+                                                  _searchSuggestRequestSeq += 1;
+                                                  setState(() {
+                                                    _searchCtrl.clear();
+                                                    _searchSuggestions =
+                                                        const <
+                                                            RightSheetGradingSearchResult>[];
+                                                    _searchSuggestError = null;
+                                                    _searchSuggestBusy = false;
+                                                    _searchResults = const <
+                                                        RightSheetGradingSearchResult>[];
+                                                    _searchError = null;
+                                                    _searchBusy = false;
+                                                  });
+                                                  _scheduleSuggestionOverlaySync();
+                                                },
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.all(4),
+                                                  child: Icon(
+                                                    Icons.close_rounded,
+                                                    size: 16,
+                                                    color: fabStyle.subText,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (showPill) ...[
+                    SizedBox(width: gap),
+                    Expanded(
+                      child: Opacity(
+                        opacity: pillOpacity,
+                        child: Transform.translate(
+                          offset: Offset(10 * (1.0 - pillOpacity), 0),
+                          child: SizedBox(
+                            height: _searchFieldHeight,
+                            child: FabStyleGlassPanel(
+                              useFabTabBarBackground: true,
+                              borderRadius: BorderRadius.circular(
+                                _searchFieldHeight / 2,
+                              ),
+                              padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildCollapsedSessionInfo(
+                                      session,
+                                      fabStyle,
+                                    ),
+                                  ),
+                                  _buildWrongOnlyToggle(
+                                    fabStyle: fabStyle,
+                                    compact: true,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              // 돋보기: 크기·좌측 위치 고정. 패널만 알약→원형으로 수축.
+              Positioned(
+                left: _searchIconLeft,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Icon(
+                      Icons.search_rounded,
+                      size: _searchIconSize,
+                      color: fabStyle.subText,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
       },
-      child: SizeChangedLayoutNotifier(
-        child: DecoratedBox(
+    );
+  }
+
+  Widget _buildGradingStickyHeaderContent(
+    RightSideSheetTestGradingSession session, {
+    required double collapseT,
+  }) {
+    final fabStyle = _rightSheetFabColors(context);
+    final t = (_showSearchChrome &&
+            (_forceSearchExpanded || _searchFocus.hasFocus))
+        ? 0.0
+        : Curves.easeInOutCubic.transform(collapseT.clamp(0.0, 1.0));
+
+    if (!session.showSearchChrome) {
+      return Material(
+        type: MaterialType.transparency,
+        child: Padding(
           key: _gradingSearchOverlayKey,
-          decoration: BoxDecoration(color: fabStyle.surface),
+          padding: const EdgeInsets.fromLTRB(
+            _gradingSheetHorizontalInset,
+            _topBarTopInset,
+            _gradingSheetHorizontalInset,
+            8,
+          ),
+          child: _buildMorphSessionOnlyChrome(
+            session: session,
+            t: t,
+            fabStyle: fabStyle,
+          ),
+        ),
+      );
+    }
+
+    final expandedOpacity = (1.0 - (t * 1.35)).clamp(0.0, 1.0);
+    final recentOpacity = (1.0 - (t / 0.28)).clamp(0.0, 1.0);
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        key: _gradingSearchOverlayKey,
+        padding: const EdgeInsets.fromLTRB(
+          _gradingSheetHorizontalInset,
+          _topBarTopInset,
+          _gradingSheetHorizontalInset,
+          8,
+        ),
+        child: Align(
+          alignment: Alignment.topCenter,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildSearchHeader(),
-              const SizedBox(height: 24),
+              _buildMorphSearchChrome(
+                session: session,
+                t: t,
+                fabStyle: fabStyle,
+              ),
+              if (_recentSearches.isNotEmpty && recentOpacity > 0)
+                ClipRect(
+                  child: Align(
+                    // heightFactor만 쓰면 Align이 칩 너비로 줄어 가운데로 모인다.
+                    alignment: Alignment.topLeft,
+                    heightFactor: recentOpacity,
+                    widthFactor: 1.0,
+                    child: Opacity(
+                      opacity: recentOpacity,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: _buildRecentSearchChips(
+                          fabStyle: fabStyle,
+                          chipDecoration: BoxDecoration(
+                            color: Theme.of(context).brightness ==
+                                    Brightness.light
+                                ? Colors.black.withValues(alpha: 0.05)
+                                : Colors.white.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              // 최상단(펼침): 세션 정보는 글래스 바깥.
+              ClipRect(
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  heightFactor: (1.0 - t).clamp(0.0, 1.0),
+                  widthFactor: 1.0,
+                  child: Opacity(
+                    opacity: expandedOpacity,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: _buildSessionHeader(
+                        session,
+                        showWrongOnly: true,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -5829,7 +6451,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  Widget _buildSessionHeader(RightSideSheetTestGradingSession session) {
+  Widget _buildSessionHeader(
+    RightSideSheetTestGradingSession session, {
+    bool showWrongOnly = true,
+  }) {
     final fabStyle = _rightSheetFabColors(context);
     final studentName =
         session.studentName.trim().isEmpty ? '학생' : session.studentName.trim();
@@ -5894,55 +6519,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ),
-            // 체크박스 등장/소멸로 헤더 높이가 바뀌지 않도록 자리를 항상 확보한다.
-            const SizedBox(width: 10),
-            Opacity(
-              opacity: (_wrongOnlyAvailable || _wrongOnly) ? 1 : 0,
-              child: IgnorePointer(
-                ignoring: !(_wrongOnlyAvailable || _wrongOnly),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(9),
-                  onTap: () {
-                    setState(() {
-                      _wrongOnly = !_wrongOnly;
-                    });
-                  },
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: IgnorePointer(
-                            child: Checkbox(
-                              value: _wrongOnly,
-                              onChanged: (_) {},
-                              activeColor: _rsAccent,
-                              checkColor: Colors.white,
-                              side: BorderSide(color: fabStyle.subText),
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '틀린것만 보기',
-                          style: TextStyle(
-                            color: fabStyle.subText,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            if (showWrongOnly) ...[
+              // 체크박스 등장/소멸로 헤더 높이가 바뀌지 않도록 자리를 항상 확보한다.
+              const SizedBox(width: 10),
+              _buildWrongOnlyToggle(fabStyle: fabStyle),
+            ],
           ],
         ),
       ],
@@ -6064,7 +6645,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         builder,
     bool barrierDismissible = true,
   }) async {
-    final overlay = Overlay.maybeOf(context);
+    // 정답 PDF 패널도 root Overlay에 올라가므로, 확인창도 root에 올려 그 위에 그린다.
+    final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) {
       return showDialog<T>(
         context: _navigatorContext,
@@ -6132,25 +6714,70 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final cacheKey = session.answerViewerCacheKey.trim().isEmpty
         ? 'right_sheet_answer:${session.sessionId}'
         : session.answerViewerCacheKey.trim();
-    final preloaded =
-        RightSheetAnswerPreloadService.instance.getPdfLinks(cacheKey);
-    final preloadedAnswer =
-        await _usablePreloadedPdfPath(preloaded?.answerPath ?? '');
-    final preloadedSolution =
-        await _usablePreloadedPdfPath(preloaded?.solutionPath ?? '');
+    final title =
+        session.title.trim().isEmpty ? '답지 확인' : session.title.trim();
+    final overlayEntries = session.overlayEntries
+        .map(
+          (entry) => <String, String>{
+            'title': '${entry['title'] ?? ''}',
+            'page': '${entry['page'] ?? ''}',
+            'memo': '${entry['memo'] ?? ''}',
+          },
+        )
+        .toList(growable: false);
+
     if (!mounted) return;
     setState(() => _answerPdfOpening = true);
+    final openSeq = ++_pdfFocusRequestSeq;
+    final baseIsSolution = preferSolutionRawAsBase && solutionRaw.isNotEmpty;
+    final needsSolutionNow = initialShowSolution || baseIsSolution;
+    final preloaded =
+        RightSheetAnswerPreloadService.instance.getPdfLinks(cacheKey);
+    final warmAnswerCandidate = (!baseIsSolution
+            ? (preloaded?.answerPath ?? '')
+            : (preloaded?.solutionPath ?? ''))
+        .trim();
+    final hasWarmLocalPdf = warmAnswerCandidate.toLowerCase().endsWith('.pdf') &&
+        File(warmAnswerCandidate).existsSync();
+
+    // 캐시 miss면 왼쪽 로딩 패널을 먼저 띄우고, 준비되면 PDF로 교체한다.
+    // 이미 로컬 캐시가 있으면 로딩 플래시 없이 바로 resolve 경로로 간다.
+    if (!hasWarmLocalPdf) {
+      rightSideSheetPdfPanelSession.value = RightSideSheetPdfPanelSession(
+        sessionId: session.sessionId,
+        title: title,
+        answerPath: '',
+        solutionPath: '',
+        cacheKey: cacheKey,
+        overlayEntries: overlayEntries,
+        isLoading: true,
+      );
+    }
+
+    bool stillCurrent() {
+      if (!mounted) return false;
+      if (widget.session?.sessionId != session.sessionId) return false;
+      final current = rightSideSheetPdfPanelSession.value;
+      // 캐시 히트로 로딩 패널을 생략한 경우에도 동일 세션이면 진행한다.
+      if (current == null) return hasWarmLocalPdf;
+      return current.sessionId == session.sessionId;
+    }
+
     try {
-      final baseIsSolution = preferSolutionRawAsBase && solutionRaw.isNotEmpty;
+      final preloadedAnswer =
+          await _usablePreloadedPdfPath(preloaded?.answerPath ?? '');
+      final preloadedSolution =
+          await _usablePreloadedPdfPath(preloaded?.solutionPath ?? '');
+      if (!stillCurrent()) return;
 
       // For solution jumps to a specific page, fetch a tiny single-page PDF
       // (lossless, original resolution) instead of opening the huge full
       // solution PDF (143~318MB). Falls back to the full PDF on any failure.
       String solutionPageFile = '';
       int effectiveFocusPage = focusPageNumber;
-      if (focusPageNumber > 0 &&
-          solutionRaw.isNotEmpty &&
-          (initialShowSolution || preferSolutionRawAsBase)) {
+      if (needsSolutionNow &&
+          focusPageNumber > 0 &&
+          solutionRaw.isNotEmpty) {
         final solRef = _textbookPdfRefFromStoragePath(solutionRaw, kind: 'sol');
         if (solRef != null) {
           try {
@@ -6165,10 +6792,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           }
         }
       }
+      if (!stillCurrent()) return;
 
       final String answerPath;
       if (baseIsSolution && solutionPageFile.isNotEmpty) {
-        // Base document is the solution itself; serve only the focused page.
         answerPath = solutionPageFile;
       } else if (baseIsSolution && preloadedSolution.isNotEmpty) {
         answerPath = preloadedSolution;
@@ -6180,11 +6807,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           kind: baseIsSolution ? 'sol' : 'ans',
         );
       }
-      if (answerPath.trim().isEmpty) return;
+      if (!stillCurrent()) return;
+      if (answerPath.trim().isEmpty) {
+        rightSideSheetPdfPanelSession.value = null;
+        if (!mounted) return;
+        ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+          const SnackBar(content: Text('답지 PDF 파일을 찾을 수 없습니다.')),
+        );
+        return;
+      }
       if (!_isSessionAnswerWebUrl(answerPath)) {
         final file = File(answerPath);
         if (!answerPath.toLowerCase().endsWith('.pdf') ||
             !await file.exists()) {
+          if (!stillCurrent()) return;
+          rightSideSheetPdfPanelSession.value = null;
           if (!mounted) return;
           ScaffoldMessenger.of(_navigatorContext).showSnackBar(
             const SnackBar(content: Text('답지 PDF 파일을 찾을 수 없습니다.')),
@@ -6193,34 +6830,35 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         }
       }
 
-      final String solutionPath;
+      // 기본 자동 오픈에서는 무거운 sol 전체 resolve를 하지 않는다.
+      // 해설이 당장 필요할 때만(해설 점프/토글) sol을 준비한다.
+      String solutionPath = '';
       if (baseIsSolution && solutionPageFile.isNotEmpty) {
-        // The focused page is already the base document.
         solutionPath = '';
       } else if (solutionPageFile.isNotEmpty) {
         solutionPath = solutionPageFile;
+      } else if (needsSolutionNow) {
+        if (preloadedSolution.isNotEmpty) {
+          solutionPath = preloadedSolution;
+        } else if (solutionRaw.isNotEmpty) {
+          solutionPath =
+              await _resolveSessionPdfViewerPath(solutionRaw, kind: 'sol');
+        }
       } else if (preloadedSolution.isNotEmpty) {
         solutionPath = preloadedSolution;
-      } else if (solutionRaw.isEmpty) {
-        solutionPath = '';
-      } else {
-        solutionPath =
-            await _resolveSessionPdfViewerPath(solutionRaw, kind: 'sol');
       }
-      if (!mounted) return;
+      if (!stillCurrent()) return;
 
-      // When the focused page became the base document, it is shown directly
-      // (no solution toggle needed).
       final focusTargetsBase = baseIsSolution && solutionPageFile.isNotEmpty;
       final shouldShowSolution = focusTargetsBase
           ? false
           : initialShowSolution && solutionPath.trim().isNotEmpty;
       final finalFocusPage =
           solutionPageFile.isNotEmpty ? effectiveFocusPage : focusPageNumber;
-      final focusRequestId = finalFocusPage > 0 ? ++_pdfFocusRequestSeq : 0;
+      final focusRequestId = finalFocusPage > 0 ? openSeq : 0;
       rightSideSheetPdfPanelSession.value = RightSideSheetPdfPanelSession(
         sessionId: session.sessionId,
-        title: session.title.trim().isEmpty ? '답지 확인' : session.title.trim(),
+        title: title,
         answerPath: answerPath.trim(),
         solutionPath: solutionPath.trim(),
         cacheKey: cacheKey,
@@ -6228,21 +6866,48 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         focusPageNumber: finalFocusPage > 0 ? finalFocusPage : 0,
         focusRequestId: focusRequestId,
         focusRect1k: finalFocusPage > 0 ? focusRect1k : const <int>[],
-        overlayEntries: session.overlayEntries
-            .map(
-              (entry) => <String, String>{
-                'title': '${entry['title'] ?? ''}',
-                'page': '${entry['page'] ?? ''}',
-                'memo': '${entry['memo'] ?? ''}',
-              },
-            )
-            .toList(growable: false),
+        overlayEntries: overlayEntries,
+        isLoading: false,
       );
       RightSheetAnswerPreloadService.instance.putPdfLinks(
         cacheKey: cacheKey,
         answerPath: answerPath,
         solutionPath: solutionPath,
       );
+
+      // 답지가 뜬 뒤, 캐시에 없는 해설만 백그라운드로 데워 둔다(UI 블로킹 없음).
+      if (!needsSolutionNow &&
+          solutionPath.isEmpty &&
+          solutionRaw.isNotEmpty &&
+          preloadedSolution.isEmpty) {
+        unawaited(() async {
+          final warmed = await _resolveSessionPdfViewerPath(
+            solutionRaw,
+            kind: 'sol',
+          );
+          if (warmed.trim().isEmpty || !stillCurrent()) return;
+          final current = rightSideSheetPdfPanelSession.value;
+          if (current == null || current.sessionId != session.sessionId) {
+            return;
+          }
+          if (current.solutionPath.trim().isNotEmpty) return;
+          RightSheetAnswerPreloadService.instance.putPdfLinks(
+            cacheKey: cacheKey,
+            answerPath: current.answerPath,
+            solutionPath: warmed,
+          );
+        }());
+      }
+    } catch (e) {
+      debugPrint('[RIGHT_SHEET_PDF] open failed: $e');
+      if (stillCurrent()) {
+        rightSideSheetPdfPanelSession.value = null;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+          const SnackBar(content: Text('답지 PDF를 열지 못했습니다.')),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _answerPdfOpening = false);
@@ -7687,40 +8352,72 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final targetLabel = targetState == 'not_performed' ? '미수행' : '모두 정답';
     final pageLabel =
         firstPage == lastPage ? 'p.$firstPage' : 'p.$firstPage–p.$lastPage';
-    final confirmed = await showDialog<bool>(
-      context: _navigatorContext,
-      useRootNavigator: true,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: _rsPanelBg,
-        title: Text(
-          isRange ? '이후 페이지를 미수행 처리할까요?' : '기존 채점을 덮어쓸까요?',
-          style: const TextStyle(
-            color: _rsText,
-            fontWeight: FontWeight.w900,
+    final title =
+        isRange ? '이후 페이지를 미수행 처리할까요?' : '기존 채점을 덮어쓸까요?';
+    final message = '$pageLabel · $questionCount문항을 $targetLabel 상태로 바꿉니다.'
+        '${isRange ? '\n현재 페이지부터 배정 범위의 마지막 페이지까지 적용됩니다.' : ''}';
+    // PDF 뷰어 Overlay 위에 뜨도록 일반 showDialog가 아니라 top overlay 사용.
+    final confirmed = await _showTopOverlayDialog<bool>(
+      builder: (overlayContext, close) {
+        final fabStyle = _rightSheetFabColors(overlayContext);
+        return SizedBox(
+          width: 470,
+          height: isRange ? 258 : 238,
+          child: UtilityGlassDialogShell(
+            title: title,
+            icon: targetState == 'not_performed'
+                ? Icons.do_not_disturb_on_rounded
+                : Icons.task_alt_rounded,
+            preferredWidth: 470,
+            maxHeight: isRange ? 258 : 238,
+            onClose: () => close(false),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: TextStyle(
+                        color: fabStyle.subText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        height: 1.5,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () => close(false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: fabStyle.text,
+                          side: BorderSide(color: fabStyle.border),
+                          minimumSize: const Size(84, 42),
+                        ),
+                        child: const Text('취소'),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton(
+                        onPressed: () => close(true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _rsAccent,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(92, 42),
+                        ),
+                        child: Text(targetLabel),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
-        content: Text(
-          '$pageLabel · $questionCount문항을 $targetLabel 상태로 바꿉니다.'
-          '${isRange ? '\n현재 페이지부터 배정 범위의 마지막 페이지까지 적용됩니다.' : ''}',
-          style: const TextStyle(
-            color: _rsTextSub,
-            fontWeight: FontWeight.w700,
-            height: 1.45,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () =>
-                Navigator.of(dialogContext, rootNavigator: true).pop(false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.of(dialogContext, rootNavigator: true).pop(true),
-            child: Text(targetLabel),
-          ),
-        ],
-      ),
+        );
+      },
     );
     return confirmed == true;
   }
@@ -7813,68 +8510,60 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  Widget _buildPageDividerLabel(
-    _RightSheetGradingPageVm page, {
-    required bool isFirst,
-  }) {
-    final fabStyle = _rightSheetFabColors(context);
-    return ColoredBox(
-      color: fabStyle.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: SizedBox(
-          height: _gradingPageHeaderHeight - 8,
-          child: Row(
-            children: [
-              if (!isFirst)
-                const Expanded(
-                  child: Divider(height: 1, thickness: 1, color: _rsBorder),
-                )
-              else
-                const Spacer(),
-              const SizedBox(width: 10),
-              Text(
-                'p.${page.pageNumber}',
-                style: const TextStyle(
-                  color: _rsTextSub,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 18,
-                  height: 1.0,
-                ),
+  Widget _buildPageDividerLabel(_RightSheetGradingPageVm page) {
+    return Padding(
+      // 페이지 라벨=문항번호 왼쪽, 액션 버튼=오른쪽.
+      padding: const EdgeInsets.fromLTRB(
+        _rsAnswerQuestionColLeftPad,
+        4,
+        _rsAnswerQuestionColLeftPad,
+        4,
+      ),
+      child: SizedBox(
+        height: _gradingPageHeaderHeight - 8,
+        child: Row(
+          children: [
+            Text(
+              'p.${page.pageNumber}',
+              style: const TextStyle(
+                color: _rsTextSub,
+                fontWeight: FontWeight.w800,
+                fontSize: 18,
+                height: 1.0,
               ),
-              const SizedBox(width: 8),
-              _buildPageBulkAction(
-                label: '모두 정답',
-                onTap: _answerListReadOnly
-                    ? null
-                    : () => unawaited(
-                          _applyPageBulkState(page, targetState: 'correct'),
+            ),
+            const Spacer(),
+            _buildPageBulkAction(
+              label: '모두 정답',
+              onTap: _answerListReadOnly
+                  ? null
+                  : () => unawaited(
+                        _applyPageBulkState(page, targetState: 'correct'),
+                      ),
+            ),
+            const SizedBox(width: 2),
+            _buildPageBulkAction(
+              label: '미수행',
+              emphasized: true,
+              onTap: _answerListReadOnly
+                  ? null
+                  : () => unawaited(
+                        _applyPageBulkState(
+                          page,
+                          targetState: 'not_performed',
                         ),
-              ),
-              const SizedBox(width: 2),
-              _buildPageBulkAction(
-                label: '미수행',
-                emphasized: true,
-                onTap: _answerListReadOnly
-                    ? null
-                    : () => unawaited(
-                          _applyPageBulkState(
-                            page,
-                            targetState: 'not_performed',
-                          ),
+                      ),
+              onLongPress: _answerListReadOnly
+                  ? null
+                  : () => unawaited(
+                        _applyPageBulkState(
+                          page,
+                          targetState: 'not_performed',
+                          includeFollowing: true,
                         ),
-                onLongPress: _answerListReadOnly
-                    ? null
-                    : () => unawaited(
-                          _applyPageBulkState(
-                            page,
-                            targetState: 'not_performed',
-                            includeFollowing: true,
-                          ),
-                        ),
-              ),
-            ],
-          ),
+                      ),
+            ),
+          ],
         ),
       ),
     );
@@ -8008,41 +8697,78 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
+  // PDF 뷰어 하단 컨트롤(화살표/해설)과 동일: bottom 16 + control 51.
+  // 닫기/확인/완료 버튼 높이는 이 값으로 통일한다.
+  static const double _gradingBottomControlsBottomInset = 16;
+  static const double _gradingBottomControlsHeight = 51;
+  static const double _gradingBottomCloseButtonWidth = 84;
+  static const double _gradingBottomActionButtonWidth = 102;
+  static const double _gradingBottomBarTopInset = 12;
+  static const double _gradingBottomBarHeight = _gradingBottomBarTopInset +
+      _gradingBottomControlsHeight +
+      _gradingBottomControlsBottomInset;
+  static const double _gradingAnswerListBottomInset = 4;
+  static const double _gradingBottomBarScrollPadding =
+      _gradingBottomBarHeight + _gradingAnswerListBottomInset;
+  static const double _gradingPageHeaderHeight = 62;
+  static const double _gradingSheetHorizontalInset = 10;
+
+  ButtonStyle _gradingBottomBarButtonStyle({
+    required Color foreground,
+    required Color border,
+    required Color background,
+    required double width,
+  }) {
+    return OutlinedButton.styleFrom(
+      backgroundColor: background,
+      side: BorderSide(color: border),
+      foregroundColor: foreground,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 0),
+      minimumSize: Size(width, _gradingBottomControlsHeight),
+      maximumSize: Size(width * 2, _gradingBottomControlsHeight),
+      fixedSize: Size(width, _gradingBottomControlsHeight),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  static const TextStyle _gradingBottomBarButtonLabelStyle = TextStyle(
+    fontSize: 18.5,
+    fontWeight: FontWeight.w800,
+    height: 1.0,
+  );
+
+  Widget _buildGradingBottomBarButton({
+    required String label,
+    required VoidCallback? onPressed,
+    required double width,
+    bool filled = false,
+  }) {
+    final fabStyle = _rightSheetFabColors(context);
+    return SizedBox(
+      width: width,
+      height: _gradingBottomControlsHeight,
+      child: OutlinedButton(
+        onPressed: onPressed,
+        style: _gradingBottomBarButtonStyle(
+          foreground: filled ? Colors.white : fabStyle.text,
+          border: filled ? _rsAccent : fabStyle.border,
+          background: filled ? _rsAccent : Colors.transparent,
+          width: width,
+        ),
+        child: Text(label, style: _gradingBottomBarButtonLabelStyle),
+      ),
+    );
+  }
+
   Widget _buildActionButtons() {
     final session = widget.session;
-    final fabStyle = _rightSheetFabColors(context);
-    Widget button({
-      required String label,
-      required VoidCallback onTap,
-      bool filled = false,
-    }) {
-      return SizedBox(
-        height: 51,
-        child: OutlinedButton(
-          onPressed: _actionBusy ? null : onTap,
-          style: OutlinedButton.styleFrom(
-            backgroundColor: filled ? _rsAccent : Colors.transparent,
-            side: BorderSide(color: filled ? _rsAccent : fabStyle.border),
-            foregroundColor: filled ? Colors.white : fabStyle.text,
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 0),
-            minimumSize: const Size(102, 51),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 18.5,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-      );
-    }
-
     if (session?.smartConfirmAction == true) {
-      return button(
+      return _buildGradingBottomBarButton(
         label: _actionBusy ? '확인중' : '확인',
-        onTap: () => unawaited(_runSmartConfirmAction()),
+        onPressed:
+            _actionBusy ? null : () => unawaited(_runSmartConfirmAction()),
+        width: _gradingBottomActionButtonWidth,
         filled: true,
       );
     }
@@ -8050,95 +8776,50 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        button(
+        _buildGradingBottomBarButton(
           label: _actionBusy ? '완료중' : '완료',
-          onTap: () => unawaited(_runAction('complete')),
+          onPressed: _actionBusy ? null : () => unawaited(_runAction('complete')),
+          width: _gradingBottomActionButtonWidth,
         ),
         const SizedBox(width: 8),
-        button(
+        _buildGradingBottomBarButton(
           label: _actionBusy ? '확인중' : '확인',
-          onTap: () => unawaited(_runAction('confirm')),
+          onPressed: _actionBusy ? null : () => unawaited(_runAction('confirm')),
+          width: _gradingBottomActionButtonWidth,
           filled: true,
         ),
       ],
     );
   }
 
-  static const double _gradingBottomBarHeight = 75;
-  static const double _gradingAnswerListBottomInset = 4;
-  static const double _gradingBottomBarScrollPadding =
-      _gradingBottomBarHeight + _gradingAnswerListBottomInset;
-  static const double _gradingPageHeaderHeight = 62;
-  static const double _gradingSheetHorizontalInset = 10;
-
-  GlobalKey _gradingPageHeaderKey(int pageNumber) {
-    return _gradingPageHeaderKeys.putIfAbsent(pageNumber, GlobalKey.new);
-  }
-
-  void _scheduleGradingPageSnap(List<_RightSheetGradingPageVm> pages) {
-    if (_gradingPageSnapInProgress || pages.isEmpty) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _gradingPageSnapInProgress) return;
-      unawaited(_snapNearestGradingPage(pages));
-    });
-  }
-
-  Future<void> _snapNearestGradingPage(
-    List<_RightSheetGradingPageVm> pages,
-  ) async {
-    if (!_gradingScrollController.hasClients) return;
-    final position = _gradingScrollController.position;
-    final currentOffset = position.pixels;
-    double? nearestOffset;
-    var nearestDistance = double.infinity;
-
-    for (final page in pages) {
-      final renderObject = _gradingPageHeaderKey(page.pageNumber)
-          .currentContext
-          ?.findRenderObject();
-      if (renderObject == null || !renderObject.attached) continue;
-      if (renderObject is RenderSliver && renderObject.geometry == null) {
-        continue;
-      }
-      final viewport = RenderAbstractViewport.of(renderObject);
-      final revealed = viewport.getOffsetToReveal(renderObject, 0).offset;
-      final target = revealed.clamp(
-        position.minScrollExtent,
-        position.maxScrollExtent,
-      );
-      final distance = (target - currentOffset).abs();
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestOffset = target;
-      }
-    }
-
-    if (nearestOffset == null || nearestDistance < 0.5) return;
-    _gradingPageSnapInProgress = true;
-    try {
-      await _gradingScrollController.animateTo(
-        nearestOffset,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-      );
-    } finally {
-      _gradingPageSnapInProgress = false;
-    }
-  }
-
   Widget _buildGradingBottomBar(RightSideSheetTestGradingSession session) {
-    if (_answerListReadOnly) return const SizedBox.shrink();
     return FabStyleGlassPanel(
       useFabTabBarBackground: true,
       borderRadius: BorderRadius.zero,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(child: _buildScoreCalculator(session)),
-          const SizedBox(width: 12),
-          _buildActionButtons(),
-        ],
+      padding: const EdgeInsets.fromLTRB(
+        12,
+        _gradingBottomBarTopInset,
+        16,
+        _gradingBottomControlsBottomInset,
+      ),
+      child: SizedBox(
+        height: _gradingBottomControlsHeight,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _buildGradingBottomBarButton(
+              label: '닫기',
+              onPressed: widget.onClose,
+              width: _gradingBottomCloseButtonWidth,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: _buildScoreCalculator(session)),
+            if (!_answerListReadOnly) ...[
+              const SizedBox(width: 12),
+              _buildActionButtons(),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -8146,93 +8827,106 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Widget _buildGradingAnswerBody({
     required RightSideSheetTestGradingSession session,
     required List<_RightSheetGradingPageVm> pages,
-    required double topScrollPadding,
   }) {
+    final maxExtent = _stickyHeaderMaxExtent;
+    final forceExpanded = _showSearchChrome &&
+        (_forceSearchExpanded || _searchFocus.hasFocus);
+    final minExtent = forceExpanded ? maxExtent : _stickyHeaderMinExtent;
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Positioned(
-          top: topScrollPadding,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // 마지막 페이지 헤더도 스크롤 영역 상단까지 올라오도록 한 화면
-              // 높이만큼 여유를 둔다. 하단 확인 바에 가리는 높이도 포함한다.
-              final trailingSpace = math.max(
-                _gradingBottomBarScrollPadding,
-                constraints.maxHeight -
-                    _gradingPageHeaderHeight +
-                    _gradingBottomBarScrollPadding,
-              );
-              return NotificationListener<ScrollEndNotification>(
-                onNotification: (notification) {
-                  if (notification.depth == 0) {
-                    _scheduleGradingPageSnap(pages);
-                  }
-                  return false;
-                },
-                child: CustomScrollView(
-                  controller: _gradingScrollController,
-                  slivers: [
-                    SliverToBoxAdapter(child: _buildSessionHeader(session)),
-                    const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                    if (pages.isNotEmpty)
-                      for (int pageIndex = 0;
-                          pageIndex < pages.length;
-                          pageIndex++) ...[
-                        SliverToBoxAdapter(
-                          child: _buildPageDividerLabel(
-                            pages[pageIndex],
-                            isFirst: pageIndex == 0,
-                          ),
-                          key: _gradingPageHeaderKey(
-                            pages[pageIndex].pageNumber,
-                          ),
-                        ),
-                        SliverToBoxAdapter(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              for (int i = 0;
-                                  i < pages[pageIndex].cells.length;
-                                  i++) ...[
-                                _buildAnswerListRow(
-                                  pages[pageIndex].cells[i],
-                                  pageNumber: pages[pageIndex].pageNumber,
-                                ),
-                                if (i != pages[pageIndex].cells.length - 1)
-                                  const SizedBox(height: 8),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    if (pages.isEmpty)
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Text(
-                            _wrongOnly
-                                ? (_baselineStates.isNotEmpty
-                                    ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
-                                    : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
-                                : '검색 결과가 없습니다.',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: _rsTextSub,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12.5,
+        Positioned.fill(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollEndNotification ||
+                  (notification is UserScrollNotification &&
+                      notification.direction == ScrollDirection.idle)) {
+                _scheduleStickyHeaderSnap();
+              }
+              return false;
+            },
+            child: ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context).copyWith(
+              scrollbars: false,
+            ),
+            child: CustomScrollView(
+              controller: _answerListScrollCtrl,
+              slivers: [
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _GradingMorphHeaderDelegate(
+                    minExtent: minExtent,
+                    maxExtent: maxExtent,
+                    rebuildToken: Object.hash(
+                      session.sessionId,
+                      session.studentName,
+                      session.groupHomeworkTitle,
+                      session.assignmentCode,
+                      session.showSearchChrome,
+                      _wrongOnly,
+                      _wrongOnlyAvailable,
+                      _recentSearches.length,
+                      forceExpanded,
+                      _searchCtrl.text,
+                      Theme.of(context).brightness,
+                    ),
+                    builder: (collapseT) => _buildGradingStickyHeaderContent(
+                      session,
+                      collapseT: forceExpanded ? 0 : collapseT,
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 10)),
+                if (pages.isNotEmpty)
+                  for (int pageIndex = 0;
+                      pageIndex < pages.length;
+                      pageIndex++) ...[
+                    SliverToBoxAdapter(
+                      child: _buildPageDividerLabel(pages[pageIndex]),
+                    ),
+                    SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (int i = 0;
+                              i < pages[pageIndex].cells.length;
+                              i++) ...[
+                            _buildAnswerListRow(
+                              pages[pageIndex].cells[i],
+                              pageNumber: pages[pageIndex].pageNumber,
                             ),
-                          ),
+                            if (i != pages[pageIndex].cells.length - 1)
+                              const SizedBox(height: 8),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                if (pages.isEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Text(
+                        _wrongOnly
+                            ? (_baselineStates.isNotEmpty
+                                ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
+                                : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
+                            : '검색 결과가 없습니다.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: _rsTextSub,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12.5,
                         ),
                       ),
-                    SliverToBoxAdapter(child: SizedBox(height: trailingSpace)),
-                  ],
+                    ),
+                  ),
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: _gradingBottomBarScrollPadding),
                 ),
-              );
-            },
+              ],
+            ),
+            ),
           ),
         ),
         Positioned(
@@ -8286,29 +8980,49 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       );
     }
 
-    _syncGradingSearchOverlayHeight();
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 0),
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned.fill(
-            child: _buildGradingAnswerBody(
-              session: session,
-              pages: pages,
-              topScrollPadding: _gradingSearchOverlayHeight,
-            ),
-          ),
-          Positioned(
-            top: 0,
-            left: -_gradingSheetHorizontalInset,
-            right: -_gradingSheetHorizontalInset,
-            child: _buildGradingSearchOverlay(),
-          ),
-        ],
+      child: _buildGradingAnswerBody(
+        session: session,
+        pages: pages,
       ),
     );
+  }
+}
+
+class _GradingMorphHeaderDelegate extends SliverPersistentHeaderDelegate {
+  _GradingMorphHeaderDelegate({
+    required this.minExtent,
+    required this.maxExtent,
+    required this.builder,
+    required this.rebuildToken,
+  });
+
+  @override
+  final double minExtent;
+  @override
+  final double maxExtent;
+  final Widget Function(double collapseT) builder;
+  final Object rebuildToken;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    final range = math.max(1.0, maxExtent - minExtent);
+    final collapseT = (shrinkOffset / range).clamp(0.0, 1.0);
+    return SizedBox.expand(
+      child: builder(collapseT),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _GradingMorphHeaderDelegate oldDelegate) {
+    return minExtent != oldDelegate.minExtent ||
+        maxExtent != oldDelegate.maxExtent ||
+        rebuildToken != oldDelegate.rebuildToken;
   }
 }
 

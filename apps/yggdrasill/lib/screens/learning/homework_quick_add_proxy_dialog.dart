@@ -1512,6 +1512,9 @@ class HomeworkQuickAddProxyDialogState
     final pageKeysByDisplay = <int, Set<String>>{};
     final smallToMid = <String, String>{};
     final smallToBig = <String, String>{};
+    // unitMappings.big/mid/smallOrder → explorer small.key
+    final smallKeyByOrder = <String, String>{};
+    final smallKeysByMidOrder = <String, Set<String>>{};
 
     for (final big in controller.data.units) {
       final bigKey = TextbookExplorerController.unitBigKey(big);
@@ -1520,6 +1523,11 @@ class HomeworkQuickAddProxyDialogState
         for (final small in mid.smalls) {
           smallToMid[small.key] = midKey;
           smallToBig[small.key] = bigKey;
+          smallKeyByOrder['${big.order}|${mid.order}|${small.order}'] =
+              small.key;
+          smallKeysByMidOrder
+              .putIfAbsent('${big.order}|${mid.order}', () => <String>{})
+              .add(small.key);
           for (final page in small.pages) {
             final display = page.displayPage ?? page.rawPage;
             final pageKey = '${small.key}#${page.rawPage}';
@@ -1542,12 +1550,43 @@ class HomeworkQuickAddProxyDialogState
 
     final cropAssigned = <String, int>{};
     final cropCompleted = <String, int>{};
-    // problemCrops 없는 구데이터/폴백: 그룹당 1회로 페이지를 센다.
+    // problemCrops 없는 구데이터/폴백: 그룹당 1회로 페이지·소단원을 센다.
     final fallbackPageAssigned = <String, int>{};
     final fallbackPageCompleted = <String, int>{};
+    final fallbackSmallAssigned = <String, int>{};
+    final fallbackSmallCompleted = <String, int>{};
 
     void bump(Map<String, int> map, String key) {
       map[key] = (map[key] ?? 0) + 1;
+    }
+
+    Set<String> smallKeysFromUnitMappings(HomeworkItem hw) {
+      final out = <String>{};
+      final mappings = hw.unitMappings;
+      if (mappings == null || mappings.isEmpty) return out;
+      for (final raw in mappings) {
+        final m = Map<String, dynamic>.from(raw);
+        final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
+        final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
+        if (bigOrder == null || midOrder == null) continue;
+        final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
+        if (smallOrder != null) {
+          final key = smallKeyByOrder['$bigOrder|$midOrder|$smallOrder'];
+          if (key != null) out.add(key);
+          continue;
+        }
+        final subKey = '${m['subKey'] ?? m['sub_key'] ?? ''}'.trim();
+        if (subKey.isNotEmpty) {
+          final key = '$bigOrder|$midOrder|$subKey';
+          if (smallToMid.containsKey(key)) {
+            out.add(key);
+            continue;
+          }
+        }
+        final midSmalls = smallKeysByMidOrder['$bigOrder|$midOrder'];
+        if (midSmalls != null) out.addAll(midSmalls);
+      }
+      return out;
     }
 
     final items = HomeworkStore.instance.items(widget.studentId);
@@ -1557,19 +1596,35 @@ class HomeworkQuickAddProxyDialogState
       if (hwBookId != linked.bookId || hwGrade != linked.gradeLabel) continue;
       final completed = _isCompletedForIssuedLock(hw);
       final cropIds = _cropIdsFromHomework(hw);
+      var matchedCrop = false;
       if (cropIds.isNotEmpty) {
         for (final cropId in cropIds) {
+          if (!cropToSmallKey.containsKey(cropId) &&
+              !cropToPageKey.containsKey(cropId)) {
+            continue;
+          }
+          matchedCrop = true;
           bump(cropAssigned, cropId);
           if (completed) bump(cropCompleted, cropId);
         }
-        continue;
+        if (matchedCrop) continue;
+      }
+
+      final eventKey =
+          (HomeworkStore.instance.groupIdOfItem(hw.id) ?? hw.id).trim();
+      if (eventKey.isEmpty) continue;
+
+      // unitMappings 단원 order 폴백 (hydrate된 units 포함).
+      final touchedSmalls = smallKeysFromUnitMappings(hw);
+      for (final smallKey in touchedSmalls) {
+        final stampKey = '$smallKey@$eventKey';
+        if (fallbackSmallAssigned.containsKey(stampKey)) continue;
+        fallbackSmallAssigned[stampKey] = 1;
+        if (completed) fallbackSmallCompleted[stampKey] = 1;
       }
 
       final pagesHw = _displayPagesFromHomework(hw);
       if (pagesHw.isEmpty) continue;
-      final eventKey =
-          (HomeworkStore.instance.groupIdOfItem(hw.id) ?? hw.id).trim();
-      if (eventKey.isEmpty) continue;
       final touchedPageKeys = <String>{};
       for (final display in pagesHw) {
         final keys = pageKeysByDisplay[display];
@@ -1577,7 +1632,6 @@ class HomeworkQuickAddProxyDialogState
         touchedPageKeys.addAll(keys);
       }
       // 그룹 내 소과제들이 같은 페이지를 중복으로 세지 않도록 event당 1회.
-      // (폴백 경로에서는 eventKey를 키 접미사로 쓰지 않고, 아래에서 set로 합친다)
       for (final pageKey in touchedPageKeys) {
         final stampKey = '$pageKey@$eventKey';
         if (fallbackPageAssigned.containsKey(stampKey)) continue;
@@ -1592,6 +1646,10 @@ class HomeworkQuickAddProxyDialogState
         if (v > m) m = v;
       }
       return m;
+    }
+
+    void takeMax(Map<String, int> target, String key, int value) {
+      if (value > (target[key] ?? 0)) target[key] = value;
     }
 
     final pageAssigned = <String, int>{};
@@ -1628,14 +1686,33 @@ class HomeworkQuickAddProxyDialogState
       if (a > 0) smallAssigned[e.key] = a;
       if (c > 0) smallCompleted[e.key] = c;
     }
-    // 폴백: 페이지 max를 소단원으로
-    for (final pageEntry in pageAssigned.entries) {
-      final smallKey = pageEntry.key.split('#').first;
-      if (cropsBySmall.containsKey(smallKey)) continue;
-      final a = pageEntry.value;
-      final c = pageCompleted[pageEntry.key] ?? 0;
-      if (a > (smallAssigned[smallKey] ?? 0)) smallAssigned[smallKey] = a;
-      if (c > (smallCompleted[smallKey] ?? 0)) smallCompleted[smallKey] = c;
+    // 페이지 폴백 스탬프 → 소단원 회차로 접기 (단원 order 폴백과 동일 eventKey면 1회).
+    for (final e in fallbackPageAssigned.entries) {
+      final at = e.key.lastIndexOf('@');
+      if (at <= 0) continue;
+      final pageKey = e.key.substring(0, at);
+      final eventKey = e.key.substring(at + 1);
+      final smallKey = pageKey.split('#').first;
+      if (smallKey.isEmpty || eventKey.isEmpty) continue;
+      fallbackSmallAssigned.putIfAbsent('$smallKey@$eventKey', () => 1);
+    }
+    for (final e in fallbackPageCompleted.entries) {
+      final at = e.key.lastIndexOf('@');
+      if (at <= 0) continue;
+      final pageKey = e.key.substring(0, at);
+      final eventKey = e.key.substring(at + 1);
+      final smallKey = pageKey.split('#').first;
+      if (smallKey.isEmpty || eventKey.isEmpty) continue;
+      fallbackSmallCompleted.putIfAbsent('$smallKey@$eventKey', () => 1);
+    }
+    // crop 경로 회차 + 폴백 회차를 합산 (crop 과제는 continue라 중복 없음).
+    for (final e in fallbackSmallAssigned.entries) {
+      final smallKey = e.key.split('@').first;
+      smallAssigned[smallKey] = (smallAssigned[smallKey] ?? 0) + e.value;
+    }
+    for (final e in fallbackSmallCompleted.entries) {
+      final smallKey = e.key.split('@').first;
+      smallCompleted[smallKey] = (smallCompleted[smallKey] ?? 0) + e.value;
     }
 
     final midAssigned = <String, int>{};
@@ -1662,28 +1739,18 @@ class HomeworkQuickAddProxyDialogState
       if (a > 0) bigAssigned[e.key] = a;
       if (c > 0) bigCompleted[e.key] = c;
     }
-    // 문항 매핑이 없는 폴백 소단원만 중/대로 올린다.
+    // 소단원 집계를 중/대로 항상 승격 (crop·페이지·단원 order 폴백 포함).
     for (final e in smallAssigned.entries) {
-      if (cropsBySmall.containsKey(e.key)) continue;
       final midKey = smallToMid[e.key];
       final bigKey = smallToBig[e.key];
-      if (midKey != null && e.value > (midAssigned[midKey] ?? 0)) {
-        midAssigned[midKey] = e.value;
-      }
-      if (bigKey != null && e.value > (bigAssigned[bigKey] ?? 0)) {
-        bigAssigned[bigKey] = e.value;
-      }
+      if (midKey != null) takeMax(midAssigned, midKey, e.value);
+      if (bigKey != null) takeMax(bigAssigned, bigKey, e.value);
     }
     for (final e in smallCompleted.entries) {
-      if (cropsBySmall.containsKey(e.key)) continue;
       final midKey = smallToMid[e.key];
       final bigKey = smallToBig[e.key];
-      if (midKey != null && e.value > (midCompleted[midKey] ?? 0)) {
-        midCompleted[midKey] = e.value;
-      }
-      if (bigKey != null && e.value > (bigCompleted[bigKey] ?? 0)) {
-        bigCompleted[bigKey] = e.value;
-      }
+      if (midKey != null) takeMax(midCompleted, midKey, e.value);
+      if (bigKey != null) takeMax(bigCompleted, bigKey, e.value);
     }
 
     controller.setHomeworkIssueStats(

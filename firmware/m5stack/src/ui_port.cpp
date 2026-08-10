@@ -121,6 +121,8 @@ static lv_timer_t* s_pin_lock_timer = nullptr;
 static String s_pin_student_id = "";
 static String s_pin_student_name = "";
 static bool s_student_list_stale = false;
+static bool s_student_list_signature_valid = false;
+static uint32_t s_student_list_signature = 0;
 static lv_obj_t* s_login_overlay = nullptr;   // "로그인 중..." 모달
 static lv_timer_t* s_bind_timeout_timer = nullptr;
 static bool s_bind_in_flight = false;          // 인터랙티브 로그인 진행 중에만 bind ack 처리(재접속 재announce ack 무시)
@@ -2527,6 +2529,10 @@ static void close_pin_page(void) {
   }
 }
 
+bool ui_port_is_pin_entry_active(void) {
+  return s_pin_page && lv_obj_is_valid(s_pin_page);
+}
+
 static void show_pin_page(const char* student_id, const char* student_name, bool pin_set) {
   if (!student_id || !*student_id) return;
   fw_mark_ui_stage(20);
@@ -2610,12 +2616,16 @@ static char s_pending_open_name[96] = {0};
 static bool s_pending_open_pin_required = false;
 static bool s_pending_open_pin_set = false;
 static bool s_pending_open_scheduled = false;
+static lv_timer_t* s_pending_open_timer = nullptr;
 
-static void open_bind_flow_async(void* unused) {
-  (void)unused;
+static void open_bind_flow_deferred(lv_timer_t* timer) {
+  (void)timer;
+  s_pending_open_timer = nullptr;
   s_pending_open_scheduled = false;
   fw_mark_ui_stage(25);
-  lv_indev_reset(NULL, NULL);  // 남아 있는 누름·스크롤 관성을 끊고 시작한다.
+  // PIN 전환은 카드 터치 뒤 80ms 후에 실행되므로, 여기서 입력 장치를 강제로
+  // reset하지 않는다. 진행 중인 LVGL 입력 타이머까지 지우면 이후 timer handler가
+  // 복구하지 못하고 watchdog으로 재부팅할 수 있다.
   if (s_pending_open_pin_required) {
     show_pin_page(s_pending_open_sid, s_pending_open_name, s_pending_open_pin_set);
   } else {
@@ -2631,7 +2641,11 @@ static void request_bind_flow(const char* sid, const char* name, bool pin_requir
   s_pending_open_pin_required = pin_required;
   s_pending_open_pin_set = pin_set;
   s_pending_open_scheduled = true;
-  lv_async_call(open_bind_flow_async, nullptr);
+  // 카드 CLICKED 이벤트와 같은 lv_timer_handler() 회차에서 화면을 교체하지 않는다.
+  // 목록이 길고 스크롤 이벤트가 남아 있을 때 PIN 객체를 즉시 만들면 이벤트 순회가
+  // 길어져 watchdog이 발생할 수 있으므로, 입력 처리가 완전히 끝난 뒤 열어 준다.
+  s_pending_open_timer = lv_timer_create(open_bind_flow_deferred, 80, nullptr);
+  lv_timer_set_repeat_count(s_pending_open_timer, 1);
 }
 
 static void close_login_overlay(void) {
@@ -2789,6 +2803,7 @@ static void build_student_list_ui() {
   s_refresh_hint = nullptr;
   s_pull_refresh_armed = false;
   s_homeworks_mode = false;
+  s_student_list_signature_valid = false;
   // student list only
   s_list = lv_obj_create(s_stage);
   lv_obj_set_size(s_list, lv_pct(100), lv_pct(100));
@@ -3502,6 +3517,37 @@ static void hub_clock_timer_cb(lv_timer_t* timer) {
   update_hub_battery();
 }
 
+static uint32_t student_list_hash_text(uint32_t hash, const char* text) {
+  const char* value = text ? text : "";
+  while (*value) {
+    hash ^= (uint8_t)*value++;
+    hash *= 16777619u;
+  }
+  hash ^= 0xFFu;  // 필드 경계
+  return hash * 16777619u;
+}
+
+static uint32_t student_list_signature(const JsonArray& students) {
+  uint32_t hash = 2166136261u;
+  for (JsonObject student : students) {
+    const char* sid = student.containsKey("student_id") ? (const char*)student["student_id"]
+      : (student.containsKey("id") ? (const char*)student["id"] : "");
+    hash = student_list_hash_text(hash, sid);
+    hash = student_list_hash_text(hash, student["name"] | student["student_name"] | "");
+    hash = student_list_hash_text(hash, student["school"] | "");
+
+    char value[16];
+    snprintf(value, sizeof(value), "%d,%d,%d,%d,%d",
+             (int)(student["grade"] | 0),
+             (int)(student["pin_required"] | false),
+             (int)(student["pin_set"] | false),
+             (int)(student["start_hour"] | -1),
+             (int)(student["start_minute"] | -1));
+    hash = student_list_hash_text(hash, value);
+  }
+  return hash;
+}
+
 static void show_volume_popup(void) {
   if (s_volume_popup) return;
   s_volume_popup = lv_obj_create(lv_scr_act());
@@ -3554,6 +3600,11 @@ void ui_port_update_students(const JsonArray& students) {
     s_student_list_stale = true;
     return;
   }
+  const uint32_t signature = student_list_signature(students);
+  if (s_student_list_signature_valid && signature == s_student_list_signature) {
+    // 하원/재연결 시 같은 목록이 여러 번 전달되어도 LVGL 객체를 다시 만들지 않는다.
+    return;
+  }
   struct StudentBindData {
     char sid[64];
     char name[96];
@@ -3568,6 +3619,8 @@ void ui_port_update_students(const JsonArray& students) {
   if (count == 0) {
     append_empty_message();
     append_refresh_button();
+    s_student_list_signature = signature;
+    s_student_list_signature_valid = true;
     return;
   }
   for (JsonObject s : students) {
@@ -3645,6 +3698,8 @@ void ui_port_update_students(const JsonArray& students) {
     }
   }
   append_refresh_button();
+  s_student_list_signature = signature;
+  s_student_list_signature_valid = true;
 }
 
 // Debounce: 그룹 순서/상태 연속 변경 시 최종 상태 누락 방지를 위해 기본 비활성화

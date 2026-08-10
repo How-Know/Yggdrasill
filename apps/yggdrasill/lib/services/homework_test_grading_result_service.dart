@@ -213,13 +213,17 @@ class HomeworkTestGradingResultService {
     final academyId = await _resolveAcademyId();
     if (academyId.isEmpty) return false;
 
-    final nextAttemptNumber =
-        await _loadAttemptCountForHomework(academyId, homeworkItemId) + 1;
-    final existingCorrectionAttemptNumbers =
-        await _loadCorrectionAttemptNumbersForHomework(
+    // 서로 독립적인 두 조회를 동시에 시작해 저장 전 네트워크 왕복을 줄인다.
+    final attemptCountFuture =
+        _loadAttemptCountForHomework(academyId, homeworkItemId);
+    final correctionAttemptNumbersFuture =
+        _loadCorrectionAttemptNumbersForHomework(
       academyId: academyId,
       homeworkItemId: homeworkItemId,
     );
+    final nextAttemptNumber = await attemptCountFuture + 1;
+    final existingCorrectionAttemptNumbers =
+        await correctionAttemptNumbersFuture;
     final computed = _computeAttemptRows(
       states: states,
       gradingPages: gradingPages,
@@ -531,6 +535,40 @@ class HomeworkTestGradingResultService {
     } catch (error, stackTrace) {
       if (!_isMissingTableError(error)) {
         debugPrint('resetAttemptsForHomework failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      return false;
+    }
+  }
+
+  /// 가장 최근 채점 시도 하나만 삭제한다. attempt_items는 FK cascade로 함께 삭제된다.
+  Future<bool> rollbackLatestAttemptForHomework({
+    required String homeworkItemId,
+  }) async {
+    final academyId = await _resolveAcademyId();
+    final itemId = homeworkItemId.trim();
+    if (academyId.isEmpty || itemId.isEmpty) return false;
+    try {
+      final supa = Supabase.instance.client;
+      final latest = await supa
+          .from('homework_test_grading_attempts')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', itemId)
+          .order('graded_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      final attemptId = '${latest?['id'] ?? ''}'.trim();
+      if (attemptId.isEmpty) return true;
+      await supa
+          .from('homework_test_grading_attempts')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('id', attemptId);
+      return true;
+    } catch (error, stackTrace) {
+      if (!_isMissingTableError(error)) {
+        debugPrint('rollbackLatestAttemptForHomework failed: $error');
         debugPrintStack(stackTrace: stackTrace);
       }
       return false;
@@ -1012,12 +1050,11 @@ class HomeworkTestGradingResultService {
     String homeworkItemId,
   ) async {
     try {
-      final rows = await Supabase.instance.client
+      return await Supabase.instance.client
           .from('homework_test_grading_attempts')
-          .select('id')
+          .count(CountOption.exact)
           .eq('academy_id', academyId)
           .eq('homework_item_id', homeworkItemId);
-      return rows.length;
     } catch (_) {
       return 0;
     }

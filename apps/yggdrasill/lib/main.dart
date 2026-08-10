@@ -1693,6 +1693,72 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
 const double kRightSideSheetPanelWidth =
     (238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26 + 8 + 12) * 0.9;
 
+class _RightSheetPdfLoadingPane extends StatelessWidget {
+  const _RightSheetPdfLoadingPane({
+    required this.title,
+    required this.onClose,
+  });
+
+  final String title;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: Color(0xFFB7C7C4),
+                ),
+              ),
+              SizedBox(height: 14),
+              Text(
+                '정답 PDF 불러오는 중…',
+                style: TextStyle(
+                  color: Color(0xFFB7C7C4),
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          top: 10,
+          right: 10,
+          child: IconButton(
+            tooltip: '닫기',
+            onPressed: onClose,
+            icon: const Icon(Icons.close_rounded, color: Color(0xFFB7C7C4)),
+          ),
+        ),
+        Positioned(
+          top: 16,
+          left: 18,
+          right: 56,
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFFE6EEEC),
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _GlobalRightSheetPdfPanel extends StatelessWidget {
   const _GlobalRightSheetPdfPanel();
 
@@ -1712,8 +1778,12 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
     return ValueListenableBuilder<RightSideSheetPdfPanelSession?>(
       valueListenable: rightSideSheetPdfPanelSession,
       builder: (context, session, _) {
-        final answerPath = session?.answerPath.trim() ?? '';
-        if (session == null || answerPath.isEmpty) {
+        if (session == null) {
+          return const SizedBox.shrink();
+        }
+        final answerPath = session.answerPath.trim();
+        final showLoading = session.isLoading;
+        if (!showLoading && answerPath.isEmpty) {
           return const SizedBox.shrink();
         }
         return ValueListenableBuilder<bool>(
@@ -1729,6 +1799,9 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
                   ),
                 )
                 .toList(growable: false);
+            final title = session.title.trim().isEmpty
+                ? '정답 PDF'
+                : session.title.trim();
             return AnimatedPositioned(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeInOut,
@@ -1739,30 +1812,34 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
               child: Material(
                 color: const Color(0xFF101415),
                 elevation: 10,
-                child: HomeworkAnswerViewerPage(
-                  key: ValueKey<String>(
-                    'right-sheet-pdf:${session.sessionId}|${session.answerPath}|${session.solutionPath}',
-                  ),
-                  filePath: answerPath,
-                  title: session.title.trim().isEmpty
-                      ? '정답 PDF'
-                      : session.title.trim(),
-                  solutionFilePath: session.solutionPath.trim().isEmpty
-                      ? null
-                      : session.solutionPath.trim(),
-                  cacheKey: session.cacheKey.trim().isEmpty
-                      ? 'right-sheet-pdf:${session.sessionId}'
-                      : session.cacheKey.trim(),
-                  enableConfirm: false,
-                  overlayEntries: overlayEntries,
-                  gradingPages: const <HomeworkAnswerGradingPage>[],
-                  hideSourceDocument: true,
-                  initialShowSolution: session.showSolution,
-                  focusPageNumber: session.focusPageNumber,
-                  focusRequestId: session.focusRequestId,
-                  focusRect1k: session.focusRect1k,
-                  onClose: _closePanelAndRightSheet,
-                ),
+                child: showLoading
+                    ? _RightSheetPdfLoadingPane(
+                        title: title,
+                        onClose: _closePanelAndRightSheet,
+                      )
+                    : HomeworkAnswerViewerPage(
+                        key: ValueKey<String>(
+                          'right-sheet-pdf:${session.sessionId}|'
+                          '${session.answerPath}|${session.solutionPath}',
+                        ),
+                        filePath: answerPath,
+                        title: title,
+                        solutionFilePath: session.solutionPath.trim().isEmpty
+                            ? null
+                            : session.solutionPath.trim(),
+                        cacheKey: session.cacheKey.trim().isEmpty
+                            ? 'right-sheet-pdf:${session.sessionId}'
+                            : session.cacheKey.trim(),
+                        enableConfirm: false,
+                        overlayEntries: overlayEntries,
+                        gradingPages: const <HomeworkAnswerGradingPage>[],
+                        hideSourceDocument: true,
+                        initialShowSolution: session.showSolution,
+                        focusPageNumber: session.focusPageNumber,
+                        focusRequestId: session.focusRequestId,
+                        focusRect1k: session.focusRect1k,
+                        onClose: _closePanelAndRightSheet,
+                      ),
               ),
             );
           },

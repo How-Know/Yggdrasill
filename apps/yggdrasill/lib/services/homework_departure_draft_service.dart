@@ -13,7 +13,10 @@ class HomeworkDepartureDraft {
     this.planHomeworkItemIds = const <String>{},
     this.autoManagedPlanItemIds = const <String>{},
     this.autoRolloverToHomeworkItemIds = const <String>{},
+    this.todayAndHomeworkGroupIds = const <String>{},
     this.hasPlanClassification = false,
+    this.planSnapshotItemIds = const <String>{},
+    this.planSnapshotAt,
   });
 
   final String attendanceId;
@@ -28,9 +31,23 @@ class HomeworkDepartureDraft {
   /// '오늘' 계획 중 하원 시 자동으로 다음 수업까지 숙제로 넘길 항목
   /// (`in_class` + `to_homework`). 알림장 숙제 리스트에 포함한다.
   final Set<String> autoRolloverToHomeworkItemIds;
+
+  /// 오늘 계획 UI 기준 숙제+오늘 그룹 id 집합 (`다음` 제외).
+  final Set<String> todayAndHomeworkGroupIds;
   final bool hasPlanClassification;
 
+  /// 목표 제시 시점에 고정한 오늘+다음 item id.
+  final Set<String> planSnapshotItemIds;
+  final DateTime? planSnapshotAt;
+
   bool get isSaved => savedAt != null;
+  bool get hasGoalSnapshot => planSnapshotAt != null;
+
+  /// 수업계획 버튼 뱃지용: 숙제+오늘 그룹 수 (계획 없으면 저장 초안 그룹 수).
+  int get planBadgeGroupCount {
+    if (hasPlanClassification) return todayAndHomeworkGroupIds.length;
+    return groupIds.length;
+  }
 
   factory HomeworkDepartureDraft.fromRow(Map<String, dynamic> row) {
     final rawGroupIds = row['homework_draft_group_ids'];
@@ -53,6 +70,15 @@ class HomeworkDepartureDraft {
       }
     }
     final rawSavedAt = row['homework_draft_saved_at'];
+    final planSnapshotItemIds = <String>{};
+    final rawSnapshotIds = row['homework_plan_snapshot_item_ids'];
+    if (rawSnapshotIds is List) {
+      for (final value in rawSnapshotIds) {
+        final id = '$value'.trim();
+        if (id.isNotEmpty) planSnapshotItemIds.add(id);
+      }
+    }
+    final rawSnapshotAt = row['homework_plan_snapshot_at'];
     return HomeworkDepartureDraft(
       attendanceId: '${row['id'] ?? ''}'.trim(),
       groupIds: groupIds,
@@ -60,6 +86,10 @@ class HomeworkDepartureDraft {
       savedAt: rawSavedAt == null
           ? null
           : DateTime.tryParse('$rawSavedAt')?.toLocal(),
+      planSnapshotItemIds: planSnapshotItemIds,
+      planSnapshotAt: rawSnapshotAt == null
+          ? null
+          : DateTime.tryParse('$rawSnapshotAt')?.toLocal(),
     );
   }
 }
@@ -73,6 +103,11 @@ class HomeworkDepartureDraftService {
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
   final Map<String, HomeworkDepartureDraft> _cache =
       <String, HomeworkDepartureDraft>{};
+
+  static const _attendanceDraftSelect =
+      'id,student_id,homework_draft_group_ids,homework_draft_group_due_dates,'
+      'homework_draft_saved_at,homework_plan_snapshot_item_ids,'
+      'homework_plan_snapshot_at';
 
   HomeworkDepartureDraft? peek(String attendanceId) {
     final key = attendanceId.trim();
@@ -92,9 +127,7 @@ class HomeworkDepartureDraftService {
         await TenantService.instance.ensureActiveAcademy();
     final row = await Supabase.instance.client
         .from('attendance_records')
-        .select(
-          'id,student_id,homework_draft_group_ids,homework_draft_group_due_dates,homework_draft_saved_at',
-        )
+        .select(_attendanceDraftSelect)
         .eq('academy_id', academyId)
         .eq('id', key)
         .maybeSingle();
@@ -111,11 +144,23 @@ class HomeworkDepartureDraftService {
             studentId: studentId,
             force: force,
           );
+    final todayAndHomeworkGroupIds = <String>{};
+    for (final plan in plans) {
+      final ui = plan.uiDestination;
+      if (ui != HomeworkPlanDestination.homework &&
+          ui != HomeworkPlanDestination.inClass) {
+        continue;
+      }
+      final groupId = plan.groupId.trim();
+      if (groupId.isNotEmpty) todayAndHomeworkGroupIds.add(groupId);
+    }
     final draft = HomeworkDepartureDraft(
       attendanceId: baseDraft.attendanceId,
       groupIds: baseDraft.groupIds,
       dueDateByGroupId: baseDraft.dueDateByGroupId,
       savedAt: baseDraft.savedAt,
+      planSnapshotItemIds: baseDraft.planSnapshotItemIds,
+      planSnapshotAt: baseDraft.planSnapshotAt,
       planHomeworkItemIds: plans
           .where((plan) =>
               plan.destination == HomeworkPlanDestination.homework &&
@@ -136,16 +181,33 @@ class HomeworkDepartureDraftService {
           .map((plan) => plan.homeworkItemId)
           .where((id) => id.isNotEmpty)
           .toSet(),
+      todayAndHomeworkGroupIds: todayAndHomeworkGroupIds,
       hasPlanClassification: plans.isNotEmpty,
     );
     _cache[key] = draft;
     return draft;
   }
 
+  /// 세션 계획 destination 변경 후 뱃지/캐시를 다시 읽게 한다.
+  /// 목표 스냅샷이 사라져 + 표시가 빠지지 않도록 즉시 재로드한다.
+  void invalidate(String attendanceId) {
+    final key = attendanceId.trim();
+    if (key.isEmpty) return;
+    _cache.remove(key);
+    revision.value = revision.value + 1;
+    load(key, force: true).catchError((Object error) {
+      debugPrint('[HW][draft] reload after invalidate failed: $error');
+      return null;
+    });
+  }
+
+  /// [presentGoalSnapshot]이 true이면 오늘+다음 item 스냅샷을 함께 기록한다.
   Future<HomeworkDepartureDraft> save({
     required String attendanceId,
     required Iterable<String> groupIds,
     required Map<String, DateTime> dueDateByGroupId,
+    Iterable<String> planSnapshotItemIds = const <String>[],
+    bool presentGoalSnapshot = false,
   }) async {
     final key = attendanceId.trim();
     if (key.isEmpty) {
@@ -161,39 +223,39 @@ class HomeworkDepartureDraftService {
         if (dueDateByGroupId[groupId] != null)
           groupId: dueDateByGroupId[groupId]!.toUtc().toIso8601String(),
     };
+    final normalizedSnapshotIds = planSnapshotItemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final payload = <String, dynamic>{
+      'homework_draft_group_ids':
+          normalizedGroupIds.toList(growable: false),
+      'homework_draft_group_due_dates': normalizedDueDates,
+      'homework_draft_saved_at': savedAt.toUtc().toIso8601String(),
+    };
+    if (presentGoalSnapshot) {
+      payload['homework_plan_snapshot_item_ids'] = normalizedSnapshotIds;
+      payload['homework_plan_snapshot_at'] =
+          savedAt.toUtc().toIso8601String();
+    }
     final rows = await Supabase.instance.client
         .from('attendance_records')
-        .update({
-          'homework_draft_group_ids':
-              normalizedGroupIds.toList(growable: false),
-          'homework_draft_group_due_dates': normalizedDueDates,
-          'homework_draft_saved_at': savedAt.toUtc().toIso8601String(),
-        })
+        .update(payload)
         .eq('academy_id', academyId)
         .eq('id', key)
         .isFilter('departure_time', null)
-        .select(
-          'id,homework_draft_group_ids,homework_draft_group_due_dates,homework_draft_saved_at',
-        );
+        .select(_attendanceDraftSelect);
     final typedRows = (rows as List<dynamic>).cast<Map<String, dynamic>>();
     if (typedRows.isEmpty) {
       throw StateError('ATTENDANCE_SESSION_CLOSED');
     }
-    final savedDraft = HomeworkDepartureDraft.fromRow(typedRows.first);
-    final previous = _cache[key];
-    final draft = HomeworkDepartureDraft(
-      attendanceId: savedDraft.attendanceId,
-      groupIds: savedDraft.groupIds,
-      dueDateByGroupId: savedDraft.dueDateByGroupId,
-      savedAt: savedDraft.savedAt,
-      planHomeworkItemIds: previous?.planHomeworkItemIds ?? const <String>{},
-      autoManagedPlanItemIds:
-          previous?.autoManagedPlanItemIds ?? const <String>{},
-      autoRolloverToHomeworkItemIds:
-          previous?.autoRolloverToHomeworkItemIds ?? const <String>{},
-      hasPlanClassification: previous?.hasPlanClassification ?? false,
-    );
-    _cache[key] = draft;
+    // 저장 직후 세션 계획 기준으로 숙제+오늘 그룹 수를 다시 계산한다.
+    _cache.remove(key);
+    final draft = await load(key, force: true);
+    if (draft == null) {
+      throw StateError('ATTENDANCE_DRAFT_RELOAD_FAILED');
+    }
     revision.value = revision.value + 1;
     return draft;
   }

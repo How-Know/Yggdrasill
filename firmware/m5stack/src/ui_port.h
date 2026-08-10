@@ -32,6 +32,8 @@ void ui_port_on_device_ack_json(const char* body);
 void ui_port_show_boot_status(void);
 void ui_port_update_boot_status(const char* status, int progress);
 void ui_port_hide_boot_status(void);
+// PIN 입력 중에는 화면보호기 진입을 막기 위한 상태 조회
+bool ui_port_is_pin_entry_active(void);
 // bind ack 결과 처리 (메인 deviceAck 핸들러에서 호출)
 void ui_port_on_bind_ack(bool ok, const char* reason, int attempts_left, int locked_seconds);
 

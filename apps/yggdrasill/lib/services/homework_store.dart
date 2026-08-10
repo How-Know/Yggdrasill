@@ -2067,9 +2067,15 @@ class HomeworkStore {
       for (final entry in _byStudentId.values) {
         _sortStudentList(entry);
       }
+      final allItems =
+          _byStudentId.values.expand((e) => e).toList(growable: false);
       await _hydratePageMappingsFromServer(
         academyId: academyId,
-        items: _byStudentId.values.expand((e) => e).toList(growable: false),
+        items: allItems,
+      );
+      await _hydrateUnitAndProblemMappingsFromServer(
+        academyId: academyId,
+        items: allItems,
       );
       await _reloadGroups(academyId: academyId, bump: false);
       for (final sid in _byStudentId.keys.toList(growable: false)) {
@@ -2391,6 +2397,29 @@ class HomeworkStore {
     }
   }
 
+  Future<int> _resolveNextGroupOrderIndex({
+    required String academyId,
+    required String studentId,
+  }) async {
+    final localNext = _nextGroupOrderIndex(studentId);
+    try {
+      final raw = await Supabase.instance.client
+          .from('homework_groups')
+          .select('order_index')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('status', 'active')
+          .order('order_index', ascending: false)
+          .limit(1);
+      final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+      if (rows.isEmpty) return localNext;
+      final remoteNext = _parseInt(rows.first['order_index']) + 1;
+      return math.max(localNext, remoteNext);
+    } catch (_) {
+      return localNext;
+    }
+  }
+
   Future<void> _ensureGroupForItem({
     required String academyId,
     required String studentId,
@@ -2413,6 +2442,12 @@ class HomeworkStore {
           ? (typedExistingRows.first['id'] as String? ?? '').trim()
           : '';
       if (groupId.isEmpty) {
+        // 화면 순서는 group.order_index 기준이다. 아이템 활성 순번을 그대로
+        // 복사하면 유령 active 그룹이 많은 학생에서 새 카드가 맨 위로 간다.
+        final nextGroupOrder = await _resolveNextGroupOrderIndex(
+          academyId: academyId,
+          studentId: studentId,
+        );
         final insertRows = await supa.from('homework_groups').insert({
           'id': const Uuid().v4(),
           'academy_id': academyId,
@@ -2422,7 +2457,7 @@ class HomeworkStore {
           if (_supportsLearningTrackColumn)
             'learning_track_code':
                 _normalizeLearningTrackCode(item.learningTrackCode),
-          'order_index': item.orderIndex,
+          'order_index': nextGroupOrder,
           'status': 'active',
           'source_homework_item_id': item.id,
         }).select('id');
@@ -3864,6 +3899,9 @@ class HomeworkStore {
 
     if (changed) {
       _sortStudentList(list);
+      // 확인(phase 4)/pending_complete가 아니라 status=completed 확정 후에만
+      // 그룹을 숨긴다. 서버 homework_complete도 동일 조건으로 archive한다.
+      _archiveLocalGroupsIfFullyCompleted(studentId, completedIds);
       _applyFallbackGroupsForStudent(studentId);
       _bump();
     }
@@ -3893,6 +3931,46 @@ class HomeworkStore {
       }
     } catch (_) {
       await _reloadStudent(studentId);
+    }
+  }
+
+  /// 그룹의 모든 하위과제가 status=completed일 때만 로컬에서 archived로 숨긴다.
+  /// 확인(phase 4)만 된 상태에서는 호출해도 대상이 되지 않는다.
+  void _archiveLocalGroupsIfFullyCompleted(
+    String studentId,
+    Iterable<String> completedItemIds,
+  ) {
+    final groups = _groupsByStudentId[studentId];
+    if (groups == null || groups.isEmpty) return;
+    final candidateGroupIds = <String>{};
+    for (final itemId in completedItemIds) {
+      final groupId = (_groupIdByItemId[itemId] ?? '').trim();
+      if (groupId.isEmpty || _isLegacyGroupId(groupId)) continue;
+      candidateGroupIds.add(groupId);
+    }
+    if (candidateGroupIds.isEmpty) return;
+
+    var changed = false;
+    for (final groupId in candidateGroupIds) {
+      final groupIdx = groups.indexWhere((g) => g.id == groupId);
+      if (groupIdx < 0) continue;
+      final group = groups[groupIdx];
+      if (group.status == 'archived') continue;
+      final children = itemsInGroup(
+        studentId,
+        groupId,
+        includeCompleted: true,
+      );
+      if (children.isEmpty) continue;
+      final allCompleted =
+          children.every((child) => child.status == HomeworkStatus.completed);
+      if (!allCompleted) continue;
+      group.status = 'archived';
+      group.updatedAt = DateTime.now();
+      changed = true;
+    }
+    if (changed) {
+      groups.sort(_compareGroupByOrder);
     }
   }
 
@@ -3940,6 +4018,112 @@ class HomeworkStore {
       // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
       unawaited(_reloadStudent(studentId));
     }
+  }
+
+  /// 여러 과제를 한 번에 제출 상태로 전환한다.
+  ///
+  /// 단일 [submit]과 같은 로컬/서버 상태를 적용하되 RPC는 병렬 실행하고
+  /// 학생 전체 재로드는 한 번만 예약한다.
+  Future<void> submitBatch(String studentId, Iterable<String> ids) async {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final targetIds =
+        ids.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    if (targetIds.isEmpty) return;
+
+    final now = DateTime.now();
+    final submittedIds = <String>[];
+    for (final item in list) {
+      if (!targetIds.contains(item.id)) continue;
+      if (item.runStart != null) {
+        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+        item.runStart = null;
+      }
+      _autoCompleteOnNextWaiting.remove(item.id);
+      if (item.status == HomeworkStatus.completed) {
+        item.status = HomeworkStatus.inProgress;
+      }
+      item.completedAt = null;
+      item.confirmedAt = null;
+      item.phase = 3;
+      item.submittedAt = now;
+      item.updatedAt = now;
+      submittedIds.add(item.id);
+    }
+    if (submittedIds.isEmpty) return;
+    _bump();
+
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
+      await Future.wait(
+        submittedIds.map(
+          (id) => Supabase.instance.client.rpc('homework_submit', params: {
+            'p_item_id': id,
+            'p_academy_id': academyId,
+            'p_updated_by': updatedBy,
+          }),
+        ),
+      );
+      unawaited(_reloadStudent(studentId));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][submitBatch][ERROR] $e');
+      // 일부 RPC만 성공했을 수도 있으므로 서버 상태를 기준으로 복구한다.
+      unawaited(_reloadStudent(studentId));
+    }
+  }
+
+  /// 원자적 구조화 채점 RPC 성공 직후 서버와 같은 제출 상태를 로컬에 선반영한다.
+  ///
+  /// 서버 쓰기는 수행하지 않으며 realtime/poll이 version·checkCount를 보정한다.
+  void applyStructuredGradingSubmittedLocally(
+    String studentId,
+    Iterable<String> ids,
+  ) {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final targetIds = ids
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (targetIds.isEmpty) return;
+
+    final targetIdSet = targetIds.toSet();
+    final now = DateTime.now();
+    var nextOrder = 0;
+    for (final item in list) {
+      if (item.status == HomeworkStatus.completed ||
+          targetIdSet.contains(item.id)) {
+        continue;
+      }
+      nextOrder = math.max(nextOrder, item.orderIndex + 1);
+    }
+    final byId = <String, HomeworkItem>{for (final item in list) item.id: item};
+    var changed = false;
+    for (final id in targetIds) {
+      final item = byId[id];
+      if (item == null) continue;
+      if (item.runStart != null) {
+        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+        item.runStart = null;
+      }
+      _autoCompleteOnNextWaiting.remove(id);
+      item.status = HomeworkStatus.inProgress;
+      item.orderIndex = nextOrder++;
+      item.completedAt = null;
+      item.confirmedAt = null;
+      item.phase = 3;
+      item.submittedAt = now;
+      item.updatedAt = now;
+      changed = true;
+    }
+    if (!changed) return;
+    _sortStudentList(list);
+    _applyFallbackGroupsForStudent(studentId);
+    _bump();
   }
 
   Future<void> reloadStudentHomework(String studentId) =>
@@ -5193,6 +5377,18 @@ class HomeworkStore {
         },
       );
       await _reloadStudent(studentId);
+      if (normalizedFromPhase == 4) {
+        // 서버가 pending_complete 항목을 바로 완료했으면 메모리 예약·낙관적
+        // 숨김도 소진한다. 이후 같은 ID가 다시 대기 전환될 때 오발화하지 않는다.
+        for (final itemId in beforeIds) {
+          final item = getById(studentId, itemId);
+          if (item?.status == HomeworkStatus.completed ||
+              item?.completedAt != null) {
+            _autoCompleteOnNextWaiting.remove(itemId);
+            _optimisticallyCompletingItemIds.remove(itemId);
+          }
+        }
+      }
       if (normalizedFromPhase == 4 &&
           groupCycleDeltaMs > 0 &&
           beforeIds.isNotEmpty) {
@@ -6012,13 +6208,21 @@ class HomeworkStore {
         groupTitle.trim().isEmpty ? '그룹 과제' : groupTitle.trim();
     final now = DateTime.now();
     final groupId = const Uuid().v4();
+    // 로컬 max와 서버 active max 중 큰 값을 써서 유령 그룹/캐시 공백에도
+    // 새 그룹이 항상 활성 목록 꼬리에 붙게 한다.
+    final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+        await TenantService.instance.ensureActiveAcademy();
+    final nextGroupOrder = await _resolveNextGroupOrderIndex(
+      academyId: academyId,
+      studentId: studentId,
+    );
     final group = HomeworkGroup(
       id: groupId,
       studentId: studentId,
       title: cleanedGroupTitle,
       flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
       learningTrackCode: groupLearningTrackCode,
-      orderIndex: _nextGroupOrderIndex(studentId),
+      orderIndex: nextGroupOrder,
       status: 'active',
       sourceHomeworkItemId: null,
       createdAt: now,
@@ -6036,8 +6240,6 @@ class HomeworkStore {
       _rtReloadDebounce.remove(studentId)?.cancel();
     }
     try {
-      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
-          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
 
       Future<void> groupPersistence = Future<void>.value();
@@ -6297,6 +6499,10 @@ class HomeworkStore {
         academyId: academyId,
         items: list,
       );
+      await _hydrateUnitAndProblemMappingsFromServer(
+        academyId: academyId,
+        items: list,
+      );
       await _reloadGroups(
         academyId: academyId,
         studentId: studentId,
@@ -6453,6 +6659,393 @@ class HomeworkStore {
         ];
       }
     }
+  }
+
+  /// `homework_item_units` / `homework_item_problems` → unitMappings 복원.
+  /// reload 행에는 JSON 매핑이 없어, 단원·문항 집계(특히 중단원 배지)가
+  /// 당일 로컬 세션에서만 되는 문제를 막는다.
+  Future<void> _hydrateUnitAndProblemMappingsFromServer({
+    required String academyId,
+    required List<HomeworkItem> items,
+  }) async {
+    if (items.isEmpty) return;
+    final ids = <String>[];
+    final byId = <String, HomeworkItem>{};
+    for (final item in items) {
+      final id = item.id.trim();
+      if (id.isEmpty) continue;
+      ids.add(id);
+      byId[id] = item;
+    }
+    if (ids.isEmpty) return;
+
+    final supa = Supabase.instance.client;
+    const batchSize = 200;
+
+    final unitRowsByItem = <String, List<Map<String, dynamic>>>{};
+    try {
+      for (var offset = 0; offset < ids.length; offset += batchSize) {
+        final batch = ids.sublist(
+          offset,
+          offset + batchSize > ids.length ? ids.length : offset + batchSize,
+        );
+        final rows = await _selectAllPaged(
+          () => supa
+              .from('homework_item_units')
+              .select(
+                'homework_item_id, big_order, mid_order, small_order, '
+                'big_name, mid_name, small_name, start_page, end_page, '
+                'page_count, weight, source_scope',
+              )
+              .eq('academy_id', academyId)
+              .inFilter('homework_item_id', batch)
+              .order('homework_item_id', ascending: true)
+              .order('big_order', ascending: true)
+              .order('mid_order', ascending: true)
+              .order('small_order', ascending: true),
+        );
+        for (final row in rows) {
+          final itemId = (row['homework_item_id'] as String?)?.trim() ?? '';
+          if (itemId.isEmpty) continue;
+          unitRowsByItem
+              .putIfAbsent(itemId, () => <Map<String, dynamic>>[])
+              .add(Map<String, dynamic>.from(row));
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[HW][hydrateUnits][ERROR] $e\n$st');
+    }
+
+    final problemRowsByItem = <String, List<Map<String, dynamic>>>{};
+    const problemSelectWithStage =
+        'homework_item_id, crop_id, crop_snapshot, sort_order, '
+        'pb_question_uid, problem_number, page_number, display_page, '
+        'raw_page, big_order, mid_order, sub_key, big_name, mid_name, '
+        'content_group_kind, content_group_label, content_group_title, '
+        'bbox_1k, item_region_1k, source_stage';
+    const problemSelectNoStage =
+        'homework_item_id, crop_id, crop_snapshot, sort_order, '
+        'pb_question_uid, problem_number, page_number, display_page, '
+        'raw_page, big_order, mid_order, sub_key, big_name, mid_name, '
+        'content_group_kind, content_group_label, content_group_title, '
+        'bbox_1k, item_region_1k';
+    var problemSelect = problemSelectWithStage;
+    try {
+      for (var offset = 0; offset < ids.length; offset += batchSize) {
+        final batch = ids.sublist(
+          offset,
+          offset + batchSize > ids.length ? ids.length : offset + batchSize,
+        );
+        List<Map<String, dynamic>> rows;
+        try {
+          rows = await _selectAllPaged(
+            () => supa
+                .from('homework_item_problems')
+                .select(problemSelect)
+                .eq('academy_id', academyId)
+                .inFilter('homework_item_id', batch)
+                .order('homework_item_id', ascending: true)
+                .order('sort_order', ascending: true),
+          );
+        } catch (e) {
+          if (problemSelect == problemSelectWithStage &&
+              _isMissingSourceStageColumnError(e)) {
+            problemSelect = problemSelectNoStage;
+            rows = await _selectAllPaged(
+              () => supa
+                  .from('homework_item_problems')
+                  .select(problemSelect)
+                  .eq('academy_id', academyId)
+                  .inFilter('homework_item_id', batch)
+                  .order('homework_item_id', ascending: true)
+                  .order('sort_order', ascending: true),
+            );
+          } else {
+            rethrow;
+          }
+        }
+        for (final row in rows) {
+          final itemId = (row['homework_item_id'] as String?)?.trim() ?? '';
+          if (itemId.isEmpty) continue;
+          problemRowsByItem
+              .putIfAbsent(itemId, () => <Map<String, dynamic>>[])
+              .add(Map<String, dynamic>.from(row));
+        }
+      }
+    } catch (e, st) {
+      // Optional table in some environments.
+      debugPrint('[HW][hydrateProblems][ERROR] $e\n$st');
+    }
+
+    if (unitRowsByItem.isEmpty && problemRowsByItem.isEmpty) return;
+
+    for (final itemId in <String>{
+      ...unitRowsByItem.keys,
+      ...problemRowsByItem.keys,
+    }) {
+      final item = byId[itemId];
+      if (item == null) continue;
+      _mergeHydratedUnitMappings(
+        item,
+        unitRows: unitRowsByItem[itemId] ?? const <Map<String, dynamic>>[],
+        problemRows:
+            problemRowsByItem[itemId] ?? const <Map<String, dynamic>>[],
+      );
+    }
+  }
+
+  void _mergeHydratedUnitMappings(
+    HomeworkItem item, {
+    required List<Map<String, dynamic>> unitRows,
+    required List<Map<String, dynamic>> problemRows,
+  }) {
+    if (unitRows.isEmpty && problemRows.isEmpty) return;
+
+    final existing = item.unitMappings;
+    final hasCrops = _unitMappingsHaveProblemCrops(existing);
+    final hasUnitOrders = _unitMappingsHaveUnitOrders(existing);
+    if (hasCrops && hasUnitOrders) return;
+
+    final hydratedCrops = <Map<String, dynamic>>[];
+    if (!hasCrops) {
+      final seenCropIds = <String>{};
+      for (final row in problemRows) {
+        final crop = _problemRowToCropMapping(row);
+        if (crop == null) continue;
+        final cropId = '${crop['cropId'] ?? ''}'.trim();
+        if (cropId.isNotEmpty && !seenCropIds.add(cropId)) continue;
+        hydratedCrops.add(crop);
+      }
+    }
+
+    // crops는 있는데 단원 order만 없을 때: 기존 매핑에 order만 보강.
+    if (hasCrops && !hasUnitOrders && existing != null && existing.isNotEmpty) {
+      if (unitRows.isEmpty) return;
+      final firstUnit = unitRows.first;
+      final bigOrder = _parseIntOpt(firstUnit['big_order']);
+      final midOrder = _parseIntOpt(firstUnit['mid_order']);
+      final smallOrder = _parseIntOpt(firstUnit['small_order']);
+      if (bigOrder == null || midOrder == null || smallOrder == null) return;
+      final first = Map<String, dynamic>.from(existing.first);
+      first['bigOrder'] = first['bigOrder'] ?? first['big_order'] ?? bigOrder;
+      first['midOrder'] = first['midOrder'] ?? first['mid_order'] ?? midOrder;
+      first['smallOrder'] =
+          first['smallOrder'] ?? first['small_order'] ?? smallOrder;
+      first['bigName'] =
+          '${first['bigName'] ?? first['big_name'] ?? ''}'.trim().isNotEmpty
+              ? first['bigName'] ?? first['big_name']
+              : (firstUnit['big_name'] as String?)?.trim() ?? '';
+      first['midName'] =
+          '${first['midName'] ?? first['mid_name'] ?? ''}'.trim().isNotEmpty
+              ? first['midName'] ?? first['mid_name']
+              : (firstUnit['mid_name'] as String?)?.trim() ?? '';
+      first['smallName'] =
+          '${first['smallName'] ?? first['small_name'] ?? ''}'.trim().isNotEmpty
+              ? first['smallName'] ?? first['small_name']
+              : (firstUnit['small_name'] as String?)?.trim() ?? '';
+      item.unitMappings = <Map<String, dynamic>>[
+        first,
+        ...existing.skip(1).map((e) => Map<String, dynamic>.from(e)),
+      ];
+      return;
+    }
+
+    // 단원 order는 있는데 crops만 없을 때: 기존 매핑에 crops만 보강.
+    if (hasUnitOrders && !hasCrops && existing != null && existing.isNotEmpty) {
+      if (hydratedCrops.isEmpty) return;
+      final first = Map<String, dynamic>.from(existing.first);
+      first['problemCrops'] = hydratedCrops;
+      first['problemCount'] = hydratedCrops.length;
+      item.unitMappings = <Map<String, dynamic>>[
+        first,
+        ...existing.skip(1).map((e) => Map<String, dynamic>.from(e)),
+      ];
+      return;
+    }
+
+    // 둘 다 없거나 매핑 자체가 비어 있을 때: units/problems로 재구성.
+    final next = <Map<String, dynamic>>[];
+    if (unitRows.isNotEmpty) {
+      for (final row in unitRows) {
+        final bigOrder = _parseIntOpt(row['big_order']);
+        final midOrder = _parseIntOpt(row['mid_order']);
+        final smallOrder = _parseIntOpt(row['small_order']);
+        if (bigOrder == null || midOrder == null || smallOrder == null) {
+          continue;
+        }
+        next.add(<String, dynamic>{
+          'selectionMode': 'hydrated_unit',
+          'sourceScope':
+              (row['source_scope'] as String?)?.trim().isNotEmpty == true
+                  ? (row['source_scope'] as String).trim()
+                  : 'hydrated_units',
+          'bigOrder': bigOrder,
+          'midOrder': midOrder,
+          'smallOrder': smallOrder,
+          'bigName': (row['big_name'] as String?)?.trim() ?? '',
+          'midName': (row['mid_name'] as String?)?.trim() ?? '',
+          'smallName': (row['small_name'] as String?)?.trim() ?? '',
+          'startPage': _parseIntOpt(row['start_page']),
+          'endPage': _parseIntOpt(row['end_page']),
+          'pageCount': _parseIntOpt(row['page_count']),
+          'weight':
+              row['weight'] is num ? (row['weight'] as num).toDouble() : 1.0,
+        });
+      }
+    }
+
+    if (existing != null && existing.isNotEmpty) {
+      final base = Map<String, dynamic>.from(existing.first);
+      if (next.isEmpty) {
+        next.add(base);
+      } else {
+        final first = Map<String, dynamic>.from(next.first);
+        final pageCounts = base['pageCounts'] ?? base['page_counts'];
+        if (pageCounts is Map && pageCounts.isNotEmpty) {
+          first['pageCounts'] = Map<String, dynamic>.from(pageCounts);
+        }
+        first['startPage'] =
+            first['startPage'] ?? base['startPage'] ?? base['start_page'];
+        first['endPage'] =
+            first['endPage'] ?? base['endPage'] ?? base['end_page'];
+        if ((first['sourceScope'] as String?)?.trim().isEmpty ?? true) {
+          first['sourceScope'] =
+              base['sourceScope'] ?? base['source_scope'] ?? 'hydrated_units';
+        }
+        next[0] = first;
+      }
+    } else if (next.isEmpty) {
+      next.add(<String, dynamic>{
+        'selectionMode': 'hydrated_problems',
+        'sourceScope': 'hydrated_problems',
+      });
+    }
+
+    if (hydratedCrops.isNotEmpty) {
+      final first = Map<String, dynamic>.from(next.first);
+      first['problemCrops'] = hydratedCrops;
+      first['problemCount'] = hydratedCrops.length;
+      final sample = hydratedCrops.first;
+      first['bigOrder'] = first['bigOrder'] ?? sample['bigOrder'];
+      first['midOrder'] = first['midOrder'] ?? sample['midOrder'];
+      first['subKey'] = first['subKey'] ?? sample['subKey'];
+      first['bigName'] = first['bigName'] ?? sample['bigName'];
+      first['midName'] = first['midName'] ?? sample['midName'];
+      final pages = <int>{};
+      for (final crop in hydratedCrops) {
+        final p = crop['displayPage'] is int
+            ? crop['displayPage'] as int
+            : (crop['rawPage'] is int ? crop['rawPage'] as int : null);
+        if (p != null && p > 0) pages.add(p);
+      }
+      if (pages.isNotEmpty) {
+        final sorted = pages.toList()..sort();
+        first['startPage'] = first['startPage'] ?? sorted.first;
+        first['endPage'] = first['endPage'] ?? sorted.last;
+        final existingCounts = first['pageCounts'];
+        if (existingCounts is! Map || existingCounts.isEmpty) {
+          final pageCounts = <String, int>{
+            for (final p in sorted) '$p': 0,
+          };
+          for (final crop in hydratedCrops) {
+            final p = crop['displayPage'] is int
+                ? crop['displayPage'] as int
+                : (crop['rawPage'] is int ? crop['rawPage'] as int : null);
+            if (p == null || p <= 0) continue;
+            pageCounts['$p'] = (pageCounts['$p'] ?? 0) + 1;
+          }
+          first['pageCounts'] = pageCounts;
+        }
+      }
+      final stage = problemRows
+          .map((r) => (r['source_stage'] as String?)?.trim() ?? '')
+          .firstWhere((s) => s.isNotEmpty, orElse: () => '');
+      if (stage.isNotEmpty) first['problemStage'] = stage;
+      next[0] = first;
+    }
+
+    item.unitMappings = next;
+  }
+
+  bool _unitMappingsHaveProblemCrops(List<Map<String, dynamic>>? mappings) {
+    if (mappings == null || mappings.isEmpty) return false;
+    for (final raw in mappings) {
+      final crops = raw['problemCrops'] ?? raw['problem_crops'];
+      if (crops is List && crops.isNotEmpty) return true;
+    }
+    return false;
+  }
+
+  bool _unitMappingsHaveUnitOrders(List<Map<String, dynamic>>? mappings) {
+    if (mappings == null || mappings.isEmpty) return false;
+    for (final raw in mappings) {
+      final big = _parseIntOpt(raw['bigOrder'] ?? raw['big_order']);
+      final mid = _parseIntOpt(raw['midOrder'] ?? raw['mid_order']);
+      final small = _parseIntOpt(raw['smallOrder'] ?? raw['small_order']);
+      if (big != null && mid != null && small != null) return true;
+    }
+    return false;
+  }
+
+  Map<String, dynamic>? _problemRowToCropMapping(Map<String, dynamic> row) {
+    final snapshotRaw = row['crop_snapshot'];
+    final snapshot = snapshotRaw is Map
+        ? Map<String, dynamic>.from(snapshotRaw)
+        : const <String, dynamic>{};
+
+    String asString(dynamic v) => v == null ? '' : v.toString().trim();
+    final cropId = asString(row['crop_id']).isNotEmpty
+        ? asString(row['crop_id'])
+        : asString(snapshot['cropId'] ?? snapshot['crop_id']);
+    final problemNumber = asString(row['problem_number']).isNotEmpty
+        ? asString(row['problem_number'])
+        : asString(snapshot['problemNumber'] ?? snapshot['problem_number']);
+    if (cropId.isEmpty && problemNumber.isEmpty) return null;
+
+    final bigOrder =
+        _parseIntOpt(row['big_order']) ?? _parseIntOpt(snapshot['bigOrder']);
+    final midOrder =
+        _parseIntOpt(row['mid_order']) ?? _parseIntOpt(snapshot['midOrder']);
+    final subKey = asString(row['sub_key']).isNotEmpty
+        ? asString(row['sub_key'])
+        : asString(snapshot['subKey'] ?? snapshot['sub_key']);
+
+    return <String, dynamic>{
+      'cropId': cropId,
+      'bigOrder': bigOrder,
+      'midOrder': midOrder,
+      'subKey': subKey,
+      'bigName': asString(row['big_name']).isNotEmpty
+          ? asString(row['big_name'])
+          : asString(snapshot['bigName']),
+      'midName': asString(row['mid_name']).isNotEmpty
+          ? asString(row['mid_name'])
+          : asString(snapshot['midName']),
+      'rawPage':
+          _parseIntOpt(row['raw_page']) ?? _parseIntOpt(snapshot['rawPage']),
+      'displayPage': _parseIntOpt(row['display_page']) ??
+          _parseIntOpt(row['page_number']) ??
+          _parseIntOpt(snapshot['displayPage']),
+      'problemNumber': problemNumber,
+      'label': asString(snapshot['label']),
+      'section': asString(snapshot['section']),
+      'pbQuestionUid': asString(row['pb_question_uid']).isNotEmpty
+          ? asString(row['pb_question_uid'])
+          : asString(snapshot['pbQuestionUid']),
+      'typeKind': asString(row['content_group_kind']).isNotEmpty
+          ? asString(row['content_group_kind'])
+          : asString(snapshot['contentGroupKind'] ?? snapshot['typeKind']),
+      'typeLabel': asString(row['content_group_label']).isNotEmpty
+          ? asString(row['content_group_label'])
+          : asString(snapshot['contentGroupLabel'] ?? snapshot['typeLabel']),
+      'typeTitle': asString(row['content_group_title']).isNotEmpty
+          ? asString(row['content_group_title'])
+          : asString(snapshot['contentGroupTitle'] ?? snapshot['typeTitle']),
+      'bbox1k': row['bbox_1k'] ?? snapshot['bbox1k'] ?? snapshot['bbox_1k'],
+      'itemRegion1k': row['item_region_1k'] ??
+          snapshot['itemRegion1k'] ??
+          snapshot['item_region_1k'],
+    };
   }
 
   /// 그룹 내 하위과제가 서로 다른 과제코드를 가지면 대표 코드로 통일한다.

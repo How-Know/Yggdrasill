@@ -1487,6 +1487,94 @@ class HomeworkAssignmentStore {
     }
   }
 
+  /// 구조화 채점 검사 기록과 하위 과제 phase 3 전환을 한 트랜잭션으로 처리한다.
+  ///
+  /// RPC가 아직 배포되지 않았거나 실패하면 null을 반환해 호출자가 기존 경로로
+  /// 안전하게 폴백할 수 있게 한다.
+  Future<HomeworkAssignmentOutcomeResult?> recordStructuredGroupGrading({
+    required String studentId,
+    required String groupId,
+    required Iterable<String> homeworkItemIds,
+    int progress = 0,
+    String? idempotencyKey,
+  }) async {
+    final ids = homeworkItemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final sid = studentId.trim();
+    final gid = groupId.trim();
+    if (sid.isEmpty || gid.isEmpty || ids.isEmpty) return null;
+    final requestId = (idempotencyKey ?? const Uuid().v4()).trim();
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'homework_record_structured_grading',
+        params: <String, dynamic>{
+          'p_student_id': sid,
+          'p_group_id': gid,
+          'p_homework_item_ids': ids,
+          'p_progress': progress.clamp(0, 150),
+          'p_idempotency_key': requestId,
+          'p_checked_at': DateTime.now().toUtc().toIso8601String(),
+        },
+      );
+      final row = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      final nextDueRaw = '${row['next_due_at'] ?? ''}'.trim();
+      _activeAssignmentsCacheByStudent.remove(sid);
+      _activeAssignmentsLoadCompletedForStudent.remove(sid);
+      _bump();
+      return HomeworkAssignmentOutcomeResult(
+        groupCheckId: '${row['group_check_id'] ?? requestId}'.trim(),
+        processedCount: (row['processed_count'] as num?)?.toInt() ?? ids.length,
+        nextDueAt: nextDueRaw.isEmpty
+            ? null
+            : DateTime.tryParse(nextDueRaw)?.toLocal(),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[HW_ASSIGN][structured_grading][WARN] $error\n$stackTrace');
+      return null;
+    }
+  }
+
+  /// 가장 최근 구조화 그룹 채점의 검사·attempt·assignment·phase를 원자적으로 롤백한다.
+  Future<int?> rollbackStructuredGroupGrading({
+    required String studentId,
+    required String groupId,
+    required Iterable<String> homeworkItemIds,
+  }) async {
+    final ids = homeworkItemIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final sid = studentId.trim();
+    final gid = groupId.trim();
+    if (sid.isEmpty || gid.isEmpty || ids.isEmpty) return null;
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'homework_rollback_structured_grading',
+        params: <String, dynamic>{
+          'p_student_id': sid,
+          'p_group_id': gid,
+          'p_homework_item_ids': ids,
+        },
+      );
+      final row = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      _activeAssignmentsCacheByStudent.remove(sid);
+      _activeAssignmentsLoadCompletedForStudent.remove(sid);
+      _bump();
+      return (row['rolled_back_count'] as num?)?.toInt() ?? 0;
+    } catch (error, stackTrace) {
+      debugPrint('[HW_ASSIGN][structured_rollback][WARN] $error\n$stackTrace');
+      return null;
+    }
+  }
+
   /// 문항 채점 결과를 숙제 검사 진행률로 반영한다. 같은 날 검사 기록이 있으면
   /// 새 기록을 만들지 않고 그 기록의 진행률만 올려, 알림장이 채점 결과를 그대로
   /// 읽게 한다.
@@ -1768,15 +1856,27 @@ class HomeworkAssignmentStore {
           await TenantService.instance.ensureActiveAcademy();
       _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
-      final rows = await supa
-          .from('homework_assignment_checks')
-          .select(
-            'id,homework_item_id,assignment_id,checked_at,progress,'
-            'outcome,reason,scheduled_due_at,next_due_at,group_check_id',
-          )
-          .eq('academy_id', academyId)
-          .eq('student_id', studentId)
-          .order('checked_at', ascending: true);
+      // PostgREST 기본 row cap에 걸려 최신(오늘) 검사가 잘리지 않도록 페이지네이션한다.
+      const pageSize = 1000;
+      final rows = <Map<String, dynamic>>[];
+      var from = 0;
+      while (true) {
+        final raw = await supa
+            .from('homework_assignment_checks')
+            .select(
+              'id,homework_item_id,assignment_id,checked_at,progress,'
+              'outcome,reason,scheduled_due_at,next_due_at,group_check_id',
+            )
+            .eq('academy_id', academyId)
+            .eq('student_id', studentId)
+            .order('checked_at', ascending: true)
+            .order('id', ascending: true)
+            .range(from, from + pageSize - 1);
+        final page = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        rows.addAll(page);
+        if (page.length < pageSize) break;
+        from += pageSize;
+      }
       DateTime parseTs(dynamic v) {
         final s = v as String?;
         return DateTime.tryParse(s ?? '')?.toLocal() ?? DateTime.now();
@@ -1791,7 +1891,7 @@ class HomeworkAssignmentStore {
       }
 
       final Map<String, List<HomeworkAssignmentCheck>> map = {};
-      for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+      for (final r in rows) {
         final itemId = (r['homework_item_id'] as String?) ?? '';
         if (itemId.isEmpty) continue;
         map.putIfAbsent(itemId, () => <HomeworkAssignmentCheck>[]).add(
@@ -2206,8 +2306,15 @@ class HomeworkAssignmentStore {
     String studentId,
     List<String> itemIds, {
     String nextStatus = 'carried_over',
+    List<String> fromStatuses = const ['assigned'],
   }) async {
     if (itemIds.isEmpty) return;
+    final statuses = fromStatuses
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (statuses.isEmpty) return;
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
@@ -2218,7 +2325,7 @@ class HomeworkAssignmentStore {
           .select('id,due_date')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
-          .eq('status', 'assigned')
+          .inFilter('status', statuses)
           .inFilter('homework_item_id', itemIds);
       final affectedDueDates = <String?>{};
       for (final row
@@ -2230,8 +2337,10 @@ class HomeworkAssignmentStore {
           .update({'status': nextStatus})
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
-          .eq('status', 'assigned')
+          .inFilter('status', statuses)
           .inFilter('homework_item_id', itemIds);
+      _activeAssignmentsCacheByStudent.remove(studentId.trim());
+      _activeAssignmentsLoadCompletedForStudent.remove(studentId.trim());
       for (final due in affectedDueDates) {
         await _normalizeAssignedOrderForDueDateIso(
           academyId: academyId,

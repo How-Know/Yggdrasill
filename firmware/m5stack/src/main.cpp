@@ -1530,7 +1530,8 @@ void loop() {
   lv_timer_handler();
   // 첫 데이터(학생 리스트/학생 정보/과제) 수신 전에는 절전 진입을 막아
   // "연결 중" 상태가 빈 화면/꺼진 화면처럼 보이지 않게 한다.
-  if (!g_first_ui_data_ready) {
+  // PIN 입력 중에는 세이버 전환이 LVGL 입력 전환과 겹치지 않게 유지한다.
+  if (!g_first_ui_data_ready || ui_port_is_pin_entry_active()) {
     screensaver_keep_awake();
   }
   LOOP_STAGE(10);

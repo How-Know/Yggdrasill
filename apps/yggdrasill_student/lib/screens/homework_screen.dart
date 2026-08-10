@@ -2342,7 +2342,11 @@ class _GroupCard extends StatelessWidget {
     final dlg = YggDialogColors.of(context);
     // 진행률 카드 부제와 동일: onSurface @ 55%.
     final subText = theme.colorScheme.onSurface.withValues(alpha: 0.55);
-    final title = group.title.isEmpty ? '(제목 없음)' : group.title;
+    // 홈 카드 전용 표시. 서버 group_title / 채점모드 / Now Playing 은 원본 title 유지.
+    final rawTitle = group.title.isEmpty ? '(제목 없음)' : group.title;
+    final title = group.isInClass && group.isAdditionalAfterSnapshot
+        ? '+ $rawTitle'
+        : rawTitle;
     final coverUri = Uri.tryParse(coverRef ?? '');
     final hasNetworkCover = !group.isPrintSource &&
         coverUri != null &&

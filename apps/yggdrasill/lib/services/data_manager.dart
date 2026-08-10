@@ -18,6 +18,7 @@ import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
 import '../models/student_pause_period.dart';
 import '../models/student_charge_point.dart';
+import '../models/student_app_presence.dart';
 import '../models/academic_season.dart';
 import '../models/season_roadmap_entry.dart';
 import 'package:flutter/foundation.dart';
@@ -101,6 +102,8 @@ class DataManager {
   List<OperatingHours> _operatingHours = [];
   Map<String, GroupInfo> _groupsById = {};
   Map<String, String> _deviceBindings = {};
+  /// student_id → 학생앱 presence (온라인·학원/집).
+  Map<String, StudentAppPresence> _studentAppPresence = {};
   bool _isInitialized = false;
   List<PaymentRecord> _paymentRecords = [];
   List<StudentPaymentInfo> _studentPaymentInfos = [];
@@ -116,6 +119,9 @@ class DataManager {
 
   /// M5 기기 바인딩 변경 시 UI 즉시 반영용
   final ValueNotifier<int> deviceBindingsRevision = ValueNotifier<int>(0);
+
+  /// 학생앱 presence 변경 시 UI 즉시 반영용
+  final ValueNotifier<int> studentAppPresenceRevision = ValueNotifier<int>(0);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier =
       ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier =
@@ -143,6 +149,25 @@ class DataManager {
 
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
   String? boundDeviceId(String studentId) => _deviceBindings[studentId];
+
+  /// 학생앱 온라인 presence. stale(90초)이면 null.
+  StudentAppPresence? studentAppPresence(String studentId) {
+    final p = _studentAppPresence[studentId];
+    if (p == null || !p.isEffectivelyOnline) return null;
+    return p;
+  }
+
+  /// 집에서 앱 로그인 중인 학생 id (등원 목록에 없는 경우 표시용).
+  List<String> get onlineHomeStudentIds {
+    final ids = <String>[];
+    for (final p in _studentAppPresence.values) {
+      if (p.isEffectivelyOnline && p.isAtHome) {
+        ids.add(p.studentId);
+      }
+    }
+    return ids;
+  }
+
   List<PaymentRecord> get paymentRecords => List.unmodifiable(_paymentRecords);
   List<AttendanceRecord> get attendanceRecords =>
       AttendanceService.instance.attendanceRecords;
@@ -1214,11 +1239,15 @@ class DataManager {
       await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
       await _subscribePaymentsRealtime(); // 결제 Realtime 구독
       await _subscribeM5DeviceBindingsRealtime(); // M5 기기 바인딩 Realtime 구독
+      await loadStudentAppPresence();
+      await _subscribeStudentAppPresenceRealtime();
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       // 1Hz 글로벌 티커 시작
       _tickTimer?.cancel();
       _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         globalTick.value++;
+        // presence stale 만료를 UI에 반영 (하트비트 중단 시 배지 사라짐).
+        _tickStudentAppPresenceStale();
         unawaited(ensurePlannedCoverageForToday(days: 15));
       });
       _isInitialized = true;
@@ -1722,6 +1751,49 @@ class DataManager {
     } catch (_) {
       _deviceBindings = {};
       deviceBindingsRevision.value++;
+    }
+  }
+
+  /// last_seen 이 stale 경계를 넘는 순간만 revision bump.
+  void _tickStudentAppPresenceStale() {
+    if (_studentAppPresence.isEmpty) return;
+    final now = DateTime.now().toUtc();
+    var changed = false;
+    for (final p in _studentAppPresence.values) {
+      if (!p.isOnline) continue;
+      final age = now.difference(p.lastSeen.toUtc());
+      // stale 경계 전후 2초 창에서만 한 번 알린다.
+      if (age >= StudentAppPresence.staleAfter &&
+          age < StudentAppPresence.staleAfter + const Duration(seconds: 2)) {
+        changed = true;
+        break;
+      }
+    }
+    if (changed) studentAppPresenceRevision.value++;
+  }
+
+  /// 학생앱 presence 로드 (학원/집 로그인 상태).
+  Future<void> loadStudentAppPresence() async {
+    if (!TagPresetService.preferSupabaseRead) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final rows = await Supabase.instance.client
+          .from('student_app_presence')
+          .select('student_id,is_online,last_seen,location_kind')
+          .eq('academy_id', academyId);
+      final next = <String, StudentAppPresence>{};
+      for (final raw in (rows as List)) {
+        if (raw is! Map) continue;
+        final p = StudentAppPresence.fromRow(Map<String, dynamic>.from(raw));
+        if (p == null) continue;
+        next[p.studentId] = p;
+      }
+      _studentAppPresence = next;
+      studentAppPresenceRevision.value++;
+    } catch (_) {
+      _studentAppPresence = {};
+      studentAppPresenceRevision.value++;
     }
   }
 
@@ -7365,6 +7437,71 @@ class DataManager {
         onResync: () async {
           try {
             await loadPaymentRecords();
+          } catch (_) {}
+        },
+      );
+    } catch (_) {}
+  }
+
+  // =================== STUDENT APP PRESENCE REALTIME ===================
+  RealtimeChannel? _rtStudentAppPresence;
+  Future<void> _subscribeStudentAppPresenceRealtime() async {
+    try {
+      _rtStudentAppPresence?.unsubscribe();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:student_app_presence:' + academyId);
+      _rtStudentAppPresence = chan
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'student_app_presence',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) async {
+            try {
+              await loadStudentAppPresence();
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'student_app_presence',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) async {
+            try {
+              await loadStudentAppPresence();
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'student_app_presence',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) async {
+            try {
+              await loadStudentAppPresence();
+            } catch (_) {}
+          },
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'student_app_presence:$academyId',
+        onResync: () async {
+          try {
+            await loadStudentAppPresence();
           } catch (_) {}
         },
       );

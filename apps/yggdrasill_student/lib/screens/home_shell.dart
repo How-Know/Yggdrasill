@@ -8,6 +8,7 @@ import '../services/homework_live_activity.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/student_attendance_session.dart';
+import '../services/student_presence_session.dart';
 import '../services/student_shell_chrome.dart';
 import '../widgets/homework_now_playing_bar.dart';
 import '../widgets/homework_now_playing_sheet.dart';
@@ -41,6 +42,13 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     unawaited(HomeworkSession.instance.startSync());
     // 등원/하원 Realtime + 폴백 (키오스크 등원 즉시 반영).
     unawaited(StudentAttendanceSession.instance.startSync());
+    // 학습앱에 학원/집 로그인 상태를 보여 주는 presence heartbeat.
+    // iOS 는 다른 iPad 로그인 시 이 기기를 로그아웃아웃.
+    StudentPresenceSession.instance.setOnIosDeviceReplaced(() async {
+      await StudentPresenceSession.instance.stop(markOffline: false);
+      await StudentApi.instance.signOut();
+    });
+    unawaited(StudentPresenceSession.instance.start());
     // iOS 잠금화면 Live Activity (비-iOS는 no-op).
     unawaited(HomeworkLiveActivity.instance.start());
     // 서버 아바타 → 세션 hydrate (계정 버튼/시트에 즉시 반영).
@@ -52,6 +60,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     unawaited(HomeworkLiveActivity.instance.stop());
     unawaited(HomeworkSession.instance.stopSync());
     unawaited(StudentAttendanceSession.instance.stopSync());
+    unawaited(StudentPresenceSession.instance.stop(markOffline: true));
     HomeworkSession.instance.removeListener(_onSessionChanged);
     StudentShellChrome.instance.removeListener(_onChromeChanged);
     super.dispose();

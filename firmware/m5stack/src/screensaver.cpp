@@ -690,54 +690,14 @@ void screensaver_init(uint32_t timeout_ms) {
 void screensaver_attach_activity(lv_obj_t* root) {
     if (!root) return;
 
-    // 중복 부착 방지.
-    // 고정 크기 추적 배열은 (1) 10칸을 넘기면 중복을 전혀 못 걸러내고
-    // (2) 삭제된 객체 주소가 남아 잘못 판정한다. 특히 lv_scr_act()처럼 매번 같은
-    // 객체에 부착하는 호출이 많아 콜백이 무한 누적되고, 터치 한 번에 처리해야 할
-    // 콜백이 계속 늘어나 결국 lv_timer_handler()가 끝나지 않는다(=기기 정지).
-    // 부착 전에 기존 콜백을 모두 제거해 항상 한 벌만 유지한다.
-    while (lv_obj_remove_event_cb(root, any_activity_event_cb)) { }
-
-    // 버블 보장
-    lv_obj_add_flag(root, LV_OBJ_FLAG_EVENT_BUBBLE);
-    // 필요한 이벤트만 등록
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_SHORT_CLICKED, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_LONG_PRESSED, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_LONG_PRESSED_REPEAT, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_KEY, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_SCROLL, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_SCROLL_BEGIN, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_SCROLL_END, NULL);
-    lv_obj_add_event_cb(root, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
-
-    // 상위 레이어(top/sys)는 전역 persistent 객체이므로 단 한 번만 부착한다.
-    // (매 화면 생성마다 부착하면 콜백이 무한 누적되어 입력 이벤트 처리가 폭주 → loop hang)
-    static bool s_layers_hooked = false;
-    if (!s_layers_hooked) {
-        s_layers_hooked = true;
-        lv_obj_t* top = lv_layer_top();
-        if (top) {
-            lv_obj_add_flag(top, LV_OBJ_FLAG_EVENT_BUBBLE);
-            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
-            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
-            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
-            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_KEY, NULL);
-            lv_obj_add_event_cb(top, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
-        }
-        lv_obj_t* sys = lv_layer_sys();
-        if (sys) {
-            lv_obj_add_flag(sys, LV_OBJ_FLAG_EVENT_BUBBLE);
-            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_PRESSED, NULL);
-            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_RELEASED, NULL);
-            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_CLICKED, NULL);
-            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_KEY, NULL);
-            lv_obj_add_event_cb(sys, any_activity_event_cb, LV_EVENT_GESTURE, NULL);
-        }
-    }
-    Serial.printf("[SCREENSAVER] activity hooks attached to root=%p/top/sys\n", root);
+    // M5.Touch의 pressed 상태가 loop()마다 screensaver_notify_touch()로 전달되므로
+    // 화면 객체에 LVGL 이벤트 콜백을 붙일 필요가 없다. 목록/PIN 화면처럼 객체가 자주
+    // 생성·삭제되는 화면에서 버블 콜백까지 연결하면 입력 한 번이 많은 이벤트를 만들고
+    // lv_timer_handler()가 watchdog 시간 안에 끝나지 않을 수 있다.
+    //
+    // 화면을 새로 열었을 때만 유휴 시간을 초기화한다. 화면보호기 자체는 생성 시
+    // any_activity_event_cb를 직접 붙여 깨우기 터치를 계속 처리한다.
+    g_last_activity_ms = lv_tick_get();
 }
 
 void screensaver_poll(void) {

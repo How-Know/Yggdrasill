@@ -74,8 +74,9 @@ class HomeworkBatchConfirmService {
       final key = entry.key;
       final hw = HomeworkStore.instance.getById(key.studentId, key.itemId);
       if (hw == null) continue;
-      // '완료'(value=true)면 완료 예정으로 마킹. confirm/confirmBatch가
-      // _autoCompleteOnNextWaiting을 기준으로 서버 pending_complete를 설정한다.
+      // '완료'(value=true)면 완료 예정만 마킹한다.
+      // confirmBatch가 pending_complete를 서버에 올리고 확인(phase 4)으로 보낸다.
+      // 실제 완료는 학생이 확인 카드를 탭한 뒤 대기 진입 시 자동 처리한다.
       if (entry.value) {
         HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
       }
@@ -89,6 +90,44 @@ class HomeworkBatchConfirmService {
       }
     }
 
+    // 활성 assignment가 confirm/outcome으로 먼저 사라지면 검사 기록이 누락된다.
+    // 확인 RPC보다 먼저, 필요 시 history assignment까지 포함해 오늘 검사 이력을 남긴다.
+    await Future.wait(
+      checkTargetKeys.map((key) async {
+        final markCompleted = pending[key] == true;
+        final target = await _resolveHomeworkCheckTarget(
+          key.studentId,
+          key.itemId,
+          includeHistory: true,
+        );
+        if (target == null) return;
+        final hasActive = await _hasActiveAssignmentForItem(
+          key.studentId,
+          key.itemId,
+          target.assignmentId,
+        );
+        if (hasActive) {
+          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+            assignmentId: target.assignmentId,
+            studentId: key.studentId,
+            homeworkItemId: key.itemId,
+            progress: target.progress,
+            issueType: null,
+            issueNote: null,
+            markCompleted: markCompleted,
+          );
+          return;
+        }
+        // 이미 완료/해제된 assignment라도 오늘 검사 진행률은 동기화한다.
+        await HomeworkAssignmentStore.instance.syncCheckProgressFromGrading(
+          studentId: key.studentId,
+          homeworkItemId: key.itemId,
+          assignmentId: target.assignmentId,
+          progress: target.progress,
+        );
+      }),
+    );
+
     if (confirmIdsByStudent.isNotEmpty) {
       await Future.wait(
         confirmIdsByStudent.entries.map(
@@ -100,26 +139,6 @@ class HomeworkBatchConfirmService {
         ),
       );
     }
-
-    await Future.wait(
-      checkTargetKeys.map((key) async {
-        final target = await _resolveHomeworkCheckTarget(
-          key.studentId,
-          key.itemId,
-          includeHistory: false,
-        );
-        if (target == null) return;
-        await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-          assignmentId: target.assignmentId,
-          studentId: key.studentId,
-          homeworkItemId: key.itemId,
-          progress: target.progress,
-          issueType: null,
-          issueNote: null,
-          markCompleted: false,
-        );
-      }),
-    );
 
     for (final entry in fallbackEntries) {
       final key = entry.key;
@@ -140,6 +159,18 @@ class HomeworkBatchConfirmService {
 
     if (!context.mounted) return;
     showAppSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
+  }
+
+  Future<bool> _hasActiveAssignmentForItem(
+    String studentId,
+    String homeworkItemId,
+    String assignmentId,
+  ) async {
+    final active =
+        await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+    return active.any(
+      (a) => a.id == assignmentId && a.homeworkItemId == homeworkItemId,
+    );
   }
 
   Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(
