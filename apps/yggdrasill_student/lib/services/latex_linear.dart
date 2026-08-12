@@ -35,6 +35,63 @@ const Map<String, String> _commandSymbols = <String, String>{
   'percent': '%',
   'sim': '~',
   'approx': '≈',
+  // 집합·논리 — 중학 집합 단원 답에서 그대로 쓰인다.
+  'cup': '∪',
+  'cap': '∩',
+  'in': '∈',
+  'notin': '∉',
+  'ni': '∋',
+  'subset': '⊂',
+  'supset': '⊃',
+  'subseteq': '⊆',
+  'supseteq': '⊇',
+  'nsubseteq': '⊈',
+  'nsupseteq': '⊉',
+  'emptyset': '∅',
+  'varnothing': '∅',
+  'complement': '∁',
+  'setminus': r'\',
+  'forall': '∀',
+  'exists': '∃',
+  'nexists': '∄',
+  'land': '∧',
+  'wedge': '∧',
+  'lor': '∨',
+  'vee': '∨',
+  'lnot': '¬',
+  'neg': '¬',
+  'therefore': '∴',
+  'because': '∵',
+  // 조건제시법 구분자 — `{x | x>0}`.
+  'mid': '|',
+  'vert': '|',
+};
+
+/// `\mathbb{R}` 같은 수 체계 기호.
+const Map<String, String> _blackboardBold = <String, String>{
+  'N': 'ℕ',
+  'Z': 'ℤ',
+  'Q': 'ℚ',
+  'R': 'ℝ',
+  'C': 'ℂ',
+};
+
+/// 여는 구분자 → 닫는 구분자. `\left\{ ... \right.` 처럼 한쪽만 쓰인
+/// 표기를 균형 잡힌 선형 표기로 되돌릴 때 쓴다.
+const Map<String, String> _fenceClosers = <String, String>{
+  '(': ')',
+  '[': ']',
+  '{': '}',
+  '|': '|',
+  '⌊': '⌋',
+  '⌈': '⌉',
+};
+
+/// 행/열 구조를 갖는 LaTeX 환경 — MyScript 가 세로로 나열된 필기를
+/// 이 형태로 내보낸다 (연립방정식, 세로로 쓴 집합 원소).
+const Set<String> _matrixEnvironments = <String>{
+  'cases', 'matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix', 'Bmatrix',
+  'array', 'aligned', 'align', 'split', 'gathered',
 };
 
 /// LaTeX 문자열을 앱 선형 표기로 변환한다. 빈 입력은 빈 문자열.
@@ -70,6 +127,32 @@ const Map<String, String> _linearSymbols = <String, String>{
   '·': r'\cdot ',
   '÷': r'\div ',
   '%': r'\% ',
+  '∪': r'\cup ',
+  '∩': r'\cap ',
+  '∈': r'\in ',
+  '∉': r'\notin ',
+  '∋': r'\ni ',
+  '⊂': r'\subset ',
+  '⊃': r'\supset ',
+  '⊆': r'\subseteq ',
+  '⊇': r'\supseteq ',
+  '⊈': r'\nsubseteq ',
+  '⊉': r'\nsupseteq ',
+  '∅': r'\varnothing ',
+  '∁': r'\complement ',
+  '∀': r'\forall ',
+  '∃': r'\exists ',
+  '∄': r'\nexists ',
+  '∧': r'\land ',
+  '∨': r'\lor ',
+  '¬': r'\lnot ',
+  '∴': r'\therefore ',
+  '∵': r'\because ',
+  'ℕ': r'\mathbb{N}',
+  'ℤ': r'\mathbb{Z}',
+  'ℚ': r'\mathbb{Q}',
+  'ℝ': r'\mathbb{R}',
+  'ℂ': r'\mathbb{C}',
 };
 
 /// 앱 선형 표기를 LaTeX 로 역변환한다 — 2D 조판 표시용.
@@ -250,6 +333,10 @@ class _LatexParser {
   final String source;
   int _pos = 0;
 
+  /// 열려 있는 `\left` 구분자 스택. `\right.`(닫는 쪽 없음)를 만나면
+  /// 여기서 짝을 찾아 닫아 준다.
+  final List<String> _openFences = <String>[];
+
   bool get _done => _pos >= source.length;
 
   String parse() {
@@ -323,23 +410,26 @@ class _LatexParser {
         }
         return '√($radicand)';
       case 'left':
+        final open = _readDelimiter();
+        _openFences.add(open);
+        return open == '.' ? '' : open;
       case 'right':
-        // \left( \right) — 뒤따르는 구분자는 그대로 살린다.
-        if (!_done) {
-          final delim = source[_pos];
-          _pos += 1;
-          if (delim == r'\') {
-            // \left\{ 같은 형태 — 이스케이프 문자 하나 더 소비.
-            if (!_done) {
-              final escaped = source[_pos];
-              _pos += 1;
-              return escaped == '.' ? '' : escaped;
-            }
-            return '';
-          }
-          return delim == '.' ? '' : delim;
-        }
+        final close = _readDelimiter();
+        final open = _openFences.isEmpty ? null : _openFences.removeLast();
+        if (close != '.') return close;
+        // `\left\{ ... \right.` — 연립·세로 나열 표기. 균형을 맞춰 닫는다.
+        return open == null ? '' : (_fenceClosers[open] ?? '');
+      case 'begin':
+        return _environment(_readArgument().trim());
+      case 'end':
+        // 짝이 맞지 않는 \end — 환경 이름만 소비하고 버린다.
+        _readArgument();
         return '';
+      case 'mathbb':
+      case 'mathbf':
+      case 'mathcal':
+        final body = _readArgument().trim();
+        return _blackboardBold[body] ?? _convert(body);
       case 'text':
       case 'mathrm':
       case 'operatorname':
@@ -353,6 +443,150 @@ class _LatexParser {
         // 모르는 명령: 이름을 그대로 남긴다 (sin, cos, log 등).
         return name;
     }
+  }
+
+  /// `\left` / `\right` 뒤의 구분자 한 글자를 읽는다.
+  /// `\left\{` 처럼 이스케이프된 형태도 처리한다. 없으면 '.'(구분자 없음).
+  String _readDelimiter() {
+    if (_done) return '.';
+    final ch = source[_pos];
+    _pos += 1;
+    if (ch != r'\') return ch;
+    if (_done) return '.';
+    final escaped = source[_pos];
+    _pos += 1;
+    // \left\lbrace 같은 이름 형태도 받아 준다.
+    if (_isLetter(escaped)) {
+      final start = _pos - 1;
+      while (!_done && _isLetter(source[_pos])) {
+        _pos += 1;
+      }
+      switch (source.substring(start, _pos)) {
+        case 'lbrace':
+          return '{';
+        case 'rbrace':
+          return '}';
+        case 'lbrack':
+          return '[';
+        case 'rbrack':
+          return ']';
+        case 'vert':
+        case 'mid':
+          return '|';
+        default:
+          return '.';
+      }
+    }
+    return escaped;
+  }
+
+  /// 행렬 계열 환경(`cases`, `matrix`, `array` …)을 선형 표기로 편다.
+  ///
+  /// MyScript 는 세로로 나열된 필기를 이 형태로 내보낸다. 학생이 집합
+  /// 원소를 세로로 썼든 연립방정식을 썼든 구조는 같으므로, 행을 쉼표로
+  /// 이어 붙여 원문을 최대한 보존한다. `cases` 는 왼쪽 중괄호가 표기에
+  /// 포함되므로 중괄호로 감싼다.
+  String _environment(String name) {
+    if (!_matrixEnvironments.contains(name)) {
+      // 모르는 환경 — 이름은 버리고 본문만 살린다.
+      return _convert(_readEnvironmentBody(name));
+    }
+    // array/tabular 의 열 정렬 인자(`{l}`)는 내용이 아니므로 버린다.
+    if ((name == 'array' || name == 'tabular') && !_done && source[_pos] == '{') {
+      _readGroup();
+    }
+    final body = _readEnvironmentBody(name);
+    final rows = <List<String>>[];
+    for (final row in _splitRows(body)) {
+      final cells = <String>[];
+      for (final cell in _splitCells(row)) {
+        final converted = _convert(cell);
+        if (converted.isNotEmpty) cells.add(converted);
+      }
+      if (cells.isNotEmpty) rows.add(cells);
+    }
+
+    if (rows.isEmpty) return name == 'cases' ? '{}' : '';
+    // 한 열짜리(대부분의 경우)는 행을 쉼표로 잇고, 실제 행렬은 행을
+    // 세미콜론으로 구분해 구조를 남긴다.
+    final singleColumn = rows.every((row) => row.length == 1);
+    final joined = singleColumn
+        ? rows.map((row) => row.first).join(',')
+        : rows.map((row) => row.join(',')).join(';');
+    return name == 'cases' ? '{$joined}' : joined;
+  }
+
+  /// `\end{name}` 까지의 본문을 읽는다 (중첩 환경 고려).
+  String _readEnvironmentBody(String name) {
+    final beginToken = '\\begin{$name}';
+    final endToken = '\\end{$name}';
+    final start = _pos;
+    var depth = 1;
+    var i = _pos;
+    while (i < source.length) {
+      if (source.startsWith(beginToken, i)) {
+        depth += 1;
+        i += beginToken.length;
+        continue;
+      }
+      if (source.startsWith(endToken, i)) {
+        depth -= 1;
+        if (depth == 0) {
+          final body = source.substring(start, i);
+          _pos = i + endToken.length;
+          return body;
+        }
+        i += endToken.length;
+        continue;
+      }
+      i += 1;
+    }
+    // 짝이 없는 경우 — 남은 전부를 본문으로 본다.
+    _pos = source.length;
+    return source.substring(start);
+  }
+
+  /// 환경 본문을 `\\`(행 구분) 기준으로 자른다. 중첩 환경·그룹 안의
+  /// `\\` 는 건너뛴다.
+  static List<String> _splitRows(String body) =>
+      _splitTopLevel(body, isSeparator: (s, i) {
+        return s[i] == r'\' && i + 1 < s.length && s[i + 1] == r'\';
+      }, separatorLength: 2);
+
+  /// 한 행을 `&`(열 구분) 기준으로 자른다.
+  static List<String> _splitCells(String row) =>
+      _splitTopLevel(row, isSeparator: (s, i) => s[i] == '&', separatorLength: 1);
+
+  static List<String> _splitTopLevel(
+    String source, {
+    required bool Function(String, int) isSeparator,
+    required int separatorLength,
+  }) {
+    final parts = <String>[];
+    final buffer = StringBuffer();
+    var depth = 0;
+    var envDepth = 0;
+    var i = 0;
+    while (i < source.length) {
+      if (source.startsWith(r'\begin{', i)) {
+        envDepth += 1;
+      } else if (source.startsWith(r'\end{', i)) {
+        envDepth -= 1;
+      }
+      final ch = source[i];
+      if (ch == '{') depth += 1;
+      if (ch == '}') depth -= 1;
+      if (depth == 0 && envDepth <= 0 && isSeparator(source, i)) {
+        parts.add(buffer.toString());
+        buffer.clear();
+        i += separatorLength;
+        continue;
+      }
+      buffer.write(ch);
+      i += 1;
+    }
+    parts.add(buffer.toString());
+    return parts;
   }
 
   /// `{...}` 또는 단일 문자 인자를 읽는다 (원문 그대로).

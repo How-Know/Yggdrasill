@@ -91,10 +91,15 @@ class _UtilityToolbarPanel extends StatelessWidget {
   static const Color _borderColor = Color(0x33FFFFFF);
   static const Color _iconColor = Color(0xFFF5F5F7);
   static const Color _activeColor = Color(0xFF33A373);
-  static const double _panelWidth = 360;
   static const double _snackBarHeight = FabTabBarTokens.fabBarHeight;
-  static const double _horizontalPadding = 6;
+  static const double _horizontalPadding = 8;
   static const double _buttonSize = FabTabBarTokens.fabBarHeight;
+  static const double _buttonGap = 4;
+  static const int _toolCount = 6;
+  // 버튼·간격·좌우 패딩 합에 맞춤 (고정 360이면 오른쪽 오버플로우)
+  static const double _panelWidth = _horizontalPadding * 2 +
+      _buttonSize * _toolCount +
+      _buttonGap * (_toolCount - 1);
   static const double _iconSize =
       FabTabBarTokens.previewAcademyBaseFontSize + 8;
   static const double _largeIconSize = _iconSize * 1.1;
@@ -161,7 +166,7 @@ class _UtilityToolbarPanel extends StatelessWidget {
                               tooltip: printTooltip,
                               onPressed: () => onPressed(_UtilityTool.print),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: _buttonGap),
                             _UtilityToolButton(
                               icon: const Icon(
                                 Icons.attach_file_rounded,
@@ -172,7 +177,7 @@ class _UtilityToolbarPanel extends StatelessWidget {
                               onPressed: () =>
                                   onPressed(_UtilityTool.fileShortcut),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: _buttonGap),
                             _UtilityToolButton(
                               icon: const Icon(
                                 Icons.picture_as_pdf_outlined,
@@ -182,7 +187,7 @@ class _UtilityToolbarPanel extends StatelessWidget {
                               tooltip: 'PDF편집',
                               onPressed: () => onPressed(_UtilityTool.pdfEdit),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: _buttonGap),
                             _UtilityToolButton(
                               icon: const _UtilityMemoIcon(
                                 color: _iconColor,
@@ -191,7 +196,7 @@ class _UtilityToolbarPanel extends StatelessWidget {
                               tooltip: '메모',
                               onPressed: () => onPressed(_UtilityTool.memo),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: _buttonGap),
                             _UtilityToolButton(
                               icon: const Icon(
                                 Icons.edit_outlined,
@@ -201,7 +206,7 @@ class _UtilityToolbarPanel extends StatelessWidget {
                               tooltip: '채점',
                               onPressed: () => onPressed(_UtilityTool.grading),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: _buttonGap),
                             _UtilityToolButton(
                               icon: const Icon(
                                 Icons.tv_rounded,

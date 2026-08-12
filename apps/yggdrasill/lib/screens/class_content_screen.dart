@@ -5621,11 +5621,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       smartConfirmAction: true,
       showSearchChrome: false,
       closeBeforeActionCompletes: true,
-      onRequestGradingCancelRetry: () => _cancelPendingStructuredGrading(
-        context: this.context,
-        keys: keys,
-        gradingHomeworkItemIds: <String>[payload.homeworkId],
-      ),
       onStatesChanged: (states) {
         final decoded = _fromRightSheetStateMap(states);
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -5901,11 +5896,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           smartConfirmAction: true,
           showSearchChrome: false,
           closeBeforeActionCompletes: true,
-          onRequestGradingCancelRetry: () => _cancelPendingStructuredGrading(
-            context: this.context,
-            keys: keys,
-            gradingHomeworkItemIds: <String>[payload.homeworkId],
-          ),
           onStatesChanged: (states) {
             final decoded = _fromRightSheetStateMap(states);
             _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -6113,13 +6103,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         smartConfirmAction: true,
         showSearchChrome: false,
         closeBeforeActionCompletes: true,
-        onRequestGradingCancelRetry: () => _cancelPendingStructuredGrading(
-          context: this.context,
-          keys: keys,
-          gradingHomeworkItemIds: <String>[
-            textbookProblemPayload.homeworkId,
-          ],
-        ),
         onStatesChanged: (states) {
           final decoded = _fromRightSheetStateMap(states);
           _testGradingDraftStatesByHomeworkId[textbookProblemPayload
@@ -10154,12 +10137,26 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
       }
       // 서버 plan row 기준으로도 오늘/다음을 보강해 스냅샷 누락을 막는다.
       final snapshotItemIds = collectGoalSnapshotItemIds();
+      // 완료개수 분모: 오늘 수업 계획(=오늘+다음) 그룹만. 홈 칩/숙제 전체는 넣지 않는다.
+      final planGoalItemIds = <String>{};
+      for (final entry in destinationByItemId.entries) {
+        final id = entry.key.trim();
+        if (id.isEmpty) continue;
+        final dest = _effectiveDestinationForSummary(id);
+        if (dest == HomeworkPlanDestination.inClass ||
+            dest == HomeworkPlanDestination.nextSession) {
+          planGoalItemIds.add(id);
+        }
+      }
       for (final plan in plans) {
         final ui = plan.uiDestination;
         if (ui == HomeworkPlanDestination.inClass ||
             ui == HomeworkPlanDestination.nextSession) {
           final id = plan.homeworkItemId.trim();
-          if (id.isNotEmpty) snapshotItemIds.add(id);
+          if (id.isNotEmpty) {
+            snapshotItemIds.add(id);
+            planGoalItemIds.add(id);
+          }
         }
       }
       final progressRates =
@@ -10167,11 +10164,27 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
       final snapshotMinutes = totalForTodayPlan(
         progressRatesByItem: progressRates,
       ).minutes;
+      final snapshotGroupsById = <String, Set<String>>{};
+      for (final itemId in planGoalItemIds) {
+        final id = itemId.trim();
+        if (id.isEmpty) continue;
+        final groupId = (HomeworkStore.instance.groupIdOfItem(id) ?? id).trim();
+        if (groupId.isEmpty) continue;
+        snapshotGroupsById.putIfAbsent(groupId, () => <String>{}).add(id);
+      }
+      final snapshotGroups = <HomeworkPlanSnapshotGroup>[
+        for (final entry in snapshotGroupsById.entries)
+          HomeworkPlanSnapshotGroup(
+            groupId: entry.key,
+            itemIds: entry.value.toList(growable: false),
+          ),
+      ];
       final savedDraft = await HomeworkDepartureDraftService.instance.save(
         attendanceId: attendanceId,
         groupIds: savedGroupIds,
         dueDateByGroupId: savedDueDates,
         planSnapshotItemIds: snapshotItemIds,
+        planSnapshotGroups: snapshotGroups,
         planSnapshotMinutes: snapshotMinutes,
         presentGoalSnapshot: true,
       );

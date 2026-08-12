@@ -496,7 +496,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         child: _DailyAverageDummySection(),
       ),
       // 수업시간 카드 아래는 시각적으로 더 벌어 보이게 넉넉히 둔다.
-      const SizedBox(height: 36),
+      const SizedBox(height: 44),
     ];
 
     if (groups == null) {
@@ -511,33 +511,53 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         ),
       );
     } else {
-      final inClass =
-          groups.where((group) => group.isInClass).toList(growable: false);
-      final homework =
-          groups.where((group) => group.isHomework).toList(growable: false);
+      // 오늘 계획 풀: 오늘/다음(+스냅샷 이후 추가분) + 오늘 검사 예정 숙제.
+      // 학습앱 홈과 같은 orderIndex 순 → 앞 2개 우선, 나머지 대기.
+      final planPool = [
+        ...groups.where((group) => group.isInClass),
+        ...groups.where((group) => group.isHomework && group.isDueForCheck),
+      ]..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+      final priority = planPool.take(2).toList(growable: false);
+      final waiting = planPool.length > 2
+          ? planPool.sublist(2)
+          : const <HomeworkGroup>[];
+      final homework = groups
+          .where((group) => group.isHomework && !group.isDueForCheck)
+          .toList(growable: false)
+        ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+      final emptyStyle = TextStyle(
+        fontSize: 15,
+        color: Theme.of(context)
+            .colorScheme
+            .onSurface
+            .withValues(alpha: 0.45),
+      );
       children.addAll([
-        const _HomeworkSectionHeader(title: '오늘 수업'),
-        if (inClass.isEmpty)
+        const _HomeworkSectionHeader(title: '우선 과제'),
+        if (priority.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(22, 8, 20, 4),
-            child: Text(
-              '오늘 수업 과제가 없어요.',
-              style: TextStyle(
-                fontSize: 15,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.45),
-              ),
-            ),
+            child: Text('우선 과제가 없어요.', style: emptyStyle),
           )
         else
           _HomeworkHorizontalRow(
             children: [
-              for (final group in inClass) _groupCardFor(group),
+              for (final group in priority) _groupCardFor(group),
             ],
           ),
-        // 카드 줄 ↔ 다음 섹션 타이틀 (헤더 top padding 없음)
+        const SizedBox(height: 28),
+        const _HomeworkSectionHeader(title: '대기 과제'),
+        if (waiting.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 8, 20, 4),
+            child: Text('대기 과제가 없어요.', style: emptyStyle),
+          )
+        else
+          _HomeworkHorizontalRow(
+            children: [
+              for (final group in waiting) _groupCardFor(group),
+            ],
+          ),
         const SizedBox(height: 28),
         const _HomeworkSectionHeader(title: '숙제'),
         // 2줄 지그재그 + 세 번째 줄에 과제 추가 카드.
@@ -588,8 +608,9 @@ class _HomeworkSectionHeader extends StatelessWidget {
     final theme = Theme.of(context);
     final chevron = theme.colorScheme.onSurface.withValues(alpha: 0.35);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 0, 20, 8),
+      padding: const EdgeInsets.fromLTRB(24, 0, 20, 0),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
             title,
@@ -601,11 +622,15 @@ class _HomeworkSectionHeader extends StatelessWidget {
               color: theme.colorScheme.onSurface,
             ),
           ),
-          const SizedBox(width: 2),
-          Icon(
-            Icons.chevron_right_rounded,
-            size: 30,
-            color: chevron,
+          // Material chevron은 36 박스 안에 왼쪽 빈 여백이 커서
+          // SizedBox 간격을 줄여도 시각 간격이 거의 안 줄어든다 → 왼쪽으로 당김.
+          Transform.translate(
+            offset: const Offset(-6, 0),
+            child: Icon(
+              Icons.chevron_right_rounded,
+              size: 36,
+              color: chevron,
+            ),
           ),
         ],
       ),
@@ -1185,10 +1210,10 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
     return '$hours시간 $mins분째';
   }
 
-  /// 예: "오후 5시 30분에 하원예정 (2시간 15분 남음)"
-  String? _plannedDepartureLine() {
+  /// 예: "오후 5시 30분 (2시간 15분 남음)" / 미설정.
+  String _plannedDepartureLabel() {
     final planned = StudentAttendanceSession.instance.plannedDepartureAt;
-    if (planned == null) return null;
+    if (planned == null) return '미설정';
     final period = planned.hour < 12 ? '오전' : '오후';
     final h12 = planned.hour % 12 == 0 ? 12 : planned.hour % 12;
     final mm = planned.minute;
@@ -1210,7 +1235,7 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
         remainPart = '$hours시간 $mins분 남음';
       }
     }
-    return '$timePart에 하원예정 ($remainPart)';
+    return '$timePart ($remainPart)';
   }
 
   /// 다음 회차 — "수 16:00".
@@ -1302,7 +1327,7 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
                     child: Builder(
                       builder: (context) {
                         // 진행률 카드 부제와 동일.
@@ -1334,7 +1359,10 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                                   height: 1.0,
                                   color: text,
                                 );
-                        final plannedLine = _plannedDepartureLine();
+                        final detailValueStyle = labelStyle.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: text,
+                        );
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
@@ -1375,25 +1403,29 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
                                 ),
                               ],
                             ),
-                            if (plannedLine != null) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                plannedLine,
-                                style: labelStyle,
-                              ),
-                            ],
                             if (_expanded) ...[
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 24),
+                              Row(
+                                children: [
+                                  Text('하원 예정', style: labelStyle),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      _plannedDepartureLabel(),
+                                      textAlign: TextAlign.end,
+                                      style: detailValueStyle,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
                               Row(
                                 children: [
                                   Text('다음 수업', style: labelStyle),
                                   const Spacer(),
                                   Text(
                                     _nextClassLabel(),
-                                    style: labelStyle.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                      color: text,
-                                    ),
+                                    style: detailValueStyle,
                                   ),
                                 ],
                               ),
@@ -1510,12 +1542,15 @@ class _DailyAverageDummySectionState extends State<_DailyAverageDummySection> {
           ),
         ),
         const SizedBox(height: 8),
-        Text(
-          _updatedLabel(),
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w400,
-            color: subText,
+        Padding(
+          padding: const EdgeInsets.only(left: 2),
+          child: Text(
+            _updatedLabel(),
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+              color: subText,
+            ),
           ),
         ),
       ],
@@ -3234,14 +3269,13 @@ class _GroupCard extends StatelessWidget {
       if (group.inspectionLabel.isNotEmpty)
         _AssignmentOriginBadge(
           label: group.inspectionLabel,
-          carryover: group.absenceCarryover,
+          carryover: false,
           onCover: true,
         ),
       if (group.isHomework && group.assignmentOriginLabel.isNotEmpty)
         _AssignmentOriginBadge(
           label: group.assignmentOriginLabel,
-          carryover: group.assignmentOrigin ==
-              HomeworkAssignmentOrigin.classCarryover,
+          carryover: false,
           onCover: true,
         ),
     ];
@@ -3364,12 +3398,12 @@ class _AssignmentOriginBadge extends StatelessWidget {
             : null,
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Text(
           label,
           style: TextStyle(
             color: onCover ? Colors.white : color,
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: FontWeight.w800,
             height: 1,
           ),
@@ -3409,7 +3443,10 @@ class _HomeworkCoverThumb extends StatelessWidget {
     final hasBadge = badge != null;
     final book = bookLabel.trim();
     final course = courseLabel.trim();
-    final hasMeta = book.isNotEmpty || course.isNotEmpty;
+    // 표지 이미지가 있으면 제목/과정·하단 그라데이션은 숨긴다.
+    final hasCoverImage = (coverRef ?? '').trim().isNotEmpty;
+    final hasMeta =
+        !hasCoverImage && (book.isNotEmpty || course.isNotEmpty);
     final hasOverlayLabels = overlayLabels.isNotEmpty;
     Widget cover = coverRef == null
         ? ColoredBox(

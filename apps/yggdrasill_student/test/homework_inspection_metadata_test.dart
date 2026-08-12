@@ -20,7 +20,7 @@ void main() {
         'list_kind': 'in_class',
       };
 
-  test('반환된 숙제는 오늘 검사 표식을 노출한다', () {
+  test('검사 예정 숙제는 오늘까지로 통일 표시한다', () {
     final today = DateTime.now();
     final todayIso = DateTime(today.year, today.month, today.day, 10)
         .toUtc()
@@ -36,38 +36,34 @@ void main() {
     final group = HomeworkGroup.fromRow(row);
 
     expect(group.isDueForCheck, isTrue);
-    expect(group.inspectionLabel, '오늘 검사');
+    expect(group.inspectionLabel, '오늘까지');
     expect(group.originalDueDate, isNotNull);
   });
 
-  test('결석 뒤 반환된 숙제는 결석 이월 표식을 노출한다', () {
-    final row = baseRow()
-      ..addAll(<String, dynamic>{
-        'inspection_status': 'due_for_check',
-        'original_due_at': '2026-08-06T01:00:00Z',
-        'absence_carryover': true,
-        'defer_count': 1,
-        'last_outcome': 'left_behind',
-      });
+  test('결석 이월·미검사 이월도 학생앱에서는 오늘까지로 표시한다', () {
+    final absence = HomeworkGroup.fromRow(
+      baseRow()
+        ..addAll(<String, dynamic>{
+          'inspection_status': 'due_for_check',
+          'original_due_at': '2026-08-06T01:00:00Z',
+          'absence_carryover': true,
+          'defer_count': 1,
+          'last_outcome': 'left_behind',
+        }),
+    );
+    final deferred = HomeworkGroup.fromRow(
+      baseRow()
+        ..addAll(<String, dynamic>{
+          'inspection_status': 'due_for_check',
+          'original_due_at': '2026-08-06T01:00:00Z',
+          'absence_carryover': false,
+          'defer_count': 0,
+        }),
+    );
 
-    final group = HomeworkGroup.fromRow(row);
-
-    expect(group.inspectionLabel, '결석 이월 · 오늘 검사');
-    expect(group.deferCount, 1);
-    expect(group.lastInspectionOutcome, 'left_behind');
-  });
-
-  test('등원했는데 검사가 밀린 숙제는 미검사 이월 표식을 노출한다', () {
-    final row = baseRow()
-      ..addAll(<String, dynamic>{
-        'inspection_status': 'due_for_check',
-        'original_due_at': '2026-08-06T01:00:00Z',
-        'absence_carryover': false,
-        'defer_count': 0,
-      });
-
-    final group = HomeworkGroup.fromRow(row);
-
-    expect(group.inspectionLabel, '미검사 이월 · 오늘 검사');
+    expect(absence.inspectionLabel, '오늘까지');
+    expect(absence.deferCount, 1);
+    expect(absence.lastInspectionOutcome, 'left_behind');
+    expect(deferred.inspectionLabel, '오늘까지');
   });
 }

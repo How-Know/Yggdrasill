@@ -18,7 +18,7 @@ void main() {
         group.assignmentOrigin,
         HomeworkAssignmentOrigin.classCarryover,
       );
-      expect(group.assignmentOriginLabel, '수업 이월');
+      expect(group.assignmentOriginLabel, '8월 6일까지');
       expect(group.dueDate, isNotNull);
       expect(group.recommendedMinutes, 35);
       expect(group.digitalSolvable, isTrue);

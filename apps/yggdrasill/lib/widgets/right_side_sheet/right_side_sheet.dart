@@ -2879,12 +2879,6 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final VoidCallback onToggleAbandoned;
   final VoidCallback onShowSourceInfo;
   final Widget answerChild;
-
-  /// 세트형 문항 파트 수 (0이면 일반 문항). 배지·펼침 화살표 표시에 사용.
-  final int setPartCount;
-
-  /// 세트형 파트 카드가 펼쳐져 있는지.
-  final bool setExpanded;
   final bool solutionOpening;
   final bool solutionOpenBlocked;
 
@@ -2907,8 +2901,6 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     required this.onToggleAbandoned,
     required this.onShowSourceInfo,
     required this.answerChild,
-    this.setPartCount = 0,
-    this.setExpanded = false,
     this.solutionOpening = false,
     this.solutionOpenBlocked = false,
   });
@@ -3117,16 +3109,6 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                       fontWeight: FontWeight.w900,
                       height: 1.0,
                     ),
-                  ),
-                ],
-                if (widget.setPartCount > 0) ...[
-                  const SizedBox(width: 8),
-                  Icon(
-                    widget.setExpanded
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    size: 26,
-                    color: _rsTextSub,
                   ),
                 ],
                 if (widget.correctedRetry) ...[
@@ -3413,9 +3395,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   /// 확인 전까지 리스트에 남겨 실수·혼란을 줄인다.
   Set<String> _wrongOnlySettledCorrectionKeys = <String>{};
 
-  /// 파트 카드가 펼쳐진 세트형 셀 키 목록.
-  final Set<String> _expandedSetCellKeys = <String>{};
-
   /// 라이트 테마 여부 — 정답 카드는 테마에 맞춰 밝은/어두운 팔레트를 쓴다.
   /// (v11 투명 렌더 + 앱 틴트 방식이 전 과제 기본으로 확정됨)
   bool get _lightCards => Theme.of(context).brightness == Brightness.light;
@@ -3440,9 +3419,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   String _boundSessionId = '';
   RightSideSheetTestGradingSession? _boundSessionRef;
   bool _gradingEditLocked = false;
-  bool _savedEditAcknowledged = false;
   bool _wrongOnly = false;
-  bool _savedEditActionBusy = false;
   bool _actionBusy = false;
   bool _answerPdfOpening = false;
   String _openingSolutionCellKey = '';
@@ -3686,9 +3663,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         _correctionStates = <String, String>{};
         _correctionAttemptNumbers = <String, int>{};
         _wrongOnlySettledCorrectionKeys = <String>{};
-        _expandedSetCellKeys.clear();
         _gradingEditLocked = false;
-        _savedEditAcknowledged = false;
         _wrongOnly = false;
         _answerRenders = <String, LearningProblemAnswerRender>{};
         _answerRenderFailedKeys = <String>{};
@@ -3735,9 +3710,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           .where((e) => e.value.trim() == 'corrected')
           .map((e) => e.key)
           .toSet();
-      _expandedSetCellKeys.clear();
       _gradingEditLocked = session.gradingLocked;
-      _savedEditAcknowledged = false;
       _wrongOnly = session.wrongOnlyDefault && baselineStates.isNotEmpty;
       _answerRenders = <String, LearningProblemAnswerRender>{};
       _answerRenderFailedKeys = <String>{};
@@ -4412,24 +4385,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels = const <String>[],
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked && _isBaselineRetryKey(key)) {
-      setState(() {
-        if (_isCorrectedRetryKey(key)) {
-          _correctionStates.remove(key);
-          _gradingStates[key] = _baselineStates[key] ?? 'wrong';
-        } else {
-          _gradingStates[key] = 'correct';
-          _correctionStates[key] = 'corrected';
-        }
-        _applyStateToParts(key, partLabels);
-      });
-      _emitStateChanged();
-      return;
-    }
-    if (_gradingEditLocked && !_savedEditAcknowledged) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
     setState(() {
       final current = _normalizeState(_gradingStates[key]);
       final next = _nextState(current);
@@ -4451,10 +4406,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels = const <String>[],
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked && !_savedEditAcknowledged) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
     setState(() {
       _gradingStates[key] = 'blank';
       _applyStateToParts(key, partLabels);
@@ -4470,10 +4421,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels = const <String>[],
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked && !_savedEditAcknowledged) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
     setState(() {
       final next = _normalizeState(_gradingStates[key]) == 'abandoned'
           ? 'correct'
@@ -4549,24 +4496,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    // 재검사(잠금+베이스라인): 파트만 개별 토글. 셀 전체로 위임하면
-    // _applyStateToParts 때문에 하위 문항이 한꺼번에 정답이 된다.
-    if (_gradingEditLocked && _isBaselineRetryKey(cellKey)) {
-      setState(() {
-        _materializePartStates(cellKey, partLabels);
-        final key = _partStateKey(cellKey, partLabel);
-        final current = _normalizeState(_gradingStates[key]);
-        final baseline = _baselineStates[cellKey] ?? 'wrong';
-        _gradingStates[key] = current == 'correct' ? baseline : 'correct';
-        _syncSetCellStateFromParts(cellKey, partLabels);
-      });
-      _emitStateChanged();
-      return;
-    }
-    if (_gradingEditLocked && !_savedEditAcknowledged) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
     setState(() {
       // 기록이 없는 파트는 셀 상태를 상속하고 있으므로, 토글 전에 현재
       // 상태를 명시적으로 고정해 둔다. 그러지 않으면 셀 상태가 바뀔 때
@@ -4575,6 +4504,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       final key = _partStateKey(cellKey, partLabel);
       _gradingStates[key] = _nextState(_normalizeState(_gradingStates[key]));
       _syncSetCellStateFromParts(cellKey, partLabels);
+      if (_isBaselineRetryKey(cellKey)) {
+        if (_normalizeState(_gradingStates[cellKey]) == 'correct') {
+          _correctionStates[cellKey] = 'corrected';
+        } else {
+          _correctionStates.remove(cellKey);
+        }
+      }
     });
     _emitStateChanged();
   }
@@ -4598,12 +4534,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked &&
-        !_savedEditAcknowledged &&
-        !_isBaselineRetryKey(cellKey)) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
     setState(() {
       _materializePartStates(cellKey, partLabels);
       _gradingStates[_partStateKey(cellKey, partLabel)] = 'blank';
@@ -4618,12 +4548,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked &&
-        !_savedEditAcknowledged &&
-        !_isBaselineRetryKey(cellKey)) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
     setState(() {
       _materializePartStates(cellKey, partLabels);
       final key = _partStateKey(cellKey, partLabel);
@@ -4633,87 +4557,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _syncSetCellStateFromParts(cellKey, partLabels);
     });
     _emitStateChanged();
-  }
-
-  Future<bool> _confirmSavedGradingEdit() async {
-    final session = widget.session;
-    if (session == null || _savedEditActionBusy) return false;
-    final cancelRetry = session.onRequestGradingCancelRetry;
-    final selected = await showDialog<String>(
-      context: _navigatorContext,
-      useRootNavigator: true,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: _rsPanelBg,
-          title: const Text(
-            '채점 결과를 수정할까요?',
-            style: TextStyle(
-              color: _rsText,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          content: const Text(
-            '이미 저장된 채점 결과가 있습니다.\n수정하면 기존 기록은 보존되고, 다시 확인할 때 새 수정본으로 저장됩니다.',
-            style: TextStyle(
-              color: _rsTextSub,
-              fontWeight: FontWeight.w700,
-              height: 1.45,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext, rootNavigator: true).pop(),
-              child: const Text('취소'),
-            ),
-            if (cancelRetry != null)
-              TextButton(
-                onPressed: () => Navigator.of(
-                  dialogContext,
-                  rootNavigator: true,
-                ).pop('retry_cancel'),
-                child: const Text('채점 취소 다시 시도'),
-              ),
-            FilledButton(
-              onPressed: () => Navigator.of(
-                dialogContext,
-                rootNavigator: true,
-              ).pop('edit'),
-              child: const Text('수정 계속'),
-            ),
-          ],
-        );
-      },
-    );
-    if (!mounted) return false;
-    if (selected == 'edit') {
-      setState(() {
-        _savedEditAcknowledged = true;
-      });
-      return true;
-    }
-    if (selected != 'retry_cancel' || cancelRetry == null) return false;
-
-    setState(() {
-      _savedEditActionBusy = true;
-    });
-    var ok = false;
-    try {
-      ok = await cancelRetry();
-    } finally {
-      if (mounted) {
-        setState(() {
-          _savedEditActionBusy = false;
-        });
-      }
-    }
-    if (!ok || !mounted) return false;
-    widget.onClearSession();
-    final closeAction = closeRightSideSheetAction;
-    if (closeAction != null) {
-      await closeAction();
-    }
-    return false;
   }
 
   /// 오버플로 정답 리스트 전용 변환.
@@ -8057,11 +7900,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final correctionAttemptNumber = _correctionAttemptNumbers[cell.key] ?? 0;
     final setParts = _setPartsOf(cell);
     final isSetCell = setParts.length >= 2;
-    // 세트형 접힘 카드는 정답을 렌더하지 않고 파트별 정오 칩만 보여주므로
+    final partLabels = [for (final part in setParts) part.label];
+    // 세트형 상위 카드는 파트별 정오 칩만 보여주므로
     // 주관식 1줄 카드와 같은 슬롯 높이를 쓴다.
     final answerSlotHeight =
         isSetCell ? _compactAnswerSlotHeight : _answerSlotHeightForCell(cell);
-    final setExpanded = isSetCell && _expandedSetCellKeys.contains(cell.key);
     final mainRow = _RightSheetAnswerListRow(
       questionLabel: questionLabel,
       questionCategory: cell.questionCategory,
@@ -8079,15 +7922,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           _answerPdfOpening || _openingSolutionCellKey.isNotEmpty,
       onOpenSolution: () => _openCellSolution(cell, pageNumber: pageNumber),
       onReportIssue: () => unawaited(_openQuestionIssueReportDialog(cell)),
-      // 세트형 셀은 탭 = 파트 카드 펼침/접힘. 정오 표시는 파트 카드에서만 하고
-      // 셀 상태는 파트 상태에서 자동 유도된다(하나라도 X면 오답).
-      onToggleState: isSetCell
-          ? () => setState(() {
-                if (!_expandedSetCellKeys.remove(cell.key)) {
-                  _expandedSetCellKeys.add(cell.key);
-                }
-              })
-          : () => unawaited(_toggleCellState(cell.key)),
+      // 세트형 상위 카드도 일반 카드와 같은 순환을 사용하되 모든 파트를
+      // 정답 → 오답 → 미수행으로 함께 이동한다.
+      onToggleState: () => unawaited(
+        _toggleCellState(
+          cell.key,
+          partLabels: partLabels,
+        ),
+      ),
       onMarkBlank: () => unawaited(
         _markCellBlank(
           cell.key,
@@ -8104,22 +7946,18 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       answerChild: isSetCell
           ? _buildSetSummaryContent(cell, setParts)
           : _buildAnswerImageOrFallback(cell),
-      setPartCount: isSetCell ? setParts.length : 0,
-      setExpanded: setExpanded,
     );
     if (!isSetCell) return mainRow;
-    final partLabels = [for (final part in setParts) part.label];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         mainRow,
-        if (setExpanded)
-          for (final part in setParts)
-            Padding(
-              // 본 정답 카드와 같은 왼쪽·같은 너비. 내용물 들여쓰기는 카드 내부에서.
-              padding: const EdgeInsets.only(left: _rsSetPartCardLeft, top: 6),
-              child: _buildSetPartCard(cell, part, partLabels),
-            ),
+        for (final part in setParts)
+          Padding(
+            // 본 정답 카드와 같은 왼쪽·같은 너비. 내용물 들여쓰기는 카드 내부에서.
+            padding: const EdgeInsets.only(left: _rsSetPartCardLeft, top: 6),
+            child: _buildSetPartCard(cell, part, partLabels),
+          ),
       ],
     );
   }
@@ -8135,8 +7973,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return _splitSetAnswerParts(cell.answer.trim());
   }
 
-  /// 세트형 접힘 카드 콘텐츠 — 정답은 렌더하지 않고 파트별 정오 상태 칩만
-  /// 표시한다. (정답 확인·수기 채점은 카드를 펼쳐 파트 카드에서 수행)
+  /// 세트형 상위 카드 콘텐츠 — 정답은 하위 카드에 표시하고 여기서는
+  /// 파트별 정오 상태 칩만 보여준다.
   Widget _buildSetSummaryContent(
     _RightSheetGradingCellVm cell,
     List<({String label, String value})> setParts,
@@ -8456,11 +8294,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     bool includeFollowing = false,
   }) async {
     if (_answerListReadOnly) return;
-    if (_gradingEditLocked && !_savedEditAcknowledged) {
-      final unlocked = await _confirmSavedGradingEdit();
-      if (!unlocked || !mounted) return;
-    }
-
     final allPages = _visiblePages(applyWrongOnly: false);
     final startIndex =
         allPages.indexWhere((page) => page.pageNumber == sourcePage.pageNumber);

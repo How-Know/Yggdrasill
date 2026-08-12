@@ -82,12 +82,13 @@ class StudentRecentAttendancePanel extends StatelessWidget {
     final scale = math.max(15, math.min(maxAbs, 60)).toDouble();
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 4, 12, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             '최근 평균',
+            textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w400,
@@ -97,17 +98,18 @@ class StudentRecentAttendancePanel extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             summaryLabel(sessions),
+            textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 22,
+              fontSize: 28,
               fontWeight: FontWeight.w700,
-              letterSpacing: -0.4,
-              height: 1.15,
+              letterSpacing: -0.6,
+              height: 1.1,
               color: text,
             ),
           ),
           const SizedBox(height: 18),
           for (var i = 0; i < sessions.length; i++) ...[
-            if (i > 0) const SizedBox(height: 8),
+            if (i > 0) const SizedBox(height: 10),
             _SessionRow(
               index: i + 1,
               session: sessions[i],
@@ -125,19 +127,20 @@ class StudentRecentAttendancePanel extends StatelessWidget {
           ],
           const SizedBox(height: 14),
           Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _LegendDot(color: barFill),
               const SizedBox(width: 6),
               Text(
                 '일찍',
-                style: TextStyle(fontSize: 12, color: subText),
+                style: TextStyle(fontSize: 13, color: subText),
               ),
               const SizedBox(width: 14),
               _LegendDot(color: _iosBlue),
               const SizedBox(width: 6),
               Text(
                 '늦음·지각',
-                style: TextStyle(fontSize: 12, color: subText),
+                style: TextStyle(fontSize: 13, color: subText),
               ),
               const SizedBox(width: 14),
               SizedBox(
@@ -154,7 +157,7 @@ class StudentRecentAttendancePanel extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 '정시',
-                style: TextStyle(fontSize: 12, color: subText),
+                style: TextStyle(fontSize: 13, color: subText),
               ),
             ],
           ),
@@ -220,15 +223,16 @@ class _SessionRow extends StatelessWidget {
         : barFill;
 
     return SizedBox(
-      height: 36,
+      height: 40,
       child: Row(
         children: [
           SizedBox(
-            width: 18,
+            width: 20,
             child: Text(
               '$index',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: FontWeight.w500,
                 fontFeatures: const [FontFeature.tabularFigures()],
                 color: subText,
@@ -236,7 +240,7 @@ class _SessionRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            flex: 5,
+            flex: 7,
             child: _PunctualityBar(
               deltaMinutes: delta,
               scaleMinutes: scaleMinutes,
@@ -246,19 +250,20 @@ class _SessionRow extends StatelessWidget {
               tick: tick,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(
-            flex: 6,
+            flex: 4,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
                   whenLabel,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                     letterSpacing: -0.2,
                     height: 1.15,
@@ -270,8 +275,9 @@ class _SessionRow extends StatelessWidget {
                   deltaLabel,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w500,
                     height: 1.15,
                     color: isLateSide && session.isLate ? lateFill : subText,

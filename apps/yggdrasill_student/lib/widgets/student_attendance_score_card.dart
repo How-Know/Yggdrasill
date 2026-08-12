@@ -12,6 +12,8 @@ class StudentAttendanceScoreCard extends StatelessWidget {
     this.showInfoIcon = true,
     this.infoFilled = false,
     this.showProgressBar = true,
+    this.goalTitle,
+    this.goalValue,
   });
 
   final String title;
@@ -21,6 +23,12 @@ class StudentAttendanceScoreCard extends StatelessWidget {
   final bool showInfoIcon;
   final bool infoFilled;
   final bool showProgressBar;
+
+  /// 총점 카드 우측 "내 목표" 라벨. null이면 숨김.
+  final String? goalTitle;
+
+  /// 예: `상위 4%`. 기능 연동 전 플레이스홀더용.
+  final String? goalValue;
 
   @override
   Widget build(BuildContext context) {
@@ -65,26 +73,68 @@ class StudentAttendanceScoreCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: subText,
-                        height: 1.0,
+                child: title.trim().isEmpty
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _ScoreValueWithUnit(
+                            value: scoreLabel,
+                            numberStyle: numberStyle,
+                            unitStyle: unitStyle,
+                          ),
+                          if (goalTitle != null) ...[
+                            const Spacer(),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    goalTitle!,
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w500,
+                                      color: subText,
+                                      height: 1.15,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    goalValue ?? '상위 —%',
+                                    style: theme.textTheme.titleLarge?.copyWith(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: -0.4,
+                                      height: 1.1,
+                                      color: text,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            title,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: subText,
+                              height: 1.0,
+                            ),
+                          ),
+                          const Spacer(),
+                          _ScoreValueWithUnit(
+                            value: scoreLabel,
+                            numberStyle: numberStyle,
+                            unitStyle: unitStyle,
+                          ),
+                        ],
                       ),
-                    ),
-                    const Spacer(),
-                    _ScoreValueWithUnit(
-                      value: scoreLabel,
-                      numberStyle: numberStyle,
-                      unitStyle: unitStyle,
-                    ),
-                  ],
-                ),
               ),
               if (showInfoIcon)
                 Icon(

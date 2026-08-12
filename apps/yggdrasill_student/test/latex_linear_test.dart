@@ -61,6 +61,84 @@ void main() {
       expect(latexToLinear(r'1\,234'), '1234');
       expect(latexToLinear('2 + 3'), '2+3');
     });
+
+    group('집합 표기', () {
+      test('한 줄 집합 — 중괄호 보존', () {
+        expect(latexToLinear(r'\left\{1,2,3\right\}'), '{1,2,3}');
+        expect(latexToLinear(r'\{1,2,3\}'), '{1,2,3}');
+      });
+
+      test('집합 연산 기호', () {
+        expect(latexToLinear(r'A\cup B'), 'A∪B');
+        expect(latexToLinear(r'A\cap B'), 'A∩B');
+        expect(latexToLinear(r'2\in A'), '2∈A');
+        expect(latexToLinear(r'3\notin B'), '3∉B');
+        expect(latexToLinear(r'A\subset B'), 'A⊂B');
+        expect(latexToLinear(r'\varnothing'), '∅');
+        expect(latexToLinear(r'\emptyset'), '∅');
+      });
+
+      test('조건제시법 — \\mid 는 세로줄', () {
+        expect(latexToLinear(r'\left\{x\mid x>0\right\}'), '{x|x>0}');
+      });
+
+      test('수 체계 기호', () {
+        expect(latexToLinear(r'x\in\mathbb{R}'), 'x∈ℝ');
+        expect(latexToLinear(r'\mathbb{N}'), 'ℕ');
+      });
+    });
+
+    group('세로 나열(연립·세로 집합) 환경', () {
+      // MyScript 가 왼쪽 중괄호만 있는 필기를 케이스 구조로 내보내는 형태.
+      test('matrix — 행을 쉼표로 잇고 중괄호 균형을 맞춘다', () {
+        expect(
+          latexToLinear(r'\left\{\begin{matrix}x+y=1\\x-y=3\end{matrix}\right.'),
+          '{x+y=1,x-y=3}',
+        );
+      });
+
+      test('세로로 쓴 집합 원소가 복원된다', () {
+        expect(
+          latexToLinear(r'\left\{\begin{matrix}1\\2\\3\end{matrix}\right.'),
+          '{1,2,3}',
+        );
+      });
+
+      test('array — 열 정렬 인자는 버린다', () {
+        expect(
+          latexToLinear(
+              r'\left\{\begin{array}{l}x+y=1\\x-y=3\end{array}\right.'),
+          '{x+y=1,x-y=3}',
+        );
+      });
+
+      test('cases — 왼쪽 중괄호가 표기에 포함된다', () {
+        expect(
+          latexToLinear(r'\begin{cases}x+y=1\\x-y=3\end{cases}'),
+          '{x+y=1,x-y=3}',
+        );
+      });
+
+      test('여러 열은 행을 세미콜론으로 구분한다', () {
+        expect(
+          latexToLinear(r'\begin{matrix}1&2\\3&4\end{matrix}'),
+          '1,2;3,4',
+        );
+      });
+
+      test('환경 안의 분수·지수도 변환된다', () {
+        expect(
+          latexToLinear(
+              r'\left\{\begin{matrix}\frac{1}{2}\\x^{2}\end{matrix}\right.'),
+          '{(1)/(2),x^2}',
+        );
+      });
+    });
+
+    test('\\left \\right 짝 맞추기', () {
+      expect(latexToLinear(r'\left(x+1\right.'), '(x+1)');
+      expect(latexToLinear(r'\left[1,2\right]'), '[1,2]');
+    });
   });
 
   group('linearToLatex', () {
@@ -112,6 +190,14 @@ void main() {
     test('등호·복수 답', () {
       expect(linearToLatex('x=3'), 'x=3');
       expect(linearToLatex('1,2'), '1,2');
+    });
+
+    test('집합 기호 역변환 — 2D 표시용', () {
+      expect(linearToLatex('{1,2,3}'), r'\{1,2,3\}');
+      expect(linearToLatex('A∪B'), r'A\cup B');
+      expect(linearToLatex('2∈A'), r'2\in A');
+      expect(linearToLatex('∅'), r'\varnothing ');
+      expect(linearToLatex('x∈ℝ'), r'x\in \mathbb{R}');
     });
   });
 }

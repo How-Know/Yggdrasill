@@ -191,13 +191,16 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         StudentAttendanceScoreCard(
-          title: '총점',
+          title: '',
           score100: totalScore,
           subtitle: totalSubtitle,
           showInfoIcon: false,
           showProgressBar: false,
+          // 껍데기만 — 이후 student_level_states.desired/target + scales.upper_percent 연동
+          goalTitle: '내 목표',
+          goalValue: '상위 —%',
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 28),
         StudentAttendanceScoreCard(
           title: '출석 점수',
           score100: score?.score100,

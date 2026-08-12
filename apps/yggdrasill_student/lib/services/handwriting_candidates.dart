@@ -26,10 +26,15 @@ const Map<String, String> _digitConfusions = <String, String>{
 };
 
 /// 답에 등장할 수 있는 수식 기호.
-const String _mathSymbols = r'+-*/=^().,:%<>±√π°';
+const String _mathSymbols = r'+-*/=^().,:;%<>±√π°∞≤≥≠≈';
+
+/// 집합·논리 기호. 이 기호가 있으면 숫자가 없어도(예: `A∪B`)
+/// 답 형태로 인정한다 — 집합 단원 답은 원소가 문자만일 수 있다.
+const String _setSymbols = '{}[]|∈∉∋∪∩⊂⊃⊆⊇⊈⊉∅∁∀∃∄∧∨¬ℕℤℚℝℂ';
 
 /// 답에 등장할 수 있는 변수 글자 (소문자 기준).
-const String _variableLetters = 'abcdknptxyz';
+/// u 는 전체집합(U)·합집합 표기에서 쓰인다.
+const String _variableLetters = 'abcdknptuxyz';
 
 /// 공백 제거 — 필기 인식이 "1 2"처럼 획 사이를 띄어 읽는 경우 정규화.
 String _canonical(String s) => s.replaceAll(RegExp(r'\s+'), '');
@@ -47,23 +52,29 @@ String normalizeHandwritingConfusions(String candidate) {
 bool _isChoice(String s) =>
     s.length == 1 && s.codeUnitAt(0) >= 0x31 && s.codeUnitAt(0) <= 0x35;
 
-/// 주관식 수학 답으로 그럴듯한지 — 숫자를 하나 이상 포함하고,
-/// 모든 글자가 숫자·수식 기호·허용 변수 안에 있어야 한다.
+/// 주관식 수학 답으로 그럴듯한지 — 모든 글자가 숫자·수식 기호·집합
+/// 기호·허용 변수 안에 있고, 숫자나 집합 기호를 하나 이상 포함해야 한다.
+///
+/// 숫자만으로 판단하면 `A∪B` 같은 집합 답이 걸러져 불필요하게 VLM
+/// 폴백을 타므로, 집합 기호도 "수식임"의 근거로 인정한다.
 bool _looksLikeMathAnswer(String s) {
   if (s.isEmpty) return false;
-  var hasDigit = false;
+  var hasAnchor = false;
   for (final ch in s.split('')) {
     final code = ch.codeUnitAt(0);
-    final isDigit = code >= 0x30 && code <= 0x39;
-    if (isDigit) {
-      hasDigit = true;
+    if (code >= 0x30 && code <= 0x39) {
+      hasAnchor = true;
+      continue;
+    }
+    if (_setSymbols.contains(ch)) {
+      hasAnchor = true;
       continue;
     }
     if (_mathSymbols.contains(ch)) continue;
     if (_variableLetters.contains(ch.toLowerCase())) continue;
     return false;
   }
-  return hasDigit;
+  return hasAnchor;
 }
 
 /// 인식 후보 중 답으로 그럴듯한 것을 고른다. 없으면 null.

@@ -13,7 +13,6 @@ typedef RightSheetTestGradingAction = Future<void> Function(
   RightSheetTestGradingStates states,
   RightSheetTestGradingStates correctionStates,
 );
-typedef RightSheetTestGradingCancelRetryAction = Future<bool> Function();
 
 /// 마이그레이션 과제의 단일 확인 버튼이 실행할 서버 액션.
 ///
@@ -77,7 +76,6 @@ class RightSideSheetTestGradingSession {
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
   final bool gradingLocked;
-  final RightSheetTestGradingCancelRetryAction? onRequestGradingCancelRetry;
   final bool closeSheetOnAction;
   final bool closeBeforeActionCompletes;
 
@@ -112,7 +110,6 @@ class RightSideSheetTestGradingSession {
     this.onStatesChanged,
     this.onAction,
     this.gradingLocked = false,
-    this.onRequestGradingCancelRetry,
     this.closeSheetOnAction = true,
     this.closeBeforeActionCompletes = false,
     this.smartConfirmAction = false,

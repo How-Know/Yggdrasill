@@ -146,29 +146,15 @@ class HomeworkGroup {
 
   String get inspectionLabel {
     if (!isDueForCheck) return '';
-    if (absenceCarryover) return '결석 이월 · 오늘 검사';
-    final original = originalDueDate;
-    if (original != null) {
-      final local = original.toLocal();
-      final originalDay = DateTime(local.year, local.month, local.day);
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      if (originalDay.isBefore(today)) {
-        return '미검사 이월 · 오늘 검사';
-      }
-    }
-    return '오늘 검사';
+    return '오늘까지';
   }
 
+  /// 숙제 마감일 칩. 예: `3월 12일까지`
   String get assignmentOriginLabel {
-    switch (assignmentOrigin) {
-      case HomeworkAssignmentOrigin.direct:
-        return '직접 숙제';
-      case HomeworkAssignmentOrigin.classCarryover:
-        return '수업 이월';
-      case HomeworkAssignmentOrigin.unknown:
-        return '';
-    }
+    final due = dueDate;
+    if (due == null) return '';
+    final local = due.toLocal();
+    return '${local.month}월 ${local.day}일까지';
   }
 
   /// 출력물/프린트 출처 — 표지 대신 흰 배경.

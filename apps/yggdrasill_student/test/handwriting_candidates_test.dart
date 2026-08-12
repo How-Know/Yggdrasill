@@ -77,6 +77,28 @@ void main() {
       );
     });
 
+    test('집합 답을 답 형태로 인정한다 (VLM 폴백 불필요)', () {
+      expect(
+        pickHandwritingCandidate(['{1,2,3}', 'hello'], answerKind: 'subjective'),
+        '{1,2,3}',
+      );
+      // 원소가 문자뿐이라 숫자가 없어도 집합 기호가 근거가 된다.
+      expect(
+        pickPlausibleHandwritingCandidate(
+          ['A∪B'],
+          answerKind: 'subjective',
+        ),
+        'A∪B',
+      );
+      expect(
+        pickPlausibleHandwritingCandidate(
+          ['x∈ℝ'],
+          answerKind: 'subjective',
+        ),
+        'x∈ℝ',
+      );
+    });
+
     test('숫자가 전혀 없는 후보뿐이면 기존처럼 첫 후보를 쓴다', () {
       expect(
         pickHandwritingCandidate(

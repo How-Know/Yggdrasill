@@ -16,6 +16,7 @@ class HomeworkDepartureDraft {
     this.todayAndHomeworkGroupIds = const <String>{},
     this.hasPlanClassification = false,
     this.planSnapshotItemIds = const <String>{},
+    this.planSnapshotGroups = const <HomeworkPlanSnapshotGroup>[],
     this.planSnapshotAt,
     this.planSnapshotMinutes,
   });
@@ -39,6 +40,9 @@ class HomeworkDepartureDraft {
 
   /// 목표 제시 시점에 고정한 오늘+다음 item id.
   final Set<String> planSnapshotItemIds;
+
+  /// 목표 제시 시점에 고정한 과제 그룹(소속 item 포함).
+  final List<HomeworkPlanSnapshotGroup> planSnapshotGroups;
   final DateTime? planSnapshotAt;
 
   /// 목표 제시 시점에 고정한 남은 권장분(오늘+대기).
@@ -82,6 +86,17 @@ class HomeworkDepartureDraft {
         if (id.isNotEmpty) planSnapshotItemIds.add(id);
       }
     }
+    final planSnapshotGroups = <HomeworkPlanSnapshotGroup>[];
+    final rawSnapshotGroups = row['homework_plan_snapshot_groups'];
+    if (rawSnapshotGroups is List) {
+      for (final value in rawSnapshotGroups) {
+        if (value is! Map) continue;
+        final group = HomeworkPlanSnapshotGroup.fromJson(
+          Map<String, dynamic>.from(value),
+        );
+        if (group != null) planSnapshotGroups.add(group);
+      }
+    }
     final rawSnapshotAt = row['homework_plan_snapshot_at'];
     final rawSnapshotMinutes = row['homework_plan_snapshot_minutes'];
     final parsedSnapshotMinutes = rawSnapshotMinutes is num
@@ -95,6 +110,7 @@ class HomeworkDepartureDraft {
           ? null
           : DateTime.tryParse('$rawSavedAt')?.toLocal(),
       planSnapshotItemIds: planSnapshotItemIds,
+      planSnapshotGroups: planSnapshotGroups,
       planSnapshotAt: rawSnapshotAt == null
           ? null
           : DateTime.tryParse('$rawSnapshotAt')?.toLocal(),
@@ -102,6 +118,37 @@ class HomeworkDepartureDraft {
           ? null
           : (parsedSnapshotMinutes < 0 ? 0 : parsedSnapshotMinutes),
     );
+  }
+}
+
+/// 목표 제시 때 고정한 과제 그룹 한 줄.
+class HomeworkPlanSnapshotGroup {
+  const HomeworkPlanSnapshotGroup({
+    required this.groupId,
+    required this.itemIds,
+  });
+
+  final String groupId;
+  final List<String> itemIds;
+
+  Map<String, dynamic> toJson() => {
+        'group_id': groupId,
+        'item_ids': itemIds,
+      };
+
+  static HomeworkPlanSnapshotGroup? fromJson(Map<String, dynamic> json) {
+    final groupId = '${json['group_id'] ?? ''}'.trim();
+    if (groupId.isEmpty) return null;
+    final rawIds = json['item_ids'];
+    final itemIds = <String>[];
+    if (rawIds is List) {
+      for (final value in rawIds) {
+        final id = '$value'.trim();
+        if (id.isNotEmpty) itemIds.add(id);
+      }
+    }
+    if (itemIds.isEmpty) return null;
+    return HomeworkPlanSnapshotGroup(groupId: groupId, itemIds: itemIds);
   }
 }
 
@@ -118,6 +165,7 @@ class HomeworkDepartureDraftService {
   static const _attendanceDraftSelect =
       'id,student_id,homework_draft_group_ids,homework_draft_group_due_dates,'
       'homework_draft_saved_at,homework_plan_snapshot_item_ids,'
+      'homework_plan_snapshot_groups,'
       'homework_plan_snapshot_at,homework_plan_snapshot_minutes';
 
   HomeworkDepartureDraft? peek(String attendanceId) {
@@ -219,6 +267,8 @@ class HomeworkDepartureDraftService {
     required Iterable<String> groupIds,
     required Map<String, DateTime> dueDateByGroupId,
     Iterable<String> planSnapshotItemIds = const <String>[],
+    Iterable<HomeworkPlanSnapshotGroup> planSnapshotGroups =
+        const <HomeworkPlanSnapshotGroup>[],
     int? planSnapshotMinutes,
     bool presentGoalSnapshot = false,
   }) async {
@@ -241,6 +291,11 @@ class HomeworkDepartureDraftService {
         .where((id) => id.isNotEmpty)
         .toSet()
         .toList(growable: false);
+    final normalizedSnapshotGroups = <Map<String, dynamic>>[
+      for (final group in planSnapshotGroups)
+        if (group.groupId.trim().isNotEmpty && group.itemIds.isNotEmpty)
+          group.toJson(),
+    ];
     final payload = <String, dynamic>{
       'homework_draft_group_ids':
           normalizedGroupIds.toList(growable: false),
@@ -249,6 +304,7 @@ class HomeworkDepartureDraftService {
     };
     if (presentGoalSnapshot) {
       payload['homework_plan_snapshot_item_ids'] = normalizedSnapshotIds;
+      payload['homework_plan_snapshot_groups'] = normalizedSnapshotGroups;
       payload['homework_plan_snapshot_at'] =
           savedAt.toUtc().toIso8601String();
       payload['homework_plan_snapshot_minutes'] =
