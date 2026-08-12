@@ -24,6 +24,7 @@ import '../../models/education_level.dart';
 import '../../models/student.dart';
 import '../../models/student_flow.dart';
 import '../../utils/naesin_exam_context.dart';
+import '../../utils/textbook_problem_source_order.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../resources/textbook_explorer_view.dart';
 
@@ -1859,6 +1860,7 @@ class HomeworkQuickAddProxyDialogState
                 bigOrder: item.bigOrder,
                 midOrder: item.midOrder,
                 subKey: item.subKey,
+                subIndex: item.subIndex,
                 bigName: big.name,
                 midName: mid.name,
                 smallName: small.name,
@@ -1874,6 +1876,7 @@ class HomeworkQuickAddProxyDialogState
                 typeLabel: item.typeGroupLabel,
                 typeTitle: item.typeGroupTitle,
                 typeOrder: null,
+                columnIndex: 0,
                 bbox1k: to1k(
                   item.numberXmin,
                   item.numberYmin,
@@ -2173,6 +2176,7 @@ class HomeworkQuickAddProxyDialogState
           bigOrder: bigOrder,
           midOrder: midOrder,
           subKey: subKey,
+          subIndex: _toInt(row['sub_index']) ?? 0,
           bigName: '${row['big_name'] ?? ''}'.trim(),
           midName: '${row['mid_name'] ?? ''}'.trim(),
           smallName: '${row['small_name'] ?? row['sub_name'] ?? ''}'.trim(),
@@ -2188,21 +2192,13 @@ class HomeworkQuickAddProxyDialogState
           typeLabel: typeLabel,
           typeTitle: typeTitle,
           typeOrder: _toInt(row['content_group_order']),
+          columnIndex: _toInt(row['column_index']) ?? 0,
           bbox1k: row['bbox_1k'],
           itemRegion1k: row['item_region_1k'],
         ),
       );
     }
-    out.sort((a, b) {
-      if (a.bigOrder != b.bigOrder) return a.bigOrder.compareTo(b.bigOrder);
-      if (a.midOrder != b.midOrder) return a.midOrder.compareTo(b.midOrder);
-      final bySub = a.subKey.compareTo(b.subKey);
-      if (bySub != 0) return bySub;
-      if (a.displayPage != b.displayPage) {
-        return a.displayPage.compareTo(b.displayPage);
-      }
-      return a.problemNumber.compareTo(b.problemNumber);
-    });
+    out.sort(_compareTextbookProblemRegionsBySource);
     return out;
   }
 
@@ -6716,15 +6712,7 @@ class HomeworkQuickAddProxyDialogState
             region.midOrder == mid.orderIndex &&
             regionInActiveSmall(region))
         .toList()
-      ..sort((a, b) {
-        if (a.displayPage != b.displayPage) {
-          return a.displayPage.compareTo(b.displayPage);
-        }
-        final ao = a.typeOrder ?? 1 << 20;
-        final bo = b.typeOrder ?? 1 << 20;
-        if (ao != bo) return ao.compareTo(bo);
-        return a.problemNumber.compareTo(b.problemNumber);
-      });
+      ..sort(_compareTextbookProblemRegionsBySource);
     final book = _selectedLinkedBook;
     String regionKey(_TextbookProblemRegion region) {
       if (book == null) return region.typeGroupKey;
@@ -9948,11 +9936,53 @@ class _TypeProblemFlatEntry {
   bool get isProblem => region != null;
 }
 
+double _problemRegionCoordinate(dynamic bbox, int index) {
+  if (bbox is! List || index < 0 || index >= bbox.length) {
+    return double.infinity;
+  }
+  final value = bbox[index];
+  if (value is num) return value.toDouble();
+  return double.tryParse('$value') ?? double.infinity;
+}
+
+int _compareTextbookProblemRegionsBySource(
+  _TextbookProblemRegion a,
+  _TextbookProblemRegion b,
+) {
+  return compareTextbookProblemSourceOrder(
+    TextbookProblemSourceOrderKey(
+      bigOrder: a.bigOrder,
+      midOrder: a.midOrder,
+      subIndex: a.subIndex,
+      subKey: a.subKey,
+      page: a.displayPage,
+      problemNumber: a.problemNumber,
+      columnIndex: a.columnIndex,
+      ymin: _problemRegionCoordinate(a.bbox1k, 0),
+      xmin: _problemRegionCoordinate(a.bbox1k, 1),
+      stableId: a.id,
+    ),
+    TextbookProblemSourceOrderKey(
+      bigOrder: b.bigOrder,
+      midOrder: b.midOrder,
+      subIndex: b.subIndex,
+      subKey: b.subKey,
+      page: b.displayPage,
+      problemNumber: b.problemNumber,
+      columnIndex: b.columnIndex,
+      ymin: _problemRegionCoordinate(b.bbox1k, 0),
+      xmin: _problemRegionCoordinate(b.bbox1k, 1),
+      stableId: b.id,
+    ),
+  );
+}
+
 class _TextbookProblemRegion {
   final String id;
   final int bigOrder;
   final int midOrder;
   final String subKey;
+  final int subIndex;
   final String bigName;
   final String midName;
   final String smallName;
@@ -9968,6 +9998,7 @@ class _TextbookProblemRegion {
   final String typeLabel;
   final String typeTitle;
   final int? typeOrder;
+  final int columnIndex;
   final dynamic bbox1k;
   final dynamic itemRegion1k;
 
@@ -9976,6 +10007,7 @@ class _TextbookProblemRegion {
     required this.bigOrder,
     required this.midOrder,
     required this.subKey,
+    this.subIndex = 0,
     required this.bigName,
     required this.midName,
     this.smallName = '',
@@ -9991,6 +10023,7 @@ class _TextbookProblemRegion {
     required this.typeLabel,
     required this.typeTitle,
     required this.typeOrder,
+    this.columnIndex = 0,
     required this.bbox1k,
     required this.itemRegion1k,
   });
@@ -10041,11 +10074,13 @@ class _TextbookProblemRegion {
         'bigOrder': bigOrder,
         'midOrder': midOrder,
         'subKey': subKey,
+        'subIndex': subIndex,
         'bigName': bigName,
         'midName': midName,
         'rawPage': rawPage,
         'displayPage': displayPage,
         'problemNumber': problemNumber,
+        'columnIndex': columnIndex,
         'label': label,
         'section': section,
         'pbQuestionUid': pbQuestionUid,

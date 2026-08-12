@@ -3,6 +3,7 @@ import 'data_manager.dart';
 import 'learning_problem_bank_service.dart';
 import 'tenant_service.dart';
 import 'textbook_concept_units.dart';
+import '../utils/textbook_problem_source_order.dart';
 
 /// 문항 응답 유형(객관식/주관식/서술형) 표시용.
 enum TbAnswerKind { objective, subjective, essay, unknown }
@@ -40,6 +41,7 @@ class TbExItem {
     required this.bigOrder,
     required this.midOrder,
     required this.subKey,
+    this.subIndex = 0,
     required this.isSetHeader,
     required this.setFrom,
     required this.setTo,
@@ -69,6 +71,7 @@ class TbExItem {
   final int bigOrder;
   final int midOrder;
   final String subKey;
+  final int subIndex;
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
@@ -152,6 +155,7 @@ class TbExItem {
       bigOrder: bigOrder,
       midOrder: midOrder,
       subKey: subKey,
+      subIndex: subIndex,
       isSetHeader: isSetHeader,
       setFrom: setFrom,
       setTo: setTo,
@@ -279,7 +283,8 @@ class TextbookExplorerService {
   final LearningProblemBankService _pbService = LearningProblemBankService();
   final Map<String, TbExData> _dataCache = <String, TbExData>{};
   final Map<String, dynamic> _payloadCache = <String, dynamic>{};
-  final Map<String, List<TbExItem>> _flatItemsCache = <String, List<TbExItem>>{};
+  final Map<String, List<TbExItem>> _flatItemsCache =
+      <String, List<TbExItem>>{};
   final Map<String, Map<String, _ConceptRange>> _specialRangeCache =
       <String, Map<String, _ConceptRange>>{};
 
@@ -477,8 +482,7 @@ class TextbookExplorerService {
   TbExData _assembleData({
     required dynamic payload,
     required List<TbExItem> items,
-    Map<String, _ConceptRange> specialRanges =
-        const <String, _ConceptRange>{},
+    Map<String, _ConceptRange> specialRanges = const <String, _ConceptRange>{},
   }) {
     final units = _buildUnits(payload, items, specialRanges: specialRanges);
     final itemsByPage = <int, List<TbExItem>>{};
@@ -549,6 +553,7 @@ class TextbookExplorerService {
       bigOrder: _toInt(row['big_order']) ?? 0,
       midOrder: _toInt(row['mid_order']) ?? 0,
       subKey: '${row['sub_key'] ?? ''}'.trim(),
+      subIndex: _toInt(row['sub_index']) ?? 0,
       isSetHeader: isSetHeader,
       setFrom: _toInt(row['set_from']),
       setTo: _toInt(row['set_to']),
@@ -587,8 +592,7 @@ class TextbookExplorerService {
   List<TbExBigUnit> _buildUnits(
     dynamic payload,
     List<TbExItem> items, {
-    Map<String, _ConceptRange> specialRanges =
-        const <String, _ConceptRange>{},
+    Map<String, _ConceptRange> specialRanges = const <String, _ConceptRange>{},
   }) {
     final itemsByKey = <String, List<TbExItem>>{};
     final itemsByMid = <String, List<TbExItem>>{};
@@ -953,12 +957,31 @@ class TextbookExplorerService {
   }
 
   int _compareItems(TbExItem a, TbExItem b) {
-    final an = int.tryParse(a.problemNumber);
-    final bn = int.tryParse(b.problemNumber);
-    if (an != null && bn != null && an != bn) return an.compareTo(bn);
-    if (an != null && bn == null) return -1;
-    if (an == null && bn != null) return 1;
-    if (a.rawPage != b.rawPage) return a.rawPage.compareTo(b.rawPage);
+    final compared = compareTextbookProblemSourceOrder(
+      TextbookProblemSourceOrderKey(
+        bigOrder: a.bigOrder,
+        midOrder: a.midOrder,
+        subIndex: a.subIndex,
+        subKey: a.subKey,
+        page: a.displayPage ?? a.rawPage,
+        problemNumber: a.problemNumber,
+        ymin: a.ymin,
+        xmin: a.xmin,
+        stableId: a.cropId,
+      ),
+      TextbookProblemSourceOrderKey(
+        bigOrder: b.bigOrder,
+        midOrder: b.midOrder,
+        subIndex: b.subIndex,
+        subKey: b.subKey,
+        page: b.displayPage ?? b.rawPage,
+        problemNumber: b.problemNumber,
+        ymin: b.ymin,
+        xmin: b.xmin,
+        stableId: b.cropId,
+      ),
+    );
+    if (compared != 0) return compared;
     return a.sortOrder.compareTo(b.sortOrder);
   }
 

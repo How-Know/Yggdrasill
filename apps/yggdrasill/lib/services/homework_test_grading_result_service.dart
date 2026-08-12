@@ -9,6 +9,46 @@ import 'homework_grading_state_codec.dart';
 import 'homework_store.dart';
 import 'tenant_service.dart';
 
+const _savedGradingItemRequiredColumns = <String>[
+  'question_key',
+  'question_uid',
+  'state',
+];
+
+const _savedGradingItemOptionalColumns = <String>[
+  'incorrect_kind',
+  'correction_state',
+  'correction_attempt_number',
+  'part_states',
+];
+
+@visibleForTesting
+String homeworkGradingSavedItemSelect({
+  Set<String> excludedColumns = const <String>{},
+}) {
+  return <String>[
+    ..._savedGradingItemRequiredColumns,
+    ..._savedGradingItemOptionalColumns.where(
+      (column) => !excludedColumns.contains(column),
+    ),
+  ].join(',');
+}
+
+/// 구버전 수정 이력 컬럼이 없는 DB에 저장할 호환 행.
+///
+/// 파트별 정오표인 `part_states`는 수정 이력 컬럼과 독립된 필수 데이터이므로
+/// 호환 저장에서도 제거하지 않는다.
+@visibleForTesting
+Map<String, dynamic> homeworkGradingCompatibilityItemRow(
+  Map<String, dynamic> row,
+) {
+  return Map<String, dynamic>.from(row)
+    ..remove('baseline_attempt_id')
+    ..remove('baseline_state')
+    ..remove('correction_state')
+    ..remove('correction_attempt_number');
+}
+
 class HomeworkTestLatestScore {
   final double scoreCorrect;
   final double scoreTotal;
@@ -353,14 +393,9 @@ class HomeworkTestGradingResultService {
           ..['id'] = fallbackAttemptId;
         final fallbackItemRows = itemRows
             .map(
-              (row) => Map<String, dynamic>.from(row)
+              (row) => homeworkGradingCompatibilityItemRow(row)
                 ..['id'] = _uuid.v4()
-                ..['attempt_id'] = fallbackAttemptId
-                ..remove('baseline_attempt_id')
-                ..remove('baseline_state')
-                ..remove('correction_state')
-                ..remove('correction_attempt_number')
-                ..remove('part_states'),
+                ..['attempt_id'] = fallbackAttemptId,
             )
             .toList(growable: false);
         try {
@@ -1067,24 +1102,32 @@ class HomeworkTestGradingResultService {
     required String attemptId,
   }) async {
     final supa = Supabase.instance.client;
-    try {
-      return await supa
-          .from('homework_test_grading_attempt_items')
-          .select(
-              'question_key,question_uid,state,incorrect_kind,correction_state,correction_attempt_number,part_states')
-          .eq('academy_id', academyId)
-          .eq('attempt_id', attemptId)
-          .order('page_number', ascending: true)
-          .order('question_index', ascending: true);
-    } catch (error) {
-      if (!_isMissingRetryColumnError(error)) rethrow;
-      return await supa
-          .from('homework_test_grading_attempt_items')
-          .select('question_key,question_uid,state')
-          .eq('academy_id', academyId)
-          .eq('attempt_id', attemptId)
-          .order('page_number', ascending: true)
-          .order('question_index', ascending: true);
+    final excludedColumns = <String>{};
+    while (true) {
+      try {
+        return await supa
+            .from('homework_test_grading_attempt_items')
+            .select(
+              homeworkGradingSavedItemSelect(
+                excludedColumns: excludedColumns,
+              ),
+            )
+            .eq('academy_id', academyId)
+            .eq('attempt_id', attemptId)
+            .order('page_number', ascending: true)
+            .order('question_index', ascending: true);
+      } catch (error) {
+        final missingColumn = _missingSavedItemOptionalColumn(
+          error,
+          excludedColumns: excludedColumns,
+        );
+        if (missingColumn == null || !excludedColumns.add(missingColumn)) {
+          rethrow;
+        }
+        debugPrint(
+          'load grading items without unavailable column: $missingColumn',
+        );
+      }
     }
   }
 
@@ -1245,12 +1288,29 @@ class HomeworkTestGradingResultService {
         (msg.contains('baseline_attempt_id') ||
             msg.contains('baseline_state') ||
             msg.contains('correction_state') ||
-            msg.contains('correction_attempt_number') ||
-            msg.contains('part_states')) &&
+            msg.contains('correction_attempt_number')) &&
         (msg.contains('schema cache') ||
             msg.contains('could not find') ||
             msg.contains('does not exist') ||
             msg.contains('42703'));
+  }
+
+  String? _missingSavedItemOptionalColumn(
+    Object error, {
+    required Set<String> excludedColumns,
+  }) {
+    final msg = error.toString().toLowerCase();
+    final missingColumnError = msg.contains('schema cache') ||
+        msg.contains('could not find') ||
+        msg.contains('does not exist') ||
+        msg.contains('42703');
+    if (!missingColumnError) return null;
+    for (final column in _savedGradingItemOptionalColumns) {
+      if (!excludedColumns.contains(column) && msg.contains(column)) {
+        return column;
+      }
+    }
+    return null;
   }
 
   Future<String> _resolveAcademyId() async {

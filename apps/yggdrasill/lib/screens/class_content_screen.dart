@@ -56,9 +56,21 @@ import '../widgets/attendance_rank_dialog.dart';
 import '../services/student_textbook_report_service.dart';
 import '../widgets/textbook_report_review_dialog.dart';
 import '../utils/homework_page_text.dart';
+import '../utils/textbook_problem_source_order.dart';
+import 'class_content/homework_created_date.dart';
 import 'class_content/grading_mode_page.dart';
 
 const double _homeworkDraftExtensionWidth = 280;
+
+class _IncompleteTextbookGradingPayloadException implements Exception {
+  const _IncompleteTextbookGradingPayloadException({
+    required this.expected,
+    required this.actual,
+  });
+
+  final int expected;
+  final int actual;
+}
 
 class ClassContentPrintController extends ChangeNotifier {
   Future<void> Function()? _startPrintFlow;
@@ -950,6 +962,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     final studentNamesById = <String, String>{
                       for (final s in list) s.id: s.name,
                     };
+                    final arrivalTimesByStudentId = <String, DateTime>{
+                      for (final s in list)
+                        if (s.record.arrivalTime != null)
+                          s.id: s.record.arrivalTime!,
+                    };
                     _syncHomeGradingHistoryAction(
                       attendingStudentIds: attendingStudentIds,
                       studentNamesById: studentNamesById,
@@ -968,6 +985,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   ? GradingModePage(
                                       attendingStudentIds: attendingStudentIds,
                                       studentNamesById: studentNamesById,
+                                      arrivalTimesByStudentId:
+                                          arrivalTimesByStudentId,
                                       headerDateText:
                                           _formatDateWithWeekdayShort(
                                         headerDateTime,
@@ -980,6 +999,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       pendingConfirms: _pendingConfirms,
                                       onSubmittedCardTap: (studentId, group,
                                           summary, children) async {
+                                        final gradingChildren = children
+                                            .where(
+                                              (e) =>
+                                                  e.status !=
+                                                      HomeworkStatus
+                                                          .completed &&
+                                                  e.completedAt == null,
+                                            )
+                                            .toList(growable: false);
                                         final submittedChildren = children
                                             .where(
                                               (e) =>
@@ -993,7 +1021,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                         if (submittedChildren.isEmpty) {
                                           return;
                                         }
-                                        final pendingKeys = submittedChildren
+                                        // 그룹 제출 카드는 일부 자식 phase가 아직 대기로
+                                        // 남아 있어도 한 과제 전체를 채점한다. 제출 자식만
+                                        // 넘기면 PLLG7721처럼 53문항 중 10문항만 열린다.
+                                        final pendingKeys = gradingChildren
                                             .map(
                                               (e) => (
                                                 studentId: studentId,
@@ -1001,17 +1032,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                               ),
                                             )
                                             .toList(growable: false);
-                                        if (submittedChildren.length == 1) {
+                                        if (gradingChildren.length == 1) {
                                           return _handleSubmittedChipTapForPending(
                                             context: context,
                                             studentId: studentId,
-                                            hw: submittedChildren.first,
+                                            hw: gradingChildren.first,
                                             targetKeys: pendingKeys,
                                           );
                                         }
                                         HomeworkItem answerSeed =
-                                            submittedChildren.first;
-                                        for (final child in submittedChildren) {
+                                            gradingChildren.first;
+                                        for (final child in gradingChildren) {
                                           if (_hasDirectHomeworkTextbookLink(
                                               child)) {
                                             answerSeed = child;
@@ -4520,8 +4551,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         .map(
           (entry) => HomeworkAnswerGradingPage(
             pageNumber: entry.key,
-            cells: entry.value
-              ..sort((a, b) => a.questionIndex.compareTo(b.questionIndex)),
+            // rows에서 확정한 교재 원본 순서를 유지한다. 개념확인67처럼
+            // 라벨의 숫자가 큰 문항을 questionIndex로 다시 정렬하면
+            // 실제 페이지 안에서 풀던 순서와 달리 맨 뒤로 밀린다.
+            cells: entry.value,
           ),
         )
         .toList(growable: false)
@@ -4849,6 +4882,79 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
+  TextbookProblemSourceOrderKey _textbookSourceOrderKeyFromRow(
+    Map<String, dynamic> row,
+  ) {
+    final snapshot = _mapFromDynamic(row['crop_snapshot']);
+    dynamic firstValue(Iterable<dynamic> values) {
+      for (final value in values) {
+        if (value != null && '$value'.trim().isNotEmpty) return value;
+      }
+      return null;
+    }
+
+    double coordinate(dynamic raw, int index) {
+      if (raw is! List || index < 0 || index >= raw.length) {
+        return double.infinity;
+      }
+      final value = raw[index];
+      if (value is num) return value.toDouble();
+      return double.tryParse('$value') ?? double.infinity;
+    }
+
+    final bbox = firstValue([
+      row['bbox_1k'],
+      snapshot['bbox1k'],
+      snapshot['bbox_1k'],
+      row['item_region_1k'],
+      snapshot['itemRegion1k'],
+      snapshot['item_region_1k'],
+    ]);
+    return TextbookProblemSourceOrderKey(
+      bigOrder: _intFromDynamic(
+            firstValue([row['big_order'], snapshot['bigOrder']]),
+          ) ??
+          0,
+      midOrder: _intFromDynamic(
+            firstValue([row['mid_order'], snapshot['midOrder']]),
+          ) ??
+          0,
+      subIndex: _intFromDynamic(
+            firstValue([row['sub_index'], snapshot['subIndex']]),
+          ) ??
+          0,
+      subKey: _trimDynamic(
+        firstValue([row['sub_key'], snapshot['subKey']]),
+      ),
+      page: _intFromDynamic(
+            firstValue([
+              row['display_page'],
+              row['page_number'],
+              snapshot['displayPage'],
+              row['raw_page'],
+              snapshot['rawPage'],
+            ]),
+          ) ??
+          0,
+      problemNumber: _trimDynamic(
+        firstValue([
+          row['problem_number'],
+          snapshot['problemNumber'],
+          row['question_label'],
+        ]),
+      ),
+      columnIndex: _intFromDynamic(
+            firstValue([row['column_index'], snapshot['columnIndex']]),
+          ) ??
+          0,
+      ymin: coordinate(bbox, 0),
+      xmin: coordinate(bbox, 1),
+      stableId: _trimDynamic(
+        firstValue([row['crop_id'], row['id'], snapshot['cropId']]),
+      ),
+    );
+  }
+
   int _textbookQuestionIndexFromRow(
     Map<String, dynamic> row,
     int fallbackIndex,
@@ -4954,11 +5060,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final itemCompare = _trimDynamic(a['homework_item_id'])
           .compareTo(_trimDynamic(b['homework_item_id']));
       if (itemCompare != 0) return itemCompare;
-      final byOrder = (_intFromDynamic(a['sort_order']) ?? 0)
-          .compareTo(_intFromDynamic(b['sort_order']) ?? 0);
-      if (byOrder != 0) return byOrder;
-      return _trimDynamic(a['problem_number'])
-          .compareTo(_trimDynamic(b['problem_number']));
+      return compareTextbookProblemSourceOrder(
+        _textbookSourceOrderKeyFromRow(a),
+        _textbookSourceOrderKeyFromRow(b),
+      );
     });
     return out;
   }
@@ -5050,6 +5155,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       })?> _resolveTextbookProblemGradingPayload({
     required HomeworkItem seedHomework,
     required List<({String studentId, String itemId})> keys,
+    int incompleteRetryAttempt = 0,
+    bool throwOnIncomplete = false,
   }) async {
     final seenItemIds = <String>{};
     final allItems = <HomeworkItem>[];
@@ -5164,20 +5271,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     final rows = rowsByCropId.values.toList(growable: false)
       ..sort((a, b) {
-        final aOrder = _intFromDynamic(a['sort_order']);
-        final bOrder = _intFromDynamic(b['sort_order']);
-        if (aOrder != null && bOrder != null && aOrder != bOrder) {
-          return aOrder.compareTo(bOrder);
-        }
-        final byPage = (_intFromDynamic(a['display_page']) ??
-                _intFromDynamic(a['raw_page']) ??
-                0)
-            .compareTo(_intFromDynamic(b['display_page']) ??
-                _intFromDynamic(b['raw_page']) ??
-                0);
-        if (byPage != 0) return byPage;
-        return _trimDynamic(a['problem_number'])
-            .compareTo(_trimDynamic(b['problem_number']));
+        return compareTextbookProblemSourceOrder(
+          _textbookSourceOrderKeyFromRow(a),
+          _textbookSourceOrderKeyFromRow(b),
+        );
       });
 
     final cellsByPage = <int, List<HomeworkAnswerGradingCell>>{};
@@ -5244,12 +5341,47 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         .map(
           (entry) => HomeworkAnswerGradingPage(
             pageNumber: entry.key,
-            cells: entry.value
-              ..sort((a, b) => a.questionIndex.compareTo(b.questionIndex)),
+            // rows에서 확정한 교재 원본 순서를 유지한다. 개념확인67처럼
+            // 라벨 속 숫자를 questionIndex로 다시 정렬하면 페이지 끝으로 밀린다.
+            cells: entry.value,
           ),
         )
         .toList(growable: false)
       ..sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+    final expectedQuestionCount = textbookItems.fold<int>(
+      0,
+      (sum, item) => sum + math.max(0, item.count ?? 0),
+    );
+    final actualQuestionCount = gradingPages.fold<int>(
+      0,
+      (sum, page) => sum + page.cells.length,
+    );
+    if (expectedQuestionCount > 0 &&
+        actualQuestionCount < expectedQuestionCount) {
+      debugPrint(
+        '[RIGHT_SHEET][incomplete] assignment=${seedHomework.assignmentCode} '
+        'expected=$expectedQuestionCount actual=$actualQuestionCount '
+        'attempt=${incompleteRetryAttempt + 1}',
+      );
+      if (incompleteRetryAttempt < 2) {
+        await Future<void>.delayed(
+          Duration(milliseconds: 250 * (incompleteRetryAttempt + 1)),
+        );
+        return _resolveTextbookProblemGradingPayload(
+          seedHomework: seedHomework,
+          keys: keys,
+          incompleteRetryAttempt: incompleteRetryAttempt + 1,
+          throwOnIncomplete: throwOnIncomplete,
+        );
+      }
+      if (throwOnIncomplete) {
+        throw _IncompleteTextbookGradingPayloadException(
+          expected: expectedQuestionCount,
+          actual: actualQuestionCount,
+        );
+      }
+      return null;
+    }
     final title =
         baseItem.title.trim().isEmpty ? '교재 문항 채점' : baseItem.title.trim();
     return (
@@ -5422,6 +5554,29 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required List<({String studentId, String itemId})> keys,
     required RightSheetPreloadedSessionPayload payload,
   }) async {
+    final seenItemIds = <String>{};
+    var expectedQuestionCount = 0;
+    for (final key in keys) {
+      if (!seenItemIds.add(key.itemId)) continue;
+      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+      expectedQuestionCount += math.max(0, item?.count ?? 0);
+    }
+    final actualQuestionCount = payload.gradingPages.fold<int>(
+      0,
+      (sum, page) => sum + page.cells.length,
+    );
+    if (expectedQuestionCount > 0 &&
+        actualQuestionCount < expectedQuestionCount) {
+      final cacheKey =
+          _rightSheetSessionPayloadCacheKey(studentId: studentId, hw: hw);
+      RightSheetAnswerPreloadService.instance.removeSessionPayload(cacheKey);
+      debugPrint(
+        '[RIGHT_SHEET][stale_preload] assignment=${hw.assignmentCode} '
+        'expected=$expectedQuestionCount actual=$actualQuestionCount',
+      );
+      // false를 반환하면 호출부가 캐시를 건너뛰고 최신 문항 메타를 다시 조회한다.
+      return false;
+    }
     final cachedStates =
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] ??
             const <String, HomeworkAnswerCellState>{};
@@ -5870,11 +6025,31 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _showHomeworkChipSnackBar(context, '테스트 답안 매핑에 실패해 기본 답지 흐름으로 전환했어요.');
     }
 
-    final textbookProblemPayload = await _resolveTextbookProblemGradingPayload(
-      seedHomework: hw,
-      keys: keys,
-    );
+    var incompleteTextbookPayload = false;
+    final textbookProblemPayload = await (() async {
+      try {
+        return await _resolveTextbookProblemGradingPayload(
+          seedHomework: hw,
+          keys: keys,
+          throwOnIncomplete: true,
+        );
+      } on _IncompleteTextbookGradingPayloadException catch (error) {
+        incompleteTextbookPayload = true;
+        debugPrint(
+          '[RIGHT_SHEET][blocked] assignment=${hw.assignmentCode} '
+          'expected=${error.expected} actual=${error.actual}',
+        );
+        return null;
+      }
+    })();
     if (!context.mounted) return;
+    if (incompleteTextbookPayload) {
+      _showHomeworkChipSnackBar(
+        context,
+        '문항 목록을 모두 불러오지 못했습니다. 잠시 후 다시 눌러 주세요.',
+      );
+      return;
+    }
     if (textbookProblemPayload != null) {
       final cachedStates = _testGradingDraftStatesByHomeworkId[
               textbookProblemPayload.homeworkId] ??
@@ -9347,12 +9522,8 @@ Future<_HomeworkCheckResult?> _runHomeworkCheckDialogForGroup({
   }
   final savedItemIds =
       targets.map((entry) => entry.item.id).toList(growable: false);
-  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-    studentId,
-    savedItemIds,
-    fromStatuses: const ['assigned', 'in_progress', 'carried_to_class'],
-  );
-
+  // 먼저 제출/대기 상태를 만들어 카드가 제출·숙제 양쪽에서 동시에 빠지는
+  // 중간 프레임을 없앤 뒤, 사용이 끝난 할당을 정리한다.
   for (final itemId in savedItemIds) {
     await HomeworkStore.instance.placeItemAtActiveTail(
       studentId,
@@ -9365,6 +9536,11 @@ Future<_HomeworkCheckResult?> _runHomeworkCheckDialogForGroup({
       await HomeworkStore.instance.waitPhase(studentId, itemId);
     }
   }
+  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+    studentId,
+    savedItemIds,
+    fromStatuses: const ['assigned', 'in_progress', 'carried_to_class'],
+  );
   if (!context.mounted) {
     return _HomeworkCheckResult(
       itemIds: savedItemIds,
@@ -11205,7 +11381,10 @@ List<_HomeworkOverviewCompletedGroupEntry>
       flow.id: flow.name,
   };
   final out = <_HomeworkOverviewCompletedGroupEntry>[];
-  final groups = HomeworkStore.instance.groups(studentId);
+  final groups = HomeworkStore.instance.groups(
+    studentId,
+    includeArchived: true,
+  );
   final now = DateTime.now();
   final DateTime? targetDateOnly =
       targetDay == null ? null : _dateOnly(targetDay);
@@ -12970,16 +13149,20 @@ Widget _buildHomeworkChipsReactiveForStudent(
                               if (columnChildren.isEmpty) {
                                 return const SizedBox.shrink();
                               }
-                              return SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(),
-                                child: Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: _homeworkChipOuterLeftInset,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: columnChildren,
+                              return ScrollConfiguration(
+                                behavior: ScrollConfiguration.of(context)
+                                    .copyWith(scrollbars: false),
+                                child: SingleChildScrollView(
+                                  physics: const BouncingScrollPhysics(),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: _homeworkChipOuterLeftInset,
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: columnChildren,
+                                    ),
                                   ),
                                 ),
                               );
@@ -14086,6 +14269,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     DateTime? latestSubmitted;
     DateTime? latestConfirmed;
     DateTime? latestWaiting;
+    final earliestCreated =
+        earliestHomeworkCreatedAt(children.map((child) => child.createdAt));
     final pages = <String>[];
     for (final child in children) {
       if (runningChild == null &&
@@ -14229,7 +14414,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       defaultSplitParts: first.defaultSplitParts,
       checkCount: runtimeCheckCount > 0 ? runtimeCheckCount : groupCheckCount,
       orderIndex: group.orderIndex,
-      createdAt: first.createdAt,
+      createdAt: earliestCreated ?? first.createdAt,
       updatedAt: latestUpdated ?? first.updatedAt,
       status: HomeworkStatus.inProgress,
       phase: phase,
@@ -18256,11 +18441,8 @@ Widget _buildHomeworkChipVisual(
   final String rawTypeText =
       (hw.type ?? '').trim().isEmpty ? '-' : (hw.type ?? '').trim();
 
-  final String startDateText = hw.firstStartedAt != null
-      ? '${hw.firstStartedAt!.month.toString().padLeft(2, '0')}.${hw.firstStartedAt!.day.toString().padLeft(2, '0')}'
-      : (hw.createdAt != null
-          ? '${hw.createdAt!.month.toString().padLeft(2, '0')}.${hw.createdAt!.day.toString().padLeft(2, '0')}'
-          : '-');
+  // 접힌 카드 3번째 줄 왼쪽은 수행일이 아니라 과제를 내준 날(생성일)이다.
+  final String startDateText = homeworkCreatedDateLabel(hw.createdAt);
 
   // 숙제 배정 회차가 아니라 수행 사이클 기준.
   // 확인(checkCount)마다 끝난 시도가 쌓이고, 대기/확인은 그 차수를 유지,

@@ -5400,7 +5400,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         );
       }
       if (parsedCells.isEmpty) continue;
-      parsedCells.sort((a, b) => a.questionIndex.compareTo(b.questionIndex));
       pages.add(
         _RightSheetGradingPageVm(
           pageNumber: pageNumber <= 0 ? 1 : pageNumber,

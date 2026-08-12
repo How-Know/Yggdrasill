@@ -6,6 +6,38 @@ import 'academy_db.dart';
 import 'runtime_flags.dart';
 import 'tag_preset_service.dart';
 import 'tenant_service.dart';
+import '../utils/textbook_problem_source_order.dart';
+
+int _sourceOrderInt(dynamic value) {
+  if (value is num) return value.toInt();
+  return int.tryParse('$value') ?? 0;
+}
+
+double _sourceOrderCoordinate(dynamic bbox, int index) {
+  if (bbox is! List || index < 0 || index >= bbox.length) {
+    return double.infinity;
+  }
+  final value = bbox[index];
+  if (value is num) return value.toDouble();
+  return double.tryParse('$value') ?? double.infinity;
+}
+
+TextbookProblemSourceOrderKey _sourceOrderKeyOfRow(
+  Map<String, dynamic> row,
+) {
+  return TextbookProblemSourceOrderKey(
+    bigOrder: _sourceOrderInt(row['big_order']),
+    midOrder: _sourceOrderInt(row['mid_order']),
+    subIndex: _sourceOrderInt(row['sub_index']),
+    subKey: '${row['sub_key'] ?? ''}',
+    page: _sourceOrderInt(row['display_page'] ?? row['raw_page']),
+    problemNumber: '${row['problem_number'] ?? ''}',
+    columnIndex: _sourceOrderInt(row['column_index']),
+    ymin: _sourceOrderCoordinate(row['bbox_1k'], 0),
+    xmin: _sourceOrderCoordinate(row['bbox_1k'], 1),
+    stableId: '${row['id'] ?? ''}',
+  );
+}
 
 class ResourceService {
   ResourceService._internal();
@@ -1091,7 +1123,7 @@ class ResourceService {
       var query = supa
           .from('textbook_problem_crops')
           .select(
-            'id, big_order, mid_order, sub_key, big_name, mid_name, '
+            'id, big_order, mid_order, sub_key, sub_index, big_name, mid_name, '
             'raw_page, display_page, section, '
             'problem_number, label, item_name, is_set_header, set_from, set_to, '
             'content_group_kind, content_group_label, content_group_title, '
@@ -1106,6 +1138,7 @@ class ResourceService {
       final rows = await query
           .order('big_order')
           .order('mid_order')
+          .order('sub_index')
           .order('sub_key')
           .order('raw_page')
           .order('problem_number');
@@ -1168,7 +1201,7 @@ class ResourceService {
         var query = supa
             .from('textbook_problem_crops')
             .select(
-              'id, big_order, mid_order, sub_key, big_name, mid_name, '
+              'id, big_order, mid_order, sub_key, sub_index, big_name, mid_name, '
               'raw_page, display_page, section, '
               'problem_number, label, is_set_header, set_from, set_to, '
               'content_group_kind, content_group_label, content_group_title, '
@@ -1190,6 +1223,7 @@ class ResourceService {
         final rows = await query
             .order('big_order')
             .order('mid_order')
+            .order('sub_index')
             .order('sub_key')
             .order('display_page')
             .order('problem_number');
@@ -1312,20 +1346,10 @@ class ResourceService {
 
       final out = byCropId.values.toList(growable: false);
       out.sort((a, b) {
-        final byBig = (_asInt(a['big_order']) ?? -1)
-            .compareTo(_asInt(b['big_order']) ?? -1);
-        if (byBig != 0) return byBig;
-        final byMid = (_asInt(a['mid_order']) ?? -1)
-            .compareTo(_asInt(b['mid_order']) ?? -1);
-        if (byMid != 0) return byMid;
-        final bySub =
-            '${a['sub_key'] ?? ''}'.compareTo('${b['sub_key'] ?? ''}');
-        if (bySub != 0) return bySub;
-        final byPage = (_asInt(a['display_page']) ?? _asInt(a['raw_page']) ?? 0)
-            .compareTo(_asInt(b['display_page']) ?? _asInt(b['raw_page']) ?? 0);
-        if (byPage != 0) return byPage;
-        return '${a['problem_number'] ?? ''}'
-            .compareTo('${b['problem_number'] ?? ''}');
+        return compareTextbookProblemSourceOrder(
+          _sourceOrderKeyOfRow(a),
+          _sourceOrderKeyOfRow(b),
+        );
       });
       return out;
     } catch (e, st) {

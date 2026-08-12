@@ -21,6 +21,7 @@ import '../../widgets/home_header_weather_icon.dart';
 import '../../widgets/navigation_rail.dart';
 import '../../widgets/resource_textbook_card.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import 'grading_queue_order.dart';
 
 const double _kGradingBaseCardWidth = 288.0;
 const double _kGradingBaseCardMetaHeight = 140.0;
@@ -52,6 +53,7 @@ const double _kGradingHomeworkCardCoverDetailFontSize = 22.0;
 const double _kGradingHomeworkCardCoverNameLineHeight = 1.15;
 const double _kGradingHomeworkCardCoverDetailLineHeight = 1.1;
 const double _kGradingHomeworkCardCoverNameVerticalPad = 10.0;
+
 /// 커버 2번째 줄(경과시간/숙제칩) 고정 높이 — 페이지 줄 Y 정렬용.
 /// 숙제칩(pad 6*2 + 15*1.1 + border)과 경과시간(22*1.1) 중 큰 쪽에 맞춤.
 const double _kGradingCoverSecondLineSlotHeight = 32.0;
@@ -145,6 +147,7 @@ typedef GradingGroupTapCallback = Future<void> Function(
 class GradingModePage extends StatefulWidget {
   final List<String> attendingStudentIds;
   final Map<String, String> studentNamesById;
+  final Map<String, DateTime> arrivalTimesByStudentId;
   final GradingGroupTapCallback? onSubmittedCardTap;
   final GradingGroupTapCallback? onHomeworkCardTap;
   final Map<({String studentId, String itemId}), bool> pendingConfirms;
@@ -158,6 +161,7 @@ class GradingModePage extends StatefulWidget {
     super.key,
     required this.attendingStudentIds,
     required this.studentNamesById,
+    required this.arrivalTimesByStudentId,
     required this.headerDateText,
     required this.headerTimeText,
     required this.headerSubmittedText,
@@ -179,11 +183,33 @@ class _GradingModePageState extends State<GradingModePage> {
   Future<List<_GradingAnswerBook>>? _answerBooksFuture;
   int _activeAssignmentsRevision = -1;
   String _activeAssignmentsStudentsKey = '';
+  Map<String, List<HomeworkAssignmentDetail>> _lastActiveAssignmentsByStudent =
+      const <String, List<HomeworkAssignmentDetail>>{};
+  final Map<String, DateTime> _retainedQueueTimeByEntry = <String, DateTime>{};
 
   @override
   void initState() {
     super.initState();
     _answerBooksFuture = _loadAnswerBooks();
+  }
+
+  @override
+  void didUpdateWidget(covariant GradingModePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.headerDateText != widget.headerDateText) {
+      _retainedQueueTimeByEntry.clear();
+      _lastActiveAssignmentsByStudent =
+          const <String, List<HomeworkAssignmentDetail>>{};
+      return;
+    }
+    final attendingNow = widget.attendingStudentIds.toSet();
+    final departedStudentIds = oldWidget.attendingStudentIds
+        .where((studentId) => !attendingNow.contains(studentId))
+        .toSet();
+    if (departedStudentIds.isEmpty) return;
+    _retainedQueueTimeByEntry.removeWhere(
+      (key, _) => departedStudentIds.any((id) => key.startsWith('$id|')),
+    );
   }
 
   @override
@@ -197,8 +223,11 @@ class _GradingModePageState extends State<GradingModePage> {
             return FutureBuilder<Map<String, List<HomeworkAssignmentDetail>>>(
               future: _activeAssignmentsForAttending(assignmentRevision),
               builder: (context, assignmentSnapshot) {
-                final activeAssignmentsByStudent = assignmentSnapshot.data ??
-                    const <String, List<HomeworkAssignmentDetail>>{};
+                if (assignmentSnapshot.hasData) {
+                  _lastActiveAssignmentsByStudent = assignmentSnapshot.data!;
+                }
+                final activeAssignmentsByStudent =
+                    assignmentSnapshot.data ?? _lastActiveAssignmentsByStudent;
                 final submittedEntries =
                     _buildSubmittedEntries(activeAssignmentsByStudent);
                 final homeworkEntries = _buildHomeworkEntries(
@@ -974,6 +1003,11 @@ class _GradingModePageState extends State<GradingModePage> {
       itemBuilder: (context, index) {
         final stack = stacks[index];
         return SizedBox(
+          key: ValueKey(
+            stack.entries.isEmpty
+                ? 'grading-stack:$index'
+                : _entryStackKey(stack.entries.first),
+          ),
           width: cardLayout.width,
           child: ScrollConfiguration(
             behavior: ScrollConfiguration.of(context).copyWith(
@@ -1086,9 +1120,7 @@ class _GradingModePageState extends State<GradingModePage> {
   }
 
   DateTime _entrySortTime(_GradingGroupEntry entry) {
-    return entry.section == _GradingSection.submitted
-        ? entry.submittedTime
-        : entry.homeworkTime;
+    return entry.queueTime;
   }
 
   /// 세로(같은 학생·같은 교재): 앞쪽 페이지가 위, 그다음 제출/대기 시각.
@@ -1234,7 +1266,7 @@ class _GradingModePageState extends State<GradingModePage> {
       );
     }
     out.sort((a, b) {
-      final t = a.submittedTime.compareTo(b.submittedTime);
+      final t = a.queueTime.compareTo(b.queueTime);
       if (t != 0) return t;
       final nameCmp = a.studentName.compareTo(b.studentName);
       if (nameCmp != 0) return nameCmp;
@@ -1259,7 +1291,7 @@ class _GradingModePageState extends State<GradingModePage> {
       );
     }
     out.sort((a, b) {
-      final t = a.homeworkTime.compareTo(b.homeworkTime);
+      final t = a.queueTime.compareTo(b.queueTime);
       if (t != 0) return t;
       final nameCmp = a.studentName.compareTo(b.studentName);
       if (nameCmp != 0) return nameCmp;
@@ -1416,6 +1448,19 @@ class _GradingModePageState extends State<GradingModePage> {
           : (group.title.trim().isNotEmpty
               ? group.title.trim()
               : summary.title);
+      final submittedTime = _submittedSortTimeOfChildren(children);
+      final homeworkTime = widget.arrivalTimesByStudentId[studentId] ??
+          _homeworkSortTimeOfChildren(children);
+      final queueTime = retainGradingQueueTime(
+        _retainedQueueTimeByEntry,
+        entryIdentity: gradingQueueEntryIdentity(
+          studentId: studentId,
+          groupId: group.id,
+          summaryId: summary.id,
+        ),
+        candidate:
+            section == _GradingSection.submitted ? submittedTime : homeworkTime,
+      );
       out.add(
         _GradingGroupEntry(
           studentId: studentId,
@@ -1428,8 +1473,9 @@ class _GradingModePageState extends State<GradingModePage> {
               ? '\uC81C\uBAA9 \uC5C6\uC74C'
               : displayTitle,
           dueDate: dueDate,
-          submittedTime: _submittedSortTimeOfChildren(children),
-          homeworkTime: _homeworkSortTimeOfChildren(children),
+          submittedTime: submittedTime,
+          homeworkTime: homeworkTime,
+          queueTime: queueTime,
         ),
       );
     }
@@ -1459,6 +1505,18 @@ class _GradingModePageState extends State<GradingModePage> {
       }
       final displayTitle =
           titleSnapshot.isNotEmpty ? titleSnapshot : item.title.trim();
+      final submittedTime = _submittedSortTimeOfItem(item);
+      final homeworkTime = widget.arrivalTimesByStudentId[studentId] ??
+          _homeworkSortTimeOfItem(item);
+      final queueTime = retainGradingQueueTime(
+        _retainedQueueTimeByEntry,
+        entryIdentity: gradingQueueEntryIdentity(
+          studentId: studentId,
+          summaryId: item.id,
+        ),
+        candidate:
+            section == _GradingSection.submitted ? submittedTime : homeworkTime,
+      );
       out.add(
         _GradingGroupEntry(
           studentId: studentId,
@@ -1471,8 +1529,9 @@ class _GradingModePageState extends State<GradingModePage> {
               ? '(\uC81C\uBAA9 \uC5C6\uC74C)'
               : displayTitle,
           dueDate: dueDate,
-          submittedTime: _submittedSortTimeOfItem(item),
-          homeworkTime: _homeworkSortTimeOfItem(item),
+          submittedTime: submittedTime,
+          homeworkTime: homeworkTime,
+          queueTime: queueTime,
         ),
       );
     }
@@ -1660,6 +1719,7 @@ class _GradingGroupEntry {
   final DateTime? dueDate;
   final DateTime submittedTime;
   final DateTime homeworkTime;
+  final DateTime queueTime;
 
   const _GradingGroupEntry({
     required this.studentId,
@@ -1672,6 +1732,7 @@ class _GradingGroupEntry {
     required this.dueDate,
     required this.submittedTime,
     required this.homeworkTime,
+    required this.queueTime,
   });
 
   bool get hasSubmittedChild => children.any(

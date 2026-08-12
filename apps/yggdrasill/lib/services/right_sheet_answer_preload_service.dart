@@ -340,6 +340,12 @@ class RightSheetAnswerPreloadService {
     return null;
   }
 
+  void removeSessionPayload(String cacheKey) {
+    final safeKey = cacheKey.trim();
+    if (safeKey.isEmpty) return;
+    _sessionCache.remove(safeKey);
+  }
+
   void schedulePreloadSessions({
     required String academyId,
     required Iterable<RightSideSheetTestGradingSession> sessions,

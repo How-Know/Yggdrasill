@@ -3933,14 +3933,14 @@ class _MainScreenState extends State<MainScreen>
                                                                   sideSheetPad,
                                                                 ),
                                                                 child:
-                                                                    Scrollbar(
-                                                                  controller:
-                                                                      _attendedScrollCtrl,
-                                                                  thumbVisibility:
-                                                                      attendedListScrollable,
-                                                                  notificationPredicate:
-                                                                      (_) =>
-                                                                          attendedListScrollable,
+                                                                    ScrollConfiguration(
+                                                                  behavior:
+                                                                      ScrollConfiguration.of(
+                                                                    context,
+                                                                  ).copyWith(
+                                                                    scrollbars:
+                                                                        false,
+                                                                  ),
                                                                   child:
                                                                       SingleChildScrollView(
                                                                     controller:

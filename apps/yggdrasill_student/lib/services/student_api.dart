@@ -566,8 +566,10 @@ class TodayAttendance {
   final DateTime? arrival;
   final DateTime? departure;
   final DateTime? classDateTime;
+
   /// 시간표 기준 수업 종료.
   final DateTime? classEndTime;
+
   /// 오늘 예정 귀가(실하원 `departure`와 별개).
   final DateTime? plannedDepartureAt;
   final String? earlyLeaveReason;
@@ -791,10 +793,16 @@ class StudentTodayPlanProgress {
   const StudentTodayPlanProgress({
     this.planMinutes = 0,
     this.completedRecommendedMinutes = 0,
+    this.planGroupCount,
+    this.completedGroupCount,
   });
 
   final int planMinutes;
   final int completedRecommendedMinutes;
+
+  /// null이면 구버전 RPC(개수 컬럼 없음).
+  final int? planGroupCount;
+  final int? completedGroupCount;
 
   int get percent {
     if (planMinutes <= 0) return 0;
@@ -803,11 +811,83 @@ class StudentTodayPlanProgress {
         .clamp(0, 100);
   }
 
+  bool get hasGroupCounts =>
+      planGroupCount != null && completedGroupCount != null;
+
+  /// 예: `5개 중 2개 완료`
+  String get groupCompletionLabel {
+    final total = planGroupCount ?? 0;
+    final safeTotal = total < 0 ? 0 : total;
+    final done = (completedGroupCount ?? 0).clamp(0, safeTotal);
+    return '$safeTotal개 중 $done개 완료';
+  }
+
   static StudentTodayPlanProgress fromRow(Map<String, dynamic> row) {
     return StudentTodayPlanProgress(
       planMinutes: (row['plan_minutes'] as num?)?.toInt() ?? 0,
       completedRecommendedMinutes:
           (row['completed_recommended_minutes'] as num?)?.toInt() ?? 0,
+      planGroupCount: row.containsKey('plan_group_count')
+          ? (row['plan_group_count'] as num?)?.toInt() ?? 0
+          : null,
+      completedGroupCount: row.containsKey('completed_group_count')
+          ? (row['completed_group_count'] as num?)?.toInt() ?? 0
+          : null,
+    );
+  }
+}
+
+/// 오늘 수업 생산성: 순수 수업시간과 오늘 새로 통과한 문항수.
+class StudentTodayProductivity {
+  const StudentTodayProductivity({
+    this.productiveSeconds = 0,
+    this.completedProblemCount = 0,
+  });
+
+  final int productiveSeconds;
+  final int completedProblemCount;
+
+  static StudentTodayProductivity fromRow(Map<String, dynamic> row) {
+    final seconds = (row['productive_seconds'] as num?)?.toInt() ?? 0;
+    final count = (row['completed_problem_count'] as num?)?.toInt() ?? 0;
+    return StudentTodayProductivity(
+      productiveSeconds: seconds < 0 ? 0 : seconds,
+      completedProblemCount: count < 0 ? 0 : count,
+    );
+  }
+}
+
+class StudentDailyPerformance {
+  const StudentDailyPerformance({
+    required this.date,
+    this.planMinutes = 0,
+    this.completedRecommendedMinutes = 0,
+    this.performanceRate = 0,
+    this.sessionCount = 0,
+    this.isLive = false,
+  });
+
+  final DateTime date;
+  final int planMinutes;
+  final int completedRecommendedMinutes;
+  final double performanceRate;
+  final int sessionCount;
+  final bool isLive;
+
+  int get percent => (performanceRate * 100).round().clamp(0, 100);
+
+  static StudentDailyPerformance? fromRow(Map<String, dynamic> row) {
+    final date = DateTime.tryParse('${row['local_date'] ?? ''}');
+    if (date == null) return null;
+    final rate = (row['performance_rate'] as num?)?.toDouble() ?? 0;
+    return StudentDailyPerformance(
+      date: date,
+      planMinutes: (row['plan_minutes'] as num?)?.toInt() ?? 0,
+      completedRecommendedMinutes:
+          (row['completed_recommended_minutes'] as num?)?.toInt() ?? 0,
+      performanceRate: rate.clamp(0.0, 1.0),
+      sessionCount: (row['session_count'] as num?)?.toInt() ?? 0,
+      isLive: row['is_live'] == true,
     );
   }
 }
@@ -991,8 +1071,7 @@ class StudentApi {
     );
   }
 
-  Future<void> presenceOffline() =>
-      _client.rpc('student_app_presence_offline');
+  Future<void> presenceOffline() => _client.rpc('student_app_presence_offline');
 
   Future<Map<String, dynamic>> _quickLoginRequest(
     Map<String, dynamic> body,
@@ -1216,10 +1295,26 @@ class StudentApi {
     );
   }
 
-  /// 오늘 완료한 과제 그룹 (completed_at 기준, 상세 카드·수행속도용).
-  Future<List<TodayCompletedHomework>> listTodayCompletedHomework() async {
-    final rows = await _client.rpc('student_list_today_completed_homework_v1')
+  /// 이번 열린 출석(등원) 이후 완료한 과제. 리스트 전용(수행률·완료율과 분리).
+  Future<List<TodayCompletedHomework>> listSessionCompletedHomework() async {
+    final rows = await _client.rpc('student_list_session_completed_homework_v1')
         as List<dynamic>;
+    return rows
+        .whereType<Map>()
+        .map((r) => TodayCompletedHomework.fromRow(
+              Map<String, dynamic>.from(r),
+            ))
+        .toList(growable: false);
+  }
+
+  /// 최근 [days]일 완료 과제 (기본 30일). 기록 보기 다이얼로그용.
+  Future<List<TodayCompletedHomework>> listRecentCompletedHomework({
+    int days = 30,
+  }) async {
+    final rows = await _client.rpc(
+      'student_list_recent_completed_homework_v1',
+      params: {'p_days': days},
+    ) as List<dynamic>;
     return rows
         .whereType<Map>()
         .map((r) => TodayCompletedHomework.fromRow(
@@ -1236,6 +1331,33 @@ class StudentApi {
     final row = rows.first;
     if (row is! Map) return const StudentTodayPlanProgress();
     return StudentTodayPlanProgress.fromRow(Map<String, dynamic>.from(row));
+  }
+
+  /// (오늘 등원 경과시간 - 설정 휴식시간)과 오늘 새로 통과한 문항수.
+  Future<StudentTodayProductivity> todayProductivity() async {
+    final rows =
+        await _client.rpc('student_today_productivity_v1') as List<dynamic>;
+    if (rows.isEmpty) return const StudentTodayProductivity();
+    final row = rows.first;
+    if (row is! Map) return const StudentTodayProductivity();
+    return StudentTodayProductivity.fromRow(Map<String, dynamic>.from(row));
+  }
+
+  /// 하원 회차 스냅샷(오늘 열린 회차는 실시간)을 날짜별로 합산한 수행률.
+  Future<List<StudentDailyPerformance>> dailyPerformance({
+    int days = 8,
+  }) async {
+    final rows = await _client.rpc(
+      'student_daily_performance_v1',
+      params: {'p_days': days},
+    ) as List<dynamic>;
+    return rows
+        .whereType<Map>()
+        .map((row) => StudentDailyPerformance.fromRow(
+              Map<String, dynamic>.from(row),
+            ))
+        .whereType<StudentDailyPerformance>()
+        .toList(growable: false);
   }
 
   /// 과제 그룹 목록 (메인 + 하원숙제 + 플래그 병합).
@@ -1354,9 +1476,8 @@ class StudentApi {
       }
     }
     final rawMinutes = row['homework_plan_snapshot_minutes'];
-    final minutes = rawMinutes is num
-        ? rawMinutes.toInt()
-        : int.tryParse('$rawMinutes');
+    final minutes =
+        rawMinutes is num ? rawMinutes.toInt() : int.tryParse('$rawMinutes');
     return StudentPlanGoalSnapshot(
       presentedAt: at,
       itemIds: ids,
