@@ -65,6 +65,13 @@ import myscript_math
             result(payload)
           }
         }
+      case "dumpRecognitionAssets":
+        DispatchQueue.global(qos: .utility).async {
+          let dump = MyScriptMathEngine.shared.dumpRecognitionAssets()
+          DispatchQueue.main.async {
+            result(["dump": dump])
+          }
+        }
       default:
         result(FlutterMethodNotImplemented)
       }

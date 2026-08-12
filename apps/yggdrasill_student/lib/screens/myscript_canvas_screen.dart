@@ -181,7 +181,7 @@ class _MyScriptCanvasScreenState extends State<MyScriptCanvasScreen> {
                   children: [
                     PencilInputPad(
                       height: 200,
-                      onRecognized: (text) =>
+                      onRecognized: (text, {sourceLatex}) =>
                           setState(() => _padResult = text),
                     ),
                     if (_padResult.isNotEmpty) ...[

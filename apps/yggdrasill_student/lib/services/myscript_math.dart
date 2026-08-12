@@ -45,6 +45,20 @@ class MyScriptMath {
     return _available!;
   }
 
+  /// iink 실물 리소스의 지원 자산 타입·기호·규칙 목록을 진단용으로 가져온다.
+  Future<String> dumpRecognitionAssets() async {
+    if (kIsWeb || !Platform.isIOS) return 'unsupported_platform';
+    try {
+      final result = await _channel
+          .invokeMethod<Map<dynamic, dynamic>>('dumpRecognitionAssets')
+          .timeout(const Duration(seconds: 20));
+      return (result?['dump'] as String?) ?? 'empty_dump';
+    } catch (e) {
+      debugPrint('MyScript asset dump failed: $e');
+      return 'channel_error: $e';
+    }
+  }
+
   /// 획 데이터를 인식해 LaTeX 문자열을 돌려준다. 실패·빈 결과는 null.
   ///
   /// [strokes]: [{'x': [double], 'y': [double], 't': [int(ms)]}]

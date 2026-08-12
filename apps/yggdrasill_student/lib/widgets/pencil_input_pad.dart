@@ -134,6 +134,11 @@ Future<List<String>> debugRecognizeStrokesWithMlKit({
 ///
 /// 획이 멈추면 잠시 후 자동으로 인식해 [onRecognized]로 전달한다.
 /// 인식 결과는 화면에 즉시 표시되므로 학생이 틀린 인식을 바로 고칠 수 있다.
+typedef HandwritingRecognizedCallback = void Function(
+  String text, {
+  String? sourceLatex,
+});
+
 class PencilInputPad extends StatefulWidget {
   const PencilInputPad({
     super.key,
@@ -147,7 +152,9 @@ class PencilInputPad extends StatefulWidget {
     this.embedded = false,
   });
 
-  final ValueChanged<String> onRecognized;
+  /// [text]는 채점·저장용 선형 표기, [sourceLatex]는 MyScript가 반환한
+  /// 구조 보존 원문이다. ML Kit/VLM 결과에는 sourceLatex가 없다.
+  final HandwritingRecognizedCallback onRecognized;
 
   /// 인식 후보 목록에서 답으로 쓸 후보를 고른다.
   /// null 반환 = "답 형태 후보 없음" → [remoteRecognizer] 폴백을 시도한다.
@@ -182,11 +189,14 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   final List<List<Offset>> _strokes = <List<Offset>>[];
   final List<List<int>> _strokeTimes = <List<int>>[];
+
   /// 포인트별 정규화 압력(0~1). 압력 정보가 없는 기기는 -1.
   final List<List<double>> _strokePressures = <List<double>>[];
   int? _activePointer;
+
   /// 현재 획을 그리는 포인터가 스타일러스(애플펜슬)인지.
   bool _activeIsStylus = false;
+
   /// 동시에 내려온 손가락(터치) 포인터 수. 스타일러스 세션이 아닐 때
   /// 2개 이상이면 필기를 막고(두 손가락 스와이프용) 진행 중 획을 취소한다.
   int _touchPointerCount = 0;
@@ -197,6 +207,7 @@ class PencilInputPadState extends State<PencilInputPad> {
   static bool _stylusSeen = false;
 
   mlkit.DigitalInkRecognizer? _recognizer;
+
   /// MyScript iink 수식 인식 사용 가능 여부 (인증서 있을 때만 true).
   /// true 면 온디바이스 1차 인식을 ML Kit 대신 MyScript 가 맡는다.
   bool _myscriptReady = false;
@@ -351,7 +362,8 @@ class PencilInputPadState extends State<PencilInputPad> {
   }
 
   /// MyScript 네이티브 브리지에 넘길 획 페이로드.
-  List<Map<String, dynamic>> _myscriptStrokesPayload() => <Map<String, dynamic>>[
+  List<Map<String, dynamic>> _myscriptStrokesPayload() =>
+      <Map<String, dynamic>>[
         for (var i = 0; i < _strokes.length; i++)
           <String, dynamic>{
             'x': <double>[for (final p in _strokes[i]) p.dx],
@@ -375,8 +387,8 @@ class PencilInputPadState extends State<PencilInputPad> {
 
       // 1차: MyScript iink 수식 인식 (인증서가 있을 때만).
       if (_myscriptReady) {
-        final latex =
-            await MyScriptMath.instance.recognizeLatex(_myscriptStrokesPayload());
+        final latex = await MyScriptMath.instance
+            .recognizeLatex(_myscriptStrokesPayload());
         final linear = latex == null ? '' : latexToLinear(latex);
         if (linear.isNotEmpty) {
           candidates = <String>[linear];
@@ -444,7 +456,10 @@ class PencilInputPadState extends State<PencilInputPad> {
         myscriptLatex: myscriptLatex,
       );
       if (!mounted || selected.isEmpty) return;
-      widget.onRecognized(selected);
+      widget.onRecognized(
+        selected,
+        sourceLatex: usedRemote ? null : myscriptLatex,
+      );
     } catch (e, stack) {
       debugPrint('Digital ink recognition failed: $e\n$stack');
       // 온디바이스 인식 자체가 실패해도 VLM 폴백은 시도한다.
@@ -623,10 +638,9 @@ class PencilInputPadState extends State<PencilInputPad> {
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: _modelReady
                       ? (event) {
-                          final isStylus =
-                              event.kind == PointerDeviceKind.stylus ||
-                                  event.kind ==
-                                      PointerDeviceKind.invertedStylus;
+                          final isStylus = event.kind ==
+                                  PointerDeviceKind.stylus ||
+                              event.kind == PointerDeviceKind.invertedStylus;
                           if (isStylus) {
                             _stylusSeen = true;
                             // 손가락 획이 그려지던 중이면 버리고 펜슬로 전환.

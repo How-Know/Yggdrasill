@@ -89,6 +89,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   /// crop_id → 현재 입력값
   final Map<String, String> _answers = <String, String>{};
 
+  /// 답 상태 키 → MyScript 원본 LaTeX.
+  ///
+  /// 채점·저장은 [_answers]의 선형 표기를 사용하고, 학생 화면만 이 구조 보존
+  /// 원문으로 그린다. 수동 입력으로 답을 고치면 해당 원문은 폐기한다.
+  final Map<String, String> _answerDisplayLatex = <String, String>{};
+
   /// crop_id → 마지막 채점 당시 제출한 값 (중복 제출 방지)
   final Map<String, String> _gradedAnswers = <String, String>{};
 
@@ -932,9 +938,44 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     return _answerKeyOf(cropId, _selectedPartKey);
   }
 
-  void _setAnswer(String answerKey, String value) {
+  void _setAnswer(
+    String answerKey,
+    String value, {
+    String? displayLatex,
+  }) {
     if (_results[answerKey] == true) return;
-    setState(() => _answers[answerKey] = value);
+    setState(() {
+      _answers[answerKey] = value;
+      final latex = displayLatex?.trim() ?? '';
+      if (latex.isEmpty || value.isEmpty) {
+        _answerDisplayLatex.remove(answerKey);
+      } else {
+        _answerDisplayLatex[answerKey] = latex;
+      }
+    });
+  }
+
+  /// 채점용 선형 답은 그대로 두고, MyScript 원본 LaTeX가 있으면 화면만
+  /// 구조 보존 형태(연립·행렬 등)로 조판한다.
+  Widget _answerMathView(
+    String answerKey,
+    String linear, {
+    required double fontSize,
+    Color? color,
+  }) {
+    final latex = _answerDisplayLatex[answerKey];
+    if (latex != null && latex.trim().isNotEmpty) {
+      return MathLatexView(
+        latex: latex,
+        fontSize: fontSize,
+        color: color,
+      );
+    }
+    return MathLatexView.linear(
+      linear,
+      fontSize: fontSize,
+      color: color,
+    );
   }
 
   /// 아직 맞지 못한 첫 파트 키.
@@ -1296,9 +1337,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       setState(() {
         if (target.hasParts) {
           // 다음 문제로 진입 → 첫 파트, 이전 문제로 진입 → 마지막 파트.
-          final partKey = delta > 0
-              ? target.setParts.first.key
-              : target.setParts.last.key;
+          final partKey =
+              delta > 0 ? target.setParts.first.key : target.setParts.last.key;
           _selectPro(target, partKey: partKey);
         } else {
           _selectPro(target);
@@ -2034,8 +2074,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                       ListView.builder(
                         controller: _answersScrollController,
                         // 하단 FAB(문항/정답 보기) 아래로 카드가 지나가도록 여백.
-                        padding:
-                            EdgeInsets.fromLTRB(24, topInset + 12, 24, 72),
+                        padding: EdgeInsets.fromLTRB(24, topInset + 12, 24, 72),
                         itemCount: problems.length,
                         itemBuilder: (context, i) => _problemRow(
                           theme,
@@ -2341,7 +2380,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         child: _problemViewMessage(theme, '문항을 선택해 주세요.'),
       );
     }
-    if (view.isQueued && (view.bodyPdfUrl == null || view.bodyPdfUrl!.isEmpty)) {
+    if (view.isQueued &&
+        (view.bodyPdfUrl == null || view.bodyPdfUrl!.isEmpty)) {
       return Center(
         child: _problemViewMessage(
           theme,
@@ -2616,7 +2656,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                                   // 주관식 답은 2D 조판 수식으로 보여준다.
                                   ? Align(
                                       alignment: Alignment.centerLeft,
-                                      child: MathLatexView.linear(
+                                      child: _answerMathView(
+                                        problem.cropId,
                                         answer,
                                         fontSize: theme.textTheme.titleMedium
                                                 ?.fontSize ??
@@ -3054,7 +3095,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                         // 파트 답도 2D 조판 수식으로 보여준다.
                         ? Align(
                             alignment: Alignment.centerLeft,
-                            child: MathLatexView.linear(
+                            child: _answerMathView(
+                              k,
                               answer,
                               fontSize:
                                   theme.textTheme.titleSmall?.fontSize ?? 14,
@@ -3147,8 +3189,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
               borderRadius: BorderRadius.circular(999),
               onTap: () => _toggleObjective(problem.cropId, n),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                 child: Container(
                   width: diameter,
                   height: diameter,
@@ -3317,7 +3358,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                           'input_mode': _InputMode.pencil.name,
                         };
                       },
-                      onRecognized: (text) => _setAnswer(answerKey, text),
+                      onRecognized: (text, {sourceLatex}) => _setAnswer(
+                        answerKey,
+                        text,
+                        displayLatex: sourceLatex,
+                      ),
                     ),
                   ),
                 _InputMode.editor => SingleChildScrollView(
@@ -3404,7 +3449,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                                   : FittedBox(
                                       fit: BoxFit.scaleDown,
                                       alignment: Alignment.centerLeft,
-                                      child: MathLatexView.linear(
+                                      child: _answerMathView(
+                                        answerKey,
                                         answer,
                                         fontSize: 19,
                                         color: Colors.black,

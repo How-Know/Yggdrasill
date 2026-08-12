@@ -252,3 +252,32 @@ C-1 의 심볼 덤프는 `HandwritingBenchScreen` 에 버튼 하나 붙이는 �
   바꾸면 `handwriting_sample_render.dart` 와 테스트도 같이 바꿔야 한다.
 - VLM 폴백이 안전망으로 계속 살아 있으므로, SK 작업이 막히더라도 사용자 영향은
   제한적이다. 무리해서 밀어붙이지 말 것.
+
+## 6. 맥 실기기 조사 결과 (2026-08-13)
+
+iPad mini의 iink 4.5 `math-sr.res`에서 `getSupportedSymbols`와
+`supportedRecognitionAssetsTypes`를 직접 덤프했다.
+
+- 지원 자산 타입: `Math Grammar`, `Text Lexicon`, `Enabled Subset`,
+  `Disabled Subset`
+- 문서에서 가정했던 `Math Disabled Subset`은 실제 타입명이 아니다.
+- 구조 규칙: `SqrtRule`, `FracRule`, `SlantedfracRule`, `SubscriptRule`,
+  `SuperscriptRule`, `SubsuperscriptRule`, `UnderscriptRule`,
+  `OverscriptRule`, `UnderoverscriptRule`, `PresuperscriptRule`,
+  `TableRule`, `VopRule`
+- `leftfence`, `fence`, `vlist`라는 독립 규칙 이름은 노출되지 않았다.
+- `{`, `}`, `∈`, `∉`, `∪`, `∩`, `⊂`, `⊃`, `⊆`, `⊇`, `∅` 등 집합
+  기호 자체는 모두 지원됨을 재확인했다.
+
+따라서 `TableRule`을 전역 또는 set-only 설정에서 차단하면 연립·행렬뿐 아니라
+세로 배치 복원까지 함께 손상할 가능성이 있다. 실제 기기에서 Windows 수정분
+(층2·층3)만으로 일반 집합이 정상 인식되는 것도 확인했으므로, 현재는 SK를
+적용하지 않는다. 큰 왼쪽 중괄호/닫는 중괄호 누락 오인이 실제 신고 샘플로
+재현될 때 해당 획을 standard와 `TableRule` 비활성 설정으로 A/B 비교한 뒤에만
+제한 적용한다.
+
+진단 API는 재현성을 위해 유지한다.
+
+- 네이티브: `MyScriptMathEngine.dumpRecognitionAssets()`
+- 채널: `dumpRecognitionAssets`
+- Dart: `MyScriptMath.dumpRecognitionAssets()`

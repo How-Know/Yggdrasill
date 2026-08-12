@@ -94,6 +94,43 @@ import UIKit
     return nil
   }
 
+  /// math2.conf 가 참조하는 기본 수식 인식 리소스 경로.
+  private static func mathRecognitionResourcePath() -> String? {
+    guard let confDir = recognitionConfDirectory() else { return nil }
+    let path = URL(fileURLWithPath: confDir)
+      .deletingLastPathComponent()
+      .appendingPathComponent("resources/math/math-sr.res")
+      .path
+    return FileManager.default.fileExists(atPath: path) ? path : nil
+  }
+
+  /// iink 4.5 실물 리소스가 지원하는 자산 타입·기호·규칙 목록을 반환한다.
+  ///
+  /// Math Subset Knowledge의 타입 문자열과 left-fence 규칙 이름은 SDK 버전에
+  /// 종속적이므로 추측하지 않고 실기기에서 이 값을 먼저 확인한다.
+  @objc public func dumpRecognitionAssets() -> String {
+    guard let engine = prepare() else { return "status=\(statusMessage)" }
+    guard let builder = engine.createRecognitionAssetsBuilder() else {
+      return "error=builder_unavailable"
+    }
+    guard let resourcePath = Self.mathRecognitionResourcePath() else {
+      return "error=math_resource_missing"
+    }
+    do {
+      let symbols = try builder.getSupportedSymbols(resourcePath: resourcePath)
+      let types = builder.supportedRecognitionAssetsTypes.joined(separator: "\n")
+      return """
+      resource=\(resourcePath)
+      types:
+      \(types)
+      symbols-and-rules:
+      \(symbols)
+      """
+    } catch {
+      return "error=dump_failed: \(error.localizedDescription)"
+    }
+  }
+
   /// 획 배열을 iink Math Recognizer 로 인식해 LaTeX 문자열을 돌려준다.
   ///
   /// - strokes: [{"x": [Double], "y": [Double], "t": [Int(ms)]}]
