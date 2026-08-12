@@ -40,6 +40,7 @@ import 'answer_key_service.dart';
 import 'season_roadmap_service.dart';
 import 'attendance_service.dart';
 import 'homework_score_service.dart';
+import 'point_service.dart';
 import 'realtime_reconciler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show
@@ -3120,7 +3121,10 @@ class DataManager {
       {'level_code': 3, 'display_name': '3등급', 'upper_percent': 23.0},
       {'level_code': 4, 'display_name': '4등급', 'upper_percent': 40.0},
       {'level_code': 5, 'display_name': '5등급', 'upper_percent': 60.0},
-      {'level_code': 6, 'display_name': '6등급', 'upper_percent': 100.0},
+      {'level_code': 6, 'display_name': '6등급', 'upper_percent': 77.0},
+      {'level_code': 7, 'display_name': '7등급', 'upper_percent': 89.0},
+      {'level_code': 8, 'display_name': '8등급', 'upper_percent': 96.0},
+      {'level_code': 9, 'display_name': '9등급', 'upper_percent': 100.0},
     ];
   }
 
@@ -3150,7 +3154,7 @@ class DataManager {
           if (row is! Map) continue;
           final map = Map<String, dynamic>.from(row);
           final code = _asIntMaybe(map['level_code']);
-          if (code == null || code < 1 || code > 6) continue;
+          if (code == null || code < 1 || code > 9) continue;
           byCode[code] = <String, dynamic>{
             'level_code': code,
             'display_name':
@@ -3215,7 +3219,7 @@ class DataManager {
         final row = await Supabase.instance.client
             .from('student_level_states')
             .select(
-                'student_id,current_level_code,desired_level_code,target_level_code')
+                'student_id,current_level_code,desired_level_code,desired_top_percent,target_level_code')
             .eq('academy_id', academyId)
             .eq('student_id', studentId)
             .maybeSingle();
@@ -3224,6 +3228,7 @@ class DataManager {
             'student_id': row['student_id'],
             'current_level_code': _asIntMaybe(row['current_level_code']),
             'desired_level_code': _asIntMaybe(row['desired_level_code']),
+            'desired_top_percent': _asIntMaybe(row['desired_top_percent']),
             'target_level_code': _asIntMaybe(row['target_level_code']),
           };
         }
@@ -3246,17 +3251,19 @@ class DataManager {
     required String studentId,
     int? currentLevelCode,
     int? desiredLevelCode,
+    int? desiredTopPercent,
     int? targetLevelCode,
   }) async {
     if (studentId.trim().isEmpty) return;
     print(
-      '[LEVEL][state][save] request student=$studentId current=$currentLevelCode desired=$desiredLevelCode target=$targetLevelCode',
+      '[LEVEL][state][save] request student=$studentId current=$currentLevelCode desired=$desiredLevelCode top%=$desiredTopPercent target=$targetLevelCode',
     );
     if (!RuntimeFlags.serverOnly) {
       await AcademyDbService.instance.saveStudentLevelState(
         studentId: studentId,
         currentLevelCode: currentLevelCode,
         desiredLevelCode: desiredLevelCode,
+        desiredTopPercent: desiredTopPercent,
         targetLevelCode: targetLevelCode,
       );
     }
@@ -3268,6 +3275,7 @@ class DataManager {
         final supa = Supabase.instance.client;
         if (currentLevelCode == null &&
             desiredLevelCode == null &&
+            desiredTopPercent == null &&
             targetLevelCode == null) {
           await supa.from('student_level_states').delete().match({
             'academy_id': academyId,
@@ -3281,6 +3289,7 @@ class DataManager {
           'student_id': studentId,
           'current_level_code': currentLevelCode,
           'desired_level_code': desiredLevelCode,
+          'desired_top_percent': desiredTopPercent,
           'target_level_code': targetLevelCode,
         }, onConflict: 'academy_id,student_id');
         print('[LEVEL][state][save] server upsert success student=$studentId');
@@ -7170,6 +7179,190 @@ class DataManager {
       'rankScore100': targetScoreValue,
     });
     return base;
+  }
+
+  /// 총점 가중치. 지표가 추가되면 이 상수 집합에 합류시킨다.
+  ///
+  /// 서버(`student_get_total_score_v1`)에도 동일한 값이 있으므로 한쪽만 바꾸면 안 된다.
+  static const double totalWeightAttendance = 0.4;
+  static const double totalWeightHomework = 0.6;
+  static const String totalScoreFormulaVersion = 'total_score_v2';
+
+  /// 총점(출석 40% + 과제 60%)과 코호트 순위를 계산한다.
+  ///
+  /// 과제 근거가 없으면 총점을 만들지 않고 `hasTotal: false`를 반환한다.
+  /// 신입 학생에게 과제 0점을 섞어 총점을 깎지 않기 위한 처리다.
+  Future<Map<String, dynamic>> calculateTotalScoreWithRankAsync({
+    required String studentId,
+    DateTime? nowRef,
+    bool excludePausedStudents = false,
+  }) async {
+    double asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is double) return v;
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+
+    int asInt(dynamic v) {
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v) ?? 0;
+      return 0;
+    }
+
+    final sid = studentId.trim();
+    final now = nowRef ?? DateTime.now();
+    Map<String, dynamic> emptyResult() => <String, dynamic>{
+          'hasTotal': false,
+          'total': null,
+          'attendanceScore100': 0.0,
+          'homeworkScore100': 0.0,
+          'attendanceEvidence': false,
+          'homeworkEvidence': false,
+          'homeworkEventCount': 0,
+          'attendanceWeight': totalWeightAttendance,
+          'homeworkWeight': totalWeightHomework,
+          'rank': null,
+          'cohortSize': 0,
+          'topPercent': null,
+          'formulaVersion': totalScoreFormulaVersion,
+        };
+
+    if (sid.isEmpty) return emptyResult();
+
+    final List<String> cohortIds = <String>[];
+    for (final s in _studentsWithInfo) {
+      final id = s.student.id.trim();
+      if (id.isEmpty) continue;
+      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+        continue;
+      }
+      cohortIds.add(id);
+    }
+    if (!cohortIds.contains(sid)) cohortIds.add(sid);
+
+    final homeworkMaps =
+        await HomeworkScoreService.instance.calculateHomeworkScoresForStudents(
+      studentIds: cohortIds,
+      nowRef: now,
+    );
+
+    // 총점을 낼 수 있는 학생만 모아 순위를 만든다.
+    final Map<String, double> eligibleTotals = <String, double>{};
+    double myAttendance = 0.0;
+    double myHomework = 0.0;
+    bool myAttendanceEvidence = false;
+    bool myHomeworkEvidence = false;
+    int myHomeworkEventCount = 0;
+
+    for (final id in cohortIds) {
+      final attMap = AttendanceService.instance.calculateAttendanceScore(
+        studentId: id,
+        nowRef: now,
+      );
+      final hwMap = homeworkMaps[id];
+      final attScore = asDouble(attMap['score100']);
+      final hwScore = asDouble(hwMap?['score100']);
+      final attEvidence = asDouble(attMap['totalWeight']) > 0;
+      final hwEventCount = asInt(hwMap?['eventCount']);
+      final hwEvidence = hwEventCount > 0;
+
+      if (id == sid) {
+        myAttendance = attScore;
+        myHomework = hwScore;
+        myAttendanceEvidence = attEvidence;
+        myHomeworkEvidence = hwEvidence;
+        myHomeworkEventCount = hwEventCount;
+      }
+
+      if (attEvidence && hwEvidence) {
+        eligibleTotals[id] =
+            (totalWeightAttendance * attScore + totalWeightHomework * hwScore) /
+                (totalWeightAttendance + totalWeightHomework);
+      }
+    }
+
+    final result = emptyResult();
+    result['attendanceScore100'] = myAttendance;
+    result['homeworkScore100'] = myHomework;
+    result['attendanceEvidence'] = myAttendanceEvidence;
+    result['homeworkEvidence'] = myHomeworkEvidence;
+    result['homeworkEventCount'] = myHomeworkEventCount;
+
+    final myTotal = eligibleTotals[sid];
+    if (myTotal == null) return result;
+
+    const double eps = 1e-9;
+    final int higherCount =
+        eligibleTotals.values.where((v) => v > (myTotal + eps)).length;
+    final int cohortSize = eligibleTotals.length;
+    final int rank = higherCount + 1;
+
+    result['hasTotal'] = true;
+    result['total'] = myTotal;
+    result['rank'] = rank;
+    result['cohortSize'] = cohortSize;
+    result['topPercent'] =
+        cohortSize > 0 ? (rank / cohortSize) * 100.0 : null;
+    return result;
+  }
+
+  /// 포인트 잔액/누적 요약을 읽는다.
+  Future<PointSummary> loadPointSummary(String studentId) =>
+      PointService.instance.loadSummary(studentId);
+
+  /// 최근 포인트 원장 내역을 읽는다.
+  Future<List<PointLedgerEntry>> loadRecentPointLedger({
+    required String studentId,
+    int limit = 20,
+  }) =>
+      PointService.instance.loadRecentLedger(
+        studentId: studentId,
+        limit: limit,
+      );
+
+  /// 포인트 요약과 코호트 순위를 함께 읽는다.
+  ///
+  /// 순위는 잔액이 아니라 누적 획득량 기준이다. 아이템을 사서 잔액이 줄어든 학생이
+  /// 순위에서 불리해지면 소비를 억제하게 되므로 바람직하지 않다.
+  Future<Map<String, dynamic>> loadPointSummaryWithRank({
+    required String studentId,
+    bool excludePausedStudents = false,
+  }) async {
+    final sid = studentId.trim();
+    final summary = await PointService.instance.loadSummary(sid);
+    final result = <String, dynamic>{
+      'balance': summary.balance,
+      'lifetimeEarned': summary.lifetimeEarned,
+      'lifetimeSpent': summary.lifetimeSpent,
+      'entryCount': summary.entryCount,
+      'lastEventAt': summary.lastEventAt,
+      'rank': null,
+      'cohortSize': 0,
+      'topPercent': null,
+    };
+    if (sid.isEmpty) return result;
+
+    final List<String> cohortIds = <String>[];
+    for (final s in _studentsWithInfo) {
+      final id = s.student.id.trim();
+      if (id.isEmpty) continue;
+      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+        continue;
+      }
+      cohortIds.add(id);
+    }
+    if (cohortIds.isEmpty) return result;
+
+    final rank = await PointService.instance.loadLifetimeRank(
+      studentId: sid,
+      cohortStudentIds: cohortIds,
+    );
+    result['rank'] = rank['rank'];
+    result['cohortSize'] = rank['cohort_size'];
+    result['topPercent'] = rank['top_percent'];
+    return result;
   }
 
   Future<void> _generatePlannedAttendanceForNextDays({int days = 15}) =>

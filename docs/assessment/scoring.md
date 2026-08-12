@@ -90,9 +90,30 @@
   - 상세는 `scoring_migrations/20260730_006_attendance_priority_v4.md` 참조
   - `출석 점수 v4.1(가중 유효 표본 8회)` 적용
   - 상세는 `scoring_migrations/20260730_007_attendance_evidence_v4_1.md` 참조
-  - `과제 점수 v1(EXP 누적+약한 희석+순위)` 적용
+  - `과제 점수 v1(EXP 누적+약한 희석+순위)` 폐기
   - 상세는 `scoring_migrations/20260213_004_homework_score_v1.md` 참조
-- 총점/자동 반영 파이프라인:
+  - `과제 점수 v2(비율 기반, 반감기 28일)` 적용
+  - v1은 EXP 누적값에서 점수를 역산해 3개월에 94점, 반년에 99점대로 포화됐다.
+    v2는 출석과 같은 비율 구조로 바꿔 포화를 없앴다.
+  - 산식 원본은 서버 `_homework_score_all_v2` 하나뿐이다(Dart는 RPC 클라이언트).
+  - 상세는 `scoring_migrations/20260812_010_homework_score_v2_exp_booster.md` 참조
+- 포인트 제도:
+  - `point_rule_v2(원장+적립+EXP 부스터)` 적용, 소비(아이템 상점)는 2단계
+  - 점수는 감쇠 지표이고 포인트는 지급 시점 확정 재화이므로 서로 재계산하지 않는다
+  - 스탯 층(0~100, 누적 아님)과 EXP 층(순수 누적, 감쇠 없음)을 분리한다.
+    스탯은 EXP 획득 배수(부스터 0.6~2.0배)로만 작용한다.
+  - 상세는 `point_system.md`,
+    `scoring_migrations/20260812_008_point_system_v1.md` 및
+    `scoring_migrations/20260812_010_homework_score_v2_exp_booster.md` 참조
+- 총점:
+  - `총점 v2(출석 40% + 과제 60% 가중 평균, 과제 점수 v2 기준)` 적용
+  - 과제 근거가 없으면 총점을 숨기고 안내 문구를 표시한다(0점으로 평균하지 않는다)
+  - 총점은 누적이 아니다. 구성요소의 반감기(출석 28일, 과제 28일)를 그대로 물려받으며
+    출석 점수가 깎이면 비중 40%만큼 함께 깎인다. 누적되는 것은 포인트뿐이다.
+  - 학습앱 스탯 탭 최상단 + 학생앱 내정보 상단 좌측에 노출
+  - 상세는 `scoring_migrations/20260812_009_total_score_v1.md` 및
+    `scoring_migrations/20260812_010_homework_score_v2_exp_booster.md` 참조
+- 자동 반영 파이프라인:
   - 아직 미도입(2단계 이후)
 - 스냅샷 정책(출석/과제):
   - 상세는 `scoring_snapshot_policy.md` 및

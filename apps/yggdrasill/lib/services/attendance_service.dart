@@ -15,6 +15,7 @@ import '../models/student_pause_period.dart';
 import '../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../models/academy_settings.dart';
+import 'point_service.dart';
 import 'tenant_service.dart';
 import 'realtime_reconciler.dart';
 
@@ -4268,6 +4269,7 @@ class AttendanceService {
 
     final resolvedSnapshotId = snapshotId ?? existing?.snapshotId;
     final resolvedBatchSessionId = batchSessionId ?? existing?.batchSessionId;
+    String? savedAttendanceId;
     if (existing != null) {
       final updated = existing.copyWith(
         classEndTime: classEndTime,
@@ -4295,6 +4297,7 @@ class AttendanceService {
           rethrow;
         }
       }
+      savedAttendanceId = updated.id;
       try {
         if (updated.id != null) {
           await _completePlannedOverrideFor(
@@ -4354,6 +4357,7 @@ class AttendanceService {
         batchSessionId: resolvedBatchSessionId,
       );
       await addAttendanceRecord(newRecord);
+      savedAttendanceId = newRecord.id;
       try {
         if (newRecord.id != null) {
           await _completePlannedOverrideFor(
@@ -4372,6 +4376,65 @@ class AttendanceService {
       } catch (e) {
         print('[WARN] planned→completed 링크 실패(추가): $e');
       }
+    }
+
+    await _grantAttendancePointsIfEligible(
+      studentId: studentId,
+      attendanceRecordId: savedAttendanceId,
+      classDateTime: classDateTime,
+      className: className,
+      isPresent: isPresent,
+      arrivalTime: arrivalTime,
+      departureTime: departureTime,
+    );
+  }
+
+  /// 출석이 실제로 확정된 경우에만 포인트를 지급한다.
+  ///
+  /// - 예정(planned) 행이나 결석은 지급 대상이 아니다.
+  /// - 멱등 키가 출석 기록 id이므로 하원 처리 등으로 같은 행이 여러 번 저장돼도
+  ///   서버에서 1회만 반영된다.
+  /// - 포인트는 부가 기능이므로 실패해도 출석 저장을 되돌리지 않는다.
+  Future<void> _grantAttendancePointsIfEligible({
+    required String studentId,
+    required String? attendanceRecordId,
+    required DateTime classDateTime,
+    required String className,
+    required bool isPresent,
+    required DateTime? arrivalTime,
+    required DateTime? departureTime,
+  }) async {
+    final recordId = (attendanceRecordId ?? '').trim();
+    if (recordId.isEmpty) return;
+    final bool hasActualAttendance =
+        isPresent || arrivalTime != null || departureTime != null;
+    if (!hasActualAttendance) return;
+
+    final int threshold = _d.getLatenessThresholdMinutes(studentId);
+    final arrival = arrivalTime?.toLocal();
+    final bool isLate = arrival != null &&
+        arrival.isAfter(classDateTime.add(Duration(minutes: threshold)));
+
+    double? score100;
+    try {
+      final score = calculateAttendanceScore(studentId: studentId);
+      final raw = score['score100'];
+      if (raw is num) score100 = raw.toDouble();
+    } catch (e) {
+      debugPrint('[AttendanceService] 출석 점수 계산 실패(포인트 기본 배수 적용): $e');
+    }
+
+    try {
+      await PointService.instance.grantAttendancePoints(
+        studentId: studentId,
+        attendanceRecordId: recordId,
+        isLate: isLate,
+        score100: score100,
+        classDateTime: classDateTime,
+        className: className,
+      );
+    } catch (e) {
+      debugPrint('[AttendanceService] 출석 포인트 지급 실패: $e');
     }
   }
 

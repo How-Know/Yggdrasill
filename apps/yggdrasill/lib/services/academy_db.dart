@@ -3345,6 +3345,13 @@ class AcademyDbService {
         'ALTER TABLE student_level_states ADD COLUMN desired_level_code INTEGER',
       );
     }
+    final hasDesiredTop =
+        cols.any((c) => '${c['name'] ?? ''}' == 'desired_top_percent');
+    if (!hasDesiredTop) {
+      await dbClient.execute(
+        'ALTER TABLE student_level_states ADD COLUMN desired_top_percent INTEGER',
+      );
+    }
   }
 
   Future<List<Map<String, dynamic>>> getStudentLevelScales() async {
@@ -3403,12 +3410,14 @@ class AcademyDbService {
     required String studentId,
     int? currentLevelCode,
     int? desiredLevelCode,
+    int? desiredTopPercent,
     int? targetLevelCode,
   }) async {
     await ensureStudentLevelTables();
     final dbClient = await db;
     if (currentLevelCode == null &&
         desiredLevelCode == null &&
+        desiredTopPercent == null &&
         targetLevelCode == null) {
       await dbClient.delete(
         'student_level_states',
@@ -3423,6 +3432,7 @@ class AcademyDbService {
         'student_id': studentId,
         'current_level_code': currentLevelCode,
         'desired_level_code': desiredLevelCode,
+        'desired_top_percent': desiredTopPercent,
         'target_level_code': targetLevelCode,
         'updated_at': DateTime.now().toIso8601String(),
       },

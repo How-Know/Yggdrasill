@@ -711,6 +711,87 @@ class RecentAttendanceSession {
   }
 }
 
+/// 학생 희망 등급(내 목표) — `student_level_states.desired_level_code`.
+class StudentDesiredLevelInfo {
+  const StudentDesiredLevelInfo({
+    this.levelCode,
+    this.upperPercent,
+    this.displayName,
+    this.options = const <StudentLevelOption>[],
+  });
+
+  final int? levelCode;
+  final double? upperPercent;
+  final String? displayName;
+  final List<StudentLevelOption> options;
+
+  String get goalValueLabel => StudentLevelOption.formatTopPercent(upperPercent);
+
+  static StudentDesiredLevelInfo fromRow(Map<String, dynamic>? row) {
+    if (row == null) {
+      return const StudentDesiredLevelInfo();
+    }
+    dynamic optionsRaw = row['options'];
+    if (optionsRaw is String && optionsRaw.trim().isNotEmpty) {
+      try {
+        optionsRaw = jsonDecode(optionsRaw);
+      } catch (_) {
+        optionsRaw = null;
+      }
+    }
+    final options = <StudentLevelOption>[];
+    if (optionsRaw is List) {
+      for (final item in optionsRaw) {
+        if (item is! Map) continue;
+        final opt = StudentLevelOption.fromRow(Map<String, dynamic>.from(item));
+        if (opt != null) options.add(opt);
+      }
+    }
+    options.sort((a, b) => a.levelCode.compareTo(b.levelCode));
+    final top = (row['desired_top_percent'] as num?)?.toDouble() ??
+        (row['upper_percent'] as num?)?.toDouble();
+    return StudentDesiredLevelInfo(
+      levelCode: (row['desired_level_code'] as num?)?.toInt(),
+      upperPercent: top,
+      displayName: (row['display_name'] as String?)?.trim(),
+      options: options,
+    );
+  }
+}
+
+class StudentLevelOption {
+  const StudentLevelOption({
+    required this.levelCode,
+    required this.displayName,
+    required this.upperPercent,
+  });
+
+  final int levelCode;
+  final String displayName;
+  final double upperPercent;
+
+  String get topPercentLabel => formatTopPercent(upperPercent);
+
+  static String formatTopPercent(num? percent) {
+    if (percent == null) return '상위 —%';
+    final v = percent.toDouble();
+    if (v == v.roundToDouble()) return '상위 ${v.round()}%';
+    return '상위 ${v.toStringAsFixed(1)}%';
+  }
+
+  static StudentLevelOption? fromRow(Map<String, dynamic> row) {
+    final code = (row['level_code'] as num?)?.toInt();
+    final percent = (row['upper_percent'] as num?)?.toDouble();
+    if (code == null || percent == null || code < 1 || code > 9) return null;
+    final name = (row['display_name'] as String?)?.trim();
+    return StudentLevelOption(
+      levelCode: code,
+      displayName: (name == null || name.isEmpty) ? '${code}등급' : name,
+      upperPercent: percent,
+    );
+  }
+}
+
 /// 출결(출석) 점수 — 학습앱 스탯과 동일 규칙(서버 계산).
 class AttendanceScoreInfo {
   const AttendanceScoreInfo({
@@ -751,6 +832,197 @@ class AttendanceScoreInfo {
       cohortSize: cohort,
       topPercent: top,
       insufficientEvidence: row['insufficient_evidence'] == true,
+    );
+  }
+}
+
+/// 누적 포인트 — 학습앱 포인트 카드와 동일 기준(lifetime_earned + 순위).
+class PointSummaryInfo {
+  const PointSummaryInfo({
+    required this.lifetimeEarned,
+    required this.balance,
+    required this.lifetimeSpent,
+    required this.entryCount,
+    required this.rank,
+    required this.cohortSize,
+    required this.topPercent,
+    this.lastEventAt,
+  });
+
+  final int lifetimeEarned;
+  final int balance;
+  final int lifetimeSpent;
+  final int entryCount;
+  final int rank;
+  final int cohortSize;
+  final double topPercent;
+  final DateTime? lastEventAt;
+
+  /// 천 단위 구분된 누적 획득 표기.
+  String get lifetimeLabel {
+    final raw = '$lifetimeEarned';
+    final buf = StringBuffer();
+    for (var i = 0; i < raw.length; i++) {
+      final fromEnd = raw.length - i;
+      buf.write(raw[i]);
+      if (fromEnd > 1 && fromEnd % 3 == 1) buf.write(',');
+    }
+    return buf.toString();
+  }
+
+  String get subtitle {
+    if (entryCount <= 0) {
+      return '출석·과제를 하면 포인트가 쌓여요';
+    }
+    if (cohortSize <= 0 || rank <= 0) {
+      return '학원 순위 데이터가 부족해요';
+    }
+    return '상위 ${topPercent.toStringAsFixed(1)}% · $rank등';
+  }
+
+  static PointSummaryInfo? fromRow(Map<String, dynamic>? row) {
+    if (row == null) return null;
+    int asInt(dynamic v) => (v as num?)?.toInt() ?? 0;
+    final lastRaw = row['last_event_at']?.toString();
+    return PointSummaryInfo(
+      lifetimeEarned: asInt(row['lifetime_earned']),
+      balance: asInt(row['balance']),
+      lifetimeSpent: asInt(row['lifetime_spent']),
+      entryCount: asInt(row['entry_count']),
+      rank: asInt(row['rank']),
+      cohortSize: asInt(row['cohort_size']),
+      topPercent: (row['top_percent'] as num?)?.toDouble() ?? 0,
+      lastEventAt: (lastRaw == null || lastRaw.isEmpty)
+          ? null
+          : DateTime.tryParse(lastRaw)?.toLocal(),
+    );
+  }
+}
+
+/// 과제 점수 — 학습앱 스탯과 동일 규칙(서버 `_homework_score_all_v2`).
+class HomeworkScoreInfo {
+  const HomeworkScoreInfo({
+    required this.score100,
+    required this.hasScore,
+    required this.rank,
+    required this.cohortSize,
+    required this.topPercent,
+    required this.evaluatedCount,
+    required this.completedCount,
+    required this.pendingCount,
+    this.insufficientEvidence = false,
+  });
+
+  final double? score100;
+  final bool hasScore;
+  final int rank;
+  final int cohortSize;
+  final double topPercent;
+  final int evaluatedCount;
+  final int completedCount;
+  final int pendingCount;
+  final bool insufficientEvidence;
+
+  String get subtitle {
+    if (!hasScore) {
+      if (pendingCount > 0) {
+        return '기한이 지나면 점수가 생겨요';
+      }
+      return '과제를 처리하면 점수가 생겨요';
+    }
+    if (cohortSize <= 0 || rank <= 0) {
+      return '학원 순위 데이터가 부족해요';
+    }
+    return '상위 ${topPercent.toStringAsFixed(1)}% · $rank등';
+  }
+
+  static HomeworkScoreInfo? fromRow(Map<String, dynamic>? row) {
+    if (row == null) return null;
+    int asInt(dynamic v) => (v as num?)?.toInt() ?? 0;
+    final hasScore = row['has_score'] == true;
+    final raw = (row['score100'] as num?)?.toDouble();
+    return HomeworkScoreInfo(
+      score100: hasScore ? raw : null,
+      hasScore: hasScore && raw != null,
+      rank: asInt(row['rank']),
+      cohortSize: asInt(row['cohort_size']),
+      topPercent: (row['top_percent'] as num?)?.toDouble() ?? 0,
+      evaluatedCount: asInt(row['evaluated_count']),
+      completedCount: asInt(row['completed_count']),
+      pendingCount: asInt(row['pending_count']),
+      insufficientEvidence: row['insufficient_evidence'] == true,
+    );
+  }
+}
+
+/// 총점 — 출석/과제 점수의 가중 평균(서버 계산, 학습앱 스탯과 동일 규칙).
+///
+/// 과제 근거가 없으면 [hasTotal]이 false이고 [score100]은 null이다.
+/// 이 경우 점수를 숨기고 안내 문구를 보여준다.
+class TotalScoreInfo {
+  const TotalScoreInfo({
+    required this.score100,
+    required this.hasTotal,
+    required this.attendanceScore100,
+    required this.homeworkScore100,
+    required this.attendanceWeight,
+    required this.homeworkWeight,
+    required this.attendanceEvidence,
+    required this.homeworkEvidence,
+    required this.homeworkEventCount,
+    required this.rank,
+    required this.cohortSize,
+    required this.topPercent,
+  });
+
+  final double? score100;
+  final bool hasTotal;
+  final double attendanceScore100;
+  final double homeworkScore100;
+  final double attendanceWeight;
+  final double homeworkWeight;
+  final bool attendanceEvidence;
+  final bool homeworkEvidence;
+  final int homeworkEventCount;
+  final int rank;
+  final int cohortSize;
+  final double topPercent;
+
+  /// 총점 카드 아래에 표시할 안내/부가 문구.
+  String get subtitle {
+    if (!hasTotal) {
+      if (!homeworkEvidence) return '과제를 처리하면 총점이 생겨요';
+      if (!attendanceEvidence) return '출석 기록이 쌓이면 총점이 생겨요';
+      return '총점을 만들 기록이 아직 부족해요';
+    }
+    if (cohortSize <= 0 || rank <= 0) {
+      return '출석 ${_pct(attendanceWeight)} + 과제 ${_pct(homeworkWeight)} 반영';
+    }
+    return '상위 ${topPercent.toStringAsFixed(1)}% · $rank등';
+  }
+
+  static String _pct(double weight) =>
+      '${(weight * 100).toStringAsFixed(0)}%';
+
+  static TotalScoreInfo? fromRow(Map<String, dynamic>? row) {
+    if (row == null) return null;
+    double asDouble(dynamic v) => (v as num?)?.toDouble() ?? 0.0;
+    int asInt(dynamic v) => (v as num?)?.toInt() ?? 0;
+    final hasTotal = row['has_total'] == true;
+    final raw = (row['total_score100'] as num?)?.toDouble();
+    return TotalScoreInfo(
+      score100: hasTotal ? raw : null,
+      hasTotal: hasTotal && raw != null,
+      attendanceScore100: asDouble(row['attendance_score100']),
+      homeworkScore100: asDouble(row['homework_score100']),
+      attendanceWeight: asDouble(row['attendance_weight']),
+      homeworkWeight: asDouble(row['homework_weight']),
+      attendanceEvidence: row['attendance_evidence'] == true,
+      homeworkEvidence: row['homework_evidence'] == true,
+      homeworkEventCount: asInt(row['homework_event_count']),
+      rank: asInt(row['rank']),
+      cohortSize: asInt(row['cohort_size']),
+      topPercent: asDouble(row['top_percent']),
     );
   }
 }
@@ -1271,6 +1543,16 @@ class StudentApi {
     return (academyId: academyId, studentId: studentId);
   }
 
+  /// 누적 포인트 + 학원 내 상위 퍼센트 (학습앱 포인트와 동일 기준).
+  Future<PointSummaryInfo?> getPointSummary() async {
+    final rows =
+        await _client.rpc('student_get_point_summary_v1') as List<dynamic>;
+    if (rows.isEmpty) return null;
+    return PointSummaryInfo.fromRow(
+      Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
   /// 출결 점수 + 학원 내 상위 퍼센트.
   Future<AttendanceScoreInfo?> getAttendanceScore() async {
     final rows =
@@ -1278,6 +1560,56 @@ class StudentApi {
     if (rows.isEmpty) return null;
     return AttendanceScoreInfo.fromRow(
       Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
+  /// 과제 점수 + 학원 내 상위 퍼센트 (학습앱 스탯과 동일 산식).
+  Future<HomeworkScoreInfo?> getHomeworkScore() async {
+    final rows =
+        await _client.rpc('student_get_homework_score_v1') as List<dynamic>;
+    if (rows.isEmpty) return null;
+    return HomeworkScoreInfo.fromRow(
+      Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
+  /// 총점(출석 + 과제 가중 평균) + 학원 내 순위.
+  Future<TotalScoreInfo?> getTotalScore() async {
+    final rows =
+        await _client.rpc('student_get_total_score_v1') as List<dynamic>;
+    if (rows.isEmpty) return null;
+    return TotalScoreInfo.fromRow(
+      Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
+  /// 희망 등급(내 목표) + 선택지. 학습앱 스탯의 desired와 동일 테이블.
+  Future<StudentDesiredLevelInfo> getDesiredLevel() async {
+    final rows =
+        await _client.rpc('student_get_desired_level_v1') as List<dynamic>;
+    if (rows.isEmpty) return const StudentDesiredLevelInfo();
+    return StudentDesiredLevelInfo.fromRow(
+      Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
+  /// 희망 상위 %만 저장(1~100). null이면 미설정. 현재/예상 등급은 건드리지 않는다.
+  Future<StudentDesiredLevelInfo> setDesiredLevel(int? topPercent) async {
+    final rows = await _client.rpc(
+      'student_set_desired_level_v1',
+      params: {'p_top_percent': topPercent},
+    ) as List<dynamic>;
+    if (rows.isEmpty) {
+      return StudentDesiredLevelInfo(upperPercent: topPercent?.toDouble());
+    }
+    final row = Map<String, dynamic>.from(rows.first as Map);
+    final top = (row['desired_top_percent'] as num?)?.toDouble() ??
+        (row['upper_percent'] as num?)?.toDouble() ??
+        topPercent?.toDouble();
+    return StudentDesiredLevelInfo(
+      levelCode: (row['desired_level_code'] as num?)?.toInt(),
+      upperPercent: top,
+      displayName: (row['display_name'] as String?)?.trim(),
     );
   }
 

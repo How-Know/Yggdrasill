@@ -384,7 +384,11 @@ async function upsertRecord(
 
 // student_textbook_answer_records 는 (student_id, crop_id) 유일키라 과제·회차를
 // 구분하지 못한다. 마스터리 루프는 append-only 인 learning_attempts 를 근거로
-// 판정하므로, 과제 스코프 풀이면 시도를 따로 남긴다.
+// 판정하므로 시도를 따로 남긴다.
+//
+// 그룹 id 없이(교재 탭 자유 풀이) 호출해도 서버가 그 문항이 배정된 진행 중
+// 과제를 찾아 자동 연결한다 — 어느 경로로 풀든 진행률·완료율이 같아진다.
+// 배정에 없는 문항이면 서버가 not_assigned 로 무시한다.
 async function logHomeworkAttempt(
   admin: Admin,
   args: {
@@ -397,11 +401,10 @@ async function logHomeworkAttempt(
   },
 ) {
   const groupId = (args.homeworkGroupId ?? '').trim();
-  if (!groupId) return;
   try {
     await admin.rpc('learning_log_homework_attempt', {
       p_student_id: args.studentId,
-      p_homework_group_id: groupId,
+      p_homework_group_id: groupId || null,
       p_crop_id: args.cropId,
       p_result: args.correct ? 'correct' : 'wrong',
       p_scored_by: args.gradedBy,
@@ -520,6 +523,29 @@ const answerTextOf = (c: CropRow) =>
   c.textbook_problem_answers?.answer_latex_2d ??
   null;
 
+// 실물 교재가 검사 신청으로 제출된 동안(phase=3)에는 같은 교재의 채점·정답
+// 공개를 잠근다 — 선생님 채점 후 답을 고쳐 쓰는 것을 막기 위해서다.
+// 검사 완료/반려로 phase가 바뀌면 자동 해제된다.
+async function isSubmitLocked(
+  admin: Admin,
+  studentId: string,
+  bookId: string,
+  gradeLabel: string,
+): Promise<boolean> {
+  try {
+    const { data, error } = await admin.rpc('student_textbook_submit_locked', {
+      p_student_id: studentId,
+      p_book_id: bookId,
+      p_grade_label: gradeLabel,
+    });
+    // 마이그레이션 전(함수 없음) 등 실패 시에는 잠그지 않는다 — 채점 우선.
+    if (error) return false;
+    return data === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // 신고로 보류(open/accepted)된 문항은 채점·기록하지 않는다.
 async function isCropOnHold(
   admin: Admin,
@@ -553,6 +579,9 @@ async function actionGrade(
   }
   if (items.length > 100) {
     return json({ ok: false, error: 'too_many_items' }, 400);
+  }
+  if (await isSubmitLocked(admin, student.studentId, bookId, gradeLabel)) {
+    return json({ ok: false, error: 'book_submitted' }, 423);
   }
 
   const results: Record<string, unknown>[] = [];
@@ -785,6 +814,13 @@ async function actionReveal(
   const answers = crop.textbook_problem_answers;
   if (!answers) return json({ ok: false, error: 'no_answer' }, 404);
 
+  // 교재 제출 중에는 정답 공개도 잠근다 — 돌려받은 뒤 고쳐쓰기 방지.
+  if (
+    await isSubmitLocked(admin, student.studentId, crop.book_id, crop.grade_label)
+  ) {
+    return json({ ok: false, error: 'book_submitted' }, 423);
+  }
+
   // 이미 정답 처리된 문항은 공개해도 유출이 아니다 — 학생이 자기 답과
   // 답지 표기(form_differs 등)를 비교할 수 있게 허용한다.
   const { data: record } = await admin
@@ -876,6 +912,9 @@ async function actionSelfMark(
     : String(body.homework_group_id);
   if (!bookId || !gradeLabel || !cropId) {
     return json({ ok: false, error: 'invalid_request' }, 400);
+  }
+  if (await isSubmitLocked(admin, student.studentId, bookId, gradeLabel)) {
+    return json({ ok: false, error: 'book_submitted' }, 423);
   }
 
   const crop = await loadCrop(admin, cropId);

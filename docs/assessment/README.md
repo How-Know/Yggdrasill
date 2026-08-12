@@ -15,6 +15,7 @@
 - `terms/`: 용어 정의(파일 1개 = 용어 1개)
 - `scoring.md`: 점수화/집계 규칙
 - `scoring_snapshot_policy.md`: 출석/과제 스냅샷 운영 정책
+- `point_system.md`: 포인트(누적 재화) 제도 정책
 - `scoring_migrations/`: 점수 규칙 변경 로그(마이그레이션 방식)
 - `data_sources.md`: 데이터 소스 및 관찰 근거
 - `glossary.md`: 용어 정리

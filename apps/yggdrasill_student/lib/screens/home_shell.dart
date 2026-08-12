@@ -14,6 +14,7 @@ import '../widgets/homework_now_playing_bar.dart';
 import '../widgets/homework_now_playing_sheet.dart';
 import '../widgets/student_bottom_nav_bar.dart';
 import 'homework_screen.dart';
+import 'homework_solve_launcher.dart';
 import 'profile_screen.dart';
 import 'textbook_screen.dart';
 
@@ -32,6 +33,10 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   bool _nowPlayingSheetMounted = false;
   /// 확장 중 1줄 크롬 강제. 닫기 시작과 동시에 false → 스크롤 축소와 같은 애니.
   bool _nowPlayingForceOneLine = false;
+
+  /// 하단 크롬(메뉴 버튼)에서 시트 닫기 애니메이션을 요청할 때 쓴다.
+  final GlobalKey<HomeworkNowPlayingExpandedState> _nowPlayingSheetKey =
+      GlobalKey<HomeworkNowPlayingExpandedState>();
 
   @override
   void initState() {
@@ -118,6 +123,17 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   }
 
   void _onCollapsedNavTap() {
+    // 상세 시트가 열려 있으면: 시트를 닫고 과제 탭으로 복귀.
+    if (_nowPlayingSheetMounted) {
+      _selectTab(0);
+      final sheet = _nowPlayingSheetKey.currentState;
+      if (sheet != null) {
+        unawaited(sheet.close());
+      } else {
+        _unmountNowPlayingSheet();
+      }
+      return;
+    }
     if (_searchExpanded) {
       _setSearchExpanded(false);
       return;
@@ -137,6 +153,21 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
       message: '과제를 일시정지했어요.',
       icon: Icons.pause_circle_outline_rounded,
     );
+  }
+
+  /// 재생 시트의 「문제 풀기」 — 시트를 닫고 배정 범위 풀이 화면으로.
+  Future<void> _openSolveFromNowPlaying() async {
+    final group = HomeworkSession.instance.active;
+    if (group == null) return;
+    _unmountNowPlayingSheet();
+    final opened = await openDigitalHomeworkSolve(context, group);
+    if (!opened && mounted) {
+      TopGlassSnackBar.show(
+        context,
+        message: '이 과제는 앱에서 풀 수 없어요.',
+        icon: Icons.menu_book_rounded,
+      );
+    }
   }
 
   void _expandNowPlaying() {
@@ -192,10 +223,12 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
           if (_nowPlayingSheetMounted)
             Positioned.fill(
               child: HomeworkNowPlayingExpanded(
+                key: _nowPlayingSheetKey,
                 onCloseBegin: _beginCollapseNowPlaying,
                 onClose: _unmountNowPlayingSheet,
                 onPlayPause: () => unawaited(handleNowPlayingPlayPause()),
                 onSubmit: () => unawaited(handleNowPlayingSubmit()),
+                onOpenSolve: () => unawaited(_openSolveFromNowPlaying()),
               ),
             ),
           Positioned(

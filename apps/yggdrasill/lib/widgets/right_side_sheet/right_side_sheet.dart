@@ -4339,6 +4339,22 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
   }
 
+  String _nextRetryState(
+    String key,
+    String current, {
+    String fallbackKey = '',
+  }) {
+    final initialStates = widget.session?.initialStates;
+    final previous = initialStates?[key] ??
+        (fallbackKey.isEmpty ? null : initialStates?[fallbackKey]) ??
+        _baselineStates[key] ??
+        (fallbackKey.isEmpty ? null : _baselineStates[fallbackKey]);
+    if (_normalizeState(previous) == 'wrong') {
+      return _normalizeState(current) == 'correct' ? 'wrong' : 'correct';
+    }
+    return _nextState(current);
+  }
+
   void _emitStateChanged() {
     widget.session?.onStatesChanged?.call(
       Map<String, String>.from(_gradingStates),
@@ -4387,7 +4403,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (_answerListReadOnly) return;
     setState(() {
       final current = _normalizeState(_gradingStates[key]);
-      final next = _nextState(current);
+      final next = _nextRetryState(key, current);
       _gradingStates[key] = next;
       _applyStateToParts(key, partLabels);
       if (_isBaselineRetryKey(key)) {
@@ -4502,7 +4518,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       // 나머지 파트가 함께 뒤집힌다(한 파트 오답 → 전체 오답 버그).
       _materializePartStates(cellKey, partLabels);
       final key = _partStateKey(cellKey, partLabel);
-      _gradingStates[key] = _nextState(_normalizeState(_gradingStates[key]));
+      _gradingStates[key] = _nextRetryState(
+        key,
+        _normalizeState(_gradingStates[key]),
+        fallbackKey: cellKey,
+      );
       _syncSetCellStateFromParts(cellKey, partLabels);
       if (_isBaselineRetryKey(cellKey)) {
         if (_normalizeState(_gradingStates[cellKey]) == 'correct') {

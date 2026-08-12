@@ -690,8 +690,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
       await _maybeCompleteHomework();
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
           message: '채점에 실패했어요. 다시 시도해 주세요.',
@@ -701,6 +701,17 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     } finally {
       if (mounted) setState(() => _grading = false);
     }
+  }
+
+  /// 실물 교재 제출(검사 대기) 중 잠금 에러면 안내하고 true.
+  bool _notifyIfBookSubmitted(Object error) {
+    if (error is! TextbookGradeException || !error.bookSubmitted) return false;
+    TopGlassSnackBar.show(
+      context,
+      message: '교재를 제출해서 검사를 기다리고 있어요. 검사가 끝나면 다시 풀 수 있어요.',
+      icon: Icons.lock_clock_rounded,
+    );
+    return true;
   }
 
   // ----------------------------------------------------------- 과제 통과 판정
@@ -748,8 +759,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     try {
       revealed =
           await TextbookApi.instance.revealAnswer(cropId: problem.cropId);
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
           message: '정답을 불러오지 못했어요.',
@@ -790,8 +801,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
       await _maybeCompleteHomework();
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
           message: '기록에 실패했어요. 다시 시도해 주세요.',
@@ -837,8 +848,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     try {
       revealed =
           await TextbookApi.instance.revealAnswer(cropId: problem.cropId);
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
           message: '정답을 불러오지 못했어요.',
@@ -897,8 +908,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
       await _maybeCompleteHomework();
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
           message: '기록에 실패했어요. 다시 시도해 주세요.',

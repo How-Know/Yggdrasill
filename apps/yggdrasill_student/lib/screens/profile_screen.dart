@@ -53,6 +53,17 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
   bool _loadingScore = true;
   String? _scoreError;
 
+  HomeworkScoreInfo? _homework;
+  bool _loadingHomework = true;
+  String? _homeworkError;
+
+  PointSummaryInfo? _points;
+  bool _loadingPoints = true;
+  String? _pointsError;
+
+  StudentDesiredLevelInfo _desired = const StudentDesiredLevelInfo();
+  bool _savingDesired = false;
+
   bool _expanded = false;
   TodayAttendance? _attendance;
   List<RecentAttendanceSession>? _recent;
@@ -65,6 +76,9 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
     _attendance = StudentAttendanceSession.instance.today;
     StudentAttendanceSession.instance.addListener(_onAttendanceSessionChanged);
     unawaited(_loadScore());
+    unawaited(_loadHomework());
+    unawaited(_loadPoints());
+    unawaited(_loadDesired());
   }
 
   @override
@@ -81,7 +95,12 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
   }
 
   Future<void> refresh() async {
-    await _loadScore();
+    await Future.wait([
+      _loadScore(),
+      _loadHomework(),
+      _loadPoints(),
+      _loadDesired(),
+    ]);
     if (_expanded) {
       await _ensureAttendanceLoaded(force: true);
     }
@@ -106,6 +125,128 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
         _scoreError = '출석 점수를 불러오지 못했어요.';
         _loadingScore = false;
       });
+    }
+  }
+
+  Future<void> _loadHomework() async {
+    setState(() {
+      _loadingHomework = true;
+      _homeworkError = null;
+    });
+    try {
+      final homework = await StudentApi.instance.getHomeworkScore();
+      if (!mounted) return;
+      setState(() {
+        _homework = homework;
+        _loadingHomework = false;
+        _homeworkError = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _homeworkError = '과제 점수를 불러오지 못했어요.';
+        _loadingHomework = false;
+      });
+    }
+  }
+
+  Future<void> _loadPoints() async {
+    if (mounted) {
+      setState(() {
+        _loadingPoints = true;
+        _pointsError = null;
+      });
+    }
+    try {
+      final points = await StudentApi.instance.getPointSummary();
+      if (!mounted) return;
+      setState(() {
+        _points = points;
+        _loadingPoints = false;
+        _pointsError = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _points = null;
+        _loadingPoints = false;
+        _pointsError = '포인트를 불러오지 못했어요.';
+      });
+    }
+  }
+
+  Future<void> _loadDesired() async {
+    try {
+      final desired = await StudentApi.instance.getDesiredLevel();
+      if (!mounted) return;
+      setState(() => _desired = desired);
+    } catch (_) {
+      // 총점 카드는 유지하고 목표는 플레이스홀더로 둔다.
+    }
+  }
+
+  Future<void> _openDesiredPicker() async {
+    if (_savingDesired) return;
+    var options = _desired.options;
+    if (options.isEmpty) {
+      try {
+        final fresh = await StudentApi.instance.getDesiredLevel();
+        if (!mounted) return;
+        setState(() => _desired = fresh);
+        options = fresh.options;
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (options.isEmpty) {
+      TopGlassSnackBar.show(
+        context,
+        message: '목표 선택지를 불러오지 못했어요.',
+        icon: Icons.error_outline_rounded,
+      );
+      return;
+    }
+
+    final picked = await showModalBottomSheet<_DesiredLevelPick>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _DesiredLevelSheet(
+        options: options,
+        selectedTopPercent: _desired.upperPercent?.round(),
+      ),
+    );
+    if (!mounted || picked == null) return;
+    if (picked.topPercent == _desired.upperPercent?.round()) return;
+
+    setState(() => _savingDesired = true);
+    try {
+      final saved =
+          await StudentApi.instance.setDesiredLevel(picked.topPercent);
+      if (!mounted) return;
+      setState(() {
+        _desired = StudentDesiredLevelInfo(
+          levelCode: saved.levelCode,
+          upperPercent: saved.upperPercent,
+          displayName: saved.displayName,
+          options: options,
+        );
+        _savingDesired = false;
+      });
+      TopGlassSnackBar.show(
+        context,
+        message: picked.topPercent == null
+            ? '내 목표를 지웠어요.'
+            : '내 목표를 ${saved.goalValueLabel}로 저장했어요.',
+        icon: Icons.check_circle_outline_rounded,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _savingDesired = false);
+      TopGlassSnackBar.show(
+        context,
+        message: '내 목표를 저장하지 못했어요.',
+        icon: Icons.error_outline_rounded,
+      );
     }
   }
 
@@ -180,36 +321,40 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       );
     }
 
-    // 총점: 현재 반영 가능한 개입 지표(출석)만으로 유효 가중치 재정규화.
-    // 과제 점수 등이 붙으면 동일 규칙으로 평균에 합류한다.
-    final totalScore = score?.score100;
-    final totalSubtitle = score == null
-        ? (_loadingScore ? '점수를 불러오는 중…' : '점수를 불러오지 못했어요')
-        : '출석 점수 반영';
+    // 상단: 누적 포인트(lifetime_earned). 학습앱 포인트와 동일 기준.
+    final points = _points;
+    final String pointsSubtitle;
+    if (_loadingPoints && points == null) {
+      pointsSubtitle = '포인트를 불러오는 중…';
+    } else if (points == null) {
+      pointsSubtitle = _pointsError ?? '포인트를 불러오지 못했어요';
+    } else {
+      pointsSubtitle = points.subtitle;
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         StudentAttendanceScoreCard(
           title: '',
-          score100: totalScore,
-          subtitle: totalSubtitle,
-          showInfoIcon: false,
+          valueLabel: points?.lifetimeLabel,
+          subtitle: pointsSubtitle,
           showProgressBar: false,
-          // 껍데기만 — 이후 student_level_states.desired/target + scales.upper_percent 연동
+          unit: 'P',
           goalTitle: '내 목표',
-          goalValue: '상위 —%',
+          goalValue: _desired.goalValueLabel,
+          onGoalTap: () => unawaited(_openDesiredPicker()),
         ),
         const SizedBox(height: 28),
         StudentAttendanceScoreCard(
           title: '출석 점수',
           score100: score?.score100,
           subtitle: score == null
-              ? (_loadingScore ? '출석 점수를 불러오는 중…' : '출석 점수를 불러오지 못했어요')
+              ? (_loadingScore
+                  ? '출석 점수를 불러오는 중…'
+                  : (_scoreError ?? '출석 점수를 불러오지 못했어요'))
               : score.subtitle,
           onTap: () => unawaited(_toggle()),
-          showInfoIcon: true,
-          infoFilled: _expanded,
         ),
         AnimatedSize(
           duration: const Duration(milliseconds: 320),
@@ -242,6 +387,17 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
                   ],
                 )
               : const SizedBox.shrink(),
+        ),
+        const SizedBox(height: 28),
+        // 펼침 상세는 아직 미정 — 요약 카드만 출석과 동일 양식으로 표시.
+        StudentAttendanceScoreCard(
+          title: '과제 점수',
+          score100: _homework?.score100,
+          subtitle: _homework == null
+              ? (_loadingHomework
+                  ? '과제 점수를 불러오는 중…'
+                  : (_homeworkError ?? '과제 점수를 불러오지 못했어요'))
+              : _homework!.subtitle,
         ),
       ],
     );
@@ -389,6 +545,241 @@ class _TodayAttendanceDetailCard extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _DesiredLevelPick {
+  const _DesiredLevelPick(this.topPercent);
+  final int? topPercent;
+}
+
+class _DesiredLevelSheet extends StatefulWidget {
+  const _DesiredLevelSheet({
+    required this.options,
+    required this.selectedTopPercent,
+  });
+
+  final List<StudentLevelOption> options;
+  final int? selectedTopPercent;
+
+  @override
+  State<_DesiredLevelSheet> createState() => _DesiredLevelSheetState();
+}
+
+class _DesiredLevelSheetState extends State<_DesiredLevelSheet> {
+  static const _defaultPercent = 40.0;
+
+  /// 실제 상위 %. 슬라이더는 왼쪽=100 · 오른쪽=1 로 뒤집어 표시한다.
+  late double _percent;
+
+  List<StudentLevelOption> get _sorted {
+    final list = [...widget.options]
+      ..sort((a, b) => a.upperPercent.compareTo(b.upperPercent));
+    return list;
+  }
+
+  double get _sliderValue => (101 - _percent).clamp(1, 100);
+
+  @override
+  void initState() {
+    super.initState();
+    final selected = widget.selectedTopPercent;
+    _percent = (selected != null ? selected.toDouble() : _defaultPercent)
+        .clamp(1, 100);
+  }
+
+  StudentLevelOption? _optionForPercent(double percent) {
+    final sorted = _sorted;
+    if (sorted.isEmpty) return null;
+    for (final opt in sorted) {
+      if (percent <= opt.upperPercent) return opt;
+    }
+    return sorted.last;
+  }
+
+  void _save() {
+    if (_optionForPercent(_percent) == null) return;
+    Navigator.of(context).pop(_DesiredLevelPick(_percent.round()));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark
+        ? theme.colorScheme.surfaceContainerHigh
+        : Colors.white;
+    final text = theme.colorScheme.onSurface;
+    final sub = text.withValues(alpha: 0.55);
+    final current = _optionForPercent(_percent);
+    final gradeLabel = current?.displayName ?? '—';
+    final percentLabel = StudentLevelOption.formatTopPercent(_percent.round());
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+                child: SizedBox(
+                  height: 56,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Text(
+                        '내 목표',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                          color: text,
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: SolidCapsuleActionBar(
+                          padding: const EdgeInsets.all(8),
+                          children: [
+                            SolidCapsuleActionButton(
+                              tooltip: '닫기',
+                              icon: Icons.close_rounded,
+                              onPressed: () => Navigator.of(context).pop(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: SolidCapsuleActionBar(
+                          padding: const EdgeInsets.all(8),
+                          children: [
+                            SolidCapsuleActionButton(
+                              tooltip: '저장',
+                              icon: Icons.check_rounded,
+                              onPressed: current == null ? null : _save,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '수능·내신 9등급제 기준이에요. 오른쪽으로 갈수록 상위예요.',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        height: 1.35,
+                        color: sub,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    Text(
+                      gradeLabel,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 34,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.8,
+                        height: 1.05,
+                        color: text,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      percentLabel,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        color: sub,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 4,
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 11,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 20,
+                        ),
+                      ),
+                      child: Slider(
+                        min: 1,
+                        max: 100,
+                        divisions: 99,
+                        value: _sliderValue,
+                        label: '상위 ${_percent.round()}%',
+                        onChanged: (v) => setState(
+                          () => _percent = (101 - v).clamp(1, 100),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        children: [
+                          Text(
+                            '상위 100%',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: sub,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '상위 1%',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: sub,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (widget.selectedTopPercent != null) ...[
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(
+                          const _DesiredLevelPick(null),
+                        ),
+                        child: const Text(
+                          '목표 지우기',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFFF554F),
+                          ),
+                        ),
+                      ),
+                    ] else
+                      const SizedBox(height: 4),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

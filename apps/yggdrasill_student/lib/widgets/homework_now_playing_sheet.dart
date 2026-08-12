@@ -15,6 +15,7 @@ class HomeworkNowPlayingExpanded extends StatefulWidget {
     required this.onClose,
     required this.onPlayPause,
     required this.onSubmit,
+    this.onOpenSolve,
   });
 
   /// 닫기 애니 시작 직후 — 탭바 1줄 해제를 스크롤 축소와 동기화.
@@ -23,16 +24,20 @@ class HomeworkNowPlayingExpanded extends StatefulWidget {
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
 
+  /// 「문제 풀기」 — 디지털 풀이 가능한 교재 숙제에서만 노출된다.
+  final VoidCallback? onOpenSolve;
+
   /// 하단 크롬 1줄 전환과 동일 길이.
   static const Duration slideDuration =
       StudentBottomNavTokens.chromeAnimDuration;
 
   @override
   State<HomeworkNowPlayingExpanded> createState() =>
-      _HomeworkNowPlayingExpandedState();
+      HomeworkNowPlayingExpandedState();
 }
 
-class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
+/// 셸이 GlobalKey로 [close]를 불러 슬라이드 아웃 닫기를 요청할 수 있다.
+class HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
     with SingleTickerProviderStateMixin {
   late final AnimationController _slide;
   late final Animation<Offset> _offset;
@@ -78,6 +83,9 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
     if (!mounted) return;
     widget.onClose();
   }
+
+  /// 외부(하단 크롬 메뉴 버튼 등)에서 닫기 애니메이션을 시작한다.
+  Future<void> close() => _requestClose();
 
   @override
   Widget build(BuildContext context) {
@@ -230,6 +238,13 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
                         kindLabel: group.isHomework ? '숙제' : '수업',
                         onPlayPause: widget.onPlayPause,
                         onSubmit: widget.onSubmit,
+                        // 문항 스냅샷이 있는 교재 과제만 앱에서 바로 푼다.
+                        // (수업/숙제 종류 무관 — digital_solvable 이 판단 기준)
+                        onOpenSolve: group.digitalSolvable &&
+                                !group.isPrintSource &&
+                                group.phase <= 2
+                            ? widget.onOpenSolve
+                            : null,
                       ),
                       const SizedBox(height: 28),
                       Text(
@@ -341,7 +356,8 @@ class _HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
   }
 }
 
-/// 가운데 수행/일시정지 알약 + 오른쪽 원형 제출 (Apple Music형).
+/// 왼쪽 원형 문제 풀기 + 가운데 수행/일시정지 알약 + 오른쪽 원형 제출
+/// (Apple Music형).
 class _NowPlayingActionRow extends StatelessWidget {
   const _NowPlayingActionRow({
     required this.running,
@@ -349,6 +365,7 @@ class _NowPlayingActionRow extends StatelessWidget {
     required this.kindLabel,
     required this.onPlayPause,
     required this.onSubmit,
+    this.onOpenSolve,
   });
 
   final bool running;
@@ -356,6 +373,9 @@ class _NowPlayingActionRow extends StatelessWidget {
   final String kindLabel;
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
+
+  /// null 이면 왼쪽 슬롯은 대칭 유지용 빈 자리로 남긴다.
+  final VoidCallback? onOpenSolve;
 
   static const double _circleSize = 52;
   static const double _pillWidth = 168;
@@ -374,8 +394,33 @@ class _NowPlayingActionRow extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // 왼쪽 슬롯 — 오른쪽 원형과 대칭으로 알약을 가운데 정렬.
-        const SizedBox(width: _circleSize),
+        // 왼쪽 슬롯 — 오른쪽 원형과 대칭. 풀 수 있는 숙제면 문제 풀기 버튼.
+        if (onOpenSolve == null)
+          const SizedBox(width: _circleSize)
+        else
+          Tooltip(
+            message: '문제 풀기',
+            child: Material(
+              color: circleBg,
+              shape: const CircleBorder(),
+              child: InkWell(
+                onTap: busy ? null : onOpenSolve,
+                customBorder: const CircleBorder(),
+                child: Opacity(
+                  opacity: busy ? 0.45 : 1,
+                  child: SizedBox(
+                    width: _circleSize,
+                    height: _circleSize,
+                    child: Icon(
+                      Icons.edit_rounded,
+                      size: 22,
+                      color: circleFg,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         const SizedBox(width: 12),
         SizedBox(
           width: _pillWidth,

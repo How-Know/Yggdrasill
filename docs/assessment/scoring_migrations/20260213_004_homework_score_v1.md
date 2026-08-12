@@ -1,8 +1,12 @@
 # 20260213_004_homework_score_v1
 
+> **폐기됨.** EXP 누적값에서 점수를 역산하는 구조여서 3개월에 94점, 반년에 99점대로
+> 포화되어 변별력을 잃었다. `20260812_010_homework_score_v2_exp_booster.md`의 비율 기반
+> v2로 대체됐다. 이 문서는 당시 판단 근거를 남기기 위해 보존한다.
+
 ## 메타
 
-- status: applied
+- status: superseded (by `20260812_010_homework_score_v2_exp_booster.md`)
 - owner: manager-app
 - related_files:
   - `apps/yggdrasill/lib/services/homework_score_service.dart`

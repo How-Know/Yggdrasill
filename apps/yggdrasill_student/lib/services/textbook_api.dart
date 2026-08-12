@@ -1,5 +1,19 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+/// 채점 Edge Function(student_textbook_grade)이 명시적 코드로 거부한 경우.
+class TextbookGradeException implements Exception {
+  const TextbookGradeException(this.code, [this.detail = '']);
+
+  final String code;
+  final String detail;
+
+  /// 실물 교재가 검사 신청으로 제출된 동안(phase=3) 채점·정답 공개 잠금.
+  bool get bookSubmitted => code == 'book_submitted';
+
+  @override
+  String toString() => 'TextbookGradeException($code)';
+}
+
 /// "교재 풀기" 관련 Supabase RPC 통신.
 /// 정답은 서버에만 있으며 클라이언트는 채점 결과(맞음/틀림)만 받는다.
 class TextbookApi {
@@ -252,19 +266,36 @@ class TextbookApi {
                 .toList(growable: false),
           }),
     ];
-    final response = await _client.functions.invoke(
-      'student_textbook_grade',
-      body: {
-        'action': 'grade',
-        'book_id': bookId,
-        'grade_label': gradeLabel,
-        'items': items,
-        if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
-          'homework_group_id': homeworkGroupId,
-      },
-    );
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {
+          'action': 'grade',
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'items': items,
+          if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
+            'homework_group_id': homeworkGroupId,
+        },
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
     return GradeResult.fromJson(
       (response.data as Map<String, dynamic>?) ?? const {},
+    );
+  }
+
+  /// Edge Function 4xx/5xx 응답을 코드 있는 예외로 바꾼다 (잠금 등 구분용).
+  Never _throwGradeException(FunctionException error) {
+    final details = error.details;
+    final map = details is Map
+        ? Map<String, dynamic>.from(details)
+        : const <String, dynamic>{};
+    throw TextbookGradeException(
+      '${map['error'] ?? 'http_${error.status}'}',
+      '${map['detail'] ?? error.reasonPhrase ?? ''}',
     );
   }
 
@@ -291,10 +322,15 @@ class TextbookApi {
 
   /// 셀프 채점용 정답 공개 (self 모드 문항만 허용).
   Future<RevealedAnswer> revealAnswer({required String cropId}) async {
-    final response = await _client.functions.invoke(
-      'student_textbook_grade',
-      body: {'action': 'reveal', 'crop_id': cropId},
-    );
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {'action': 'reveal', 'crop_id': cropId},
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
     final data = (response.data as Map<String, dynamic>?) ?? const {};
     if (data['ok'] != true) {
       throw Exception('reveal_failed: ${data['error']}');
@@ -315,23 +351,28 @@ class TextbookApi {
     Map<String, bool>? partMarks,
     String? homeworkGroupId,
   }) async {
-    final response = await _client.functions.invoke(
-      'student_textbook_grade',
-      body: {
-        'action': 'self_mark',
-        'book_id': bookId,
-        'grade_label': gradeLabel,
-        'crop_id': cropId,
-        'correct': correct,
-        if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
-          'homework_group_id': homeworkGroupId,
-        if (answer != null) 'answer': answer,
-        if (partMarks != null && partMarks.isNotEmpty)
-          'part_marks': partMarks.entries
-              .map((e) => {'key': e.key, 'correct': e.value})
-              .toList(growable: false),
-      },
-    );
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {
+          'action': 'self_mark',
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'crop_id': cropId,
+          'correct': correct,
+          if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
+            'homework_group_id': homeworkGroupId,
+          if (answer != null) 'answer': answer,
+          if (partMarks != null && partMarks.isNotEmpty)
+            'part_marks': partMarks.entries
+                .map((e) => {'key': e.key, 'correct': e.value})
+                .toList(growable: false),
+        },
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
     final data = (response.data as Map<String, dynamic>?) ?? const {};
     if (data['ok'] != true) {
       throw Exception('self_mark_failed: ${data['error']}');

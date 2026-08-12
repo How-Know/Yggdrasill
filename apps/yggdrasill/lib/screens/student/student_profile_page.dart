@@ -11,6 +11,8 @@ import '../../widgets/pill_tab_selector.dart';
 import '../../models/attendance_record.dart';
 import '../../services/homework_store.dart';
 import '../../services/homework_assignment_store.dart';
+import '../../services/homework_score_service.dart';
+import '../../services/point_service.dart';
 import '../../services/tag_store.dart';
 import '../../services/student_flow_store.dart';
 import '../../services/student_behavior_assignment_store.dart';
@@ -264,17 +266,25 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
   List<_LevelOption> _options = const <_LevelOption>[];
   int? _currentLevelCode;
   int? _desiredLevelCode;
+  int? _desiredTopPercent;
   int? _targetLevelCode;
   late Future<Map<String, dynamic>> _homeworkScoreFuture;
+  late Future<Map<String, dynamic>> _pointFuture;
+  late Future<Map<String, dynamic>> _totalScoreFuture;
 
   @override
   void initState() {
     super.initState();
     _homeworkScoreFuture = _buildHomeworkScoreFuture();
+    _pointFuture = _buildPointFuture();
+    _totalScoreFuture = _buildTotalScoreFuture();
     HomeworkStore.instance.revision.addListener(_onHomeworkSignalsChanged);
     HomeworkAssignmentStore.instance.revision
         .addListener(_onHomeworkSignalsChanged);
     DataManager.instance.studentsNotifier
+        .addListener(_onHomeworkSignalsChanged);
+    PointService.instance.revision.addListener(_onHomeworkSignalsChanged);
+    DataManager.instance.attendanceRecordsNotifier
         .addListener(_onHomeworkSignalsChanged);
     unawaited(HomeworkStore.instance.loadAll());
     unawaited(_load());
@@ -297,6 +307,9 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         .removeListener(_onHomeworkSignalsChanged);
     DataManager.instance.studentsNotifier
         .removeListener(_onHomeworkSignalsChanged);
+    PointService.instance.revision.removeListener(_onHomeworkSignalsChanged);
+    DataManager.instance.attendanceRecordsNotifier
+        .removeListener(_onHomeworkSignalsChanged);
     super.dispose();
   }
 
@@ -306,26 +319,63 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     );
   }
 
+  Future<Map<String, dynamic>> _buildPointFuture() async {
+    final studentId = widget.studentWithInfo.student.id;
+    final results = await Future.wait(<Future<Map<String, dynamic>?>>[
+      DataManager.instance.loadPointSummaryWithRank(studentId: studentId),
+      PointService.instance.loadBooster(studentId),
+    ]);
+    final summary = Map<String, dynamic>.from(
+      results[0] ?? const <String, dynamic>{},
+    );
+    final booster = results[1];
+    if (booster != null) {
+      summary['booster'] = booster['booster'];
+      summary['boosterInput'] = booster['booster_input'];
+    }
+    return summary;
+  }
+
+  Future<Map<String, dynamic>> _buildTotalScoreFuture() {
+    return DataManager.instance.calculateTotalScoreWithRankAsync(
+      studentId: widget.studentWithInfo.student.id,
+    );
+  }
+
   void _refreshHomeworkScoreFuture() {
     if (!mounted) return;
     setState(() {
       _homeworkScoreFuture = _buildHomeworkScoreFuture();
+      _pointFuture = _buildPointFuture();
+      _totalScoreFuture = _buildTotalScoreFuture();
     });
   }
 
   void _onHomeworkSignalsChanged() {
+    // 과제/출석이 바뀌면 45초 TTL을 기다리지 않고 서버 값을 다시 읽는다.
+    HomeworkScoreService.instance.invalidateCache();
     _refreshHomeworkScoreFuture();
   }
 
   List<_LevelOption> _fallbackOptions() {
     return const <_LevelOption>[
-      _LevelOption(1, '1등급'),
-      _LevelOption(2, '2등급'),
-      _LevelOption(3, '3등급'),
-      _LevelOption(4, '4등급'),
-      _LevelOption(5, '5등급'),
-      _LevelOption(6, '6등급'),
+      _LevelOption(1, '1등급', 4.0),
+      _LevelOption(2, '2등급', 11.0),
+      _LevelOption(3, '3등급', 23.0),
+      _LevelOption(4, '4등급', 40.0),
+      _LevelOption(5, '5등급', 60.0),
+      _LevelOption(6, '6등급', 77.0),
+      _LevelOption(7, '7등급', 89.0),
+      _LevelOption(8, '8등급', 96.0),
+      _LevelOption(9, '9등급', 100.0),
     ];
+  }
+
+  String _formatTopPercent(double percent) {
+    if (percent == percent.roundToDouble()) {
+      return '상위 ${percent.round()}%';
+    }
+    return '상위 ${percent.toStringAsFixed(1)}%';
   }
 
   int? _asInt(dynamic v) {
@@ -351,14 +401,19 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     });
     try {
       final rows = await DataManager.instance.loadStudentLevelScales();
+      final fallbackByCode = {
+        for (final o in _fallbackOptions()) o.code: o.upperPercent,
+      };
       final parsed = rows
           .map((row) {
             final code = _asInt(row['level_code']);
-            if (code == null || code < 1 || code > 6) return null;
+            if (code == null || code < 1 || code > 9) return null;
             final label = (row['display_name'] as String?)?.trim();
+            final percent = _asDouble(row['upper_percent']);
             return _LevelOption(
               code,
               (label == null || label.isEmpty) ? '${code}등급' : label,
+              percent > 0 ? percent : (fallbackByCode[code] ?? 0),
             );
           })
           .whereType<_LevelOption>()
@@ -368,11 +423,21 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       final state = await DataManager.instance.loadStudentLevelState(
         widget.studentWithInfo.student.id,
       );
+      final desiredCode = _asInt(state?['desired_level_code']);
+      var desiredTop = _asInt(state?['desired_top_percent']);
+      if (desiredTop == null && desiredCode != null) {
+        final opts = parsed.isNotEmpty ? parsed : _fallbackOptions();
+        final match = opts.where((o) => o.code == desiredCode);
+        if (match.isNotEmpty) {
+          desiredTop = match.first.upperPercent.round();
+        }
+      }
       if (!mounted) return;
       setState(() {
         _options = parsed.isNotEmpty ? parsed : _fallbackOptions();
         _currentLevelCode = _asInt(state?['current_level_code']);
-        _desiredLevelCode = _asInt(state?['desired_level_code']);
+        _desiredLevelCode = desiredCode;
+        _desiredTopPercent = desiredTop;
         _targetLevelCode = _asInt(state?['target_level_code']);
         _loading = false;
       });
@@ -389,8 +454,48 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
   String _labelForCode(int? code) {
     if (code == null) return '미설정';
     final match = _options.where((o) => o.code == code);
-    if (match.isNotEmpty) return match.first.label;
+    if (match.isNotEmpty) {
+      final o = match.first;
+      return '${o.label} (${_formatTopPercent(o.upperPercent)})';
+    }
     return '${code}등급';
+  }
+
+  String _desiredSummaryLabel() {
+    if (_desiredTopPercent == null && _desiredLevelCode == null) {
+      return '미설정';
+    }
+    final grade = _labelForCode(_desiredLevelCode).split(' (').first;
+    if (_desiredTopPercent != null) {
+      return '$grade (${_formatTopPercent(_desiredTopPercent!.toDouble())})';
+    }
+    return _labelForCode(_desiredLevelCode);
+  }
+
+  _LevelOption? _optionForTopPercent(double percent) {
+    final sorted = [..._options]
+      ..sort((a, b) => a.upperPercent.compareTo(b.upperPercent));
+    if (sorted.isEmpty) return null;
+    for (final opt in sorted) {
+      if (percent <= opt.upperPercent) return opt;
+    }
+    return sorted.last;
+  }
+
+  void _setDesiredTopPercent(double? percent) {
+    if (percent == null) {
+      setState(() {
+        _desiredTopPercent = null;
+        _desiredLevelCode = null;
+      });
+      return;
+    }
+    final clamped = percent.clamp(1, 100).round();
+    final opt = _optionForTopPercent(clamped.toDouble());
+    setState(() {
+      _desiredTopPercent = clamped;
+      _desiredLevelCode = opt?.code;
+    });
   }
 
   List<DropdownMenuItem<int?>> _buildLevelItems() {
@@ -402,7 +507,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       ..._options.map(
         (o) => DropdownMenuItem<int?>(
           value: o.code,
-          child: Text(o.label),
+          child: Text('${o.label} · ${_formatTopPercent(o.upperPercent)}'),
         ),
       ),
     ];
@@ -437,15 +542,18 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         studentId: studentId,
         currentLevelCode: _currentLevelCode,
         desiredLevelCode: _desiredLevelCode,
+        desiredTopPercent: _desiredTopPercent,
         targetLevelCode: _targetLevelCode,
       );
       final readBack =
           await DataManager.instance.loadStudentLevelState(studentId);
       final rbCurrent = _asInt(readBack?['current_level_code']);
       final rbDesired = _asInt(readBack?['desired_level_code']);
+      final rbDesiredTop = _asInt(readBack?['desired_top_percent']);
       final rbTarget = _asInt(readBack?['target_level_code']);
       final bool verified = rbCurrent == _currentLevelCode &&
           rbDesired == _desiredLevelCode &&
+          rbDesiredTop == _desiredTopPercent &&
           rbTarget == _targetLevelCode;
       final bool serverReadback = TagPresetService.preferSupabaseRead;
       if (!mounted) return;
@@ -465,6 +573,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       setState(() {
         _currentLevelCode = rbCurrent;
         _desiredLevelCode = rbDesired;
+        _desiredTopPercent = rbDesiredTop;
         _targetLevelCode = rbTarget;
         _saving = false;
       });
@@ -492,6 +601,30 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       ),
       child: Text(
         '$label ${ratio.toStringAsFixed(1)}% (${value.toStringAsFixed(2)})',
+        style: const TextStyle(
+          color: kDlgText,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _countChip({
+    required String label,
+    required int count,
+    required double share,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Text(
+        '$label $count건 (${share.toStringAsFixed(1)}%)',
         style: const TextStyle(
           color: kDlgText,
           fontSize: 12,
@@ -719,17 +852,21 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
 
   Widget _buildHomeworkScoreCard(Map<String, dynamic> scoreMap) {
     final score100 = _asDouble(scoreMap['score100']);
-    final expRaw = _asDouble(scoreMap['expRaw']);
-    final expDecayed = _asDouble(scoreMap['expDecayed']);
-    final assignedExpDecayed = _asDouble(scoreMap['assignedExpDecayed']);
-    final checkExpDecayed = _asDouble(scoreMap['checkExpDecayed']);
-    final completedExpDecayed = _asDouble(scoreMap['completedExpDecayed']);
-    final eventCount = _asInt(scoreMap['eventCount']) ?? 0;
-    final assignedCount = _asInt(scoreMap['assignedCount']) ?? 0;
-    final checkCount = _asInt(scoreMap['checkCount']) ?? 0;
+    final evaluatedCount = _asInt(scoreMap['evaluatedCount']) ??
+        _asInt(scoreMap['eventCount']) ??
+        0;
     final completedCount = _asInt(scoreMap['completedCount']) ?? 0;
+    final partialCount = _asInt(scoreMap['partialCount']) ?? 0;
+    final untouchedCount = _asInt(scoreMap['untouchedCount']) ?? 0;
+    final pendingCount = _asInt(scoreMap['pendingCount']) ?? 0;
+    final totalWeight = _asDouble(scoreMap['totalWeight']);
+    final requiredWeight = _asDouble(scoreMap['requiredWeight']);
+    final ratioRawValue = scoreMap['ratioRaw'];
+    final double? ratioRaw =
+        ratioRawValue == null ? null : _asDouble(ratioRawValue);
+    final ratioAdjusted = _asDouble(scoreMap['ratioAdjusted']);
+    final insufficient = scoreMap['insufficientEvidence'] == true;
     final halfLifeDays = _asDouble(scoreMap['halfLifeDays']);
-    final scaleK = _asDouble(scoreMap['scaleK']);
     final formulaVersion = (scoreMap['formulaVersion'] as String?)?.trim();
     final rank = _asInt(scoreMap['rank']);
     final cohortSize = _asInt(scoreMap['cohortSize']) ?? 0;
@@ -743,7 +880,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         ? '없음'
         : DateFormat('yyyy.MM.dd').format(lastEventAt);
 
-    if (eventCount <= 0 || expDecayed <= 0) {
+    if (evaluatedCount <= 0) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
@@ -752,20 +889,18 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: kDlgBorder),
         ),
-        child: const Text(
-          '과제 점수를 계산할 기록이 아직 충분하지 않아요. 과제 배정/검사/완료 기록이 누적되면 점수가 표시됩니다.',
-          style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.4),
+        child: Text(
+          pendingCount > 0
+              ? '아직 기한이 지난 과제가 없어요. 배정된 ${pendingCount}건의 기한이 지나면 점수가 표시됩니다.'
+              : '과제 점수를 계산할 기록이 아직 충분하지 않아요. 과제 배정/검사/완료 기록이 누적되면 점수가 표시됩니다.',
+          style: const TextStyle(
+              color: kDlgTextSub, fontSize: 12.5, height: 1.4),
         ),
       );
     }
 
-    final double totalExp = expDecayed;
-    final double completedRatio =
-        totalExp > 0 ? (completedExpDecayed / totalExp) * 100.0 : 0.0;
-    final double checkRatio =
-        totalExp > 0 ? (checkExpDecayed / totalExp) * 100.0 : 0.0;
-    final double assignedRatio =
-        totalExp > 0 ? (assignedExpDecayed / totalExp) * 100.0 : 0.0;
+    double share(int count) =>
+        evaluatedCount > 0 ? (count / evaluatedCount) * 100.0 : 0.0;
 
     return Container(
       width: double.infinity,
@@ -786,7 +921,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '과제 점수 (EXP)',
+                      '과제 점수',
                       style: TextStyle(
                         color: kDlgText,
                         fontSize: 15,
@@ -795,7 +930,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     ),
                     SizedBox(height: 4),
                     Text(
-                      '배정/검사/완료 이벤트를 누적하고, 오래된 기록은 약하게만 희석해 장기 성실도를 반영합니다.',
+                      '기한이 지난 배정을 얼마나 수행했는지의 비율입니다. 최근 기록에 더 큰 가중치를 둡니다.',
                       style: TextStyle(
                           color: kDlgTextSub, fontSize: 12.5, height: 1.35),
                     ),
@@ -826,45 +961,437 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _metricChip(
+              _countChip(
                 label: '완료',
-                value: completedExpDecayed,
-                ratio: completedRatio,
+                count: completedCount,
+                share: share(completedCount),
                 color: const Color(0xFF33A373),
               ),
-              _metricChip(
-                label: '검사',
-                value: checkExpDecayed,
-                ratio: checkRatio,
+              _countChip(
+                label: '부분 수행',
+                count: partialCount,
+                share: share(partialCount),
                 color: const Color(0xFFE09C3D),
               ),
-              _metricChip(
-                label: '배정',
-                value: assignedExpDecayed,
-                ratio: assignedRatio,
-                color: const Color(0xFF5A8DEE),
+              _countChip(
+                label: '미착수',
+                count: untouchedCount,
+                share: share(untouchedCount),
+                color: const Color(0xFFEF6A6A),
               ),
             ],
           ),
           const SizedBox(height: 10),
           Text(
-            '누적 EXP ${expRaw.toStringAsFixed(1)} · 희석 반영 EXP ${expDecayed.toStringAsFixed(1)}',
+            '평가 대상 ${evaluatedCount}건 · 기한 전 유보 ${pendingCount}건 · 마지막 반영 ${lastEventText}',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
           const SizedBox(height: 4),
           Text(
-            '반영 이벤트 ${eventCount}건 (완료 ${completedCount} · 검사 ${checkCount} · 배정 ${assignedCount}) · 마지막 반영 ${lastEventText}',
+            ratioRaw == null
+                ? '수행 비율을 계산할 가중치가 없어요.'
+                : '수행 비율 ${(ratioRaw * 100).toStringAsFixed(1)}%'
+                    '${insufficient ? ' → 표본 부족 보정 ${(ratioAdjusted * 100).toStringAsFixed(1)}%' : ''}',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
           const SizedBox(height: 4),
           Text(
-            '기준: 반감기 ${halfLifeDays.toStringAsFixed(0)}일 · scaleK ${scaleK.toStringAsFixed(0)} · ${formulaVersion ?? 'homework_score_v1'}',
+            '기준: 반감기 ${halfLifeDays.toStringAsFixed(0)}일 · 유효 가중치 '
+            '${totalWeight.toStringAsFixed(1)}/${requiredWeight.toStringAsFixed(0)} · '
+            '${formulaVersion ?? 'homework_score_v2'}',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12),
           ),
           const SizedBox(height: 6),
           Text(
             (rank != null && cohortSize > 0)
                 ? '재원생 기준 ${rank}등 / ${cohortSize}명 (상위 ${topPercent.toStringAsFixed(1)}%)'
+                : '재원생 순위 계산을 위한 데이터가 부족해요.',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTotalScoreLoadingCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: kDlgAccent,
+            ),
+          ),
+          SizedBox(width: 10),
+          Text(
+            '총점을 계산하는 중입니다...',
+            style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTotalScoreErrorCard(Object? error) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Text(
+        '총점 계산 중 오류가 발생했어요: $error',
+        style: const TextStyle(
+            color: Color(0xFFEF6A6A), fontSize: 12.5, height: 1.35),
+      ),
+    );
+  }
+
+  Widget _buildTotalScoreCard(Map<String, dynamic> totalMap) {
+    final hasTotal = totalMap['hasTotal'] == true;
+    final total = _asDouble(totalMap['total']);
+    final attendanceScore = _asDouble(totalMap['attendanceScore100']);
+    final homeworkScore = _asDouble(totalMap['homeworkScore100']);
+    final attendanceWeight = _asDouble(totalMap['attendanceWeight']);
+    final homeworkWeight = _asDouble(totalMap['homeworkWeight']);
+    final homeworkEvidence = totalMap['homeworkEvidence'] == true;
+    final attendanceEvidence = totalMap['attendanceEvidence'] == true;
+    final rank = _asInt(totalMap['rank']);
+    final cohortSize = _asInt(totalMap['cohortSize']) ?? 0;
+    final topPercent = _asDouble(totalMap['topPercent']);
+
+    final String attendancePercent =
+        (attendanceWeight * 100).toStringAsFixed(0);
+    final String homeworkPercent = (homeworkWeight * 100).toStringAsFixed(0);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '총점',
+                      style: TextStyle(
+                        color: kDlgText,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '출석 $attendancePercent% + 과제 $homeworkPercent% 가중 평균입니다.',
+                      style: const TextStyle(
+                          color: kDlgTextSub, fontSize: 12.5, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: hasTotal
+                      ? const Color(0xFF1F4D3A)
+                      : const Color(0xFF23262D),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: hasTotal
+                        ? const Color(0xFF3B8C68)
+                        : const Color(0xFF3A3F4A),
+                  ),
+                ),
+                child: Text(
+                  hasTotal ? '${total.toStringAsFixed(1)}점' : '—',
+                  style: TextStyle(
+                    color: hasTotal ? Colors.white : kDlgTextSub,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (!hasTotal)
+            Text(
+              !homeworkEvidence
+                  ? '과제를 처리하면 총점이 표시됩니다. 아직 과제 기록이 없어 총점을 계산하지 않았어요.'
+                  : (!attendanceEvidence
+                      ? '출석 기록이 쌓이면 총점이 표시됩니다.'
+                      : '총점을 계산할 기록이 아직 부족해요.'),
+              style: const TextStyle(
+                  color: kDlgTextSub, fontSize: 12.5, height: 1.4),
+            )
+          else ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _pointChip(
+                  label: '출석 $attendancePercent%',
+                  text: '${attendanceScore.toStringAsFixed(1)}점',
+                  color: const Color(0xFF5A8DEE),
+                ),
+                _pointChip(
+                  label: '과제 $homeworkPercent%',
+                  text: '${homeworkScore.toStringAsFixed(1)}점',
+                  color: const Color(0xFF33A373),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              (rank != null && cohortSize > 0)
+                  ? '총점 산출 대상 ${cohortSize}명 중 ${rank}등 (상위 ${topPercent.toStringAsFixed(1)}%)'
+                  : '총점 순위 계산을 위한 데이터가 부족해요.',
+              style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _pointChip({
+    required String label,
+    required String text,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Text(
+        '$label $text',
+        style: const TextStyle(
+          color: kDlgText,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPointLoadingCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: kDlgAccent,
+            ),
+          ),
+          SizedBox(width: 10),
+          Text(
+            '포인트를 불러오는 중입니다...',
+            style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPointErrorCard(Object? error) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Text(
+        '포인트를 불러오는 중 오류가 발생했어요: $error',
+        style: const TextStyle(
+            color: Color(0xFFEF6A6A), fontSize: 12.5, height: 1.35),
+      ),
+    );
+  }
+
+  Widget _buildPointCard(Map<String, dynamic> pointMap) {
+    final fmt = NumberFormat('#,##0');
+    final balance = _asInt(pointMap['balance']) ?? 0;
+    final lifetimeEarned = _asInt(pointMap['lifetimeEarned']) ?? 0;
+    final lifetimeSpent = _asInt(pointMap['lifetimeSpent']) ?? 0;
+    final entryCount = _asInt(pointMap['entryCount']) ?? 0;
+    final boosterValue = pointMap['booster'];
+    final double? booster =
+        boosterValue == null ? null : _asDouble(boosterValue);
+    final boosterInputValue = pointMap['boosterInput'];
+    final double? boosterInput =
+        boosterInputValue == null ? null : _asDouble(boosterInputValue);
+    final rank = _asInt(pointMap['rank']);
+    final cohortSize = _asInt(pointMap['cohortSize']) ?? 0;
+    final topPercent = _asDouble(pointMap['topPercent']);
+    final lastEventAtRaw = pointMap['lastEventAt'];
+    final DateTime? lastEventAt =
+        (lastEventAtRaw is DateTime) ? lastEventAtRaw.toLocal() : null;
+    final String lastEventText = lastEventAt == null
+        ? '없음'
+        : DateFormat('yyyy.MM.dd').format(lastEventAt);
+
+    if (entryCount <= 0) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171C),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kDlgBorder),
+        ),
+        child: const Text(
+          '아직 적립된 포인트가 없어요. 출석을 확정하거나 과제를 완료하면 자동으로 적립됩니다.',
+          style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.4),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '포인트',
+                      style: TextStyle(
+                        color: kDlgText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '출석 확정과 과제 완료 시점에 확정 적립됩니다. 적립된 기록은 이후 점수 규칙이 바뀌어도 변하지 않습니다.',
+                      style: TextStyle(
+                          color: kDlgTextSub, fontSize: 12.5, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3D3116),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF8A6D24)),
+                ),
+                child: Text(
+                  '${fmt.format(balance)}P',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _pointChip(
+                label: '누적 획득',
+                text: '${fmt.format(lifetimeEarned)}P',
+                color: const Color(0xFFE0B23D),
+              ),
+              _pointChip(
+                label: '사용',
+                text: '${fmt.format(lifetimeSpent)}P',
+                color: const Color(0xFF8A93A6),
+              ),
+              _pointChip(
+                label: '적립 내역',
+                text: '$entryCount건',
+                color: const Color(0xFF5A8DEE),
+              ),
+              _pointChip(
+                label: 'EXP 부스터',
+                text: booster == null
+                    ? '기본 1.00배'
+                    : '×${booster.toStringAsFixed(2)}',
+                color: const Color(0xFF9B6ADE),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            booster == null
+                ? '총점이 쌓이면 적립 배수가 올라갑니다. 지금은 기본 배수로 적립됩니다.'
+                : '총점 ${boosterInput == null ? '-' : boosterInput.toStringAsFixed(1)}점 기준 '
+                    '적립 배수 ×${booster.toStringAsFixed(2)} '
+                    '(${PointService.boosterMin.toStringAsFixed(1)}~${PointService.boosterMax.toStringAsFixed(1)}배). '
+                    '같은 과제를 해도 총점이 높으면 더 많이 적립됩니다.',
+            style: const TextStyle(
+                color: kDlgTextSub, fontSize: 12, height: 1.35),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '누적 획득은 레벨 기준값이라 포인트를 사용해도 줄어들지 않습니다.',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '마지막 적립 $lastEventText · 규칙 ${PointService.ruleVersion}',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            (rank != null && cohortSize > 0)
+                ? '누적 획득 기준 ${rank}등 / ${cohortSize}명 (상위 ${topPercent.toStringAsFixed(1)}%)'
                 : '재원생 순위 계산을 위한 데이터가 부족해요.',
             style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
           ),
@@ -911,6 +1438,28 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            const YggDialogSectionHeader(
+                              icon: Icons.emoji_events_outlined,
+                              title: '총점',
+                            ),
+                            const SizedBox(height: 10),
+                            FutureBuilder<Map<String, dynamic>>(
+                              future: _totalScoreFuture,
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState ==
+                                    ConnectionState.waiting) {
+                                  return _buildTotalScoreLoadingCard();
+                                }
+                                if (snapshot.hasError) {
+                                  return _buildTotalScoreErrorCard(
+                                      snapshot.error);
+                                }
+                                return _buildTotalScoreCard(
+                                  snapshot.data ?? const <String, dynamic>{},
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 20),
                             Text(
                               '등급(레벨) 입력',
                               style: Theme.of(context)
@@ -923,7 +1472,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                             ),
                             const SizedBox(height: 6),
                             const Text(
-                              '현재/희망/예상 등급은 수동으로 저장하며, 과제 완료 시점 스냅샷에 사용됩니다.',
+                              '현재·예상은 선생님이 입력하고, 희망은 학생앱 「내 목표」와 같은 값입니다. 과제 완료 스냅샷에도 사용됩니다.',
                               style:
                                   TextStyle(color: kDlgTextSub, fontSize: 13),
                             ),
@@ -944,30 +1493,114 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: DropdownButtonFormField<int?>(
-                                    value: _desiredLevelCode,
+                                    value: _targetLevelCode,
                                     items: _buildLevelItems(),
-                                    decoration: _inputDecoration('희망 등급'),
+                                    decoration: _inputDecoration('예상 등급'),
                                     style: const TextStyle(color: kDlgText),
                                     dropdownColor: const Color(0xFF15171C),
                                     onChanged: (value) => setState(
-                                        () => _desiredLevelCode = value),
+                                        () => _targetLevelCode = value),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<int?>(
-                              value: _targetLevelCode,
-                              items: _buildLevelItems(),
-                              decoration: _inputDecoration('예상 등급'),
-                              style: const TextStyle(color: kDlgText),
-                              dropdownColor: const Color(0xFF15171C),
-                              onChanged: (value) =>
-                                  setState(() => _targetLevelCode = value),
+                            const SizedBox(height: 16),
+                            Text(
+                              '희망 등급 (학생 · 9등급제)',
+                              style: TextStyle(
+                                color: kDlgTextSub,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF15171C),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: kDlgBorder),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    _desiredTopPercent == null
+                                        ? '미설정'
+                                        : '${_optionForTopPercent(_desiredTopPercent!.toDouble())?.label ?? _labelForCode(_desiredLevelCode).split(' (').first} · ${_formatTopPercent(_desiredTopPercent!.toDouble())}',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: kDlgText,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  SliderTheme(
+                                    data: SliderTheme.of(context).copyWith(
+                                      trackHeight: 3,
+                                      thumbShape: const RoundSliderThumbShape(
+                                        enabledThumbRadius: 8,
+                                      ),
+                                      activeTrackColor: kDlgAccent,
+                                      inactiveTrackColor: kDlgBorder,
+                                      thumbColor: kDlgAccent,
+                                      overlayColor:
+                                          kDlgAccent.withValues(alpha: 0.16),
+                                    ),
+                                    child: Slider(
+                                      min: 1,
+                                      max: 100,
+                                      divisions: 99,
+                                      // 왼쪽=100 · 오른쪽=1 (학생앱과 동일)
+                                      value: (101 -
+                                              (_desiredTopPercent ?? 40))
+                                          .clamp(1, 100)
+                                          .toDouble(),
+                                      onChanged: (v) => _setDesiredTopPercent(
+                                        (101 - v).clamp(1, 100),
+                                      ),
+                                    ),
+                                  ),
+                                  Row(
+                                    children: [
+                                      const Text(
+                                        '상위 100%',
+                                        style: TextStyle(
+                                          color: kDlgTextSub,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      const Text(
+                                        '상위 1%',
+                                        style: TextStyle(
+                                          color: kDlgTextSub,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton(
+                                      onPressed: _desiredTopPercent == null
+                                          ? null
+                                          : () => _setDesiredTopPercent(null),
+                                      child: const Text(
+                                        '희망 지우기',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFFEF6A6A),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              '현재: ${_labelForCode(_currentLevelCode)}   ·   희망: ${_labelForCode(_desiredLevelCode)}   ·   예상: ${_labelForCode(_targetLevelCode)}',
+                              '현재: ${_labelForCode(_currentLevelCode)}   ·   희망: ${_desiredSummaryLabel()}   ·   예상: ${_labelForCode(_targetLevelCode)}',
                               style: const TextStyle(
                                   color: kDlgTextSub, fontSize: 12),
                             ),
@@ -1070,6 +1703,32 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                                 );
                               },
                             ),
+                            const SizedBox(height: 16),
+                            const YggDialogSectionHeader(
+                              icon: Icons.savings_outlined,
+                              title: '포인트',
+                            ),
+                            const Text(
+                              '출석 점수와 과제 수행도에 비례해 적립되는 누적 재화입니다. 적립 시점 값으로 확정되며 이후 재계산되지 않습니다.',
+                              style:
+                                  TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                            ),
+                            const SizedBox(height: 10),
+                            FutureBuilder<Map<String, dynamic>>(
+                              future: _pointFuture,
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState ==
+                                    ConnectionState.waiting) {
+                                  return _buildPointLoadingCard();
+                                }
+                                if (snapshot.hasError) {
+                                  return _buildPointErrorCard(snapshot.error);
+                                }
+                                return _buildPointCard(
+                                  snapshot.data ?? const <String, dynamic>{},
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -1088,8 +1747,9 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
 class _LevelOption {
   final int code;
   final String label;
+  final double upperPercent;
 
-  const _LevelOption(this.code, this.label);
+  const _LevelOption(this.code, this.label, this.upperPercent);
 }
 
 class _StudentTimelineView extends StatefulWidget {
