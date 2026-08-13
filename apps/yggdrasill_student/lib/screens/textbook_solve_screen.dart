@@ -12,6 +12,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 import '../services/handwriting_candidates.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
+import '../services/student_point_session.dart';
 import '../services/textbook_api.dart';
 import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
@@ -164,6 +165,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   GlobalKey<MathExpressionEditorState> _editorKey =
       GlobalKey<MathExpressionEditorState>();
   GlobalKey<PencilInputPadState> _pencilKey = GlobalKey<PencilInputPadState>();
+
+  /// 필기 인식이 돌고 있는 답 키. 문항을 넘긴 뒤에도 인식은 계속되므로
+  /// 결과가 올 때까지 해당 카드에 "인식 중"을 띄운다.
+  final Set<String> _recognizingAnswerKeys = <String>{};
   final GlobalKey<_ScratchPracticeSheetState> _scratchKey =
       GlobalKey<_ScratchPracticeSheetState>();
   final TextEditingController _keyboardController = TextEditingController();
@@ -402,6 +407,54 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         .toList(growable: false);
   }
 
+  /// 과제 모드에서는 답 캐시 대신 "이 배정에서 남긴 시도"를 상태로 쓴다.
+  ///
+  /// 답 캐시(student_textbook_answer_records)는 회차를 모르는 학생×문항 한
+  /// 줄이라, 이전 회차(예전 과제·자유 풀이)에서 맞힌 문항이 새 과제에서도
+  /// 이미 맞은 것처럼 보인다. 이 배정에서 안 풀었으면 비어 있어야 한다.
+  Future<List<PageProblem>> _withHomeworkRoundState(
+    List<PageProblem> problems,
+  ) async {
+    final scope = widget.homework;
+    if (scope == null || problems.isEmpty) return problems;
+
+    Map<String, HomeworkProblem> byCrop;
+    try {
+      final rows =
+          await StudentApi.instance.listHomeworkProblems(scope.groupId);
+      byCrop = {
+        for (final row in rows)
+          if (row.cropId.isNotEmpty) row.cropId: row,
+      };
+    } catch (_) {
+      // 조회 실패 시 캐시 상태로라도 보여준다. 이전 회차가 비칠 수 있지만
+      // 화면이 막히는 것보다 낫다.
+      return problems;
+    }
+
+    return [
+      for (final p in problems)
+        () {
+          final hp = byCrop[p.cropId];
+          final attempts = hp?.attemptCount ?? 0;
+          if (hp == null || attempts <= 0) {
+            // 이 배정에서 아직 안 푼 문항 — 빈 상태로 시작한다.
+            return p.withSolveState();
+          }
+          final answer = (hp.lastAnswer ?? '').trim();
+          return p.withSolveState(
+            myAnswer: answer.isEmpty ? null : answer,
+            myCorrect: hp.passed,
+            attemptCount: attempts,
+            gradedBy: hp.lastScoredBy,
+            // 파트별 기록은 캐시에만 있다. 이 배정에서 시도한 문항이면
+            // 최신 캐시가 곧 이 회차의 기록이다.
+            partResults: p.partResults,
+          );
+        }(),
+    ];
+  }
+
   void _expandTreeForPage(TbPageStat page) {
     final tree = _tree;
     if (tree == null) return;
@@ -507,7 +560,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         rawPage: page.rawPage,
       );
       if (!mounted) return;
-      final problems = _scopedProblems(loaded);
+      final problems = await _withHomeworkRoundState(_scopedProblems(loaded));
+      if (!mounted) return;
       setState(() {
         _problems = problems;
         _loadingProblems = false;
@@ -590,6 +644,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
 
   Future<void> _grade() async {
     if (_grading) return;
+    // 방금 쓴 필기가 아직 인식 전일 수 있다. 답을 모으기 전에 마무리한다.
+    await _flushPencilInput();
+    if (!mounted) return;
     final problems = _problems;
     if (problems == null) return;
 
@@ -695,6 +752,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       // 트리의 페이지 현황 갱신
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
+      _noteFreePracticeGrant(result.pointsGranted);
       await _maybeCompleteHomework();
     } catch (e) {
       if (mounted && !_notifyIfBookSubmitted(e)) {
@@ -707,6 +765,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     } finally {
       if (mounted) setState(() => _grading = false);
     }
+  }
+
+  /// 교재 탭 자유 풀이로 과제가 자동 통과된 경우 포인트 스낵바.
+  void _noteFreePracticeGrant(int points) {
+    if (points <= 0 || widget.homework != null) return;
+    StudentPointSession.instance.noteHomeworkGrant(points);
   }
 
   /// 실물 교재 제출(검사 대기) 중 잠금 에러면 안내하고 true.
@@ -744,11 +808,16 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         return;
       }
       unawaited(HomeworkSession.instance.refresh());
-      TopGlassSnackBar.show(
-        context,
-        message: '과제를 모두 맞혔어요! 통과 처리했어요.',
-        icon: Icons.verified_rounded,
-      );
+      final points = (result['points_granted'] as num?)?.toInt() ?? 0;
+      if (points > 0) {
+        StudentPointSession.instance.noteHomeworkGrant(points);
+      } else {
+        TopGlassSnackBar.show(
+          context,
+          message: '과제를 모두 맞혔어요! 통과 처리했어요.',
+          icon: Icons.verified_rounded,
+        );
+      }
       await Future<void>.delayed(const Duration(milliseconds: 900));
       if (mounted) Navigator.of(context).pop(true);
     } catch (_) {
@@ -788,7 +857,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     if (marked == null || !mounted) return;
 
     try {
-      await TextbookApi.instance.selfMark(
+      final res = await TextbookApi.instance.selfMark(
         bookId: widget.book.bookId,
         gradeLabel: widget.book.gradeLabel,
         cropId: problem.cropId,
@@ -806,6 +875,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       });
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
+      _noteFreePracticeGrant(res.pointsGranted);
       await _maybeCompleteHomework();
     } catch (e) {
       if (mounted && !_notifyIfBookSubmitted(e)) {
@@ -913,6 +983,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       });
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
+      _noteFreePracticeGrant(res.pointsGranted);
       await _maybeCompleteHomework();
     } catch (e) {
       if (mounted && !_notifyIfBookSubmitted(e)) {
@@ -978,6 +1049,33 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     );
   }
 
+  /// 필기를 인식하는 동안 답 자리에 보여줄 표시.
+  Widget _recognizingView({required double fontSize, Color? color}) {
+    final tint = color ?? YggGlassTokens.confirmActionColor;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: fontSize * 0.8,
+          height: fontSize * 0.8,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(tint),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '인식 중…',
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w700,
+            color: tint,
+          ),
+        ),
+      ],
+    );
+  }
+
   /// 아직 맞지 못한 첫 파트 키.
   /// 하단 입력이 가능한 auto 파트를 우선하고, 없으면 self 파트, 모두 정답이면 첫 파트.
   String? _firstPendingPartKey(PageProblem problem) {
@@ -991,8 +1089,30 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     return firstSelfPending ?? problem.setParts.first.key;
   }
 
+  /// 필기 인식 진행 표시 — 패드가 사라진 뒤에도 불리므로 mounted를 본다.
+  void _setRecognizing(String answerKey, bool busy) {
+    if (!mounted) return;
+    final changed = busy
+        ? _recognizingAnswerKeys.add(answerKey)
+        : _recognizingAnswerKeys.remove(answerKey);
+    if (changed) setState(() {});
+  }
+
+  bool _isRecognizing(String answerKey) =>
+      _recognizingAnswerKeys.contains(answerKey);
+
+  /// 대기 중인 필기를 2초 기다리지 않고 지금 인식시킨다.
+  /// 문항을 옮기거나 채점하기 직전에 불러야 마지막 획이 답에 들어간다.
+  Future<void> _flushPencilInput() async {
+    final pad = _pencilKey.currentState;
+    if (pad == null) return;
+    await pad.flushRecognition();
+  }
+
   /// 문항 선택 (입력 패널 대상 변경 — 에디터/키보드 상태 재생성).
   void _selectPro(PageProblem problem, {String? partKey}) {
+    // 패드는 아래에서 새 키로 교체되므로, 그 전에 남은 필기를 넘긴다.
+    unawaited(_flushPencilInput());
     _selectedCropId = problem.cropId;
     if (problem.hasParts) {
       _expandedSetCrops.add(problem.cropId);
@@ -1807,8 +1927,17 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       );
     }
 
+    // 과제 스코프면 배정 문항이 있는 페이지만 보여준다. 이전/다음 이동과
+    // 같은 규칙 — 시트로도 과제 밖 페이지에 못 나간다.
+    final scope = widget.homework;
+    bool inScope(TbPageStat page) =>
+        scope == null || scope.rawPages.contains(page.rawPage);
+
     final rows = <Widget>[];
     for (final big in tree.bigUnits) {
+      if (!big.mids.any((m) => m.smalls.any((s) => s.pages.any(inScope)))) {
+        continue;
+      }
       final bigId = 'b${big.order}';
       rows.add(_treeRow(
         theme,
@@ -1820,6 +1949,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       ));
       if (!_expanded.contains(bigId)) continue;
       for (final mid in big.mids) {
+        if (!mid.smalls.any((s) => s.pages.any(inScope))) continue;
         final midId = '$bigId|m${mid.order}';
         rows.add(_treeRow(
           theme,
@@ -1830,6 +1960,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         ));
         if (!_expanded.contains(midId)) continue;
         for (final small in mid.smalls) {
+          if (!small.pages.any(inScope)) continue;
           final smallId = '$midId|s${small.subKey}';
           rows.add(_treeRow(
             theme,
@@ -1840,6 +1971,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           ));
           if (!_expanded.contains(smallId)) continue;
           for (final page in small.pages) {
+            if (!inScope(page)) continue;
             rows.add(_pageRow(
               theme,
               page,
@@ -2545,6 +2677,31 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   /// 개념원리만 문항분류(필수유형 등)를 난이도/유형코드와 같은 회색 글씨로 표시.
   bool get _showCategoryLabel => widget.book.series == 'wonri';
 
+  /// 같은 문항을 다시 푸는 중이면 몇 번째인지 알려 준다.
+  /// 처음 푸는 문항(1회차)은 굳이 표시하지 않는다.
+  Widget _roundChip(ThemeData theme, PageProblem problem) {
+    if (problem.roundNo < 2) return const SizedBox.shrink();
+    const roundColor = Color(0xFF7E9CC9);
+    return Padding(
+      padding: const EdgeInsets.only(right: 9),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: roundColor.withValues(alpha: 0.13),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          '${problem.roundNo}회차',
+          style: const TextStyle(
+            color: roundColor,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _problemRow(
     ThemeData theme,
     PageProblem problem, {
@@ -2650,43 +2807,53 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                                 fontWeight: FontWeight.w600,
                               ),
                             )
-                          : problem.isObjective && showObjectiveButtons
-                              ? _objectiveButtons(theme, problem)
-                              : !problem.isObjective && answer.isNotEmpty
-                                  // 주관식 답은 2D 조판 수식으로 보여준다.
-                                  ? Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: _answerMathView(
-                                        problem.cropId,
-                                        answer,
-                                        fontSize: theme.textTheme.titleMedium
-                                                ?.fontSize ??
+                          : _isRecognizing(problem.cropId)
+                              ? Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: _recognizingView(
+                                    fontSize:
+                                        theme.textTheme.titleMedium?.fontSize ??
                                             16,
-                                      ),
-                                    )
-                                  : Text(
-                                      problem.isObjective
-                                          ? (answer.isEmpty
-                                              ? '객관식'
-                                              : _objectiveAnswerText(answer))
-                                          : (problem.isSelfCheck
-                                              ? '공책에 풀고 정답을 확인해 보세요'
-                                              : '답을 입력해 주세요'),
-                                      style:
-                                          theme.textTheme.titleMedium?.copyWith(
-                                        color: answer.isEmpty
-                                            ? theme.hintColor
-                                            : null,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: problem.isObjective &&
-                                                answer.isNotEmpty
-                                            ? (theme.textTheme.titleMedium
-                                                        ?.fontSize ??
-                                                    16) *
-                                                1.35
-                                            : null,
-                                      ),
-                                    ),
+                                  ),
+                                )
+                              : problem.isObjective && showObjectiveButtons
+                                  ? _objectiveButtons(theme, problem)
+                                  : !problem.isObjective && answer.isNotEmpty
+                                      // 주관식 답은 2D 조판 수식으로 보여준다.
+                                      ? Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: _answerMathView(
+                                            problem.cropId,
+                                            answer,
+                                            fontSize: theme.textTheme
+                                                    .titleMedium?.fontSize ??
+                                                16,
+                                          ),
+                                        )
+                                      : Text(
+                                          problem.isObjective
+                                              ? (answer.isEmpty
+                                                  ? '객관식'
+                                                  : _objectiveAnswerText(
+                                                      answer))
+                                              : (problem.isSelfCheck
+                                                  ? '공책에 풀고 정답을 확인해 보세요'
+                                                  : '답을 입력해 주세요'),
+                                          style: theme.textTheme.titleMedium
+                                              ?.copyWith(
+                                            color: answer.isEmpty
+                                                ? theme.hintColor
+                                                : null,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: problem.isObjective &&
+                                                    answer.isNotEmpty
+                                                ? (theme.textTheme.titleMedium
+                                                            ?.fontSize ??
+                                                        16) *
+                                                    1.35
+                                                : null,
+                                          ),
+                                        ),
                     ),
                     const SizedBox(width: 12),
                     if (held) ...[
@@ -2735,6 +2902,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                         ),
                         const SizedBox(width: 10),
                       ],
+                      _roundChip(theme, problem),
                       if (graded && result && attemptCount > 1) ...[
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -2896,6 +3064,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                               const SizedBox(width: 8),
                               Expanded(child: _setSummaryChips(theme, problem)),
                               const SizedBox(width: 12),
+                              _roundChip(theme, problem),
                               if (allCorrect && attemptCount > 1) ...[
                                 Container(
                                   padding: const EdgeInsets.symmetric(
@@ -3091,28 +3260,39 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                     ),
                   ),
                   Expanded(
-                    child: !part.isSelfCheck && answer.isNotEmpty
-                        // 파트 답도 2D 조판 수식으로 보여준다.
+                    child: _isRecognizing(k)
                         ? Align(
                             alignment: Alignment.centerLeft,
-                            child: _answerMathView(
-                              k,
-                              answer,
+                            child: _recognizingView(
                               fontSize:
                                   theme.textTheme.titleSmall?.fontSize ?? 14,
                             ),
                           )
-                        : Text(
-                            part.isSelfCheck
-                                ? (graded
-                                    ? (result ? '맞았어요' : '틀렸어요 · 다시 확인해 보세요')
-                                    : '공책에 풀고 정답을 확인해 보세요')
-                                : '답을 입력해 주세요',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              color: theme.hintColor,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                        : !part.isSelfCheck && answer.isNotEmpty
+                            // 파트 답도 2D 조판 수식으로 보여준다.
+                            ? Align(
+                                alignment: Alignment.centerLeft,
+                                child: _answerMathView(
+                                  k,
+                                  answer,
+                                  fontSize:
+                                      theme.textTheme.titleSmall?.fontSize ??
+                                          14,
+                                ),
+                              )
+                            : Text(
+                                part.isSelfCheck
+                                    ? (graded
+                                        ? (result
+                                            ? '맞았어요'
+                                            : '틀렸어요 · 다시 확인해 보세요')
+                                        : '공책에 풀고 정답을 확인해 보세요')
+                                    : '답을 입력해 주세요',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  color: theme.hintColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                   ),
                   const SizedBox(width: 10),
                   if (part.isSelfCheck && result != true) ...[
@@ -3358,6 +3538,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                           'input_mode': _InputMode.pencil.name,
                         };
                       },
+                      onRecognizingChanged: (busy) =>
+                          _setRecognizing(answerKey, busy),
                       onRecognized: (text, {sourceLatex}) => _setAnswer(
                         answerKey,
                         text,
@@ -3438,24 +3620,29 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                             ),
                             // 인식·입력된 답은 2D 조판 수식으로 보여준다.
                             Flexible(
-                              child: answer.isEmpty
-                                  ? const Text(
-                                      '입력 전',
-                                      style: TextStyle(
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w800,
-                                      ),
+                              child: _isRecognizing(answerKey)
+                                  ? _recognizingView(
+                                      fontSize: 17,
+                                      color: Colors.black,
                                     )
-                                  : FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      alignment: Alignment.centerLeft,
-                                      child: _answerMathView(
-                                        answerKey,
-                                        answer,
-                                        fontSize: 19,
-                                        color: Colors.black,
-                                      ),
-                                    ),
+                                  : answer.isEmpty
+                                      ? const Text(
+                                          '입력 전',
+                                          style: TextStyle(
+                                            color: Colors.black,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        )
+                                      : FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: _answerMathView(
+                                            answerKey,
+                                            answer,
+                                            fontSize: 19,
+                                            color: Colors.black,
+                                          ),
+                                        ),
                             ),
                           ],
                         ),

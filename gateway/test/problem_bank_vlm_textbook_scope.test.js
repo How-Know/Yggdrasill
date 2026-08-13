@@ -11,6 +11,12 @@ test('textbook VLM retries transient fetch failures but not daily quota exhausti
   assert.equal(isRetryableVlmChunkError('ECONNRESET: socket hang up'), true);
   assert.equal(
     isRetryableVlmChunkError(
+      'vlm_gemini_http_499: { "error": { "code": 499, "message": "The operation was cancelled.", "status": "CANCELLED" } }',
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableVlmChunkError(
       'RESOURCE_EXHAUSTED generate_requests_per_model_per_day please retry in 12h',
     ),
     false,

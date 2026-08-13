@@ -4438,6 +4438,40 @@ function toErrorCode(err) {
   return 'UNKNOWN';
 }
 
+function isTransientSupabaseError(err) {
+  const msg = String(err?.message || err || '');
+  return /fetch failed|network|socket hang up|econnreset|econnrefused|etimedout|eai_again|timeout|aborted|502|503|504/i.test(
+    msg,
+  );
+}
+
+// 추출 마지막 단계(잡/문서 상태 기록)는 이미 수십 분치 작업이 저장된 뒤에 실행된다.
+// 여기서 일시적인 네트워크 오류 한 번으로 throw 하면 잡 전체가 failed 로 떨어지고
+// 매니저 UI 가 막히므로, 전송 실패 계열은 짧은 백오프로 다시 시도한다.
+async function runSupabaseWriteWithRetry(label, run, attempts = 4) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const { error } = await run();
+      if (!error) return;
+      lastErr = error;
+    } catch (err) {
+      lastErr = err;
+    }
+    if (!isTransientSupabaseError(lastErr) || attempt + 1 >= attempts) break;
+    console.warn(
+      '[pb-extract-worker] supabase_write_retry',
+      JSON.stringify({
+        label,
+        attempt: attempt + 1,
+        message: compact(lastErr?.message || lastErr),
+      }),
+    );
+    await sleep(1000 * Math.pow(2, attempt));
+  }
+  throw new Error(`${label}:${compact(lastErr?.message || lastErr)}`);
+}
+
 function normalizeTargetQuestionIdsFromJob(job) {
   const raw = job?.result_summary?.targetQuestionIds;
   if (!Array.isArray(raw)) return [];
@@ -5894,51 +5928,49 @@ async function processOneJob(job) {
     },
   };
 
-  const { error: jobUpdateErr } = await supa
-    .from('pb_extract_jobs')
-    .update({
-      status: jobStatus,
-      result_summary: resultSummary,
-      error_code: '',
-      error_message: '',
-      finished_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('id', job.id);
-  if (jobUpdateErr) {
-    throw new Error(`job_update_failed:${jobUpdateErr.message}`);
-  }
+  await runSupabaseWriteWithRetry('job_update_failed', () =>
+    supa
+      .from('pb_extract_jobs')
+      .update({
+        status: jobStatus,
+        result_summary: resultSummary,
+        error_code: '',
+        error_message: '',
+        finished_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('id', job.id),
+  );
   await updateTextbookExtractRunForJob({
     jobId: job.id,
     status: jobStatus,
     resultSummary,
   });
 
-  const { error: docUpdateErr } = await supa
-    .from('pb_documents')
-    .update({
-      status: docStatus,
-      curriculum_code: classification.curriculum_code,
-      source_type_code: classification.source_type_code,
-      school_level: classification.school_level,
-      grade_key: classification.grade_key,
-      course_key: classification.course_key,
-      course_label: classification.course_label,
-      grade_label: classification.grade_label,
-      exam_year: classification.exam_year,
-      semester_label: classification.semester_label,
-      exam_term_label: classification.exam_term_label,
-      school_name: classification.school_name,
-      publisher_name: classification.publisher_name,
-      material_name: classification.material_name,
-      classification_detail: classification.classification_detail,
-      meta: nextDocMeta,
-      updated_at: nowIso,
-    })
-    .eq('id', doc.id);
-  if (docUpdateErr) {
-    throw new Error(`document_update_failed:${docUpdateErr.message}`);
-  }
+  await runSupabaseWriteWithRetry('document_update_failed', () =>
+    supa
+      .from('pb_documents')
+      .update({
+        status: docStatus,
+        curriculum_code: classification.curriculum_code,
+        source_type_code: classification.source_type_code,
+        school_level: classification.school_level,
+        grade_key: classification.grade_key,
+        course_key: classification.course_key,
+        course_label: classification.course_label,
+        grade_label: classification.grade_label,
+        exam_year: classification.exam_year,
+        semester_label: classification.semester_label,
+        exam_term_label: classification.exam_term_label,
+        school_name: classification.school_name,
+        publisher_name: classification.publisher_name,
+        material_name: classification.material_name,
+        classification_detail: classification.classification_detail,
+        meta: nextDocMeta,
+        updated_at: nowIso,
+      })
+      .eq('id', doc.id),
+  );
 
   return {
     jobStatus,

@@ -44,6 +44,10 @@ class StudentAttendanceSession extends ChangeNotifier {
   int? get planSnapshotMinutes => _planSnapshotMinutes;
   bool get hasPlanGoalSnapshot => _planSnapshotAt != null;
 
+  /// 지금 학원에 있는가. 등원했고 아직 하원하지 않은 상태.
+  /// 서버 `_student_location_kind`와 같은 규칙이다.
+  bool get isAtAcademy => _today.arrival != null && _today.departure == null;
+
   /// 로그인 후 셸에서 한 번 호출.
   Future<void> startSync() async {
     if (_syncStarted) return;

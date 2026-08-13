@@ -1,4 +1,4 @@
-// 해설 PDF 페이지 이미지를 Gemini Vision 에 보내 "문항번호 bbox" 를 받아오는 클라이언트.
+﻿// 해설 PDF 페이지 이미지를 Gemini Vision 에 보내 "문항번호 bbox" 를 받아오는 클라이언트.
 // `vlm_detect_client.js` 와 뼈대는 같지만, 프롬프트와 결과 정규화 규칙이 다르다.
 
 import { buildDetectSolutionRefsPrompt } from './vlm_solution_refs_prompt.js';
@@ -18,7 +18,7 @@ import {
   parseSingleProblemNumber,
 } from './problem_number_key.js';
 
-const SOLREF_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const SOLREF_TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const SOLREF_DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {

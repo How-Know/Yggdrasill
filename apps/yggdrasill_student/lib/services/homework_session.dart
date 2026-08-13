@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'student_api.dart';
@@ -9,12 +9,16 @@ import 'textbook_api.dart';
 /// 앱 전역에서 "현재 수행 중 과제"를 공유한다.
 ///
 /// 학습앱 `HomeworkStore`와 같이 Realtime + 짧은 폴백 폴링(1.2s)으로 목록을 맞춘다.
-class HomeworkSession extends ChangeNotifier {
+class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
   HomeworkSession._();
   static final HomeworkSession instance = HomeworkSession._();
 
   static const Duration _fallbackPollInterval = Duration(milliseconds: 1200);
   static const Duration _reloadDebounce = Duration(milliseconds: 120);
+
+  /// 수행 중임을 서버에 알리는 주기. 앱이 갑자기 죽으면 마지막 신호 시점까지만
+  /// 학습 시간으로 인정되므로, 손실 상한이 이 값이 된다.
+  static const Duration _beatInterval = Duration(seconds: 30);
 
   HomeworkGroup? _active;
   String? _coverRef;
@@ -35,6 +39,9 @@ class HomeworkSession extends ChangeNotifier {
   String? _rtStudentId;
   Timer? _fallbackPollTimer;
   Timer? _reloadDebounceTimer;
+  Timer? _beatTimer;
+  bool _beatInFlight = false;
+  bool _lifecycleBound = false;
   DateTime? _pollCursorUtc;
   bool _pollInFlight = false;
   bool _refreshInFlight = false;
@@ -178,26 +185,94 @@ class HomeworkSession extends ChangeNotifier {
     _active = next;
     _coverRef = cover;
     _runningGroupId = runningId;
+    _syncBeatTimer();
     // 목록 스냅샷은 항상 알린다 (과제 화면 stale phase 방지).
     notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------
+  // 수행 신호 (30초) + 앱 생명주기
+  // ---------------------------------------------------------------------
+
+  void _syncBeatTimer() {
+    final running = _syncStarted && _runningGroupId != null;
+    if (running && _beatTimer == null) {
+      _beatTimer = Timer.periodic(_beatInterval, (_) => _sendBeat());
+      _sendBeat();
+    } else if (!running && _beatTimer != null) {
+      _beatTimer?.cancel();
+      _beatTimer = null;
+    }
+  }
+
+  void _sendBeat() {
+    if (_beatInFlight || _runningGroupId == null) return;
+    _beatInFlight = true;
+    unawaited(
+      StudentApi.instance.homeworkBeat().catchError((Object e) {
+        debugPrint('[HW][beat] failed: $e');
+      }).whenComplete(() => _beatInFlight = false),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_syncStarted) return;
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+        // 백그라운드로 내려가면 iOS가 곧 타이머를 멈춰 신호가 끊긴다.
+        // 내려가기 직전 한 번 더 찍어 손실 구간을 최소화한다.
+        _sendBeat();
+      case AppLifecycleState.detached:
+        // 종료를 알려주는 경우는 드물지만, 받으면 그 시점까지만 인정한다.
+        unawaited(rewindToLastBeat(reason: 'app_detached'));
+      case AppLifecycleState.resumed:
+        _sendBeat();
+        unawaited(refresh());
+    }
+  }
+
+  /// 앱이 죽었다 돌아온 정황이 확인됐을 때 — 마지막 신호 시점까지만 인정한다.
+  Future<void> rewindToLastBeat({String reason = 'app_closed'}) async {
+    if (_runningGroupId == null) return;
+    try {
+      await StudentApi.instance.homeworkRewind(reason: reason);
+    } catch (e) {
+      debugPrint('[HW][beat] rewind failed: $e');
+      return;
+    }
+    await refresh();
   }
 
   /// 로그인 후 셸에서 한 번 호출 — Realtime + 1.2s 폴백 시작.
   Future<void> startSync() async {
     if (_syncStarted) return;
     _syncStarted = true;
+    if (!_lifecycleBound) {
+      WidgetsBinding.instance.addObserver(this);
+      _lifecycleBound = true;
+    }
     await refresh(fetchCovers: true);
     await _subscribeRealtime();
     _startFallbackPoll();
+    _syncBeatTimer();
   }
 
   /// 로그아웃/셸 dispose 시 구독·폴링 정리.
   Future<void> stopSync() async {
     _syncStarted = false;
+    if (_lifecycleBound) {
+      WidgetsBinding.instance.removeObserver(this);
+      _lifecycleBound = false;
+    }
     _fallbackPollTimer?.cancel();
     _fallbackPollTimer = null;
     _reloadDebounceTimer?.cancel();
     _reloadDebounceTimer = null;
+    _beatTimer?.cancel();
+    _beatTimer = null;
     _pollCursorUtc = null;
     final channel = _rt;
     _rt = null;

@@ -2816,9 +2816,13 @@ class _RightSheetGradingCellVm {
   final List<int> solutionRect1k;
   final Map<String, String> sourceInfo;
 
+  /// 이 학생이 이 문항을 몇 번째로 푸는 중인가. 0이면 아직 푼 적 없다.
+  final int roundNo;
+
   const _RightSheetGradingCellVm({
     required this.key,
     required this.questionIndex,
+    this.roundNo = 0,
     this.questionLabel = '',
     this.questionCategory = '',
     required this.answer,
@@ -2868,6 +2872,9 @@ class _RightSheetAnswerListRow extends StatefulWidget {
   final String baselineState;
   final bool correctedRetry;
   final int correctionAttemptNumber;
+
+  /// 이 학생이 이 문항을 몇 번째로 푸는 중인가. 2회차부터만 표시한다.
+  final int roundNo;
   final Color backgroundColor;
   final Color borderColor;
   final double answerSlotHeight;
@@ -2890,6 +2897,7 @@ class _RightSheetAnswerListRow extends StatefulWidget {
     this.baselineState = '',
     this.correctedRetry = false,
     this.correctionAttemptNumber = 0,
+    this.roundNo = 0,
     required this.backgroundColor,
     required this.borderColor,
     required this.answerSlotHeight,
@@ -3108,6 +3116,31 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                       fontSize: 13,
                       fontWeight: FontWeight.w900,
                       height: 1.0,
+                    ),
+                  ),
+                ],
+                if (widget.roundNo >= 2) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF7E9CC9).withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: const Color(0xFF7E9CC9).withValues(alpha: 0.55),
+                      ),
+                    ),
+                    child: Text(
+                      '${widget.roundNo}회차',
+                      style: const TextStyle(
+                        color: Color(0xFF7E9CC9),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w900,
+                        height: 1.0,
+                      ),
                     ),
                   ),
                 ],
@@ -5175,6 +5208,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             key: key,
             questionIndex:
                 questionIndex <= 0 ? (parsedCells.length + 1) : questionIndex,
+            roundNo: parsePositiveInt(
+                  rawCell['roundNo'] ?? rawCell['round_no'],
+                ) ??
+                0,
             questionLabel: questionLabel,
             questionCategory:
                 '${rawCell['questionCategory'] ?? rawCell['question_category'] ?? ''}'
@@ -7933,6 +7970,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       baselineState: baselineState,
       correctedRetry: correctedRetry,
       correctionAttemptNumber: correctionAttemptNumber,
+      roundNo: cell.roundNo,
       backgroundColor: colors.background,
       borderColor: colors.border,
       answerSlotHeight: answerSlotHeight,

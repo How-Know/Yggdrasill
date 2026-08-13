@@ -1,4 +1,4 @@
-// 쎈/RPM 중단원 본문 페이지 묶음에서 A/B/C 파트 경계를 찾는 경량 Gemini 클라이언트.
+﻿// 쎈/RPM 중단원 본문 페이지 묶음에서 A/B/C 파트 경계를 찾는 경량 Gemini 클라이언트.
 //
 // 문항 좌표/본문은 추출하지 않고 페이지별 파트와 정확한 상단 헤더 가시성만
 // 반환한다. 목차에서 얻은 중단원 시작/끝 범위를 A/B/C 입력칸으로 나눌 때 쓴다.
@@ -8,7 +8,7 @@ import {
   repairLatexBackslashes,
 } from '../problem_bank/extract_engines/vlm/client.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {

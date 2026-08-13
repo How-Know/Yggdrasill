@@ -1,4 +1,4 @@
-// 해설 PDF 한 지면에 **어느 소단원 블록이 실려 있는지**만 먼저 읽는 클라이언트.
+﻿// 해설 PDF 한 지면에 **어느 소단원 블록이 실려 있는지**만 먼저 읽는 클라이언트.
 //
 // 수력충전 해설은 소단원 블록이 줄줄이 이어지고, 블록 머리("04 두 선분의 길이의
 // 합의 최솟값 ▶p.16~17")는 블록이 시작될 때 한 번만 인쇄된다. 이어지는 지면은
@@ -15,7 +15,7 @@ import {
   parseTextbookVlmJson,
 } from './vlm_json_parse.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

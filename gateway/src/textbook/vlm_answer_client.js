@@ -1,4 +1,4 @@
-// 답지 페이지 이미지를 Gemini Vision 에 보내 "문항별 정답" 을 받아오는 클라이언트.
+﻿// 답지 페이지 이미지를 Gemini Vision 에 보내 "문항별 정답" 을 받아오는 클라이언트.
 //
 // `vlm_detect_client.js` 와 뼈대는 같지만 프롬프트와 결과 정규화 규칙이 다르다.
 // Answer 전용이라 섹션/레이아웃 필드 없이 `items[].problem_number/kind/answer_text/...` 만
@@ -21,7 +21,7 @@ import {
   parseSingleProblemNumber,
 } from './problem_number_key.js';
 
-const ANSWER_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const ANSWER_TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 // 한 지면에 블록이 여러 개 쌓이고 블록마다 번호가 1번부터 다시 시작하는 교재.
 const ANSWER_DENSE_SERIES = new Set(['gaeyu', 'suryeok']);
 const ANSWER_DEFAULT_MAX_RETRIES = 3;

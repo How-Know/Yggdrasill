@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/homework_session.dart';
+import '../services/student_attendance_session.dart';
+import 'homework_now_playing_bar.dart';
 import 'student_bottom_nav_bar.dart';
 
 /// 미니바 확장 — 셸 Stack 안에서 전체화면으로 깔리고,
@@ -458,28 +460,35 @@ class _NowPlayingActionRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        Tooltip(
-          message: '$kindLabel 제출',
-          child: Material(
-            color: circleBg,
-            shape: const CircleBorder(),
-            child: InkWell(
-              onTap: busy ? null : onSubmit,
-              customBorder: const CircleBorder(),
-              child: Opacity(
-                opacity: busy ? 0.45 : 1,
-                child: SizedBox(
-                  width: _circleSize,
-                  height: _circleSize,
-                  child: Icon(
-                    Icons.check_rounded,
-                    size: 24,
-                    color: circleFg,
+        // 등원 중이 아니면 흐리게. 눌러 보면 이유를 알려준다.
+        ListenableBuilder(
+          listenable: StudentAttendanceSession.instance,
+          builder: (context, _) {
+            final allowed = homeworkSubmitAllowed;
+            return Tooltip(
+              message: allowed ? '$kindLabel 제출' : homeworkSubmitBlockedMessage,
+              child: Material(
+                color: circleBg,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  onTap: busy ? null : onSubmit,
+                  customBorder: const CircleBorder(),
+                  child: Opacity(
+                    opacity: busy || !allowed ? 0.45 : 1,
+                    child: SizedBox(
+                      width: _circleSize,
+                      height: _circleSize,
+                      child: Icon(
+                        Icons.check_rounded,
+                        size: 24,
+                        color: circleFg,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ],
     );

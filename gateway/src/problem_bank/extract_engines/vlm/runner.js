@@ -701,11 +701,14 @@ function isDailyQuotaExceededMessage(input) {
   );
 }
 
+// 499 CANCELLED 는 Gemini 가 응답 도중 스트림을 닫을 때 오는 일시적 코드다.
+// 우리 쪽 취소(AbortController)는 abort 메시지로 구분되므로 함께 재시도해도
+// 중복 호출이 되지 않는다. (RPM 2-2 p62~63 청크가 이 코드로 한 번에 실패했다.)
 export function isRetryableVlmChunkError(input) {
   const message = String(input || '');
   return (
     !isDailyQuotaExceededMessage(message) &&
-    /aborted|abort|timeout|deadline|fetch failed|network|econnreset|econnrefused|etimedout|socket hang up|429|500|502|503|504|missing_expected_questions|parse_failed/i.test(
+    /aborted|abort|cancell?ed|timeout|deadline|fetch failed|network|econnreset|econnrefused|etimedout|socket hang up|429|499|500|502|503|504|missing_expected_questions|parse_failed/i.test(
       message,
     )
   );

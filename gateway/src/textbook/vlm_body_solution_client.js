@@ -1,4 +1,4 @@
-// 개념원리 필수유형 전용: 본문 PDF 의 유형 페이지에서 각 필수유형의
+﻿// 개념원리 필수유형 전용: 본문 PDF 의 유형 페이지에서 각 필수유형의
 // "풀이" 단락 좌표와 굵은 글씨 정답을 추출하는 Gemini Vision 클라이언트.
 //
 // 쎈/RPM 은 정답이 답지 PDF(vlm_answer_client), 해설이 해설 PDF
@@ -11,7 +11,7 @@ import {
   parseTextbookVlmJson,
 } from './vlm_json_parse.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {

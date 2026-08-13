@@ -54,6 +54,10 @@ class HomeworkAnswerGradingCell {
   final List<int> solutionRect1k;
   final Map<String, String> sourceInfo;
 
+  /// 이 학생이 이 문항을 몇 번째로 푸는 중인가. 0이면 아직 푼 적 없다.
+  /// 통과·재배정·리셋으로 회차가 넘어간다 (student_problem_rounds).
+  final int roundNo;
+
   const HomeworkAnswerGradingCell({
     required this.key,
     required this.questionIndex,
@@ -78,6 +82,7 @@ class HomeworkAnswerGradingCell {
     this.solutionPageNumber,
     this.solutionRect1k = const <int>[],
     this.sourceInfo = const <String, String>{},
+    this.roundNo = 0,
   });
 }
 
@@ -1882,7 +1887,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         break;
     }
     return Tooltip(
-      message: '${cell.questionIndex}번',
+      message: cell.roundNo >= 2
+          ? '${cell.questionIndex}번 · ${cell.roundNo}회차'
+          : '${cell.questionIndex}번',
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: () => _toggleGradingCellState(cell.key),
@@ -1894,31 +1901,49 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: borderColor),
           ),
-          child: Center(
-            child: state == HomeworkAnswerCellState.correct
-                ? LatexTextRenderer(
-                    text,
-                    textAlign: TextAlign.right,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    maxLines: 3,
-                    softWrap: true,
-                    style: TextStyle(
-                      color: textColor,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 25,
-                      height: 1.0,
-                    ),
-                  )
-                : Text(
-                    text,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: textColor,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 25,
+          child: Stack(
+            children: [
+              Center(
+                child: state == HomeworkAnswerCellState.correct
+                    ? LatexTextRenderer(
+                        text,
+                        textAlign: TextAlign.right,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        maxLines: 3,
+                        softWrap: true,
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 25,
+                          height: 1.0,
+                        ),
+                      )
+                    : Text(
+                        text,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 25,
+                          height: 1.0,
+                        ),
+                      ),
+              ),
+              // 다시 푸는 문항은 몇 회차인지 구석에 작게 알려 준다.
+              if (cell.roundNo >= 2)
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: Text(
+                    '${cell.roundNo}회',
+                    style: const TextStyle(
+                      color: Color(0xFF7E9CC9),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11,
                       height: 1.0,
                     ),
                   ),
+                ),
+            ],
           ),
         ),
       ),

@@ -379,7 +379,15 @@ async function upsertRecord(
     { onConflict: 'student_id,crop_id' },
   );
 
-  await logHomeworkAttempt(admin, args);
+  return await logHomeworkAttempt(admin, args);
+}
+
+function masteryPayload(log: Record<string, unknown> | null): Record<string, unknown> | null {
+  const raw = log?.mastery;
+  if (!raw || typeof raw !== 'object') return null;
+  const mastery = raw as Record<string, unknown>;
+  if (mastery.ok !== true) return null;
+  return mastery;
 }
 
 // student_textbook_answer_records 는 (student_id, crop_id) 유일키라 과제·회차를
@@ -388,7 +396,7 @@ async function upsertRecord(
 //
 // 그룹 id 없이(교재 탭 자유 풀이) 호출해도 서버가 그 문항이 배정된 진행 중
 // 과제를 찾아 자동 연결한다 — 어느 경로로 풀든 진행률·완료율이 같아진다.
-// 배정에 없는 문항이면 서버가 not_assigned 로 무시한다.
+// 배정에 없는 문항은 free_practice 세션으로 남는다 (회차는 계속 이어진다).
 async function logHomeworkAttempt(
   admin: Admin,
   args: {
@@ -399,10 +407,10 @@ async function logHomeworkAttempt(
     gradedBy: 'auto' | 'self';
     homeworkGroupId?: string | null;
   },
-) {
+): Promise<Record<string, unknown> | null> {
   const groupId = (args.homeworkGroupId ?? '').trim();
   try {
-    await admin.rpc('learning_log_homework_attempt', {
+    const { data } = await admin.rpc('learning_log_homework_attempt', {
       p_student_id: args.studentId,
       p_homework_group_id: groupId || null,
       p_crop_id: args.cropId,
@@ -414,9 +422,13 @@ async function logHomeworkAttempt(
       p_assist_level: args.gradedBy === 'auto' ? 'none' : 'unknown',
       p_meta: {},
     });
+    if (data && typeof data === 'object') {
+      return data as Record<string, unknown>;
+    }
   } catch (_) {
     // 학습 기록 실패가 채점 자체를 막지는 않는다.
   }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -587,6 +599,7 @@ async function actionGrade(
   const results: Record<string, unknown>[] = [];
   let correctCount = 0;
   let wrongCount = 0;
+  let mastery: Record<string, unknown> | null = null;
 
   for (const raw of items) {
     const rawItem = raw as Record<string, unknown>;
@@ -697,7 +710,7 @@ async function actionGrade(
         updates,
       );
       const overall = allPartsCorrect(setParts, merged);
-      await upsertRecord(admin, {
+      const logged = await upsertRecord(admin, {
         academyId: student.academyId,
         studentId: student.studentId,
         bookId,
@@ -710,6 +723,7 @@ async function actionGrade(
         partResults: merged,
         homeworkGroupId,
       });
+      mastery = masteryPayload(logged) ?? mastery;
       results.push({
         crop_id: cropId,
         correct: overall,
@@ -773,7 +787,7 @@ async function actionGrade(
       aiUnitSpecified,
     });
 
-    await upsertRecord(admin, {
+    const logged = await upsertRecord(admin, {
       academyId: student.academyId,
       studentId: student.studentId,
       bookId,
@@ -785,6 +799,7 @@ async function actionGrade(
       flags,
       homeworkGroupId,
     });
+    mastery = masteryPayload(logged) ?? mastery;
 
     if (correct) correctCount += 1;
     else wrongCount += 1;
@@ -796,6 +811,7 @@ async function actionGrade(
     results,
     correct_count: correctCount,
     wrong_count: wrongCount,
+    mastery,
   });
 }
 
@@ -963,7 +979,7 @@ async function actionSelfMark(
       updates,
     );
     const overall = allPartsCorrect(setParts, merged);
-    await upsertRecord(admin, {
+    const logged = await upsertRecord(admin, {
       academyId: student.academyId,
       studentId: student.studentId,
       bookId,
@@ -976,10 +992,15 @@ async function actionSelfMark(
       partResults: merged,
       homeworkGroupId,
     });
-    return json({ ok: true, correct: overall, part_results: merged });
+    return json({
+      ok: true,
+      correct: overall,
+      part_results: merged,
+      mastery: masteryPayload(logged),
+    });
   }
 
-  await upsertRecord(admin, {
+  const logged = await upsertRecord(admin, {
     academyId: student.academyId,
     studentId: student.studentId,
     bookId,
@@ -992,7 +1013,7 @@ async function actionSelfMark(
     homeworkGroupId,
   });
 
-  return json({ ok: true, correct });
+  return json({ ok: true, correct, mastery: masteryPayload(logged) });
 }
 
 // ---------------------------------------------------------------------------

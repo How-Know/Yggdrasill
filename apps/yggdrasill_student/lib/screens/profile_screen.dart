@@ -5,6 +5,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/student_api.dart';
 import '../services/student_attendance_session.dart';
+import '../services/student_point_session.dart';
 import '../widgets/student_attendance_score_card.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_recent_attendance_panel.dart';
@@ -57,9 +58,9 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
   bool _loadingHomework = true;
   String? _homeworkError;
 
-  PointSummaryInfo? _points;
-  bool _loadingPoints = true;
-  String? _pointsError;
+  PointSummaryInfo? get _points => StudentPointSession.instance.summary;
+  bool get _loadingPoints => StudentPointSession.instance.loading;
+  String? get _pointsError => StudentPointSession.instance.error;
 
   StudentDesiredLevelInfo _desired = const StudentDesiredLevelInfo();
   bool _savingDesired = false;
@@ -70,21 +71,38 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
   bool _loadingAttendance = false;
   String? _attendanceError;
 
+  bool _pointsExpanded = false;
+  List<PointHistoryEntry>? _pointHistory;
+  bool _loadingPointHistory = false;
+  String? _pointHistoryError;
+
   @override
   void initState() {
     super.initState();
     _attendance = StudentAttendanceSession.instance.today;
     StudentAttendanceSession.instance.addListener(_onAttendanceSessionChanged);
+    StudentPointSession.instance.addListener(_onPointsChanged);
     unawaited(_loadScore());
     unawaited(_loadHomework());
-    unawaited(_loadPoints());
     unawaited(_loadDesired());
+    if (StudentPointSession.instance.summary == null) {
+      unawaited(StudentPointSession.instance.refresh());
+    }
   }
 
   @override
   void dispose() {
     StudentAttendanceSession.instance.removeListener(_onAttendanceSessionChanged);
+    StudentPointSession.instance.removeListener(_onPointsChanged);
     super.dispose();
+  }
+
+  void _onPointsChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_pointsExpanded) {
+      unawaited(_ensurePointHistoryLoaded(force: true));
+    }
   }
 
   void _onAttendanceSessionChanged() {
@@ -98,11 +116,14 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
     await Future.wait([
       _loadScore(),
       _loadHomework(),
-      _loadPoints(),
+      StudentPointSession.instance.refresh(),
       _loadDesired(),
     ]);
     if (_expanded) {
       await _ensureAttendanceLoaded(force: true);
+    }
+    if (_pointsExpanded) {
+      await _ensurePointHistoryLoaded(force: true);
     }
   }
 
@@ -146,31 +167,6 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       setState(() {
         _homeworkError = '과제 점수를 불러오지 못했어요.';
         _loadingHomework = false;
-      });
-    }
-  }
-
-  Future<void> _loadPoints() async {
-    if (mounted) {
-      setState(() {
-        _loadingPoints = true;
-        _pointsError = null;
-      });
-    }
-    try {
-      final points = await StudentApi.instance.getPointSummary();
-      if (!mounted) return;
-      setState(() {
-        _points = points;
-        _loadingPoints = false;
-        _pointsError = null;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _points = null;
-        _loadingPoints = false;
-        _pointsError = '포인트를 불러오지 못했어요.';
       });
     }
   }
@@ -254,6 +250,35 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
     final next = !_expanded;
     setState(() => _expanded = next);
     if (next) await _ensureAttendanceLoaded(force: true);
+  }
+
+  Future<void> _togglePoints() async {
+    final next = !_pointsExpanded;
+    setState(() => _pointsExpanded = next);
+    if (next) await _ensurePointHistoryLoaded();
+  }
+
+  Future<void> _ensurePointHistoryLoaded({bool force = false}) async {
+    if (!force && (_pointHistory != null || _loadingPointHistory)) return;
+    setState(() {
+      _loadingPointHistory = true;
+      _pointHistoryError = null;
+    });
+    try {
+      final rows = await StudentApi.instance.listRecentPoints(limit: 20);
+      if (!mounted) return;
+      setState(() {
+        _pointHistory = rows;
+        _loadingPointHistory = false;
+      });
+    } catch (e) {
+      debugPrint('[points] history load failed: $e');
+      if (!mounted) return;
+      setState(() {
+        _pointHistoryError = '포인트 내역을 불러오지 못했어요.';
+        _loadingPointHistory = false;
+      });
+    }
   }
 
   Future<void> _ensureAttendanceLoaded({bool force = false}) async {
@@ -344,6 +369,37 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
           goalTitle: '내 목표',
           goalValue: _desired.goalValueLabel,
           onGoalTap: () => unawaited(_openDesiredPicker()),
+          onTap: () => unawaited(_togglePoints()),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeInOutCubic,
+          alignment: Alignment.topCenter,
+          child: _pointsExpanded
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 28),
+                    Text(
+                      '최근 받은 포인트',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: -0.2,
+                        color: sub,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _RecentPointHistoryCard(
+                      entries: _pointHistory,
+                      loading: _loadingPointHistory,
+                      error: _pointHistoryError,
+                      onRetry: () =>
+                          unawaited(_ensurePointHistoryLoaded(force: true)),
+                    ),
+                  ],
+                )
+              : const SizedBox.shrink(),
         ),
         const SizedBox(height: 28),
         StudentAttendanceScoreCard(
@@ -399,6 +455,261 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
                   : (_homeworkError ?? '과제 점수를 불러오지 못했어요'))
               : _homework!.subtitle,
         ),
+      ],
+    );
+  }
+}
+
+/// 출석 펼침 카드와 같은 셸. 최근 적립 목록(과제는 그룹 단위).
+class _RecentPointHistoryCard extends StatefulWidget {
+  const _RecentPointHistoryCard({
+    required this.entries,
+    required this.loading,
+    required this.error,
+    required this.onRetry,
+  });
+
+  final List<PointHistoryEntry>? entries;
+  final bool loading;
+  final String? error;
+  final VoidCallback onRetry;
+
+  @override
+  State<_RecentPointHistoryCard> createState() =>
+      _RecentPointHistoryCardState();
+}
+
+class _RecentPointHistoryCardState extends State<_RecentPointHistoryCard> {
+  static const _cardRadius = 22.0;
+  static const _weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+
+  final Set<String> _expanded = <String>{};
+
+  static String _whenLabel(DateTime dt) {
+    final wd = _weekdays[(dt.weekday - 1).clamp(0, 6)];
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '${dt.month}월 ${dt.day}일 $wd요일 · $h:$m';
+  }
+
+  void _toggle(String id) {
+    setState(() {
+      if (!_expanded.remove(id)) _expanded.add(id);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark
+        ? theme.colorScheme.surfaceContainerHigh
+        : Colors.white;
+    final text = theme.colorScheme.onSurface;
+    final subText = theme.colorScheme.onSurface.withValues(alpha: 0.45);
+    final divider = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : const Color(0xFFC6C6C8);
+    final accent = isDark
+        ? Colors.white.withValues(alpha: 0.78)
+        : const Color(0xFF3A3A3C);
+
+    final rows = widget.entries ?? const <PointHistoryEntry>[];
+    final hasBody = widget.entries != null;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(_cardRadius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.loading && !hasBody)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(child: YggLoadingIndicator(size: 28)),
+            )
+          else if (widget.error != null && !hasBody)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+              child: Column(
+                children: [
+                  Text(
+                    widget.error!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: subText),
+                  ),
+                  TextButton(
+                    onPressed: widget.onRetry,
+                    child: const Text('다시 시도'),
+                  ),
+                ],
+              ),
+            )
+          else if (rows.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+              child: Text(
+                '아직 받은 포인트가 없어요.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: subText),
+              ),
+            )
+          else
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Divider(height: 1, thickness: 0.33, color: divider),
+                ),
+              _PointHistoryRow(
+                entry: rows[i],
+                whenLabel: _whenLabel(rows[i].createdAt),
+                text: text,
+                sub: subText,
+                accent: accent,
+                expanded: _expanded.contains(rows[i].id),
+                onToggleDetail: rows[i].canExpand
+                    ? () => _toggle(rows[i].id)
+                    : null,
+              ),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PointHistoryRow extends StatelessWidget {
+  const _PointHistoryRow({
+    required this.entry,
+    required this.whenLabel,
+    required this.text,
+    required this.sub,
+    required this.accent,
+    this.expanded = false,
+    this.onToggleDetail,
+    this.nested = false,
+  });
+
+  final PointHistoryEntry entry;
+  final String whenLabel;
+  final Color text;
+  final Color sub;
+  final Color accent;
+  final bool expanded;
+  final VoidCallback? onToggleDetail;
+  final bool nested;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = entry.title.isEmpty ? '포인트' : entry.title;
+    final titleSize = nested ? 15.0 : 17.0;
+    final pad = nested
+        ? const EdgeInsets.fromLTRB(28, 10, 16, 10)
+        : const EdgeInsets.fromLTRB(16, 14, 8, 14);
+
+    final row = Padding(
+      padding: pad,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: text,
+                    fontSize: titleSize,
+                    fontWeight: FontWeight.w600,
+                    height: 1.25,
+                  ),
+                ),
+                if (entry.detail.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    entry.detail,
+                    style: TextStyle(
+                      color: sub,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                Text(
+                  whenLabel,
+                  style: TextStyle(
+                    color: sub,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Text(
+              entry.deltaLabel,
+              style: TextStyle(
+                color: accent,
+                fontSize: nested ? 15 : 17,
+                fontWeight: FontWeight.w700,
+                height: 1.25,
+              ),
+            ),
+          ),
+          if (onToggleDetail != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 2),
+              child: AnimatedRotation(
+                turns: expanded ? 0.25 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 22,
+                  color: sub,
+                ),
+              ),
+            )
+          else if (!nested)
+            const SizedBox(width: 8),
+        ],
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        onToggleDetail == null
+            ? row
+            : Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onToggleDetail,
+                  child: row,
+                ),
+              ),
+        if (expanded && entry.children.isNotEmpty)
+          ...entry.children.map(
+            (child) => _PointHistoryRow(
+              entry: child,
+              whenLabel:
+                  _RecentPointHistoryCardState._whenLabel(child.createdAt),
+              text: text,
+              sub: sub,
+              accent: accent,
+              nested: true,
+            ),
+          ),
       ],
     );
   }

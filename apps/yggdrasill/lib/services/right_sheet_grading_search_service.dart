@@ -1090,6 +1090,7 @@ class RightSheetGradingSearchService {
                   (cell) => <String, dynamic>{
                     'key': cell.key,
                     'questionIndex': cell.questionIndex,
+                    if (cell.roundNo > 0) 'roundNo': cell.roundNo,
                     if (cell.questionLabel.trim().isNotEmpty)
                       'questionLabel': cell.questionLabel.trim(),
                     if (cell.questionCategory.trim().isNotEmpty)

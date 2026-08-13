@@ -146,6 +146,7 @@ class PencilInputPad extends StatefulWidget {
     this.candidateSelector,
     this.remoteRecognizer,
     this.onSnapshot,
+    this.onRecognizingChanged,
     this.height = 220,
     this.showControls = true,
     this.showEmptyHint = true,
@@ -169,6 +170,10 @@ class PencilInputPad extends StatefulWidget {
   /// 호출부가 문항별로 보관해 두면 패드가 언마운트된 뒤에도
   /// 신고(필기 인식 불량)에 첨부할 수 있다.
   final ValueChanged<Map<String, dynamic>>? onSnapshot;
+
+  /// 인식 시작·종료를 알린다. 호출부가 문항 카드에 "인식 중"을 띄울 때 쓴다.
+  /// 패드가 사라진 뒤 끝나는 인식도 알려야 하므로 언마운트 후에도 호출된다.
+  final ValueChanged<bool>? onRecognizingChanged;
 
   final double height;
   final bool showControls;
@@ -216,8 +221,23 @@ class PencilInputPadState extends State<PencilInputPad> {
   String? _modelError;
   String? _recognitionError;
   bool _recognizing = false;
+
+  /// 인식 중에 이어 쓴 획이 있어 끝난 뒤 한 번 더 돌려야 하는지.
+  bool _rerunRequested = false;
+
+  /// 획이 바뀔 때마다 올라간다. 같은 획을 두 번 인식하지 않기 위한 기준.
+  int _strokeRevision = 0;
+
+  /// 마지막으로 인식을 시작한 시점의 [_strokeRevision].
+  int _recognizedRevision = -1;
   Timer? _debounce;
   Size _canvasSize = Size.zero;
+
+  /// 인식 도중 문항을 옮기면 패드가 폐기되므로, 결과를 넘길 콜백은
+  /// 인식 시작 시점에 붙잡아 둔다 (폐기 뒤에도 답이 전달되도록).
+  HandwritingRecognizedCallback? _activeOnRecognized;
+  ValueChanged<Map<String, dynamic>>? _activeOnSnapshot;
+  ValueChanged<bool>? _activeOnRecognizingChanged;
 
   /// 마지막 인식 시점의 필기 스냅샷 — 신고(필기 인식 불량) 첨부용.
   Map<String, dynamic>? _lastRecognitionSnapshot;
@@ -283,8 +303,23 @@ class PencilInputPadState extends State<PencilInputPad> {
   @override
   void dispose() {
     _debounce?.cancel();
+    // 대기 중인 획을 그냥 버리면 학생이 쓴 답이 사라진다. 폐기 직전에
+    // 인식을 걸어 두면 결과는 붙잡아 둔 콜백으로 전달된다.
+    unawaited(flushRecognition());
     // 인식기는 앱 전체에서 재사용하므로 여기서 닫지 않는다.
     super.dispose();
+  }
+
+  /// 2초 대기를 건너뛰고 지금 즉시 인식한다. 문항을 옮기거나 채점하기 직전에
+  /// 호출하면 마지막 획까지 답에 반영된다. 인식할 새 획이 없으면 아무것도
+  /// 하지 않고, 이미 인식 중이면 끝난 뒤 한 번 더 돌린다.
+  Future<void> flushRecognition() {
+    _debounce?.cancel();
+    if (_strokes.isEmpty || _recognizedRevision == _strokeRevision) {
+      return Future<void>.value();
+    }
+    // setState 콜백이나 dispose 안에서 불릴 수 있어 한 틱 미뤄 시작한다.
+    return Future<void>.microtask(_recognize);
   }
 
   /// 기기가 실제 압력을 주는 경우 0~1로 정규화, 아니면 -1(정보 없음).
@@ -299,6 +334,7 @@ class PencilInputPadState extends State<PencilInputPad> {
   void _startStroke(Offset position, int timestamp, double pressure) {
     _debounce?.cancel();
     _strokesDirty = true;
+    _strokeRevision++;
     setState(() {
       _strokes.add(<Offset>[position]);
       _strokeTimes.add(<int>[timestamp]);
@@ -342,6 +378,7 @@ class PencilInputPadState extends State<PencilInputPad> {
     _debounce?.cancel();
     _activePointer = null;
     if (_strokes.isEmpty) return;
+    _strokeRevision++;
     setState(() {
       _strokes.removeLast();
       _strokeTimes.removeLast();
@@ -373,13 +410,39 @@ class PencilInputPadState extends State<PencilInputPad> {
       ];
 
   Future<void> _recognize() async {
+    if (_strokes.isEmpty) return;
+    if (_recognizer == null && !_myscriptReady) return;
+    // 이 획으로 이미 인식했거나 인식하고 있으면 다시 돌릴 이유가 없다.
+    if (_recognizedRevision == _strokeRevision) return;
+    if (_recognizing) {
+      // 인식 중에 이어 쓴 획 — 지금 끼어들지 말고 끝난 뒤 다시 돌린다.
+      _rerunRequested = true;
+      return;
+    }
+    _activeOnRecognized = widget.onRecognized;
+    _activeOnSnapshot = widget.onSnapshot;
+    _activeOnRecognizingChanged = widget.onRecognizingChanged;
+    _recognizing = true;
+    _recognitionError = null;
+    if (mounted) setState(() {});
+    _activeOnRecognizingChanged?.call(true);
+    try {
+      do {
+        _rerunRequested = false;
+        _recognizedRevision = _strokeRevision;
+        await _recognizeOnce();
+      } while (_rerunRequested && _strokes.isNotEmpty);
+    } finally {
+      _recognizing = false;
+      _rerunRequested = false;
+      if (mounted) setState(() {});
+      _activeOnRecognizingChanged?.call(false);
+    }
+  }
+
+  Future<void> _recognizeOnce() async {
     final recognizer = _recognizer;
-    if (_strokes.isEmpty || _recognizing) return;
-    if (recognizer == null && !_myscriptReady) return;
-    setState(() {
-      _recognizing = true;
-      _recognitionError = null;
-    });
+    final onRecognized = _activeOnRecognized ?? widget.onRecognized;
     try {
       var candidates = const <String>[];
       var engine = 'mlkit';
@@ -455,8 +518,8 @@ class PencilInputPadState extends State<PencilInputPad> {
         engine: engine,
         myscriptLatex: myscriptLatex,
       );
-      if (!mounted || selected.isEmpty) return;
-      widget.onRecognized(
+      if (selected.isEmpty) return;
+      onRecognized(
         selected,
         sourceLatex: usedRemote ? null : myscriptLatex,
       );
@@ -470,7 +533,7 @@ class PencilInputPadState extends State<PencilInputPad> {
           recognizedText: remote,
           usedRemoteFallback: true,
         );
-        if (mounted) widget.onRecognized(remote);
+        onRecognized(remote);
       } else {
         // 인식 실패도 신고 대상이므로 획 스냅샷은 남긴다.
         _publishSnapshot(const <String>[]);
@@ -478,13 +541,12 @@ class PencilInputPadState extends State<PencilInputPad> {
           setState(() => _recognitionError = '인식하지 못했어요. 다시 써 주세요.');
         }
       }
-    } finally {
-      if (mounted) setState(() => _recognizing = false);
     }
   }
 
   void _clear() {
     _debounce?.cancel();
+    _strokeRevision++;
     setState(() {
       _strokes.clear();
       _strokeTimes.clear();
@@ -495,6 +557,7 @@ class PencilInputPadState extends State<PencilInputPad> {
   void _undo() {
     if (_strokes.isEmpty) return;
     _strokesDirty = true;
+    _strokeRevision++;
     setState(() {
       _strokes.removeLast();
       _strokeTimes.removeLast();
@@ -548,7 +611,7 @@ class PencilInputPadState extends State<PencilInputPad> {
     );
     _lastRecognitionSnapshot = snapshot;
     _strokesDirty = false;
-    widget.onSnapshot?.call(snapshot);
+    (_activeOnSnapshot ?? widget.onSnapshot)?.call(snapshot);
   }
 
   Map<String, dynamic> _buildSnapshot(

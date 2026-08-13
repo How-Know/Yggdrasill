@@ -4245,6 +4245,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   (cell) => <String, dynamic>{
                     'key': cell.key,
                     'questionIndex': cell.questionIndex,
+                    if (cell.roundNo > 0) 'roundNo': cell.roundNo,
                     if (cell.questionLabel.trim().isNotEmpty)
                       'questionLabel': cell.questionLabel.trim(),
                     if (cell.questionCategory.trim().isNotEmpty)
@@ -5143,6 +5144,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return sourceInfo;
   }
 
+  /// 문항별 "몇 회차째 푸는 중인가". 학생이 하나로 특정될 때만 의미가 있어
+  /// 여러 학생을 한꺼번에 여는 경우에는 비워 둔다.
+  Future<Map<String, int>> _loadProblemRounds({
+    required Set<String> studentIds,
+    required Set<String> cropIds,
+  }) async {
+    if (studentIds.length != 1 || cropIds.isEmpty) return const <String, int>{};
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'staff_list_problem_rounds_v1',
+        params: {
+          'p_student_id': studentIds.first,
+          'p_crop_ids': cropIds.toList(growable: false),
+        },
+      );
+      final rows = result is List ? result : const <dynamic>[];
+      final out = <String, int>{};
+      for (final row in rows.whereType<Map<String, dynamic>>()) {
+        final cropId = _trimDynamic(row['crop_id']);
+        final roundNo = _intFromDynamic(row['round_no']) ?? 0;
+        if (cropId.isNotEmpty && roundNo > 0) out[cropId] = roundNo;
+      }
+      return out;
+    } catch (_) {
+      // 회차는 부가 정보다. 못 가져와도 채점 화면은 열려야 한다.
+      return const <String, int>{};
+    }
+  }
+
   Future<
       ({
         String homeworkId,
@@ -5269,6 +5299,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
     if (rowsByCropId.isEmpty) return null;
 
+    final roundNoByCropId = await _loadProblemRounds(
+      studentIds: keys.map((k) => k.studentId).toSet(),
+      cropIds: rowsByCropId.keys.toSet(),
+    );
+
     final rows = rowsByCropId.values.toList(growable: false)
       ..sort((a, b) {
         return compareTextbookProblemSourceOrder(
@@ -5332,6 +5367,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 row,
                 baseItem: baseItem,
               ),
+              roundNo: roundNoByCropId[cropId] ?? 0,
             ),
           );
     }
@@ -18209,44 +18245,52 @@ Widget _buildFlowChip(
   final normalizedFlowName = flowName.trim();
   final normalizedDueLabel = (dueLabel ?? '').trim();
   final normalizedOverrideText = (overrideText ?? '').trim();
-  // 숙제: 긴 due 라벨 대신 '숙제'만. 배경은 제거하고 테두리는 유지.
+  // 숙제/플로우가 같은 슬롯을 쓰므로 패딩·줄간격·테두리 두께를 고정한다.
+  // (숙제만 height: 1.1이면 카드 1행 높이가 달라 레이아웃이 흔들린다.)
+  const chipPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 5);
+  const chipTextStyle = TextStyle(
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    height: 1.0,
+    leadingDistribution: TextLeadingDistribution.even,
+  );
+  const chipBorderWidth = 1.0;
+
+  final String chipText;
+  final Color backgroundColor;
+  final Border? border;
+  final Color textColor;
   if (isHomeworkDue && normalizedOverrideText.isEmpty) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(
-        color: overrideBackgroundColor ?? Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
-        border: overrideBorder ?? Border.all(color: kDlgAccent, width: 1.05),
-      ),
-      child: Text(
-        '숙제',
-        style: TextStyle(
-          color: overrideTextColor ?? const Color(0xFF9FE3C6),
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          height: 1.1,
-        ),
-      ),
-    );
+    chipText = '숙제';
+    backgroundColor = overrideBackgroundColor ?? Colors.transparent;
+    border = overrideBorder ??
+        Border.all(color: kDlgAccent, width: chipBorderWidth);
+    textColor = overrideTextColor ?? const Color(0xFF9FE3C6);
+  } else {
+    chipText = normalizedOverrideText.isNotEmpty
+        ? normalizedOverrideText
+        : (normalizedDueLabel.isEmpty
+            ? (normalizedFlowName.isEmpty ? '플로우 미지정' : normalizedFlowName)
+            : (normalizedFlowName.isEmpty
+                ? normalizedDueLabel
+                : '$normalizedFlowName · $normalizedDueLabel'));
+    final bool isDefault =
+        StudentFlow.normalizeName(normalizedFlowName) == '개념' &&
+            !isHomeworkDue;
+    backgroundColor = overrideBackgroundColor ??
+        (isDefault ? Colors.transparent : cardTheme.flowChipDefaultBg);
+    border = overrideBorder ??
+        (isDefault
+            ? Border.all(
+                color: cardTheme.flowChipDefaultBorder,
+                width: chipBorderWidth,
+              )
+            : null);
+    textColor = overrideTextColor ?? cardTheme.flowChipDefaultText;
   }
-  final chipText = normalizedOverrideText.isNotEmpty
-      ? normalizedOverrideText
-      : (normalizedDueLabel.isEmpty
-          ? (normalizedFlowName.isEmpty ? '플로우 미지정' : normalizedFlowName)
-          : (normalizedFlowName.isEmpty
-              ? normalizedDueLabel
-              : '$normalizedFlowName · $normalizedDueLabel'));
-  final bool isDefault =
-      StudentFlow.normalizeName(normalizedFlowName) == '개념' && !isHomeworkDue;
-  final Color backgroundColor = overrideBackgroundColor ??
-      (isDefault ? Colors.transparent : cardTheme.flowChipDefaultBg);
-  final Border? border = overrideBorder ??
-      (isDefault
-          ? Border.all(color: cardTheme.flowChipDefaultBorder, width: 1)
-          : null);
-  final Color textColor = overrideTextColor ?? cardTheme.flowChipDefaultText;
+
   return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+    padding: chipPadding,
     decoration: BoxDecoration(
       color: backgroundColor,
       borderRadius: BorderRadius.circular(20),
@@ -18254,11 +18298,7 @@ Widget _buildFlowChip(
     ),
     child: Text(
       chipText,
-      style: TextStyle(
-        color: textColor,
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-      ),
+      style: chipTextStyle.copyWith(color: textColor),
     ),
   );
 }
@@ -18321,6 +18361,111 @@ int _homeworkRecommendedMinutesOf(HomeworkItem item) {
   final remaining =
       (total.minutes * (1.0 - completion)).round().clamp(0, total.minutes);
   return (minutes: remaining, hasUnestimated: total.hasUnestimated);
+}
+
+/// 과제 카드 펼침에서 보여주는 문항 회차 요약.
+///
+/// 배정 문항들이 이 학생에게 몇 번째 회차인지(student_problem_rounds) 모아서
+/// "2회차" 또는 "1~3회차"로 줄인다. 아직 푼 적 없는 문항은 이번이 1회차다.
+class _HomeworkRoundsLabel extends StatefulWidget {
+  const _HomeworkRoundsLabel({
+    required this.studentId,
+    required this.items,
+    this.style,
+  });
+
+  final String studentId;
+  final List<HomeworkItem> items;
+  final TextStyle? style;
+
+  @override
+  State<_HomeworkRoundsLabel> createState() => _HomeworkRoundsLabelState();
+}
+
+class _HomeworkRoundsLabelState extends State<_HomeworkRoundsLabel> {
+  /// 카드를 접었다 펼 때마다 서버를 두드리지 않게 잠깐 기억해 둔다.
+  static final Map<String, ({String label, DateTime at})> _cache =
+      <String, ({String label, DateTime at})>{};
+
+  String _label = '';
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Set<String> _cropIds() {
+    final out = <String>{};
+    for (final item in widget.items) {
+      for (final rawMapping
+          in item.unitMappings ?? const <Map<String, dynamic>>[]) {
+        final crops = rawMapping['problemCrops'];
+        if (crops is! List) continue;
+        for (final rawCrop in crops) {
+          if (rawCrop is! Map) continue;
+          final cropId = '${rawCrop['cropId'] ?? ''}'.trim();
+          if (cropId.isNotEmpty) out.add(cropId);
+        }
+      }
+    }
+    return out;
+  }
+
+  Future<void> _load() async {
+    final crops = _cropIds();
+    // 레거시(문항 매핑 없는) 과제는 회차 개념이 없다 — 아무것도 안 보여준다.
+    if (widget.studentId.isEmpty || crops.isEmpty) return;
+
+    final sorted = crops.toList(growable: false)..sort();
+    final key = '${widget.studentId}|${sorted.join(',')}';
+    final cached = _cache[key];
+    if (cached != null &&
+        DateTime.now().difference(cached.at) < const Duration(seconds: 90)) {
+      if (mounted) setState(() => _label = cached.label);
+      return;
+    }
+
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'staff_list_problem_rounds_v1',
+        params: {
+          'p_student_id': widget.studentId,
+          'p_crop_ids': sorted,
+        },
+      );
+      final rows = result is List ? result : const <dynamic>[];
+      final byCrop = <String, int>{};
+      for (final row in rows.whereType<Map<String, dynamic>>()) {
+        final cropId = '${row['crop_id'] ?? ''}'.trim();
+        final roundNo = (row['round_no'] as num?)?.toInt() ?? 0;
+        if (cropId.isNotEmpty && roundNo > 0) byCrop[cropId] = roundNo;
+      }
+      var lo = 0;
+      var hi = 0;
+      for (final cropId in crops) {
+        final n = byCrop[cropId] ?? 1;
+        if (lo == 0 || n < lo) lo = n;
+        if (n > hi) hi = n;
+      }
+      final label = hi == 0 ? '' : (lo == hi ? '$hi회차' : '$lo~$hi회차');
+      _cache[key] = (label: label, at: DateTime.now());
+      if (mounted) setState(() => _label = label);
+    } catch (_) {
+      // 회차는 부가 정보 — 조회에 실패해도 카드는 그대로 보여야 한다.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_label.isEmpty) return const SizedBox.shrink();
+    return Text(
+      _label,
+      style: widget.style,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
 }
 
 Widget _buildHomeworkChipVisual(
@@ -18794,7 +18939,9 @@ Widget _buildHomeworkChipVisual(
       advance: effectiveProgress.advanceRate,
       completion: effectiveProgress.completionRate,
       textStyle: secondaryRowStyle,
-      cycleLabel: '${displayRepeatIndex}차',
+      // "N차"는 문항 회차(student_problem_rounds)와 헷갈린다.
+      // 이 숫자는 검사 사이클 기준 수행 시도다.
+      cycleLabel: '시도 $displayRepeatIndex',
     ),
   );
 
@@ -19037,9 +19184,28 @@ Widget _buildHomeworkChipVisual(
     ],
     if (hasGroupChildren) ...[
       const SizedBox(height: expandLineGap),
-      expandPairRow(
-        '하위과제 ${groupChildren.length}개',
-        '${displayRepeatIndex}회차',
+      // 오른쪽은 문항 풀이 회차(student_problem_rounds) 요약.
+      // 수행 시도 수(displayRepeatIndex)와는 다른 값이다.
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '하위과제 ${groupChildren.length}개',
+                style: secondaryRowStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            _HomeworkRoundsLabel(
+              studentId: studentId,
+              items: groupChildren,
+              style: secondaryRowStyle,
+            ),
+          ],
+        ),
       ),
       const SizedBox(height: 24),
       for (int i = 0; i < visibleGroupChildren; i++) ...[

@@ -164,6 +164,14 @@ class StudentBottomNavBar extends StatefulWidget {
       ),
     ),
     _StudentNavDestination(
+      label: '보내기',
+      customIconBuilder: (color, selected, size) => _PaperPlaneIcon(
+        color: color,
+        filled: selected,
+        size: size * 1.18,
+      ),
+    ),
+    _StudentNavDestination(
       label: '내 정보',
       customIconBuilder: (color, selected, size) => _ProfilePersonIcon(
         color: color,
@@ -775,6 +783,173 @@ class _ProfilePersonIconPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ProfilePersonIconPainter oldDelegate) {
+    return oldDelegate.color != color || oldDelegate.filled != filled;
+  }
+}
+
+/// 종이비행기 아이콘 시안 선택 — 1: 이미지 좌표 트레이스, 2: 정삼각형 기반 계산.
+const int _paperPlaneVariant = 1;
+
+/// 둥근 종이비행기 실루엣. 빨간 알림 점은 그리지 않는다.
+class _PaperPlaneIcon extends StatelessWidget {
+  const _PaperPlaneIcon({
+    required this.color,
+    required this.filled,
+    required this.size,
+  });
+
+  final Color color;
+  final bool filled;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _PaperPlaneIconPainter(color: color, filled: filled),
+      ),
+    );
+  }
+}
+
+class _PaperPlaneIconPainter extends CustomPainter {
+  const _PaperPlaneIconPainter({
+    required this.color,
+    required this.filled,
+  });
+
+  final Color color;
+  final bool filled;
+
+  /// 꼭짓점을 균일한 반지름으로 둥글린 폐곡선.
+  Path _roundedPolygon(List<Offset> pts, double radius) {
+    Offset toward(Offset from, Offset to) {
+      final v = to - from;
+      final len = v.distance;
+      if (len < 0.001) return from;
+      return from + v * (radius / len).clamp(0.0, 0.45);
+    }
+
+    final path = Path();
+    for (var i = 0; i < pts.length; i++) {
+      final prev = pts[(i + pts.length - 1) % pts.length];
+      final cur = pts[i];
+      final next = pts[(i + 1) % pts.length];
+      final enter = toward(cur, prev);
+      final leave = toward(cur, next);
+      if (i == 0) {
+        path.moveTo(enter.dx, enter.dy);
+      } else {
+        path.lineTo(enter.dx, enter.dy);
+      }
+      path.quadraticBezierTo(cur.dx, cur.dy, leave.dx, leave.dy);
+    }
+    path.close();
+    return path;
+  }
+
+  void _paintVariant2(Canvas canvas, double cell, Paint strokePaint) {
+    final stroke = strokePaint.strokeWidth;
+    final pad = stroke * 0.6;
+    final width = cell - pad * 2;
+    final height = width * math.sqrt(3) / 2;
+    final left = pad;
+    final top = pad + (cell - pad * 2 - height) / 2;
+
+    final topLeft = Offset(left, top);
+    final topRight = Offset(left + width, top);
+    final bottom = Offset(left + width / 2, top + height);
+    // 왼쪽 변 위의 오목한 접점 — 종이가 접힌 자리.
+    final onLeft = Offset.lerp(topLeft, bottom, 0.52)!;
+    final elbow = Offset(onLeft.dx + width * 0.15, onLeft.dy);
+
+    canvas.drawPath(
+      _roundedPolygon([topLeft, topRight, bottom, elbow], width * 0.16),
+      strokePaint,
+    );
+
+    final toCorner = topRight - elbow;
+    canvas.drawLine(
+      elbow,
+      topRight - toCorner / toCorner.distance * (stroke * 2.2),
+      strokePaint,
+    );
+  }
+
+  void _paintVariant1(Canvas canvas, double cell, Paint strokePaint) {
+    Offset point(double x, double y) => Offset(cell * x, cell * y);
+
+    // 첨부 이미지의 중심선을 그대로 옮긴 비대칭 외곽 경로.
+    final body = Path()
+      ..moveTo(cell * 0.19, cell * 0.11)
+      ..lineTo(cell * 0.80, cell * 0.11)
+      ..quadraticBezierTo(
+        cell * 0.91,
+        cell * 0.11,
+        cell * 0.87,
+        cell * 0.25,
+      )
+      ..lineTo(cell * 0.60, cell * 0.79)
+      ..quadraticBezierTo(
+        cell * 0.54,
+        cell * 0.91,
+        cell * 0.49,
+        cell * 0.92,
+      )
+      ..quadraticBezierTo(
+        cell * 0.39,
+        cell * 0.93,
+        cell * 0.36,
+        cell * 0.79,
+      )
+      ..lineTo(cell * 0.32, cell * 0.52)
+      ..lineTo(cell * 0.14, cell * 0.31)
+      ..quadraticBezierTo(
+        cell * 0.05,
+        cell * 0.20,
+        cell * 0.12,
+        cell * 0.12,
+      )
+      ..quadraticBezierTo(
+        cell * 0.14,
+        cell * 0.11,
+        cell * 0.19,
+        cell * 0.11,
+      )
+      ..close();
+
+    // 세로 비율은 유지하고 중심을 기준으로 좌우 폭만 살짝 넓힌다.
+    canvas
+      ..save()
+      ..translate(cell / 2, 0)
+      ..scale(1.06, 1)
+      ..translate(-cell / 2, 0);
+    canvas.drawPath(body, strokePaint);
+    canvas.drawLine(point(0.32, 0.52), point(0.66, 0.31), strokePaint);
+    canvas.restore();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cell = size.shortestSide;
+    final strokePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = cell * (filled ? 0.095 : 0.09)
+      ..strokeJoin = StrokeJoin.round
+      ..strokeCap = StrokeCap.round;
+
+    if (_paperPlaneVariant == 2) {
+      _paintVariant2(canvas, cell, strokePaint);
+    } else {
+      _paintVariant1(canvas, cell, strokePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PaperPlaneIconPainter oldDelegate) {
     return oldDelegate.color != color || oldDelegate.filled != filled;
   }
 }

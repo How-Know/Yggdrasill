@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/data_manager.dart';
 import '../../models/student.dart';
 import '../../models/education_level.dart';
@@ -3206,6 +3207,66 @@ class _FlowHomeworkCard extends StatefulWidget {
 class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
   final Set<String> _expandedIds = <String>{};
 
+  /// 과제별 (학원 ms, 집 ms). 수행 구간을 닫을 때 서버가 쌓아 둔 실측값이라
+  /// 사이클 재분배의 영향을 받지 않는다.
+  Map<String, (int, int)> _locationMs = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadLocationMs());
+  }
+
+  @override
+  void didUpdateWidget(covariant _FlowHomeworkCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      unawaited(_loadLocationMs());
+    }
+  }
+
+  Future<void> _loadLocationMs() async {
+    final studentId = widget.studentId;
+    if (studentId.isEmpty) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('homework_items')
+          .select('id,academy_ms,home_ms')
+          .eq('student_id', studentId);
+      final next = <String, (int, int)>{};
+      for (final row in rows) {
+        final id = '${row['id'] ?? ''}';
+        if (id.isEmpty) continue;
+        final academy = (row['academy_ms'] as num?)?.toInt() ?? 0;
+        final home = (row['home_ms'] as num?)?.toInt() ?? 0;
+        if (academy <= 0 && home <= 0) continue;
+        next[id] = (academy, home);
+      }
+      if (!mounted) return;
+      setState(() => _locationMs = next);
+    } catch (_) {
+      // 마이그레이션 전이면 컬럼이 없다. 장소 표시만 빠진다.
+    }
+  }
+
+  String _locationLabel(String itemId) {
+    final entry = _locationMs[itemId];
+    if (entry == null) return '';
+    final (academy, home) = entry;
+    if (home <= 0) return '학원 ${_formatMs(academy)}';
+    if (academy <= 0) return '집 ${_formatMs(home)}';
+    return '학원 ${_formatMs(academy)} · 집 ${_formatMs(home)}';
+  }
+
+  static String _formatMs(int ms) {
+    final d = Duration(milliseconds: ms < 0 ? 0 : ms);
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    if (h > 0) return '$h시간 $m분';
+    if (m > 0) return '$m분';
+    return '${d.inSeconds}초';
+  }
+
   DateTime? _sortKey(HomeworkItem item) {
     return item.completedAt ??
         item.firstStartedAt ??
@@ -3515,6 +3576,8 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                 children: [
                   _metaItem('시작', _formatTime(startTime)),
                   _metaItem('총 걸린시간', duration),
+                  if (_locationLabel(hw.id).isNotEmpty)
+                    _metaItem('장소별', _locationLabel(hw.id)),
                   _metaItem('검사횟수', checkCount.toString()),
                 ],
               ),

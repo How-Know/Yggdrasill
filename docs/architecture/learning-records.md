@@ -358,6 +358,8 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
 - **회차별 출제 부분집합을 어디에 담을지.** 지금은 "정답 시도가 없는 문항"으로
   그때그때 파생한다(테이블 불필요). 선생님이 손으로 조정하게 하려면
   `assignment × homework_item_problem` 연결 테이블이 필요하다.
+  문항 하나를 여러 시기에 다시 푸는 것 자체는 `student_problem_rounds` 로
+  갈라 놓았다 — `docs/architecture/problem-rounds.md`.
 - **통과 판정을 뷰로 둘지 캐시 테이블로 둘지.** 지금은 함수에서 매번 계산한다.
   느려지면 요약 테이블로 옮긴다. 어느 쪽이든 원자료에서 재계산 가능해야 한다
   (기준이 바뀔 게 거의 확실하다).

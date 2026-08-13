@@ -1,4 +1,4 @@
-// 학생 필기 샘플(디지털 잉크 렌더 이미지)을 Gemini Vision 에 보내
+﻿// 학생 필기 샘플(디지털 잉크 렌더 이미지)을 Gemini Vision 에 보내
 // 인식 실패 원인 분류 + 개선 방향 제안을 받아오는 클라이언트.
 //
 // `vlm_detect_client.js` 와 같은 호출 규약(전송/재시도/JSON 복구)을 따르되,
@@ -10,7 +10,7 @@ import {
   parseTextbookVlmJson,
 } from './vlm_json_parse.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 2;
 
 // 매니저앱/DB(ai_assessment)와 공유하는 판정 분류값.

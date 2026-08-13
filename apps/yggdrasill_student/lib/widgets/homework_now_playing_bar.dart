@@ -5,8 +5,20 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/homework_session.dart';
+import '../services/student_attendance_session.dart';
 import '../services/student_api.dart';
 import 'student_bottom_nav_bar.dart';
+
+/// 과제 제출(검사 요청)은 등원 중에만 받는다.
+///
+/// 집에서 수행하고 채점하는 것은 그대로 열어 두되, "검사해 주세요"는 학원에서
+/// 눌러야 한다. 서버(`student_group_transition`)도 같은 규칙으로 막는다.
+bool get homeworkSubmitAllowed => StudentAttendanceSession.instance.isAtAcademy;
+
+String get homeworkSubmitBlockedMessage =>
+    StudentAttendanceSession.instance.departure != null
+        ? '하원해서 제출할 수 없어요. 집에서 더 풀고 다음 등원 때 제출해 주세요.'
+        : '등원한 뒤에 제출할 수 있어요.';
 
 /// 커스텀 탭바 위 — 현재 수행 중 과제 미니 플레이어.
 class HomeworkNowPlayingBar extends StatefulWidget {
@@ -239,15 +251,26 @@ class _HomeworkNowPlayingBarState extends State<HomeworkNowPlayingBar> {
                       color: titleColor,
                       onTap: widget.onPlayPause,
                     ),
-                    _IconButton(
-                      tooltip: '$kindLabel 제출',
-                      size: 44 * s,
-                      onTap: widget.busy ? null : widget.onSubmit,
-                      child: Icon(
-                        Icons.check_rounded,
-                        size: (widget.inline ? 28.0 : 30.0) * s,
-                        color: YggGlassTokens.confirmActionColor,
-                      ),
+                    // 제출은 등원 중에만. 하원했거나 등원 전이면 흐리게 두되
+                    // 누르면 이유를 알려준다 (죽은 버튼은 고장으로 오해한다).
+                    ListenableBuilder(
+                      listenable: StudentAttendanceSession.instance,
+                      builder: (context, _) {
+                        final allowed = homeworkSubmitAllowed;
+                        return _IconButton(
+                          tooltip: allowed
+                              ? '$kindLabel 제출'
+                              : homeworkSubmitBlockedMessage,
+                          size: 44 * s,
+                          onTap: widget.busy ? null : widget.onSubmit,
+                          child: Icon(
+                            Icons.check_rounded,
+                            size: (widget.inline ? 28.0 : 30.0) * s,
+                            color: YggGlassTokens.confirmActionColor
+                                .withValues(alpha: allowed ? 1 : 0.35),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -539,6 +562,14 @@ mixin HomeworkNowPlayingActions<T extends StatefulWidget> on State<T> {
   Future<void> handleNowPlayingSubmit() async {
     final group = session.active;
     if (group == null) return;
+    if (!homeworkSubmitAllowed) {
+      TopGlassSnackBar.show(
+        context,
+        message: homeworkSubmitBlockedMessage,
+        icon: Icons.home_outlined,
+      );
+      return;
+    }
     final result = await session.submit();
     if (!mounted) return;
     if (result['ok'] == true) {
@@ -546,6 +577,13 @@ mixin HomeworkNowPlayingActions<T extends StatefulWidget> on State<T> {
         context,
         message: '${group.isHomework ? '숙제' : '수업 과제'}를 제출했어요!',
         icon: Icons.check_circle_outline_rounded,
+      );
+    } else if (result['error'] == 'not_at_academy') {
+      // 제출 직전에 하원 처리된 경우 — 서버가 최종 판정을 낸다.
+      TopGlassSnackBar.show(
+        context,
+        message: homeworkSubmitBlockedMessage,
+        icon: Icons.home_outlined,
       );
     } else if (result['error'] == 'phase_mismatch') {
       TopGlassSnackBar.show(

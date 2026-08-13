@@ -389,6 +389,10 @@ class HomeworkProblem {
     required this.sourceStage,
     required this.passed,
     required this.attemptCount,
+    this.lastAnswer,
+    this.lastScoredBy,
+    this.roundNo = 0,
+    this.roundAttemptCount = 0,
   });
 
   final String problemId;
@@ -402,7 +406,21 @@ class HomeworkProblem {
   final int? displayPage;
   final String sourceStage;
   final bool passed;
+
+  /// 이 배정에서의 누적 시도 수.
   final int attemptCount;
+
+  /// 이 배정에서 마지막으로 낸 답. 안 풀었으면 null.
+  final String? lastAnswer;
+
+  /// 마지막 시도의 채점 주체 (auto | self). 안 풀었으면 null.
+  final String? lastScoredBy;
+
+  /// 이 문항을 몇 번째로 푸는 중인가 (배정 이전의 자유 풀이까지 포함).
+  final int roundNo;
+
+  /// 지금 회차 안에서의 시도 수.
+  final int roundAttemptCount;
 
   static HomeworkProblem fromRow(Map<String, dynamic> row) {
     return HomeworkProblem(
@@ -418,6 +436,10 @@ class HomeworkProblem {
       sourceStage: (row['source_stage'] as String?) ?? 'original',
       passed: (row['passed'] as bool?) ?? false,
       attemptCount: (row['attempt_count'] as num?)?.toInt() ?? 0,
+      lastAnswer: row['last_answer'] as String?,
+      lastScoredBy: row['last_scored_by'] as String?,
+      roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
+      roundAttemptCount: (row['round_attempt_count'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -725,7 +747,8 @@ class StudentDesiredLevelInfo {
   final String? displayName;
   final List<StudentLevelOption> options;
 
-  String get goalValueLabel => StudentLevelOption.formatTopPercent(upperPercent);
+  String get goalValueLabel =>
+      StudentLevelOption.formatTopPercent(upperPercent);
 
   static StudentDesiredLevelInfo fromRow(Map<String, dynamic>? row) {
     if (row == null) {
@@ -899,6 +922,75 @@ class PointSummaryInfo {
   }
 }
 
+/// 포인트 카드 펼침용 최근 적립 1건.
+///
+/// 과제는 그룹 단위로 합산되고, [children]에 하위과제 내역이 들어간다.
+class PointHistoryEntry {
+  const PointHistoryEntry({
+    required this.id,
+    required this.createdAt,
+    required this.kind,
+    required this.delta,
+    required this.title,
+    required this.detail,
+    this.groupId,
+    this.children = const [],
+  });
+
+  final String id;
+  final DateTime createdAt;
+  final String kind;
+  final int delta;
+  final String title;
+  final String detail;
+  final String? groupId;
+  final List<PointHistoryEntry> children;
+
+  String get deltaLabel => '+$delta P';
+
+  bool get canExpand => kind == 'earn_homework' && children.length > 1;
+
+  static PointHistoryEntry? fromRow(Map<String, dynamic> row) {
+    final id = row['id']?.toString() ?? '';
+    if (id.isEmpty) return null;
+    final createdRaw = row['created_at'];
+    DateTime? createdAt;
+    if (createdRaw is DateTime) {
+      createdAt = createdRaw.toLocal();
+    } else {
+      final raw = createdRaw?.toString();
+      if (raw == null || raw.isEmpty) return null;
+      createdAt = DateTime.tryParse(raw)?.toLocal();
+    }
+    if (createdAt == null) return null;
+    final rawChildren = row['children'];
+    final children = <PointHistoryEntry>[];
+    final childList = rawChildren is String
+        ? (rawChildren.isEmpty ? const [] : jsonDecode(rawChildren))
+        : rawChildren;
+    if (childList is List) {
+      for (final child in childList) {
+        if (child is! Map) continue;
+        final parsed = PointHistoryEntry.fromRow(
+          Map<String, dynamic>.from(child),
+        );
+        if (parsed != null) children.add(parsed);
+      }
+    }
+    final groupId = row['group_id']?.toString().trim();
+    return PointHistoryEntry(
+      id: id,
+      createdAt: createdAt,
+      kind: row['kind']?.toString() ?? '',
+      delta: (row['delta'] as num?)?.toInt() ?? 0,
+      title: (row['title'] as String?)?.trim() ?? '',
+      detail: (row['detail'] as String?)?.trim() ?? '',
+      groupId: (groupId == null || groupId.isEmpty) ? null : groupId,
+      children: children,
+    );
+  }
+}
+
 /// 과제 점수 — 학습앱 스탯과 동일 규칙(서버 `_homework_score_all_v2`).
 class HomeworkScoreInfo {
   const HomeworkScoreInfo({
@@ -1001,8 +1093,7 @@ class TotalScoreInfo {
     return '상위 ${topPercent.toStringAsFixed(1)}% · $rank등';
   }
 
-  static String _pct(double weight) =>
-      '${(weight * 100).toStringAsFixed(0)}%';
+  static String _pct(double weight) => '${(weight * 100).toStringAsFixed(0)}%';
 
   static TotalScoreInfo? fromRow(Map<String, dynamic>? row) {
     if (row == null) return null;
@@ -1553,6 +1644,25 @@ class StudentApi {
     );
   }
 
+  /// 최근 적립 내역(과제·출석). 최신이 앞.
+  Future<List<PointHistoryEntry>> listRecentPoints({int limit = 20}) async {
+    try {
+      final raw = await _client.rpc(
+        'student_list_recent_points_v1',
+        params: {'p_limit': limit},
+      );
+      final rows = raw is List ? raw : const <dynamic>[];
+      return rows
+          .whereType<Map>()
+          .map((r) => PointHistoryEntry.fromRow(Map<String, dynamic>.from(r)))
+          .whereType<PointHistoryEntry>()
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[points] listRecentPoints failed: $e');
+      rethrow;
+    }
+  }
+
   /// 출결 점수 + 학원 내 상위 퍼센트.
   Future<AttendanceScoreInfo?> getAttendanceScore() async {
     final rows =
@@ -1950,6 +2060,15 @@ class StudentApi {
   }
 
   Future<void> pauseAll() => _client.rpc('student_pause_all');
+
+  /// 수행 중임을 서버에 알린다 (30초 주기).
+  /// 신호가 끊기면 서버가 마지막 신호 시점으로 타이머를 마감하므로,
+  /// 앱이 갑자기 죽어도 그때까지의 학습 시간은 남는다.
+  Future<void> homeworkBeat() => _client.rpc('student_homework_beat');
+
+  /// 앱이 죽었다 돌아온 경우 — 마지막 신호 시점까지만 인정하고 멈춘다.
+  Future<void> homeworkRewind({String reason = 'app_closed'}) =>
+      _client.rpc('student_homework_rewind', params: {'p_reason': reason});
 
   Future<void> raiseQuestion() => _client.rpc('student_raise_question');
 

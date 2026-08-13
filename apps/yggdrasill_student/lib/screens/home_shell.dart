@@ -8,6 +8,7 @@ import '../services/homework_live_activity.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/student_attendance_session.dart';
+import '../services/student_point_session.dart';
 import '../services/student_presence_session.dart';
 import '../services/student_shell_chrome.dart';
 import '../widgets/homework_now_playing_bar.dart';
@@ -29,8 +30,10 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   int _index = 0;
   bool _searchExpanded = false;
+
   /// 확장 시트가 Stack에 올라가 있는지 (슬라이드 아웃 중에도 true).
   bool _nowPlayingSheetMounted = false;
+
   /// 확장 중 1줄 크롬 강제. 닫기 시작과 동시에 false → 스크롤 축소와 같은 애니.
   bool _nowPlayingForceOneLine = false;
 
@@ -49,6 +52,9 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     unawaited(HomeworkSession.instance.startSync());
     // 등원/하원 Realtime + 폴백 (키오스크 등원 즉시 반영).
     unawaited(StudentAttendanceSession.instance.startSync());
+    unawaited(StudentPointSession.instance.startSync());
+    StudentPointSession.instance.homeworkGrantTick
+        .addListener(_onHomeworkPointGrant);
     // 학습앱에 학원/집 로그인 상태를 보여 주는 presence heartbeat.
     // iOS 는 다른 iPad 로그인 시 이 기기를 로그아웃.
     StudentPresenceSession.instance.setOnIosDeviceReplaced(() async {
@@ -67,12 +73,26 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     unawaited(HomeworkLiveActivity.instance.stop());
     unawaited(HomeworkSession.instance.stopSync());
     unawaited(StudentAttendanceSession.instance.stopSync());
+    unawaited(StudentPointSession.instance.stopSync());
+    StudentPointSession.instance.homeworkGrantTick
+        .removeListener(_onHomeworkPointGrant);
     unawaited(StudentPresenceSession.instance.stop(markOffline: true));
     HomeworkSession.instance.removeListener(_onSessionChanged);
     StudentShellChrome.instance.removeListener(_onChromeChanged);
     StudentAttendanceSession.instance.planGoalPresentedTick
         .removeListener(_onPlanGoalPresented);
     super.dispose();
+  }
+
+  void _onHomeworkPointGrant() {
+    if (!mounted) return;
+    final points = StudentPointSession.instance.lastHomeworkGrant;
+    if (points <= 0) return;
+    TopGlassSnackBar.show(
+      context,
+      message: '과제 완료! $points P를 받았어요.',
+      icon: Icons.stars_rounded,
+    );
   }
 
   void _onSessionChanged() {
@@ -87,8 +107,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   void _onPlanGoalPresented() {
     if (!mounted) return;
     unawaited(HomeworkSession.instance.refresh());
-    final minutes =
-        StudentAttendanceSession.instance.planSnapshotMinutes ?? 0;
+    final minutes = StudentAttendanceSession.instance.planSnapshotMinutes ?? 0;
     final planLabel = _formatPlanMinutesCompact(minutes);
     TopGlassSnackBar.show(
       context,
@@ -215,6 +234,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
             children: const [
               HomeworkScreen(),
               TextbookScreen(),
+              _ComingSoonTab(),
               ProfileScreen(),
             ],
           ),
@@ -423,8 +443,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
     final searchL = hasNp ? lerpDouble(searchL0, searchL1, spreadT)! : searchL0;
 
     // 검색 펼침이면 원형. 1줄 미니바 배치(t)에서도 원형.
-    final navCollapsed =
-        hasNp ? (searchExpanded || t > 0.55) : searchExpanded;
+    final navCollapsed = hasNp ? (searchExpanded || t > 0.55) : searchExpanded;
     // 검색 모프는 탭바 자체 width 애니와 슬롯(searchT)을 같이 씀.
     // 1줄 전환만 할 때는 부모가 tabW로 크기를 밀어 animateSize는 끈다.
     final navAnimateSize = searchExpanded || searchT > 0.01;
@@ -556,5 +575,15 @@ class _SwipeDownDismissState extends State<_SwipeDownDismiss> {
         ),
       ),
     );
+  }
+}
+
+/// 탭만 열어 둔 자리. 화면·동작은 아직 없다.
+class _ComingSoonTab extends StatelessWidget {
+  const _ComingSoonTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox.expand();
   }
 }

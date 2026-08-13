@@ -37,6 +37,8 @@ struct HomeworkLiveActivityWidget: Widget {
       let title = sharedDefault.string(forKey: context.attributes.prefixedKey("title")) ?? "과제"
       let elapsed = sharedDefault.string(forKey: context.attributes.prefixedKey("elapsedLabel")) ?? "0:00"
       let isRunning = (sharedDefault.string(forKey: context.attributes.prefixedKey("isRunning")) ?? "0") == "1"
+      // 제출은 등원 중에만. 하원하면 흐리게 보인다.
+      let canSubmit = (sharedDefault.string(forKey: context.attributes.prefixedKey("canSubmit")) ?? "1") == "1"
 
       return DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
@@ -68,9 +70,10 @@ struct HomeworkLiveActivityWidget: Widget {
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(Color.green.opacity(0.85), in: Capsule())
-                .foregroundStyle(.white)
+                .background(Color.green.opacity(canSubmit ? 0.85 : 0.25), in: Capsule())
+                .foregroundStyle(canSubmit ? .white : Color.white.opacity(0.5))
             }
+            .disabled(!canSubmit)
           }
         }
       } compactLeading: {
@@ -114,6 +117,7 @@ private struct HomeworkLockScreenView: View {
     let elapsedLabel = sharedDefault.string(forKey: context.attributes.prefixedKey("elapsedLabel")) ?? "0:00"
     let anchorMs = sharedDefault.double(forKey: context.attributes.prefixedKey("timerAnchorMs"))
     let start = Date(timeIntervalSince1970: anchorMs / 1000.0)
+    let canSubmit = (sharedDefault.string(forKey: context.attributes.prefixedKey("canSubmit")) ?? "1") == "1"
 
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 4) {
@@ -156,10 +160,11 @@ private struct HomeworkLockScreenView: View {
           Link(destination: URL(string: "yggstudent://submit")!) {
             Image(systemName: "checkmark")
               .font(.system(size: 16, weight: .bold))
-              .foregroundStyle(.white)
+              .foregroundStyle(canSubmit ? .white : Color.white.opacity(0.5))
               .frame(width: 36, height: 36)
-              .background(Color.green, in: Circle())
+              .background(canSubmit ? Color.green : Color.green.opacity(0.3), in: Circle())
           }
+          .disabled(!canSubmit)
         }
       }
     }

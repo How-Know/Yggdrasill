@@ -1,4 +1,4 @@
-// 교재 목차('차례') 페이지들에서 대/중/소단원 트리를 추출하는 Gemini Vision 클라이언트.
+﻿// 교재 목차('차례') 페이지들에서 대/중/소단원 트리를 추출하는 Gemini Vision 클라이언트.
 //
 // 입력: 목차 페이지들을 래스터한 PNG 배열 (여러 페이지를 한 호출에 담아
 //       책 전체 목차를 한 번에 읽는다 — 페이지를 나눠 부르면 단원 순서/중첩이 깨진다)
@@ -14,7 +14,7 @@ import {
   repairLatexBackslashes,
 } from '../problem_bank/extract_engines/vlm/client.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {

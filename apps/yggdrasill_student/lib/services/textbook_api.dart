@@ -147,6 +147,20 @@ class TextbookApi {
         .toList(growable: false);
   }
 
+  /// 교재를 처음부터 다시 푼다. 지난 풀이 기록은 회차로 남고 화면만 비워진다.
+  /// 선생님이 검사 중인 교재는 서버가 `under_review` 로 거절한다.
+  Future<String?> resetTextbook({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final result = await _client.rpc(
+      'student_reset_textbook_v1',
+      params: {'p_book_id': bookId, 'p_grade_label': gradeLabel},
+    );
+    if (result is Map && result['ok'] == true) return null;
+    return (result is Map ? result['error'] as String? : null) ?? 'unknown';
+  }
+
   Future<TextbookProblemImage> problemImage({
     required String cropId,
   }) async {
@@ -380,6 +394,7 @@ class TextbookApi {
     return SelfMarkResult(
       correct: data['correct'] == true,
       partResults: ProblemPartResult.listFromJson(data['part_results']),
+      pointsGranted: _pointsGrantedFromMastery(data['mastery']),
     );
   }
 
@@ -511,9 +526,7 @@ class StudentTextbookProblemView {
       status: status,
       pdfUrl: nullableString(json['pdf_url']),
       bodyPdfUrl: nullableString(
-        json['body_pdf_url'] ??
-            fallback['body_pdf_url'] ??
-            fallback['pdf_url'],
+        json['body_pdf_url'] ?? fallback['body_pdf_url'] ?? fallback['pdf_url'],
       ),
       rawPage: ((json['raw_page'] ?? fallback['raw_page']) as num?)?.toInt(),
       itemRegion1k: region?.length == 4 ? region : null,
@@ -582,10 +595,17 @@ class RevealedAnswerPart {
 
 /// 셀프 채점 기록 결과 (서버가 계산한 전체 정오 + 누적 파트 결과).
 class SelfMarkResult {
-  const SelfMarkResult({required this.correct, this.partResults = const []});
+  const SelfMarkResult({
+    required this.correct,
+    this.partResults = const [],
+    this.pointsGranted = 0,
+  });
 
   final bool correct;
   final List<ProblemPartResult> partResults;
+
+  /// 이 채점으로 과제가 통과되면 지급된 포인트.
+  final int pointsGranted;
 }
 
 /// 자가 등록 카탈로그용 교재 (진행 통계 없음).
@@ -657,8 +677,10 @@ class StudentTextbook {
   final int gradedCount;
   final int correctCount;
   final int completedCount;
+
   /// 최초 시도가 틀린 문항 수.
   final int firstWrongCount;
+
   /// 최초 오답 후 현재 정답인 문항 수.
   final int correctedCount;
   final Map<String, TextbookStageProgress> stageProgress;
@@ -676,9 +698,8 @@ class StudentTextbook {
       totalProblems <= 0 ? 0 : completedCount / totalProblems;
 
   /// 정답률 = 최초 시도 정답 / 풀이 문항. 없으면 null.
-  int? get accuracyPercent => gradedCount <= 0
-      ? null
-      : ((correctCount * 100) / gradedCount).round();
+  int? get accuracyPercent =>
+      gradedCount <= 0 ? null : ((correctCount * 100) / gradedCount).round();
 
   /// 수정률 = 최초 오답 중 이후 정답 / 최초 오답. 없으면 null.
   int? get revisionPercent => firstWrongCount <= 0
@@ -802,9 +823,7 @@ class TextbookUnitTree {
           final small = _map(rawSmalls[smallIndex]);
           if (small.isEmpty) continue;
           final subKey = _text(
-                small['sub_key'] ??
-                    small['legacy_sub_key'] ??
-                    small['key'],
+                small['sub_key'] ?? small['legacy_sub_key'] ?? small['key'],
               ) ??
               _normalizedSubKey(_text(small['unit_key'])) ??
               '${smallIndex + 1}';
@@ -1093,6 +1112,8 @@ class PageProblem {
     this.categoryCode,
     this.categoryLabel,
     this.itemName,
+    this.roundNo = 0,
+    this.roundOpen = false,
   });
 
   final String cropId;
@@ -1122,8 +1143,49 @@ class PageProblem {
   final String? categoryLabel;
   final String? itemName;
 
+  /// 이 문항을 몇 번째로 푸는 중인가. 0이면 아직 푼 적 없다.
+  /// 통과하거나, 과제로 다시 나오거나, 리셋하면 다음 회차로 넘어간다.
+  final int roundNo;
+
+  /// 지금 회차가 아직 진행 중인가 (통과 전).
+  final bool roundOpen;
+
   bool get isObjective => answerKind == 'objective';
   bool get isSelfCheck => gradingMode == 'self';
+
+  /// 풀이 상태(답·정오·시도수·파트 기록)만 갈아 끼운 사본.
+  ///
+  /// 과제 모드에서 쓴다. 답 캐시는 회차를 모르는 학생×문항 한 줄이라,
+  /// 이 배정에서 남긴 시도 기준 상태로 바꿔야 이전 회차 정답이 비치지 않는다.
+  /// 인자를 안 주면 "안 푼" 상태가 된다.
+  PageProblem withSolveState({
+    String? myAnswer,
+    bool? myCorrect,
+    int? attemptCount,
+    String? gradedBy,
+    List<ProblemPartResult> partResults = const [],
+  }) {
+    return PageProblem(
+      cropId: cropId,
+      problemNumber: problemNumber,
+      label: label,
+      answerKind: answerKind,
+      gradingMode: gradingMode,
+      myAnswer: myAnswer,
+      myCorrect: myCorrect,
+      attemptCount: attemptCount,
+      gradedBy: gradedBy,
+      flags: flags,
+      reportStatus: reportStatus,
+      setParts: setParts,
+      partResults: partResults,
+      categoryCode: categoryCode,
+      categoryLabel: categoryLabel,
+      itemName: itemName,
+      roundNo: roundNo,
+      roundOpen: roundOpen,
+    );
+  }
 
   /// 파트별 입력·채점이 가능한 세트형 문항.
   bool get hasParts => setParts.length >= 2;
@@ -1152,6 +1214,8 @@ class PageProblem {
         row['category_label'] ?? row['categoryLabel'],
       ),
       itemName: _nullableText(row['item_name'] ?? row['itemName']),
+      roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
+      roundOpen: (row['round_open'] as bool?) ?? false,
       setParts: rawSetParts is List
           ? rawSetParts
               .whereType<Map>()
@@ -1222,6 +1286,7 @@ class GradeResult {
     required this.correctCount,
     required this.wrongCount,
     this.partResultsByCropId = const {},
+    this.pointsGranted = 0,
   });
 
   final bool ok;
@@ -1232,6 +1297,9 @@ class GradeResult {
 
   /// 세트형 문항의 누적 파트 결과 (crop_id → 파트 결과 목록).
   final Map<String, List<ProblemPartResult>> partResultsByCropId;
+
+  /// 이 채점으로 과제가 통과되면 지급된 포인트.
+  final int pointsGranted;
 
   static GradeResult fromJson(Map<String, dynamic> json) {
     final map = <String, bool>{};
@@ -1257,6 +1325,13 @@ class GradeResult {
       correctCount: (json['correct_count'] as num?)?.toInt() ?? 0,
       wrongCount: (json['wrong_count'] as num?)?.toInt() ?? 0,
       partResultsByCropId: partResults,
+      pointsGranted: _pointsGrantedFromMastery(json['mastery']),
     );
   }
+}
+
+int _pointsGrantedFromMastery(Object? raw) {
+  if (raw is! Map) return 0;
+  if (raw['ok'] != true) return 0;
+  return (raw['points_granted'] as num?)?.toInt() ?? 0;
 }

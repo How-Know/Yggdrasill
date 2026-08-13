@@ -136,7 +136,9 @@ class StudentStatusIsland extends StatelessWidget {
                       ),
                     ),
                     Positioned(
-                      right: 4,
+                      // 공부중 씬은 책상 가장자리가 캡슐 곡선에 잘리지 않게
+                      // 휴식중보다 4 더 띄운다.
+                      right: studying ? 8 : 4,
                       top: 0,
                       bottom: 0,
                       child: Center(
@@ -164,7 +166,10 @@ const Color _islandSkin = Color(0xFFE8E8ED);
 const Color _islandHair = Color(0xFFC7C7CC);
 const Color _islandPants = Color(0xFF8E8E93);
 
-/// 64×64 논리 캔버스 → 아일랜드 높이 안에 맞게 축소. 책상+열공 + 필기 모션.
+/// 64×64 논리 캔버스 → 아일랜드 높이 안에 맞게 축소.
+///
+/// 정면으로 앉아 책상에 글을 쓴다. 필기는 짧은 획을 긋고 펜을 들어
+/// 다음 줄로 가는 루프.
 class _StudyingHardBadge extends StatefulWidget {
   const _StudyingHardBadge();
 
@@ -181,7 +186,7 @@ class _StudyingHardBadgeState extends State<_StudyingHardBadge>
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2400),
+      duration: const Duration(milliseconds: 2800),
     )..repeat();
   }
 
@@ -216,25 +221,20 @@ class _StudyingHardPainter extends CustomPainter {
 
   final double t;
 
-  /// 글자 쓰듯: 짧은 획 → 살짝 띄움 → 다음 글자로 전진. (책상 중앙 기준)
-  static Offset _handwritingPoint(double u) {
-    const chars = 5;
-    final scaled = u * chars;
-    final charIndex = scaled.floor().clamp(0, chars - 1);
-    final local = (scaled - charIndex).clamp(0.0, 1.0);
-    // 노트 중앙(x≈32) 부근에서 글자 진행
-    final baseX = 22.0 + charIndex * 4.4;
-
-    final down = local < 0.72;
-    final stroke = down ? (local / 0.72) : 1.0;
-    final x = baseX +
-        stroke * 3.4 +
-        math.sin(stroke * math.pi * 2) * 0.7;
-    final y = 43.5 +
-        (down
-            ? (math.sin(stroke * math.pi) * -2.4 +
-                math.sin(stroke * math.pi * 3) * 0.55)
-            : -1.0);
+  /// 정면 노트 위에서 한 사이클에 두 줄.
+  /// 각 줄은 긋기(0–0.72) → 들어올림(0.72–1).
+  static Offset _penOnPage(double u) {
+    const line0y = 45.6;
+    const line1y = 48.8;
+    const startX = 22.0;
+    const strokeW = 20.0;
+    final line = u < 0.5 ? 0 : 1;
+    final local = ((u < 0.5 ? u : u - 0.5) / 0.5).clamp(0.0, 1.0);
+    final writing = local < 0.72;
+    final stroke = writing ? (local / 0.72) : 1.0;
+    final x = startX + stroke * strokeW;
+    final y = (line == 0 ? line0y : line1y) +
+        (writing ? math.sin(stroke * math.pi * 3) * 0.55 : -2.2);
     return Offset(x, y);
   }
 
@@ -244,104 +244,102 @@ class _StudyingHardPainter extends CustomPainter {
     canvas.save();
     canvas.scale(s, s);
 
-    final cycle = t;
-    final pen = _handwritingPoint(cycle);
     final bob = math.sin(t * math.pi * 2) * 0.35;
+    final pen = _penOnPage(t);
 
-    // 나무 책상 — 상판 + 결 + 다리 느낌
-    final deskTop = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4, 47, 56, 8),
-      const Radius.circular(2.5),
-    );
-    canvas.drawRRect(deskTop, Paint()..color = const Color(0xFFC4A574));
-    // 결 (밝은 스트라이프)
-    final grain = Paint()
-      ..color = const Color(0xFFD9C29A)
-      ..strokeWidth = 1.1
+    final skin = Paint()..color = _islandSkin;
+    final hair = Paint()..color = _islandHair;
+    final pants = Paint()
+      ..color = _islandPants
+      ..strokeWidth = 3.4
       ..strokeCap = StrokeCap.round;
-    for (var i = 0; i < 5; i++) {
-      final y = 48.5 + i * 1.35;
-      canvas.drawLine(Offset(7.0 + i * 0.4, y), Offset(56.0 - i * 0.3, y), grain);
-    }
-    // 상판 가장자리 그림자
+    final armPaint = Paint()
+      ..color = _islandSkin
+      ..strokeWidth = 3.0
+      ..strokeCap = StrokeCap.round;
+
+    // 1) 사람 몸 — 책상 뒤에 앉은 정면.
+    canvas.save();
+    canvas.translate(0, bob);
+
+    canvas.drawLine(const Offset(28, 42), const Offset(25, 58), pants);
+    canvas.drawLine(const Offset(36, 42), const Offset(39, 58), pants);
+
+    final torso = Path()
+      ..moveTo(25, 24)
+      ..quadraticBezierTo(23, 34, 25, 46)
+      ..lineTo(39, 46)
+      ..quadraticBezierTo(41, 34, 39, 24)
+      ..close();
+    canvas.drawPath(torso, skin);
+
+    canvas.drawCircle(const Offset(32, 17.5), 7.0, skin);
+    final hairPath = Path()
+      ..moveTo(25.5, 16)
+      ..quadraticBezierTo(26.5, 8.5, 32, 8)
+      ..quadraticBezierTo(38.5, 8.5, 38.5, 16)
+      ..quadraticBezierTo(36, 13, 32, 13.5)
+      ..quadraticBezierTo(28, 13, 25.5, 16.5)
+      ..close();
+    canvas.drawPath(hairPath, hair);
+    canvas.restore();
+
+    // 2) 책상 — 정면에서 허리 아래를 가린다.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(4, 50, 56, 10),
+        const Radius.circular(2.5),
+      ),
+      Paint()..color = const Color(0xFFC4A574),
+    );
     canvas.drawLine(
-      const Offset(5, 54.2),
-      const Offset(59, 54.2),
+      const Offset(5, 51.3),
+      const Offset(59, 51.3),
       Paint()
-        ..color = const Color(0xFF8B6914).withValues(alpha: 0.55)
-        ..strokeWidth = 1.4
+        ..color = const Color(0xFFE8D5B5)
+        ..strokeWidth = 1.5
         ..strokeCap = StrokeCap.round,
     );
-    // 짧은 다리
-    final legPaint = Paint()..color = const Color(0xFFA67C52);
+
+    // 3) 노트 — 책상 위, 정면 사각형.
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        const Rect.fromLTWH(8, 54, 4, 6),
-        const Radius.circular(1),
+        const Rect.fromLTWH(16, 41, 32, 12),
+        const Radius.circular(1.8),
       ),
-      legPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        const Rect.fromLTWH(52, 54, 4, 6),
-        const Radius.circular(1),
-      ),
-      legPaint,
+      Paint()..color = const Color(0xFFF5F5F7),
     );
 
-    // 노트 (책상 중앙)
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        const Rect.fromLTWH(18, 35, 28, 13),
-        const Radius.circular(2),
-      ),
-      Paint()..color = const Color(0xFFFAFAFC),
-    );
-    final rule = Paint()
-      ..color = const Color(0xFFD1D1D6)
-      ..strokeWidth = 0.9;
-    for (var i = 0; i < 3; i++) {
-      final y = 38.5 + i * 3.0;
-      canvas.drawLine(Offset(20, y), Offset(44, y), rule);
-    }
-
-    // 위줄(이미 쓴 글)
     final inkDone = Paint()
-      ..color = const Color(0xFF2C2C2E)
+      ..color = const Color(0xFF3A3A3C)
       ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
-    final doneLine = Path()..moveTo(21, 38.7);
-    for (var i = 1; i <= 16; i++) {
-      final p = i / 16.0;
-      doneLine.lineTo(
-        21 + p * 22,
-        38.7 + math.sin(p * math.pi * 5) * 0.9,
-      );
+    final done = Path()..moveTo(19, 44.2);
+    for (var k = 1; k <= 12; k++) {
+      final p = k / 12.0;
+      done.lineTo(19 + p * 26, 44.2 + math.sin(p * math.pi * 4) * 0.6);
     }
-    canvas.drawPath(doneLine, inkDone);
+    canvas.drawPath(done, inkDone);
 
-    // 지금 쓰는 줄
     final inkLive = Paint()
       ..color = const Color(0xFF1C1C1E)
-      ..strokeWidth = 1.8
+      ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke;
     final live = Path();
-    const samples = 48;
+    const samples = 56;
     var started = false;
     for (var i = 0; i <= samples; i++) {
       final u = i / samples;
-      if (u > cycle) break;
-      final scaled = u * 5;
-      final local = scaled - scaled.floor();
-      final lifting = local >= 0.72;
-      final pt = _handwritingPoint(u);
-      if (lifting) {
+      if (u > t) break;
+      final local = ((u < 0.5 ? u : u - 0.5) / 0.5);
+      if (local >= 0.72) {
         started = false;
         continue;
       }
+      final pt = _penOnPage(u);
       if (!started) {
         live.moveTo(pt.dx, pt.dy);
         started = true;
@@ -351,72 +349,34 @@ class _StudyingHardPainter extends CustomPainter {
     }
     canvas.drawPath(live, inkLive);
 
-    // 사람 — 휴식 씬과 동일 팔레트·비율, 책상 가운데 앉음
+    // 4) 팔·펜 — 책상 앞으로 나와 노트에 글을 쓴다.
     canvas.save();
     canvas.translate(0, bob);
 
-    final skin = Paint()..color = _islandSkin;
-    final hair = Paint()..color = _islandHair;
-    final pants = Paint()
-      ..color = _islandPants
-      ..strokeWidth = 3.2
-      ..strokeCap = StrokeCap.round;
-    final armPaint = Paint()
-      ..color = _islandSkin
-      ..strokeWidth = 2.8
-      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(const Offset(26, 28), const Offset(22, 42), armPaint);
+    canvas.drawCircle(const Offset(21.5, 43.2), 2.1, skin);
 
-    // 몸통 (휴식과 같은 soft path, 중앙·살짝 숙임)
-    final torso = Path()
-      ..moveTo(27, 26)
-      ..quadraticBezierTo(25, 34, 28, 42)
-      ..lineTo(37, 42)
-      ..quadraticBezierTo(39, 32, 35, 25)
-      ..close();
-    canvas.drawPath(torso, skin);
-
-    // 머리 + 머리숱 (휴식과 동일 실루엣, 중앙 배치)
-    canvas.drawCircle(const Offset(32, 20), 6.0, skin);
-    final hairPath = Path()
-      ..moveTo(27, 18)
-      ..quadraticBezierTo(28, 12, 34, 13)
-      ..quadraticBezierTo(38, 15, 36, 20)
-      ..quadraticBezierTo(32, 17, 27, 19)
-      ..close();
-    canvas.drawPath(hairPath, hair);
-
-    // 다리 — 책상 아래 앉은 실루엣 (휴식의 회색 바지)
-    canvas.drawLine(const Offset(30, 41), const Offset(26, 50), pants);
-    canvas.drawLine(const Offset(34, 41), const Offset(38, 50), pants);
-
-    // 왼팔 지지
-    canvas.drawLine(const Offset(28, 30), const Offset(26, 38), armPaint);
-
-    // 오른팔 — 어깨 고정, 손목만 필기
-    const shoulder = Offset(36, 28);
-    final elbow = Offset(35 + (pen.dx - 32) * 0.1, 33);
-    final hand = Offset(pen.dx - 1.0, pen.dy - 1.8);
+    const shoulder = Offset(38, 27);
+    final elbow = Offset(40.5 + (pen.dx - 32) * 0.08, 35);
+    final hand = Offset(pen.dx + 0.4, pen.dy - 1.4);
     canvas.drawLine(shoulder, elbow, armPaint);
     canvas.drawLine(elbow, hand, armPaint);
-    canvas.drawCircle(hand, 2.2, skin);
+    canvas.drawCircle(hand, 2.3, skin);
 
-    // 펜 (인물 스케일에 맞게 조금 작게)
-    final penTip = Offset(pen.dx, pen.dy);
-    final penTop = Offset(pen.dx + 4.5, pen.dy - 8);
     canvas.drawLine(
-      penTip,
-      penTop,
+      Offset(pen.dx + 2.2, pen.dy - 7.2),
+      Offset(pen.dx, pen.dy),
       Paint()
         ..color = const Color(0xFFFFD60A)
-        ..strokeWidth = 2.4
+        ..strokeWidth = 2.3
         ..strokeCap = StrokeCap.round,
     );
     canvas.drawLine(
-      penTip,
-      Offset(pen.dx - 0.4, pen.dy + 2.0),
+      Offset(pen.dx, pen.dy),
+      Offset(pen.dx - 0.2, pen.dy + 2.0),
       Paint()
         ..color = const Color(0xFF34C759)
-        ..strokeWidth = 1.8
+        ..strokeWidth = 1.7
         ..strokeCap = StrokeCap.round,
     );
 

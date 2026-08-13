@@ -1,4 +1,4 @@
-// 교재 페이지 이미지를 Gemini Vision 에 보내 "문항번호 bbox" 를 받아오는 클라이언트.
+﻿// 교재 페이지 이미지를 Gemini Vision 에 보내 "문항번호 bbox" 를 받아오는 클라이언트.
 //
 // 기존 `extract_engines/vlm/client.js` 는 PDF inline_data 전용이고 프롬프트도
 // 문제은행 전용이라 재사용하지 않고 별도 모듈로 분리했다.
@@ -22,7 +22,7 @@ import {
   parseTextbookVlmJson,
 } from './vlm_json_parse.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 const ALLOWED_LABELS = new Set(VLM_DETECT_LABELS);
 

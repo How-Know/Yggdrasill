@@ -1,4 +1,4 @@
-// 수력충전 빠른 정답 지면을 "소단원 머리 + 번호/정답" 구조로 읽는다.
+﻿// 수력충전 빠른 정답 지면을 "소단원 머리 + 번호/정답" 구조로 읽는다.
 //
 // 모델은 보이는 요소와 값을 OCR만 한다. 어느 정답이 어느 본문 크롭인지는
 // 소단원별 기대 문항 수·번호를 이미 가진 매니저 앱이 결정한다.
@@ -9,7 +9,7 @@ import {
 } from './vlm_json_parse.js';
 import { normalizeAnswerResult } from './vlm_answer_client.js';
 
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
