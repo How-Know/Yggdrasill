@@ -1,25 +1,20 @@
-Homework Live Activity — Xcode one-time setup (Mac)
+Homework Live Activity — Xcode target status
 
-1. Open ios/Runner.xcworkspace in Xcode.
-2. File > New > Target… > Widget Extension
-   - Product Name: HomeworkLiveActivity
-   - Embed in Application: Runner
-   - Uncheck "Include Configuration App Intent"
-3. When asked to Activate scheme, Activate.
-4. Delete the generated Swift/storyboard boilerplate.
-5. Add existing files from ios/HomeworkLiveActivity/:
-   - HomeworkLiveActivityBundle.swift
-   - Info.plist (set as INFOPLIST_FILE for the extension)
-   - HomeworkLiveActivity.entitlements (CODE_SIGN_ENTITLEMENTS)
-6. Extension target settings:
-   - Bundle ID: com.beleunu.yggdrasillStudent.HomeworkLiveActivity
-   - iOS Deployment Target: 16.1+
-   - App Groups: group.com.beleunu.yggdrasillStudent
-     (same group as Runner entitlements)
-7. Runner already has:
-   - NSSupportsLiveActivities
-   - URL scheme yggstudent
-   - App Group entitlement
+The HomeworkLiveActivity Widget Extension is already included in
+Runner.xcodeproj and embedded in Runner.
 
-Preview: Live Activities need a physical iPhone/iPad (iOS 16.1+).
-Windows Flutter run cannot show them. Xcode Previews can mock Widget UI only.
+Required identifiers:
+- Extension bundle ID:
+  com.beleunu.yggdrasillStudent.HomeworkLiveActivity
+- Shared App Group:
+  group.com.beleunu.yggdrasillStudent
+- URL scheme:
+  yggstudent
+
+Do not create the target again. When moving to another Mac, use the checked-in
+Runner.xcodeproj and let Automatic Signing provision both Runner and the
+extension.
+
+Live Activities require a physical device. iPhone needs iOS 16.1 or later;
+iPad lock-screen Live Activities require iPadOS 17 or later. Windows Flutter
+run cannot display them.

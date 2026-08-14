@@ -104,9 +104,18 @@
 | `20260813203000_student_submit_requires_attendance.sql` | 제출 등원 검사 |
 | `20260813204000_learning_session_location.sql` | 세션 장소 기록 + 하원 시 종료 |
 
-## 남은 것
+## iOS 잠금화면 Live Activity
 
-iOS 라이브 액티비티는 코드가 다 있지만 **Xcode 위젯 익스텐션 타깃이 아직
-추가되지 않았다**. `apps/yggdrasill_student/ios/HomeworkLiveActivity/XCODE_SETUP.txt`
-절차를 맥에서 한 번 해야 잠금화면에 뜬다. 그 전까지 "라이브 액티비티가 사라지면
-되감기"는 동작하지 않고, 3시간 상한과 하원 마감만 걸린다.
+`HomeworkLiveActivity` 위젯 익스텐션은 Runner에 포함되어 있다. 과제를 선택하면
+잠금화면에 수행 시간과 **수행/멈춤**, **제출** 버튼이 표시된다.
+
+- Live Activity가 유지되는 동안에는 화면이 꺼져도 수행 상태를 유지한다.
+- 학생이 카드를 직접 지운 뒤 앱으로 돌아오면 마지막 heartbeat 시점까지만
+  인정하고 멈춘다.
+- 버튼은 URL scheme으로 학생앱을 열어 기존 인증 세션과 서버 RPC를 사용한다.
+  따라서 잠긴 기기에서는 Face ID/암호 해제가 필요할 수 있다.
+- 제출은 기존 정책대로 등원 중에만 가능하며, 서버에서도 다시 검사한다.
+- Live Activity가 남아 있어도 3시간 무응답 상한과 하원 강제 종료가 우선한다.
+
+iPad에서는 Live Activity를 지원하는 iPadOS 17 이상이 필요하다. 사용자가 시스템
+설정에서 Live Activities를 끈 경우에는 잠금화면 수행 흐름을 사용할 수 없다.

@@ -52,7 +52,7 @@ struct HomeworkLiveActivityWidget: Widget {
           }
         }
         DynamicIslandExpandedRegion(.trailing) {
-          Text(elapsedText(context: context))
+          elapsedText(context: context)
             .font(.title2.monospacedDigit().weight(.semibold))
             .minimumScaleFactor(0.7)
         }

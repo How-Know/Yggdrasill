@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:live_activities/live_activities.dart';
 import 'package:live_activities/models/activity_update.dart';
+import 'package:live_activities/models/live_activity_state.dart';
 import 'package:live_activities/models/url_scheme_data.dart';
 
 import '../widgets/homework_now_playing_bar.dart';
@@ -29,6 +30,7 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
   StreamSubscription<ActivityUpdate>? _activitySub;
   Timer? _tick;
   bool _started = false;
+  String? _activityKey;
   String? _activityId;
 
   /// 우리가 스스로 종료한 액티비티. 학생이 끈 것과 구분해야 한다.
@@ -44,6 +46,7 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
         requestAndroidNotificationPermission: false,
       );
       HomeworkSession.instance.addListener(_onSessionChanged);
+      StudentAttendanceSession.instance.addListener(_onSessionChanged);
       _urlSub = _plugin.urlSchemeStream().listen(_onUrlScheme);
       _activitySub = _plugin.activityUpdateStream.listen(_onActivityUpdate);
       WidgetsBinding.instance.addObserver(this);
@@ -57,6 +60,7 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
     if (!_started) return;
     _started = false;
     HomeworkSession.instance.removeListener(_onSessionChanged);
+    StudentAttendanceSession.instance.removeListener(_onSessionChanged);
     WidgetsBinding.instance.removeObserver(this);
     await _urlSub?.cancel();
     _urlSub = null;
@@ -64,26 +68,23 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
     _activitySub = null;
     _tick?.cancel();
     _tick = null;
-    try {
-      if (_activityId != null) {
-        _endedByUs.add(_activityId!);
-        await _plugin.endActivity(_activityId!);
-      } else {
-        await _plugin.endAllActivities();
-      }
-    } catch (_) {}
-    _activityId = null;
+    await _endCurrentActivity(allIfUnknown: true);
   }
 
   /// 학생이 잠금화면에서 라이브 액티비티를 지우면 "그만한다"는 뜻으로 본다.
   /// 우리가 끝낸 것(과제 전환·로그아웃)과 구분해서 그때만 되감는다.
   void _onActivityUpdate(ActivityUpdate update) {
     update.mapOrNull(
+      active: (state) {
+        if (_activityKey != null) _activityId = state.activityId;
+      },
       ended: (state) {
         final id = state.activityId;
         if (_endedByUs.remove(id)) return;
-        if (!id.startsWith(_activityPrefix)) return;
-        if (_activityId == id) _activityId = null;
+        if (_activityKey == null) return;
+        if (_activityId != null && _activityId != id) return;
+        _activityId = null;
+        _activityKey = null;
         unawaited(
           HomeworkSession.instance
               .rewindToLastBeat(reason: 'live_activity_ended'),
@@ -109,8 +110,13 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
     if (group == null || !session.isRunningGroup(group.groupId)) return;
     try {
       if (!await _plugin.areActivitiesSupported()) return;
-      final ids = await _plugin.getAllActivitiesIds();
-      if (ids.contains('$_activityPrefix${group.groupId}')) return;
+      final state = await _plugin.getActivityState(
+        '$_activityPrefix${group.groupId}',
+      );
+      if (state == LiveActivityState.active ||
+          state == LiveActivityState.stale) {
+        return;
+      }
     } catch (e) {
       debugPrint('[HW][live] resume check failed: $e');
       return;
@@ -125,14 +131,7 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
     if (group == null) {
       _tick?.cancel();
       _tick = null;
-      final id = _activityId;
-      _activityId = null;
-      if (id != null) {
-        _endedByUs.add(id);
-        try {
-          await _plugin.endActivity(id);
-        } catch (_) {}
-      }
+      await _endCurrentActivity(allIfUnknown: true);
       return;
     }
 
@@ -166,7 +165,7 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     // 카운트업 타이머 앵커 = 지금 − 이미 경과한 초.
     final timerAnchorMs = nowMs - elapsed * 1000;
-    final activityId = '$_activityPrefix$groupId';
+    final activityKey = '$_activityPrefix$groupId';
     final data = <String, dynamic>{
       'title': group.title.isEmpty ? '(제목 없음)' : group.title,
       'subtitle': group.primaryMetaLine,
@@ -183,16 +182,43 @@ class HomeworkLiveActivity with WidgetsBindingObserver {
     try {
       final supported = await _plugin.areActivitiesSupported();
       if (!supported) return;
-      await _plugin.createOrUpdateActivity(
-        activityId,
+      if (_activityKey != null && _activityKey != activityKey) {
+        await _endCurrentActivity();
+      }
+      final result = await _plugin.createOrUpdateActivity(
+        activityKey,
         data,
         removeWhenAppIsKilled: false,
         iOSEnableRemoteUpdates: false,
       );
-      _activityId = activityId;
+      _activityKey = activityKey;
+      if (result is String && result.isNotEmpty) _activityId = result;
     } catch (e) {
       debugPrint('[HW][live] push failed: $e');
     }
+  }
+
+  Future<void> _endCurrentActivity({bool allIfUnknown = false}) async {
+    final endId = _activityId ?? _activityKey;
+    _activityId = null;
+    _activityKey = null;
+    if (endId == null) {
+      if (!allIfUnknown) return;
+      try {
+        _endedByUs.addAll(await _plugin.getAllActivitiesIds());
+        await _plugin.endAllActivities();
+      } catch (_) {}
+      return;
+    }
+    try {
+      // 앱 재시작 뒤에는 custom key만 알고 실제 ActivityKit id를 모를 수 있다.
+      // 종료 이벤트를 사용자 삭제로 오인하지 않도록 현재 id들도 함께 표시한다.
+      _endedByUs.addAll(await _plugin.getAllActivitiesIds());
+    } catch (_) {}
+    _endedByUs.add(endId);
+    try {
+      await _plugin.endActivity(endId);
+    } catch (_) {}
   }
 
   void _onUrlScheme(UrlSchemeData data) {
