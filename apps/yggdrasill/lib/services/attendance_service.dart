@@ -5584,36 +5584,22 @@ class AttendanceService {
     try {
       // 종료 직전 최신 상태를 기준으로 보정하기 위해 서버 데이터를 다시 로드한다.
       await loadAttendanceRecords();
-      final int lessonMinutes = _d.getAcademySettings().lessonDuration;
-      final DateTime nowKst =
-          DateTime.now().toUtc().add(const Duration(hours: 9));
-      final DateTime ymdYesterdayKst =
-          DateTime(nowKst.year, nowKst.month, nowKst.day)
-              .subtract(const Duration(days: 1));
-
-      bool isSameKstDay(DateTime dt, DateTime ymdKst) {
-        final k = dt.toUtc().add(const Duration(hours: 9));
-        return k.year == ymdKst.year &&
-            k.month == ymdKst.month &&
-            k.day == ymdKst.day;
-      }
-
+      final now = DateTime.now();
       int updated = 0;
       for (final rec in _attendanceRecords) {
-        final arrival = rec.arrivalTime;
-        if (arrival == null) continue;
-        if (rec.departureTime != null) continue;
-        if (!isSameKstDay(arrival, ymdYesterdayKst)) continue;
-
-        final DateTime dep = arrival.add(Duration(minutes: lessonMinutes));
-        final updatedRec = rec.copyWith(
-          isPresent: true,
-          departureTime: dep,
+        if (rec.arrivalTime == null || rec.departureTime != null) continue;
+        // 등원일 다음날 밤 12시(등원일+2일 00:00)가 지난 미하원만 닫는다.
+        // 자정을 넘긴 당일 수업은 건드리지 않는다.
+        if (now.isBefore(rec.openSessionCapAt)) continue;
+        await updateAttendanceRecord(
+          rec.copyWith(
+            isPresent: true,
+            departureTime: rec.openSessionCapAt,
+          ),
         );
-        await updateAttendanceRecord(updatedRec);
         updated++;
       }
-      print('[ATT] 어제(KST) 미하원 자동 처리: $updated건');
+      print('[ATT] 캡 지난 미하원 자동 처리: $updated건');
     } catch (e, st) {
       print('[ATT][ERROR] 미하원 자동 처리 실패: $e\n$st');
     }

@@ -22,6 +22,19 @@ class AttendanceRecord {
   final DateTime updatedAt;
   final int version; // 낙관적 잠금을 위한 버전
 
+  /// 등원일 다음날 밤 12시. 이 시각부터는 미하원이어도 하원으로 본다.
+  DateTime get openSessionCapAt {
+    final local = classDateTime.toLocal();
+    return DateTime(local.year, local.month, local.day)
+        .add(const Duration(days: 2));
+  }
+
+  /// 등원했고 아직 하원 전이면서, 캡(등원일+2일 00:00) 안인가.
+  bool isLiveOpenSession({DateTime? now}) {
+    if (arrivalTime == null || departureTime != null) return false;
+    return (now ?? DateTime.now()).isBefore(openSessionCapAt);
+  }
+
   AttendanceRecord({
     this.id,
     required this.studentId,
@@ -96,6 +109,7 @@ class AttendanceRecord {
       if (v is String) return int.tryParse(v) ?? 0;
       return 0;
     }
+
     return AttendanceRecord(
       id: map['id'] as String?,
       studentId: map['student_id'] as String,
@@ -104,10 +118,10 @@ class AttendanceRecord {
       classEndTime: DateTime.parse(map['class_end_time'] as String),
       className: map['class_name'] as String,
       isPresent: (map['is_present'] as int) == 1,
-      arrivalTime: map['arrival_time'] != null 
+      arrivalTime: map['arrival_time'] != null
           ? DateTime.parse(map['arrival_time'] as String)
           : null,
-      departureTime: map['departure_time'] != null 
+      departureTime: map['departure_time'] != null
           ? DateTime.parse(map['departure_time'] as String)
           : null,
       notes: map['notes'] as String?,
@@ -116,7 +130,9 @@ class AttendanceRecord {
       snapshotId: map['snapshot_id'] as String?,
       batchSessionId: map['batch_session_id'] as String?,
       cycle: map['cycle'] is num ? (map['cycle'] as num).toInt() : null,
-      sessionOrder: map['session_order'] is num ? (map['session_order'] as num).toInt() : null,
+      sessionOrder: map['session_order'] is num
+          ? (map['session_order'] as num).toInt()
+          : null,
       isPlanned: map['is_planned'] == true || map['is_planned'] == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),

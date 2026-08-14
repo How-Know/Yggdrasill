@@ -379,6 +379,11 @@ class HomeworkTestGradingResultService {
       if (itemRows.isNotEmpty) {
         await supa.from('homework_test_grading_attempt_items').insert(itemRows);
       }
+      await _mirrorGradingToLearningRecords(
+        studentId: trimmedStudentId,
+        homeworkItemId: homeworkItemId,
+        rows: computed.rows,
+      );
       return true;
     } catch (error, stackTrace) {
       try {
@@ -407,6 +412,11 @@ class HomeworkTestGradingResultService {
                 .from('homework_test_grading_attempt_items')
                 .insert(fallbackItemRows);
           }
+          await _mirrorGradingToLearningRecords(
+            studentId: trimmedStudentId,
+            homeworkItemId: homeworkItemId,
+            rows: computed.rows,
+          );
           return true;
         } catch (fallbackError, fallbackStackTrace) {
           try {
@@ -428,6 +438,39 @@ class HomeworkTestGradingResultService {
         debugPrintStack(stackTrace: stackTrace);
       }
       return false;
+    }
+  }
+
+  /// 문항별 O/X 를 학습 기록(learning_attempts·회차·답 캐시)에도 남긴다.
+  ///
+  /// 학생앱은 learning_attempts 를 읽어 과제 화면을 채우므로, 이 호출이 있어야
+  /// 검사 결과(맞은 문항 통과, 틀린 문항만 재도전)가 학생앱에 전달된다.
+  /// 실패해도 채점 저장 자체는 유효하므로 로그만 남기고 삼킨다.
+  Future<void> _mirrorGradingToLearningRecords({
+    required String studentId,
+    required String homeworkItemId,
+    required List<_ComputedAttemptRow> rows,
+  }) async {
+    final items = <Map<String, dynamic>>[
+      for (final row in rows)
+        if ((row.questionUid ?? '').trim().isNotEmpty)
+          {
+            'question_uid': row.questionUid!.trim(),
+            'state': row.state,
+          },
+    ];
+    if (items.isEmpty) return;
+    try {
+      await Supabase.instance.client.rpc(
+        'staff_record_homework_grading_v1',
+        params: {
+          'p_student_id': studentId,
+          'p_homework_item_id': homeworkItemId,
+          'p_items': items,
+        },
+      );
+    } catch (error) {
+      debugPrint('mirrorGradingToLearningRecords failed: $error');
     }
   }
 

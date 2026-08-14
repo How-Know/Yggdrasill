@@ -389,6 +389,7 @@ class HomeworkProblem {
     required this.sourceStage,
     required this.passed,
     required this.attemptCount,
+    this.lastResult,
     this.lastAnswer,
     this.lastScoredBy,
     this.roundNo = 0,
@@ -409,6 +410,9 @@ class HomeworkProblem {
 
   /// 이 배정에서의 누적 시도 수.
   final int attemptCount;
+
+  /// 마지막 시도 결과 (correct | wrong | skipped ...). 안 풀었으면 null.
+  final String? lastResult;
 
   /// 이 배정에서 마지막으로 낸 답. 안 풀었으면 null.
   final String? lastAnswer;
@@ -436,6 +440,7 @@ class HomeworkProblem {
       sourceStage: (row['source_stage'] as String?) ?? 'original',
       passed: (row['passed'] as bool?) ?? false,
       attemptCount: (row['attempt_count'] as num?)?.toInt() ?? 0,
+      lastResult: row['last_result'] as String?,
       lastAnswer: row['last_answer'] as String?,
       lastScoredBy: row['last_scored_by'] as String?,
       roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
@@ -1930,6 +1935,24 @@ class StudentApi {
         .whereType<Map<String, dynamic>>()
         .map(HomeworkProblem.fromRow)
         .toList(growable: false);
+  }
+
+  /// 과제 이탈 시 안 푼 문항을 미수행(skipped)으로 기록한다.
+  /// 시도 +1 이 되고 회차 이력에 남아, 학습앱에서도 "미수행"으로 보인다.
+  Future<void> logHomeworkSkipped({
+    required String groupId,
+    required String cropId,
+  }) async {
+    final id = await identity();
+    if (id == null) return;
+    await _client.rpc('learning_log_homework_attempt', params: {
+      'p_student_id': id.studentId,
+      'p_homework_group_id': groupId,
+      'p_crop_id': cropId,
+      'p_result': 'skipped',
+      'p_scored_by': 'self',
+      'p_meta': {'exit_flush': true},
+    });
   }
 
   /// 문항 통과 현황 요약.

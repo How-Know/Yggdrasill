@@ -87,6 +87,17 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   List<PageProblem>? _problems;
   bool _loadingProblems = false;
 
+  /// 이 화면에서 열어 본 모든 문항 (crop_id →). 페이지를 넘어가도 답이
+  /// 사라지지 않게, 일괄 채점이 다른 페이지의 미채점 답까지 모을 수 있게 한다.
+  final Map<String, PageProblem> _seenProblems = <String, PageProblem>{};
+
+  /// 이번 방문에서 채점(자동·셀프)이 한 번이라도 있었는가.
+  /// 과제 모드에서 나갈 때 "안 푼 문항 미수행 기록"을 할지 판단한다.
+  bool _gradedThisVisit = false;
+
+  /// 나가기 처리(잔여 답 채점 + 미수행 기록)가 도는 중.
+  bool _exitFlushing = false;
+
   /// crop_id → 현재 입력값
   final Map<String, String> _answers = <String, String>{};
 
@@ -441,6 +452,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             // 이 배정에서 아직 안 푼 문항 — 빈 상태로 시작한다.
             return p.withSolveState();
           }
+          if (!hp.passed && hp.lastResult == 'skipped') {
+            // 미수행 기록만 있는 문항 — 오답이 아니라 "안 푼 것"이므로
+            // X 표시 없이 빈 상태로 다시 풀 수 있게 한다.
+            return p.withSolveState();
+          }
           final answer = (hp.lastAnswer ?? '').trim();
           return p.withSolveState(
             myAnswer: answer.isEmpty ? null : answer,
@@ -537,13 +553,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _pagePathLabel = pathLabel;
       _problems = null;
       _loadingProblems = true;
-      _answers.clear();
-      _gradedAnswers.clear();
-      _results.clear();
-      _attemptCounts.clear();
-      _flags.clear();
-      _selfGraded.clear();
-      _reportStatuses.clear();
+      // 답 상태(_answers 등)는 crop_id 키라 페이지가 바뀌어도 지우지 않는다.
+      // 미채점 답을 들고 다니다가 일괄 채점 때 한 번에 모은다.
       _expandedSetCrops.clear();
       _selectedCropId = null;
       _selectedPartKey = null;
@@ -562,12 +573,21 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       if (!mounted) return;
       final problems = await _withHomeworkRoundState(_scopedProblems(loaded));
       if (!mounted) return;
+      // 아직 채점하지 않은 로컬 입력. 서버 기록으로 덮어쓰지 않는다.
+      bool localDirty(String key) {
+        final v = _answers[key]?.trim() ?? '';
+        return v.isNotEmpty && v != (_gradedAnswers[key]?.trim() ?? '');
+      }
+
       setState(() {
         _problems = problems;
         _loadingProblems = false;
         for (final p in problems) {
+          _seenProblems[p.cropId] = p;
           if (p.myAnswer != null && p.myAnswer!.isNotEmpty) {
-            _answers[p.cropId] = p.myAnswer!;
+            if (!localDirty(p.cropId)) {
+              _answers[p.cropId] = p.myAnswer!;
+            }
             _gradedAnswers[p.cropId] = p.myAnswer!;
           }
           if (p.myCorrect != null) {
@@ -590,7 +610,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             final k = _answerKeyOf(p.cropId, pr.key);
             final partAnswer = pr.answer?.trim() ?? '';
             if (partAnswer.isNotEmpty) {
-              _answers[k] = partAnswer;
+              if (!localDirty(k)) {
+                _answers[k] = partAnswer;
+              }
               _gradedAnswers[k] = partAnswer;
             }
             _results[k] = pr.correct;
@@ -642,19 +664,17 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     }
   }
 
-  Future<void> _grade() async {
-    if (_grading) return;
-    // 방금 쓴 필기가 아직 인식 전일 수 있다. 답을 모으기 전에 마무리한다.
-    await _flushPencilInput();
-    if (!mounted) return;
-    final problems = _problems;
-    if (problems == null) return;
-
-    // 자동 채점 문항 중 새로 입력했거나 값이 바뀐 것만 제출
+  /// 지금까지 본 모든 문항에서 새로 입력했거나 값이 바뀐 답을 모은다.
+  /// 페이지를 넘어가도 답을 들고 다니므로 여러 페이지 분량이 한 번에 나온다.
+  ({
+    Map<String, String> answers,
+    Map<String, Map<String, String>> parts,
+    List<String> incomplete,
+  }) _collectPendingSubmissions() {
     final toSubmit = <String, String>{};
     final partSubmit = <String, Map<String, String>>{};
     final incomplete = <String>[];
-    for (final p in problems) {
+    for (final p in _seenProblems.values) {
       if (_isOnHold(p.cropId)) continue; // 보류 문항은 채점 제외
       if (p.hasParts) {
         // 세트형: auto 파트별로 새 답만 제출
@@ -687,6 +707,20 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       }
       toSubmit[p.cropId] = answer;
     }
+    return (answers: toSubmit, parts: partSubmit, incomplete: incomplete);
+  }
+
+  Future<void> _grade() async {
+    if (_grading) return;
+    // 방금 쓴 필기가 아직 인식 전일 수 있다. 답을 모으기 전에 마무리한다.
+    await _flushPencilInput();
+    if (!mounted) return;
+    if (_problems == null) return;
+
+    final pending = _collectPendingSubmissions();
+    final toSubmit = pending.answers;
+    final partSubmit = pending.parts;
+    final incomplete = pending.incomplete;
     if (incomplete.isNotEmpty) {
       TopGlassSnackBar.show(
         context,
@@ -714,6 +748,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         homeworkGroupId: widget.homework?.groupId,
       );
       if (!mounted) return;
+      _gradedThisVisit = true;
       setState(() {
         _results.addAll(result.correctByCropId);
         _flags.addAll(result.flagsByCropId);
@@ -765,6 +800,56 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     } finally {
       if (mounted) setState(() => _grading = false);
     }
+  }
+
+  /// 뒤로 나가기 전 잔여 처리.
+  ///
+  /// 1) 아직 채점 안 한 답이 남아 있으면 조용히 일괄 채점해 유실을 막는다.
+  /// 2) 과제 모드에서 이번 방문에 채점이 한 번이라도 있었다면, 이 배정에서
+  ///    한 번도 안 푼 문항을 미수행(skipped)으로 기록한다 — 학생이 스스로
+  ///    검사를 받고 나간 것과 같은 셈이다. 학습앱 회차 이력에도 남는다.
+  Future<void> _handleExit() async {
+    if (_exitFlushing) return;
+    setState(() => _exitFlushing = true);
+    try {
+      await _flushPencilInput();
+      final pending = _collectPendingSubmissions();
+      if (pending.answers.isNotEmpty || pending.parts.isNotEmpty) {
+        try {
+          await TextbookApi.instance.gradePage(
+            bookId: widget.book.bookId,
+            gradeLabel: widget.book.gradeLabel,
+            answersByCropId: pending.answers,
+            partAnswersByCropId: pending.parts,
+            homeworkGroupId: widget.homework?.groupId,
+          );
+          _gradedThisVisit = true;
+          _loadTree();
+        } catch (_) {
+          // 나가는 길의 채점 실패가 이탈을 막지는 않는다.
+        }
+      }
+      final scope = widget.homework;
+      if (scope != null && _gradedThisVisit) {
+        try {
+          final rows =
+              await StudentApi.instance.listHomeworkProblems(scope.groupId);
+          for (final row in rows) {
+            if (row.cropId.isEmpty || row.attemptCount > 0) continue;
+            await StudentApi.instance.logHomeworkSkipped(
+              groupId: scope.groupId,
+              cropId: row.cropId,
+            );
+          }
+        } catch (_) {
+          // 미수행 기록 실패도 이탈을 막지 않는다.
+        }
+        HomeworkSession.instance.notifyPlanProgress();
+      }
+    } finally {
+      if (mounted) setState(() => _exitFlushing = false);
+    }
+    if (mounted) Navigator.of(context).pop();
   }
 
   /// 교재 탭 자유 풀이로 과제가 자동 통과된 경우 포인트 스낵바.
@@ -866,6 +951,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         homeworkGroupId: widget.homework?.groupId,
       );
       if (!mounted) return;
+      _gradedThisVisit = true;
       setState(() {
         _results[problem.cropId] = marked;
         _gradedAnswers[problem.cropId] = _answers[problem.cropId] ?? '';
@@ -969,6 +1055,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         homeworkGroupId: widget.homework?.groupId,
       );
       if (!mounted) return;
+      _gradedThisVisit = true;
       setState(() {
         _results[answerKey] = marked;
         _selfGraded.add(answerKey);
@@ -1738,79 +1825,96 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final titleExtent = _solveTitleExtent(context);
-    return Scaffold(
-      backgroundColor: context.yggSurfaceBase,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: _buildPagePanel(theme, topInset: titleExtent),
-          ),
-          // 딤 배리어 — 항상 두고 opacity 로 페이드 (시트 슬라이드와 동기).
-          Positioned.fill(
-            child: IgnorePointer(
-              ignoring: !_treeOpen,
-              child: AnimatedOpacity(
-                opacity: _treeOpen ? 1 : 0,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOutCubic,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _setTreeOpen(false),
-                  child: const ColoredBox(
-                    color: Color(0x66000000),
+    return PopScope(
+      // 시스템 뒤로가기도 잔여 답 채점·미수행 기록을 거친 뒤 나간다.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        unawaited(_handleExit());
+      },
+      child: Scaffold(
+        backgroundColor: context.yggSurfaceBase,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: _buildPagePanel(theme, topInset: titleExtent),
+            ),
+            // 딤 배리어 — 항상 두고 opacity 로 페이드 (시트 슬라이드와 동기).
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: !_treeOpen,
+                child: AnimatedOpacity(
+                  opacity: _treeOpen ? 1 : 0,
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeOutCubic,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _setTreeOpen(false),
+                    child: const ColoredBox(
+                      color: Color(0x66000000),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 320),
-            curve: Curves.easeOutCubic,
-            // 시트 폭 + 왼쪽 그림자 blur 만큼 더 내보내 접힌 상태 잔상 제거.
-            right: _treeOpen ? 0 : -(_kPageSheetWidth + _kPageSheetShadowBleed),
-            // 타이틀 바 높이만큼 내려 이전 AppBar 아래 정렬과 동일하게 맞춤.
-            top: titleExtent,
-            bottom: 0,
-            width: _kPageSheetWidth,
-            child: IgnorePointer(
-              ignoring: !_treeOpen,
-              child: _IosPageSheet(
-                onClose: () => _setTreeOpen(false),
-                child: _buildTreePanel(theme),
-              ),
-            ),
-          ),
-          if (!_treeOpen)
-            Positioned(
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 320),
+              curve: Curves.easeOutCubic,
+              // 시트 폭 + 왼쪽 그림자 blur 만큼 더 내보내 접힌 상태 잔상 제거.
+              right:
+                  _treeOpen ? 0 : -(_kPageSheetWidth + _kPageSheetShadowBleed),
+              // 타이틀 바 높이만큼 내려 이전 AppBar 아래 정렬과 동일하게 맞춤.
               top: titleExtent,
-              right: 0,
               bottom: 0,
-              width: 28,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragEnd: (details) {
-                  if ((details.primaryVelocity ?? 0) < -180) {
-                    _setTreeOpen(true);
-                  }
-                },
-              ),
-            ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              ignoring: _titleOpacity < 0.05,
-              child: Opacity(
-                opacity: _titleOpacity,
-                child: Transform.translate(
-                  offset: Offset(0, -(1 - _titleOpacity) * 12),
-                  child: _buildSolveTitleBar(theme),
+              width: _kPageSheetWidth,
+              child: IgnorePointer(
+                ignoring: !_treeOpen,
+                child: _IosPageSheet(
+                  onClose: () => _setTreeOpen(false),
+                  child: _buildTreePanel(theme),
                 ),
               ),
             ),
-          ),
-        ],
+            if (!_treeOpen)
+              Positioned(
+                top: titleExtent,
+                right: 0,
+                bottom: 0,
+                width: 28,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onHorizontalDragEnd: (details) {
+                    if ((details.primaryVelocity ?? 0) < -180) {
+                      _setTreeOpen(true);
+                    }
+                  },
+                ),
+              ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                ignoring: _titleOpacity < 0.05,
+                child: Opacity(
+                  opacity: _titleOpacity,
+                  child: Transform.translate(
+                    offset: Offset(0, -(1 - _titleOpacity) * 12),
+                    child: _buildSolveTitleBar(theme),
+                  ),
+                ),
+              ),
+            ),
+            // 나가기 처리(잔여 답 채점·미수행 기록) 중 입력 차단.
+            if (_exitFlushing)
+              const Positioned.fill(
+                child: ColoredBox(
+                  color: Color(0x33000000),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1834,7 +1938,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                 const SizedBox(width: 24),
                 IconButton(
                   tooltip: '뒤로',
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () => unawaited(_handleExit()),
                   style: IconButton.styleFrom(
                     padding: EdgeInsets.zero,
                     minimumSize: const Size(40, 40),

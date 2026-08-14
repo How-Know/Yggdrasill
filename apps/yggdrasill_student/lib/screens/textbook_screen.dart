@@ -341,7 +341,14 @@ class _BookCardState extends State<_BookCard> {
                       Positioned(
                         top: 12,
                         left: 12,
-                        child: _CoverStartDateLabel(startedAt: book.startedAt),
+                        right: 12,
+                        child: Row(
+                          children: [
+                            _CoverStartDateLabel(startedAt: book.startedAt),
+                            const Spacer(),
+                            _CoverSeasonLabel(seasonNo: book.seasonNo),
+                          ],
+                        ),
                       ),
                       if (book.startedAt != null)
                         Center(
@@ -526,6 +533,27 @@ class _CoverStartDateLabel extends StatelessWidget {
       style: const TextStyle(
         color: Colors.black,
         fontSize: 19.2, // 16 × 1.2
+        fontWeight: FontWeight.w800,
+        height: 1.1,
+        letterSpacing: -0.2,
+      ),
+    );
+  }
+}
+
+/// 커버 오른쪽 상단 시즌 — 다시 풀기를 할 때마다 하나씩 올라간다.
+class _CoverSeasonLabel extends StatelessWidget {
+  const _CoverSeasonLabel({required this.seasonNo});
+
+  final int seasonNo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '시즌 $seasonNo',
+      style: const TextStyle(
+        color: Colors.black,
+        fontSize: 19.2,
         fontWeight: FontWeight.w800,
         height: 1.1,
         letterSpacing: -0.2,

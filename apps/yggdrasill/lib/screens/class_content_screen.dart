@@ -2150,13 +2150,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final students =
         DataManager.instance.students.map((e) => e.student).toList();
     // 슬라이드 시트와 동일 정렬: 등원 시간 asc
-    final records = DataManager.instance.attendanceRecords
-        .where((rec) =>
-            rec.isPresent &&
-            rec.arrivalTime != null &&
-            rec.departureTime == null &&
-            sameDay(rec.classDateTime, anchor))
-        .toList()
+    final yesterday = anchor.subtract(const Duration(days: 1));
+    final records = DataManager.instance.attendanceRecords.where((rec) {
+      if (!rec.isPresent || !rec.isLiveOpenSession()) return false;
+      if (sameDay(rec.classDateTime, anchor)) return true;
+      // 오늘 화면이면 어제에서 이어진 야간 수업도 등원중으로 둔다.
+      return isAttendanceAnchorToday(anchor) &&
+          sameDay(rec.classDateTime, yesterday);
+    }).toList()
       ..sort((a, b) => a.arrivalTime!.compareTo(b.arrivalTime!));
 
     for (final rec in records) {
@@ -18263,8 +18264,8 @@ Widget _buildFlowChip(
   if (isHomeworkDue && normalizedOverrideText.isEmpty) {
     chipText = '숙제';
     backgroundColor = overrideBackgroundColor ?? Colors.transparent;
-    border = overrideBorder ??
-        Border.all(color: kDlgAccent, width: chipBorderWidth);
+    border =
+        overrideBorder ?? Border.all(color: kDlgAccent, width: chipBorderWidth);
     textColor = overrideTextColor ?? const Color(0xFF9FE3C6);
   } else {
     chipText = normalizedOverrideText.isNotEmpty
@@ -18275,8 +18276,7 @@ Widget _buildFlowChip(
                 ? normalizedDueLabel
                 : '$normalizedFlowName · $normalizedDueLabel'));
     final bool isDefault =
-        StudentFlow.normalizeName(normalizedFlowName) == '개념' &&
-            !isHomeworkDue;
+        StudentFlow.normalizeName(normalizedFlowName) == '개념' && !isHomeworkDue;
     backgroundColor = overrideBackgroundColor ??
         (isDefault ? Colors.transparent : cardTheme.flowChipDefaultBg);
     border = overrideBorder ??
@@ -18436,10 +18436,17 @@ class _HomeworkRoundsLabelState extends State<_HomeworkRoundsLabel> {
       );
       final rows = result is List ? result : const <dynamic>[];
       final byCrop = <String, int>{};
+      var skippedCount = 0;
       for (final row in rows.whereType<Map<String, dynamic>>()) {
         final cropId = '${row['crop_id'] ?? ''}'.trim();
         final roundNo = (row['round_no'] as num?)?.toInt() ?? 0;
         if (cropId.isNotEmpty && roundNo > 0) byCrop[cropId] = roundNo;
+        // 학생이 검사를 받듯 나가면서 미수행으로 남긴 문항 수.
+        final passed = row['passed'] == true;
+        final lastResult = '${row['last_result'] ?? ''}'.trim();
+        if (cropId.isNotEmpty && !passed && lastResult == 'skipped') {
+          skippedCount += 1;
+        }
       }
       var lo = 0;
       var hi = 0;
@@ -18448,7 +18455,10 @@ class _HomeworkRoundsLabelState extends State<_HomeworkRoundsLabel> {
         if (lo == 0 || n < lo) lo = n;
         if (n > hi) hi = n;
       }
-      final label = hi == 0 ? '' : (lo == hi ? '$hi회차' : '$lo~$hi회차');
+      var label = hi == 0 ? '' : (lo == hi ? '$hi회차' : '$lo~$hi회차');
+      if (label.isNotEmpty && skippedCount > 0) {
+        label = '$label · 미수행 $skippedCount';
+      }
       _cache[key] = (label: label, at: DateTime.now());
       if (mounted) setState(() => _label = label);
     } catch (_) {

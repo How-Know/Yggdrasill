@@ -164,11 +164,14 @@ class StudentBottomNavBar extends StatefulWidget {
       ),
     ),
     _StudentNavDestination(
-      label: '보내기',
-      customIconBuilder: (color, selected, size) => _PaperPlaneIcon(
-        color: color,
-        filled: selected,
-        size: size * 1.18,
+      label: '여행',
+      customIconBuilder: (color, selected, size) => Transform.scale(
+        scaleY: 33 / (StudentBottomNavTokens.iconSize * 1.18),
+        child: _PaperPlaneIcon(
+          color: color,
+          filled: selected,
+          size: size * 1.18 * 0.9,
+        ),
       ),
     ),
     _StudentNavDestination(
@@ -920,14 +923,43 @@ class _PaperPlaneIconPainter extends CustomPainter {
       )
       ..close();
 
+    final foldStart = point(0.32, 0.52);
+    final foldEnd = point(0.66, 0.31);
+    // 같은 기울기로 왼쪽 밖까지 밀어, 꺾인 변·테두리까지 뚫리게 한다.
+    final foldDir = foldStart - foldEnd;
+    final cutStart = foldStart + foldDir / foldDir.distance * (cell * 0.36);
+
     // 세로 비율은 유지하고 중심을 기준으로 좌우 폭만 살짝 넓힌다.
+    // 도형이 박스 하단으로 깔려 보여 조금만 올린다.
     canvas
       ..save()
-      ..translate(cell / 2, 0)
+      ..translate(cell / 2, -cell * 0.04)
       ..scale(1.06, 1)
       ..translate(-cell / 2, 0);
-    canvas.drawPath(body, strokePaint);
-    canvas.drawLine(point(0.32, 0.52), point(0.66, 0.31), strokePaint);
+
+    if (filled) {
+      canvas.saveLayer(null, Paint());
+      canvas.drawPath(
+        body,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawPath(body, strokePaint);
+      canvas.drawLine(
+        cutStart,
+        foldEnd,
+        Paint()
+          ..blendMode = BlendMode.dstOut
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokePaint.strokeWidth
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.restore();
+    } else {
+      canvas.drawPath(body, strokePaint);
+      canvas.drawLine(foldStart, foldEnd, strokePaint);
+    }
     canvas.restore();
   }
 

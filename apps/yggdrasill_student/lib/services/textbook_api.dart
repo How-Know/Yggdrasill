@@ -27,6 +27,8 @@ class TextbookApi {
     final results = await Future.wait([
       _client.rpc('student_list_textbooks'),
       _client.rpc('student_textbook_start_dates'),
+      // 시즌 RPC 미배포 환경에서도 목록은 떠야 한다.
+      _client.rpc('student_textbook_seasons_v1').catchError((Object _) => []),
     ]);
     final rows = results[0] as List<dynamic>;
     final startDates = <String, DateTime>{};
@@ -38,11 +40,23 @@ class TextbookApi {
             startedAt.toLocal();
       }
     }
+    final seasons = <String, int>{};
+    final seasonRows = results[2];
+    if (seasonRows is List) {
+      for (final raw in seasonRows.whereType<Map>()) {
+        final row = Map<String, dynamic>.from(raw);
+        final no = (row['season_no'] as num?)?.toInt();
+        if (no != null && no > 0) {
+          seasons['${row['book_id']}|${row['grade_label']}'] = no;
+        }
+      }
+    }
     return rows
         .whereType<Map<String, dynamic>>()
         .map((row) => StudentTextbook.fromRow(
               row,
               startedAt: startDates['${row['book_id']}|${row['grade_label']}'],
+              seasonNo: seasons['${row['book_id']}|${row['grade_label']}'],
             ))
         .toList(growable: false);
   }
@@ -664,6 +678,7 @@ class StudentTextbook {
     this.lastDisplayPage,
     this.lastActivity,
     this.startedAt,
+    this.seasonNo = 1,
   });
 
   final String bookId;
@@ -689,6 +704,10 @@ class StudentTextbook {
   final DateTime? lastActivity;
   final DateTime? startedAt;
 
+  /// 이 교재를 도는 몇 번째 구간인가. 다시 풀기를 할 때마다 하나 올라간다.
+  /// 아직 한 번도 풀지 않은 교재도 시즌 1로 본다.
+  final int seasonNo;
+
   /// 진행률 = 풀이 문항 / 전체.
   double get advanceRate =>
       totalProblems <= 0 ? 0 : gradedCount / totalProblems;
@@ -709,6 +728,7 @@ class StudentTextbook {
   static StudentTextbook fromRow(
     Map<String, dynamic> row, {
     DateTime? startedAt,
+    int? seasonNo,
   }) {
     final stages = <String, TextbookStageProgress>{};
     final rawStages = row['stage_progress'];
@@ -741,6 +761,7 @@ class StudentTextbook {
           ? DateTime.tryParse(row['last_activity'] as String)?.toLocal()
           : null,
       startedAt: startedAt,
+      seasonNo: seasonNo ?? 1,
     );
   }
 }

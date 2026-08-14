@@ -47,9 +47,14 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
 
       final hwRows = await supa
@@ -59,12 +64,14 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
           .order('at', ascending: false)
           .limit(200);
 
-    final List<_TimelineEvent> evs = [];
+      final List<_TimelineEvent> evs = [];
       final List<String> itemIds = [];
       for (final r in (hwRows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final String itemId = (r['item_id'] as String?) ?? '';
         final int phase = ((r['phase'] as num?) ?? 0).toInt();
-        final DateTime at = DateTime.tryParse((r['at'] as String?) ?? '')?.toLocal() ?? DateTime.now();
+        final DateTime at =
+            DateTime.tryParse((r['at'] as String?) ?? '')?.toLocal() ??
+                DateTime.now();
         final String? note = r['note'] as String?;
         if (itemId.isNotEmpty) itemIds.add(itemId);
         evs.add(_TimelineEvent(
@@ -98,15 +105,19 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
 
       final tagRows = await supa
           .from('tag_events')
-          .select('set_id, student_id, tag_name, color_value, icon_code, occurred_at, note')
+          .select(
+              'set_id, student_id, tag_name, color_value, icon_code, occurred_at, note')
           .eq('academy_id', academyId)
           .order('occurred_at', ascending: false)
           .limit(200);
 
       for (final r in (tagRows as List<dynamic>).cast<Map<String, dynamic>>()) {
-        final DateTime at = DateTime.tryParse((r['occurred_at'] as String?) ?? '')?.toLocal() ?? DateTime.now();
+        final DateTime at =
+            DateTime.tryParse((r['occurred_at'] as String?) ?? '')?.toLocal() ??
+                DateTime.now();
         final String tagName = (r['tag_name'] as String?) ?? '';
-        final int colorValue = ((r['color_value'] as num?) ?? 0xFF1976D2).toInt();
+        final int colorValue =
+            ((r['color_value'] as num?) ?? 0xFF1976D2).toInt();
         final int iconCode = ((r['icon_code'] as num?) ?? 0).toInt();
         final String studentId = (r['student_id'] as String?) ?? '';
         final String? note = r['note'] as String?;
@@ -151,39 +162,49 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
         }
       }
 
-      evs.sort((a,b) => b.timestamp.compareTo(a.timestamp));
+      evs.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
       // Hydrate subtitles with student name where possible
-      final students = DataManager.instance.students.map((s) => s.student).toList();
+      final students =
+          DataManager.instance.students.map((s) => s.student).toList();
       String nameOf(String id) {
         if (students.isEmpty) return '';
         final idx = students.indexWhere((x) => x.id == id);
         return (idx == -1 ? students.first : students[idx]).name;
       }
+
       for (int i = 0; i < evs.length; i++) {
         final e = evs[i];
         if (e.type == _EventType.homework) {
           final brief = briefByItem[e.relatedId];
           if (brief != null) {
             final studentName = nameOf(brief.studentId);
-            evs[i] = e.copyWith(subtitle: (brief.title.isEmpty ? studentName : '$studentName · ${brief.title}'));
+            evs[i] = e.copyWith(
+                subtitle: (brief.title.isEmpty
+                    ? studentName
+                    : '$studentName · ${brief.title}'));
             evs[i] = evs[i].withStudent(brief.studentId);
           }
         } else if (e.type == _EventType.tag) {
           final studentName = nameOf(e.relatedId);
-          evs[i] = e.copyWith(subtitle: studentName + (e.subtitle.isNotEmpty ? ' · ' + e.subtitle : ''));
+          evs[i] = e.copyWith(
+              subtitle: studentName +
+                  (e.subtitle.isNotEmpty ? ' · ' + e.subtitle : ''));
         }
       }
 
       // Compute current attending students (arrival today and no departure)
       final DateTime now = DateTime.now();
-      bool sameDay(DateTime a, DateTime b) => a.year==b.year && a.month==b.month && a.day==b.day;
+      bool sameDay(DateTime a, DateTime b) =>
+          a.year == b.year && a.month == b.month && a.day == b.day;
       final Set<String> attendingIds = {};
       for (final rec in DataManager.instance.attendanceRecords) {
-        if (!rec.isPresent) continue;
-        if (rec.arrivalTime == null) continue;
-        if (rec.departureTime != null) continue;
-        if (!sameDay(rec.classDateTime, now)) continue;
+        if (!rec.isPresent || !rec.isLiveOpenSession(now: now)) continue;
+        final yesterday = now.subtract(const Duration(days: 1));
+        if (!sameDay(rec.classDateTime, now) &&
+            !sameDay(rec.classDateTime, yesterday)) {
+          continue;
+        }
         attendingIds.add(rec.studentId);
       }
       final List<_StudentBrief> attending = attendingIds.map((sid) {
@@ -191,12 +212,19 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
         final name = (idx == -1 ? sid : students[idx].name);
         return _StudentBrief(id: sid, name: name);
       }).toList()
-        ..sort((a,b)=>a.name.compareTo(b.name));
+        ..sort((a, b) => a.name.compareTo(b.name));
 
-      setState(() { _allEvents = evs; _attending = attending; _loading = false; });
+      setState(() {
+        _allEvents = evs;
+        _attending = attending;
+        _loading = false;
+      });
       _applyFilter();
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
     }
   }
 
@@ -204,9 +232,12 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
     final start = _selectedDayStart;
     final end = start.add(const Duration(days: 1));
     final List<_TimelineEvent> filtered = _allEvents.where((e) {
-      if (e.timestamp.isBefore(start) || !e.timestamp.isBefore(end)) return false;
+      if (e.timestamp.isBefore(start) || !e.timestamp.isBefore(end))
+        return false;
       if (_filterType != null && e.type != _filterType) return false;
-      if (_filterStudentId != null && _filterStudentId!.isNotEmpty && e.studentId != _filterStudentId) return false;
+      if (_filterStudentId != null &&
+          _filterStudentId!.isNotEmpty &&
+          e.studentId != _filterStudentId) return false;
       return true;
     }).toList();
     setState(() {
@@ -335,7 +366,8 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                    icon: const Icon(Icons.arrow_back,
+                        color: Colors.white70, size: 20),
                     onPressed: () => Navigator.of(context).maybePop(),
                     tooltip: '닫기',
                     padding: EdgeInsets.zero,
@@ -368,7 +400,8 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
   Widget _buildList() {
     String nameOf(String? id) {
       if (id == null || id.isEmpty) return '';
-      final students = DataManager.instance.students.map((s) => s.student).toList();
+      final students =
+          DataManager.instance.students.map((s) => s.student).toList();
       if (students.isEmpty) return '';
       final idx = students.indexWhere((x) => x.id == id);
       return (idx == -1 ? students.first.name : students[idx].name);
@@ -376,17 +409,25 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
 
     return ListView.separated(
       itemCount: _events.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0x22FFFFFF)),
+      separatorBuilder: (_, __) =>
+          const Divider(height: 1, color: Color(0x22FFFFFF)),
       itemBuilder: (ctx, i) {
         final e = _events[i];
         final studentName = nameOf(e.studentId);
-        final displayTitle = studentName.isNotEmpty ? '$studentName · ${e.title}' : e.title;
-        final subtitle = '${_format(e.timestamp)}${e.subtitle.isNotEmpty ? ' · ${e.subtitle}' : ''}';
+        final displayTitle =
+            studentName.isNotEmpty ? '$studentName · ${e.title}' : e.title;
+        final subtitle =
+            '${_format(e.timestamp)}${e.subtitle.isNotEmpty ? ' · ${e.subtitle}' : ''}';
         return ListTile(
           dense: true,
-          leading: CircleAvatar(radius: 14, backgroundColor: e.color.withOpacity(0.2), child: Icon(e.icon, color: e.color, size: 16)),
-          title: Text(displayTitle, style: const TextStyle(color: Colors.white)),
-          subtitle: Text(subtitle, style: const TextStyle(color: Colors.white60)),
+          leading: CircleAvatar(
+              radius: 14,
+              backgroundColor: e.color.withOpacity(0.2),
+              child: Icon(e.icon, color: e.color, size: 16)),
+          title:
+              Text(displayTitle, style: const TextStyle(color: Colors.white)),
+          subtitle:
+              Text(subtitle, style: const TextStyle(color: Colors.white60)),
         );
       },
     );
@@ -411,7 +452,9 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               height: 36,
               decoration: BoxDecoration(
-                color: selected ? const Color(0xFF1B6B63) : const Color(0xFF2A2A2A),
+                color: selected
+                    ? const Color(0xFF1B6B63)
+                    : const Color(0xFF2A2A2A),
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
@@ -449,7 +492,8 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
       },
     ));
 
-    final bool attSel = _filterType == _EventType.attendance && (_filterStudentId == null || _filterStudentId!.isEmpty);
+    final bool attSel = _filterType == _EventType.attendance &&
+        (_filterStudentId == null || _filterStudentId!.isEmpty);
     chips.add(chip(
       label: '등하원',
       selected: attSel,
@@ -462,7 +506,8 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
       },
     ));
 
-    final bool tagSel = _filterType == _EventType.tag && (_filterStudentId == null || _filterStudentId!.isEmpty);
+    final bool tagSel = _filterType == _EventType.tag &&
+        (_filterStudentId == null || _filterStudentId!.isEmpty);
     chips.add(chip(
       label: '활동(태그)',
       selected: tagSel,
@@ -518,7 +563,8 @@ class _TimelineDayToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = '${dayStart.year}.${dayStart.month.toString().padLeft(2, '0')}.${dayStart.day.toString().padLeft(2, '0')}';
+    final label =
+        '${dayStart.year}.${dayStart.month.toString().padLeft(2, '0')}.${dayStart.day.toString().padLeft(2, '0')}';
     final baseTextStyle = TextStyle(
       color: const Color(0xFFEAF2F2),
       fontSize: compact ? 18 : 24,
@@ -564,7 +610,8 @@ class _TimelineDayToolbar extends StatelessWidget {
               lastDate: DateTime(2100),
               builder: (context, child) => Theme(
                 data: Theme.of(context).copyWith(
-                  colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                  colorScheme:
+                      const ColorScheme.dark(primary: Color(0xFF1976D2)),
                   dialogBackgroundColor: const Color(0xFF1F1F1F),
                 ),
                 child: child!,
@@ -593,16 +640,41 @@ class _TimelineEvent {
   final IconData icon;
   final String relatedId; // homework: item_id, tag: student_id
   final String? studentId; // normalized student id for filtering
-  const _TimelineEvent({required this.type, required this.timestamp, required this.title, required this.subtitle, required this.color, required this.icon, required this.relatedId, required this.studentId});
-  _TimelineEvent copyWith({String? subtitle}) => _TimelineEvent(type: type, timestamp: timestamp, title: title, subtitle: subtitle ?? this.subtitle, color: color, icon: icon, relatedId: relatedId, studentId: studentId);
-  _TimelineEvent withStudent(String sid) => _TimelineEvent(type: type, timestamp: timestamp, title: title, subtitle: subtitle, color: color, icon: icon, relatedId: relatedId, studentId: sid);
+  const _TimelineEvent(
+      {required this.type,
+      required this.timestamp,
+      required this.title,
+      required this.subtitle,
+      required this.color,
+      required this.icon,
+      required this.relatedId,
+      required this.studentId});
+  _TimelineEvent copyWith({String? subtitle}) => _TimelineEvent(
+      type: type,
+      timestamp: timestamp,
+      title: title,
+      subtitle: subtitle ?? this.subtitle,
+      color: color,
+      icon: icon,
+      relatedId: relatedId,
+      studentId: studentId);
+  _TimelineEvent withStudent(String sid) => _TimelineEvent(
+      type: type,
+      timestamp: timestamp,
+      title: title,
+      subtitle: subtitle,
+      color: color,
+      icon: icon,
+      relatedId: relatedId,
+      studentId: sid);
 }
 
 class _HomeworkItemBrief {
   final String id;
   final String studentId;
   final String title;
-  const _HomeworkItemBrief({required this.id, required this.studentId, required this.title});
+  const _HomeworkItemBrief(
+      {required this.id, required this.studentId, required this.title});
 }
 
 class _StudentBrief {
@@ -613,35 +685,46 @@ class _StudentBrief {
 
 String _phaseLabel(int phase) {
   switch (phase) {
-    case 0: return '종료';
-    case 1: return '대기';
-    case 2: return '수행';
-    case 3: return '제출';
-    case 4: return '확인';
+    case 0:
+      return '종료';
+    case 1:
+      return '대기';
+    case 2:
+      return '수행';
+    case 3:
+      return '제출';
+    case 4:
+      return '확인';
   }
   return '알수없음';
 }
 
 Color _phaseColor(int phase) {
   switch (phase) {
-    case 2: return const Color(0xFF4CAF50);
-    case 3: return const Color(0xFFFFB300);
-    case 4: return const Color(0xFF42A5F5);
+    case 2:
+      return const Color(0xFF4CAF50);
+    case 3:
+      return const Color(0xFFFFB300);
+    case 4:
+      return const Color(0xFF42A5F5);
     case 0:
     case 1:
-    default: return Colors.white54;
+    default:
+      return Colors.white54;
   }
 }
 
 IconData _phaseIcon(int phase) {
   switch (phase) {
-    case 2: return Icons.play_arrow_rounded;
-    case 3: return Icons.hourglass_bottom_rounded;
-    case 4: return Icons.pending_actions_rounded;
+    case 2:
+      return Icons.play_arrow_rounded;
+    case 3:
+      return Icons.hourglass_bottom_rounded;
+    case 4:
+      return Icons.pending_actions_rounded;
     case 0:
     case 1:
-    default: return Icons.pause_circle_outline;
+    default:
+      return Icons.pause_circle_outline;
   }
 }
-
-
