@@ -40,7 +40,30 @@ export function gradingMode(kind: string, text: string | null): 'auto' | 'self' 
   if (!t) return 'self';
   if (/(^|\s)\(\s*\d\s*\)\s*\S/.test(t)) return 'self'; // 세트형 (1)(2)
   if (/\((가|나|다|라|마|바|사)\)/.test(t)) return 'self'; // 빈칸 채우기
-  if (t.includes('\\begin')) return 'self'; // 연립/행렬
+  if (t.includes('\\begin')) {
+    const supported = new Set([
+      'cases',
+      'matrix',
+      'pmatrix',
+      'bmatrix',
+      'Bmatrix',
+      'vmatrix',
+      'Vmatrix',
+      'array',
+    ]);
+    const environments = [...t.matchAll(/\\begin\{([^{}]+)\}/g)]
+      .map((match) => match[1]);
+    // 구조만으로 된 연립·행렬은 서버가 동일 선형 표기로 펼칠 수 있어 자동 채점.
+    // 미지원 환경이나 한글 설명이 섞인 답은 기존처럼 교사/학생 확인으로 둔다.
+    if (
+      environments.length === 0 ||
+      environments.some((name) => !supported.has(name)) ||
+      /[가-힣]/.test(t)
+    ) {
+      return 'self';
+    }
+    return 'auto';
+  }
   if (/풀이\s*\d+\s*쪽/.test(t)) return 'self'; // 풀이 참조
   const labels = new Set<string>();
   const re = /(?:^|[,;\s(])\s*([A-Za-zα-ω가-힣][A-Za-z0-9α-ω가-힣의 ]{0,15}?)\s*[:=]/g;
@@ -207,6 +230,45 @@ function replaceLatexCommand(
   return s;
 }
 
+/** MyScript/VLM의 행·열 LaTeX 환경을 앱의 채점용 선형 표기로 편다. */
+function flattenLatexEnvironments(input: string): string {
+  const environment =
+    /\\begin\{(cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|array)\}([\s\S]*?)\\end\{\1\}/g;
+  let s = input;
+  let guard = 0;
+  while (environment.test(s) && guard < 20) {
+    guard += 1;
+    environment.lastIndex = 0;
+    s = s.replace(environment, (_whole, rawName: string, rawBody: string) => {
+      const name = rawName;
+      let body = rawBody.trim();
+      // array 환경의 첫 열 정렬 인자({cc}, {l} 등)는 답 내용이 아니다.
+      if (name === 'array') body = body.replace(/^\s*\{[^{}]*\}/, '');
+      const rows = body
+        .split(/\\\\/)
+        .map((row: string) =>
+          row
+            .split('&')
+            .map((cell) => cell.trim())
+            .filter(Boolean)
+        )
+        .filter((row: string[]) => row.length > 0);
+      if (rows.length === 0) return '';
+      const singleColumn = rows.every((row: string[]) => row.length === 1);
+      const joined = singleColumn
+        ? rows.map((row: string[]) => row[0]).join(',')
+        : rows.map((row: string[]) => row.join(',')).join(';');
+      if (name === 'pmatrix') return `(${joined})`;
+      if (name === 'bmatrix') return `[${joined}]`;
+      if (name === 'Bmatrix' || name === 'cases') return `{${joined}}`;
+      if (name === 'vmatrix') return `|${joined}|`;
+      if (name === 'Vmatrix') return `‖${joined}‖`;
+      return joined;
+    });
+  }
+  return s;
+}
+
 const GREEK: Record<string, string> = {
   alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ',
   theta: 'θ', lambda: 'λ', mu: 'μ', omega: 'ω',
@@ -228,6 +290,7 @@ export function normalizeMathLinear(raw: string | null): string {
   s = s.replace(/\\(?:dfrac|tfrac)/g, '\\frac');
   s = s.replace(/\\text(?:rm|style)?\s*\{([^{}]*)\}/g, '$1');
   s = s.replace(/\\mathrm\s*\{([^{}]*)\}/g, '$1');
+  s = flattenLatexEnvironments(s);
   s = replaceLatexCommand(s, '\\frac', 2, ([a, b]) => `(${a})/(${b})`);
   // n제곱근: \sqrt[3]{x} → √[3](x)  (√[n]( 형태가 표준 선형 표기)
   s = s.replace(/\\sqrt\s*\[\s*(\d+)\s*\]/g, '\\nthroot$1');
@@ -262,6 +325,8 @@ export function normalizeMathLinear(raw: string | null): string {
   s = s.replace(/\^\{([^{}]*)\}/g, '^($1)');
   s = s.replace(/_\{([^{}]*)\}/g, '_($1)');
   s = s.replace(/\\[,;! ]/g, '');
+  // LaTeX 리터럴 중괄호(\{, \})는 MyScript 일반 중괄호와 동일하다.
+  s = s.replace(/\\([{}])/g, '$1');
   s = s.replace(/[{}]/g, '');
   s = s.replace(/−/g, '-'); // U+2212
   // 보기 항목 표기 통일: ㉠/㈀/(ㄱ) → ㄱ

@@ -41,8 +41,23 @@ eq(gradingMode('subjective', '(1) 시속 5 km (2) 12분'), 'self', 'mode: 세트
 eq(gradingMode('subjective', '(가) 10 (나) 9 (다) 8'), 'self', 'mode: 빈칸');
 eq(
   gradingMode('subjective', '\\begin{cases} x+y=12 \\\\ y=3x \\end{cases}'),
+  'auto',
+  'mode: 구조만 있는 연립 자동 채점',
+);
+eq(
+  gradingMode('subjective', '\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}'),
+  'auto',
+  'mode: 구조만 있는 행렬 자동 채점',
+);
+eq(
+  gradingMode('subjective', '해는 \\begin{pmatrix}1\\\\2\\end{pmatrix}'),
   'self',
-  'mode: 연립',
+  'mode: 한글 설명이 섞인 행렬은 셀프 채점',
+);
+eq(
+  gradingMode('subjective', '\\begin{aligned}x&=1\\\\y&=2\\end{aligned}'),
+  'self',
+  'mode: 미지원 수식 환경은 셀프 채점',
 );
 eq(gradingMode('subjective', '풀이 174쪽'), 'self', 'mode: 풀이 참조');
 eq(gradingMode('subjective', 'a=2, b=3'), 'self', 'mode: 복수 라벨');
@@ -65,6 +80,54 @@ eq(gradingMode('subjective', '제2사분면'), 'auto', 'mode: 한글 auto');
 eq(grade('objective', '③', '3').correct, true, 'obj: ③=3');
 eq(grade('objective', '①, ③', '3,1').correct, true, 'obj: 복수 순서무관');
 eq(grade('objective', '③', '4').correct, false, 'obj: 오답');
+
+// -------------------------------------------------------- 구조 수식(MyScript)
+eq(
+  grade('subjective', '\\{1, 4, 5, 6\\}', '{1,4,5,6}').correct,
+  true,
+  'structure: 이스케이프 집합 중괄호',
+);
+eq(
+  grade(
+    'subjective',
+    '\\{x|x\\le1 또는 x>4\\}',
+    '{x|x≤1또는x>4}',
+  ).correct,
+  true,
+  'structure: 개념원리 공통수학2 171쪽 필수2',
+);
+eq(
+  grade('subjective', '\\{2, 3, 4, 6\\}', '{2,3,4,6}').correct,
+  true,
+  'structure: 개념원리 공통수학2 171쪽 확인411',
+);
+eq(
+  grade(
+    'subjective',
+    '\\left\\{\\begin{matrix}x+y=1\\\\x-y=3\\end{matrix}\\right.',
+    '{x+y=1,x-y=3}',
+  ).correct,
+  true,
+  'structure: 연립방정식 matrix → 선형',
+);
+eq(
+  grade(
+    'subjective',
+    '\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}',
+    '(1,2;3,4)',
+  ).correct,
+  true,
+  'structure: pmatrix → 선형',
+);
+eq(
+  grade(
+    'subjective',
+    '\\begin{bmatrix}1&2\\\\3&4\\end{bmatrix}',
+    '[1,2;3,4]',
+  ).correct,
+  true,
+  'structure: bmatrix → 선형',
+);
 
 // ---------------------------------------------------------------- n제곱근
 eq(normalizeMathLinear('\\sqrt[3]{8}'), '√[3](8)', 'nthroot: 정규화');
