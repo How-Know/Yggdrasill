@@ -3678,7 +3678,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (value == 'blank' || value == 'unsolved') return 'blank';
     if (value == 'not_performed') return 'not_performed';
     if (value == 'abandoned') return 'abandoned';
-    return 'correct';
+    if (value == 'correct') return 'correct';
+    // 상태가 없는 문항을 화면에서 정답처럼 보이면, 저장 시 미수행으로
+    // 계산되는 값과 어긋난다. 미채점은 명시적으로 미수행으로 표시한다.
+    return 'not_performed';
   }
 
   void _hydrateSessionState({bool force = false}) {

@@ -392,6 +392,10 @@ class HomeworkProblem {
     this.lastResult,
     this.lastAnswer,
     this.lastScoredBy,
+    this.lastGradedResult,
+    this.lastGradedAnswer,
+    this.lastGradedScoredBy,
+    this.gradedAttemptCount,
     this.roundNo = 0,
     this.roundAttemptCount = 0,
   });
@@ -420,6 +424,14 @@ class HomeworkProblem {
   /// 마지막 시도의 채점 주체 (auto | self). 안 풀었으면 null.
   final String? lastScoredBy;
 
+  /// skipped 를 건너뛴 마지막 채점 결과. 없으면 null.
+  final String? lastGradedResult;
+  final String? lastGradedAnswer;
+  final String? lastGradedScoredBy;
+
+  /// skipped 가 아닌 시도 수. 서버가 아직 안 주면 null.
+  final int? gradedAttemptCount;
+
   /// 이 문항을 몇 번째로 푸는 중인가 (배정 이전의 자유 풀이까지 포함).
   final int roundNo;
 
@@ -443,6 +455,10 @@ class HomeworkProblem {
       lastResult: row['last_result'] as String?,
       lastAnswer: row['last_answer'] as String?,
       lastScoredBy: row['last_scored_by'] as String?,
+      lastGradedResult: row['last_graded_result'] as String?,
+      lastGradedAnswer: row['last_graded_answer'] as String?,
+      lastGradedScoredBy: row['last_graded_scored_by'] as String?,
+      gradedAttemptCount: (row['graded_attempt_count'] as num?)?.toInt(),
       roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
       roundAttemptCount: (row['round_attempt_count'] as num?)?.toInt() ?? 0,
     );
@@ -1953,6 +1969,45 @@ class StudentApi {
       'p_scored_by': 'self',
       'p_meta': {'exit_flush': true},
     });
+  }
+
+  /// 셀프 채점을 배정 문항에 직접 남긴다.
+  /// edge self_mark 가 자유 풀이로만 남기거나 삼킨 경우를 보완한다.
+  Future<void> logHomeworkSelfMark({
+    required String groupId,
+    required String cropId,
+    required bool correct,
+    String? answer,
+  }) async {
+    final id = await identity();
+    if (id == null) {
+      throw StateError('student_identity_missing');
+    }
+    final result =
+        await _client.rpc('learning_log_homework_attempt', params: {
+      'p_student_id': id.studentId,
+      'p_homework_group_id': groupId,
+      'p_crop_id': cropId,
+      'p_result': correct ? 'correct' : 'wrong',
+      'p_scored_by': 'self',
+      'p_answer_text': (answer ?? '').trim().isEmpty ? null : answer,
+      'p_assist_level': 'unknown',
+      'p_meta': {'self_mark_link': true},
+    });
+    if (result is Map && result['ok'] != true) {
+      throw StateError(
+        'homework_self_mark_link_failed:${result['reason'] ?? 'unknown'}',
+      );
+    }
+  }
+
+  /// 채점이 있었던 풀이 이탈을 검사 1회로 남긴다 (check_count +1).
+  /// 단계는 바꾸지 않는다. 열기만 하고 나온 경우에는 호출하지 않는다.
+  Future<void> recordHomeworkSelfInspection(String groupId) async {
+    await _client.rpc(
+      'student_record_homework_self_inspection_v1',
+      params: {'p_group_id': groupId},
+    );
   }
 
   /// 문항 통과 현황 요약.

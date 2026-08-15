@@ -226,10 +226,7 @@ class KioskNoticePrintService {
             : const <String, DateTime>{},
       );
 
-      // 하원 시 PC 수동 흐름과 동일한 전처리.
-      await HomeworkSessionPlanService.instance.finalizeDeparture(
-        attendanceId: attendanceId,
-      );
+      // 오늘→숙제 전환은 departure_time 트리거가 이미 처리한다.
       if (selection != null) {
         if (selection.itemIds.isNotEmpty) {
           final planItemIds = selection.planHomeworkItemIds.toSet();

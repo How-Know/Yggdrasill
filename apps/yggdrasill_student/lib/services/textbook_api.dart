@@ -409,6 +409,9 @@ class TextbookApi {
       correct: data['correct'] == true,
       partResults: ProblemPartResult.listFromJson(data['part_results']),
       pointsGranted: _pointsGrantedFromMastery(data['mastery']),
+      homeworkLinked: homeworkGroupId == null
+          ? true
+          : data['homework_linked'] as bool?,
     );
   }
 
@@ -613,6 +616,7 @@ class SelfMarkResult {
     required this.correct,
     this.partResults = const [],
     this.pointsGranted = 0,
+    this.homeworkLinked,
   });
 
   final bool correct;
@@ -620,6 +624,9 @@ class SelfMarkResult {
 
   /// 이 채점으로 과제가 통과되면 지급된 포인트.
   final int pointsGranted;
+
+  /// 과제 배정 문항의 공통 정오 원장에도 기록됐는지.
+  final bool? homeworkLinked;
 }
 
 /// 자가 등록 카탈로그용 교재 (진행 통계 없음).

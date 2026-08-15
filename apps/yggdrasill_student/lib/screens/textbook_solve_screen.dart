@@ -452,17 +452,42 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             // 이 배정에서 아직 안 푼 문항 — 빈 상태로 시작한다.
             return p.withSolveState();
           }
-          if (!hp.passed && hp.lastResult == 'skipped') {
-            // 미수행 기록만 있는 문항 — 오답이 아니라 "안 푼 것"이므로
-            // X 표시 없이 빈 상태로 다시 풀 수 있게 한다.
+          // skipped 만 있으면 빈 문항. 그 전에 스스로/자동 채점한
+          // 정오가 있으면 그걸 보여 준다 (이탈 플러시가 skipped 를
+          // 덧씌워도 정오가 사라지지 않게).
+          final lastGraded = hp.lastGradedResult ??
+              (hp.lastResult == 'skipped' ? null : hp.lastResult);
+          final gradedAttempts = hp.gradedAttemptCount ??
+              (lastGraded == null ? 0 : attempts);
+          if (lastGraded == null && hp.passed) {
+            // last_graded 컬럼이 아직 없는 서버에서도, 한 번이라도
+            // 맞힌 문항은 정답으로 복원한다.
+            return p.withSolveState(
+              myCorrect: true,
+              attemptCount: attempts,
+              gradedBy: hp.lastScoredBy ?? (p.isSelfCheck ? 'self' : null),
+              partResults: p.partResults,
+            );
+          }
+          if (gradedAttempts <= 0 || lastGraded == null) {
             return p.withSolveState();
           }
-          final answer = (hp.lastAnswer ?? '').trim();
+          final answer = (hp.lastGradedAnswer ?? hp.lastAnswer ?? '').trim();
+          final bool? myCorrect = lastGraded == 'correct'
+              ? true
+              : lastGraded == 'wrong' || lastGraded == 'partial'
+                  ? false
+                  : hp.passed
+                      ? true
+                      : null;
+          final gradedBy = hp.lastGradedScoredBy ??
+              hp.lastScoredBy ??
+              (p.isSelfCheck ? 'self' : null);
           return p.withSolveState(
             myAnswer: answer.isEmpty ? null : answer,
-            myCorrect: hp.passed,
+            myCorrect: myCorrect,
             attemptCount: attempts,
-            gradedBy: hp.lastScoredBy,
+            gradedBy: gradedBy,
             // 파트별 기록은 캐시에만 있다. 이 배정에서 시도한 문항이면
             // 최신 캐시가 곧 이 회차의 기록이다.
             partResults: p.partResults,
@@ -599,7 +624,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           if (p.flags.isNotEmpty) {
             _flags[p.cropId] = p.flags;
           }
-          if (p.gradedBy == 'self') {
+          // 공책 풀이(셀프)는 답이 비어 있어도 정오를 보여야 한다.
+          // graded_by 가 비어 있어도 이 배정에서 채점된 셀프 문항이면 복원한다.
+          if (p.gradedBy == 'self' ||
+              p.gradedBy == 'teacher' ||
+              (p.isSelfCheck &&
+                  p.myCorrect != null &&
+                  (p.attemptCount ?? 0) > 0)) {
             _selfGraded.add(p.cropId);
           }
           if (p.reportStatus != null) {
@@ -836,6 +867,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
               await StudentApi.instance.listHomeworkProblems(scope.groupId);
           for (final row in rows) {
             if (row.cropId.isEmpty || row.attemptCount > 0) continue;
+            // 방금 스스로 채점한 문항은 서버 집계가 늦어도 미수행으로
+            // 덮지 않는다. 덮이면 재진입 때 정오가 사라지고 다시
+            // 정답 확인을 요구한다.
+            if (_selfGraded.contains(row.cropId) ||
+                _results.containsKey(row.cropId) ||
+                (_attemptCounts[row.cropId] ?? 0) > 0) {
+              continue;
+            }
             await StudentApi.instance.logHomeworkSkipped(
               groupId: scope.groupId,
               cropId: row.cropId,
@@ -843,6 +882,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           }
         } catch (_) {
           // 미수행 기록 실패도 이탈을 막지 않는다.
+        }
+        try {
+          await StudentApi.instance.recordHomeworkSelfInspection(scope.groupId);
+        } catch (_) {
+          // 시도 +1 실패가 이탈을 막지는 않는다.
         }
         HomeworkSession.instance.notifyPlanProgress();
       }
@@ -941,6 +985,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     );
     if (marked == null || !mounted) return;
 
+    var saveStage = 'self_mark';
     try {
       final res = await TextbookApi.instance.selfMark(
         bookId: widget.book.bookId,
@@ -962,8 +1007,21 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
       _noteFreePracticeGrant(res.pointsGranted);
+      if (res.homeworkLinked != true) {
+        saveStage = 'homework_link';
+        await _ensureHomeworkSelfMarkLinked(
+          cropId: problem.cropId,
+          correct: marked,
+          answer: _answers[problem.cropId],
+          expectedAttemptCount: _attemptCounts[problem.cropId] ?? 1,
+          verifyFirst: res.homeworkLinked == null,
+        );
+      }
+      saveStage = 'complete_check';
       await _maybeCompleteHomework();
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[HW_SELF_MARK][$saveStage] $e');
+      debugPrintStack(stackTrace: stackTrace);
       if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
@@ -1045,6 +1103,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     );
     if (marked == null || !mounted) return;
 
+    var saveStage = 'self_mark_part';
     try {
       final res = await TextbookApi.instance.selfMark(
         bookId: widget.book.bookId,
@@ -1071,8 +1130,21 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
       _noteFreePracticeGrant(res.pointsGranted);
+      if (res.homeworkLinked != true) {
+        saveStage = 'homework_link';
+        await _ensureHomeworkSelfMarkLinked(
+          cropId: problem.cropId,
+          correct: res.correct,
+          answer: _answers[problem.cropId],
+          expectedAttemptCount: _attemptCounts[problem.cropId] ?? 1,
+          verifyFirst: res.homeworkLinked == null,
+        );
+      }
+      saveStage = 'complete_check';
       await _maybeCompleteHomework();
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[HW_SELF_MARK][$saveStage] $e');
+      debugPrintStack(stackTrace: stackTrace);
       if (mounted && !_notifyIfBookSubmitted(e)) {
         TopGlassSnackBar.show(
           context,
@@ -1081,6 +1153,44 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         );
       }
     }
+  }
+
+  /// 과제 모드에서 셀프 채점이 배정 문항(learning_attempts)에 안 남았으면
+  /// 한 번 더 잇는다. 안 남으면 재진입 때 빈 문항으로 보인다.
+  Future<void> _ensureHomeworkSelfMarkLinked({
+    required String cropId,
+    required bool correct,
+    String? answer,
+    required int expectedAttemptCount,
+    required bool verifyFirst,
+  }) async {
+    final scope = widget.homework;
+    if (scope == null || cropId.isEmpty) return;
+    if (verifyFirst) {
+      try {
+        final rows =
+            await StudentApi.instance.listHomeworkProblems(scope.groupId);
+        for (final row in rows) {
+          if (row.cropId != cropId ||
+              row.attemptCount < expectedAttemptCount) {
+            continue;
+          }
+          final lastGraded = row.lastGradedResult ??
+              (row.lastResult == 'skipped' ? null : row.lastResult);
+          if (lastGraded == (correct ? 'correct' : 'wrong')) return;
+        }
+      } catch (_) {
+        // 확인 실패 시 아래 직접 기록으로 보완한다.
+      }
+    }
+    // 과제 정오 원장 연결은 선택 사항이 아니다. 이것까지 실패하면 성공처럼
+    // 보이지 않고 호출부에서 기록 실패를 안내한다.
+    await StudentApi.instance.logHomeworkSelfMark(
+      groupId: scope.groupId,
+      cropId: cropId,
+      correct: correct,
+      answer: answer,
+    );
   }
 
   // ------------------------------------------------------------- 입력 조작
@@ -2820,6 +2930,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     final attemptCount = _attemptCounts[problem.cropId] ?? 0;
     final graded = result != null &&
         (_selfGraded.contains(problem.cropId) ||
+            (problem.isSelfCheck &&
+                (_attemptCounts[problem.cropId] ?? 0) > 0) ||
             _gradedAnswers[problem.cropId] == answer);
     final selected = _selectedCropId == problem.cropId;
     final held = _isOnHold(problem.cropId);

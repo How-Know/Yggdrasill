@@ -410,7 +410,7 @@ async function logHomeworkAttempt(
 ): Promise<Record<string, unknown> | null> {
   const groupId = (args.homeworkGroupId ?? '').trim();
   try {
-    const { data } = await admin.rpc('learning_log_homework_attempt', {
+    const { data, error } = await admin.rpc('learning_log_homework_attempt', {
       p_student_id: args.studentId,
       p_homework_group_id: groupId || null,
       p_crop_id: args.cropId,
@@ -422,11 +422,13 @@ async function logHomeworkAttempt(
       p_assist_level: args.gradedBy === 'auto' ? 'none' : 'unknown',
       p_meta: {},
     });
+    if (error) return null;
     if (data && typeof data === 'object') {
       return data as Record<string, unknown>;
     }
   } catch (_) {
     // 학습 기록 실패가 채점 자체를 막지는 않는다.
+    // 과제 셀프 채점은 학생앱이 배정 문항으로 한 번 더 잇는다.
   }
   return null;
 }
@@ -996,6 +998,7 @@ async function actionSelfMark(
       ok: true,
       correct: overall,
       part_results: merged,
+      homework_linked: homeworkGroupId == null || logged?.ok === true,
       mastery: masteryPayload(logged),
     });
   }
@@ -1013,7 +1016,12 @@ async function actionSelfMark(
     homeworkGroupId,
   });
 
-  return json({ ok: true, correct, mastery: masteryPayload(logged) });
+  return json({
+    ok: true,
+    correct,
+    homework_linked: homeworkGroupId == null || logged?.ok === true,
+    mastery: masteryPayload(logged),
+  });
 }
 
 // ---------------------------------------------------------------------------

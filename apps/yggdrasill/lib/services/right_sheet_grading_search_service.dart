@@ -273,10 +273,18 @@ class RightSheetGradingSearchService {
         await _gradingResultService.loadFirstSavedSessionForHomework(
       homeworkItemId: payload.homeworkId,
     );
+    final currentStates =
+        await _gradingResultService.loadCurrentStatesForHomework(
+      studentId: studentId,
+      homeworkItemId: payload.homeworkId,
+      gradingPages: payload.gradingPages,
+    );
     if (!context.mounted) return false;
-    final initialStates = savedSession?.states.isNotEmpty == true
-        ? savedSession!.states
-        : cachedStates;
+    final initialStates = <String, HomeworkAnswerCellState>{
+      ...cachedStates,
+      if (savedSession != null) ...savedSession.states,
+      ...currentStates,
+    };
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
     final lockGrading = readOnly || hasSavedGrading;

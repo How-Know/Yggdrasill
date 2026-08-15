@@ -4002,11 +4002,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         snapshotId: record.snapshotId,
         batchSessionId: record.batchSessionId,
       );
-      if (attendanceId.isNotEmpty) {
-        await HomeworkSessionPlanService.instance.finalizeDeparture(
-          attendanceId: attendanceId,
-        );
-      }
+      // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
       if (selection.itemIds.isNotEmpty) {
         final planItemIds = selection.planHomeworkItemIds.toSet();
         final selectedItemIds = selection.itemIds
@@ -5327,7 +5323,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final questionUid = _trimDynamic(row['pb_question_uid']).isNotEmpty
           ? _trimDynamic(row['pb_question_uid'])
           : cropId;
-      final key = '${baseItem.id}|$pageNumber|$questionIndex|$questionUid';
+      final assignedItemId =
+          _trimDynamic(row['homework_item_id']).isNotEmpty
+              ? _trimDynamic(row['homework_item_id'])
+              : baseItem.id;
+      final key =
+          '$assignedItemId|$pageNumber|$questionIndex|$questionUid';
       final answerKind = _trimDynamic(row['answer_kind']).toLowerCase();
       final renderStyleVersion =
           _trimDynamic(row['answer_render_style_version']);
@@ -5625,10 +5626,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         await _gradingResultService.loadFirstSavedSessionForHomework(
       homeworkItemId: payload.homeworkId,
     );
+    final currentStates =
+        await _gradingResultService.loadCurrentStatesForHomework(
+      studentId: studentId,
+      homeworkItemId: payload.homeworkId,
+      gradingPages: payload.gradingPages,
+    );
     if (!context.mounted || !mounted) return true;
-    final initialStates = savedSession?.states.isNotEmpty == true
-        ? savedSession!.states
-        : cachedStates;
+    final initialStates = <String, HomeworkAnswerCellState>{
+      ...cachedStates,
+      if (savedSession != null) ...savedSession.states,
+      ...currentStates,
+    };
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
     final baselineStates = _retryBaselineStates(baselineSession);
@@ -5848,10 +5857,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             await _gradingResultService.loadFirstSavedSessionForHomework(
           homeworkItemId: payload.homeworkId,
         );
+        final currentStates =
+            await _gradingResultService.loadCurrentStatesForHomework(
+          studentId: studentId,
+          homeworkItemId: payload.homeworkId,
+          gradingPages: payload.gradingPages,
+        );
         if (!context.mounted) return;
-        final initialStates = savedSession?.states.isNotEmpty == true
-            ? savedSession!.states
-            : cachedStates;
+        final initialStates = <String, HomeworkAnswerCellState>{
+          ...cachedStates,
+          if (savedSession != null) ...savedSession.states,
+          ...currentStates,
+        };
         final hasSavedGrading = savedSession != null ||
             _testGradingSavedHomeworkIds.contains(payload.homeworkId);
         final baselineStates = _retryBaselineStates(baselineSession);
@@ -6089,10 +6106,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           await _gradingResultService.loadFirstSavedSessionForHomework(
         homeworkItemId: textbookProblemPayload.homeworkId,
       );
+      final currentStates =
+          await _gradingResultService.loadCurrentStatesForHomework(
+        studentId: studentId,
+        homeworkItemId: textbookProblemPayload.homeworkId,
+        gradingPages: textbookProblemPayload.gradingPages,
+      );
       if (!context.mounted) return;
-      final initialStates = savedSession?.states.isNotEmpty == true
-          ? savedSession!.states
-          : cachedStates;
+      final initialStates = <String, HomeworkAnswerCellState>{
+        ...cachedStates,
+        if (savedSession != null) ...savedSession.states,
+        ...currentStates,
+      };
       final hasSavedGrading = savedSession != null ||
           _testGradingSavedHomeworkIds
               .contains(textbookProblemPayload.homeworkId);
@@ -15940,7 +15965,6 @@ Future<Map<String, HomeworkGradingProgressRate>>
     _loadHomeworkProgressRatesForStudent(String studentId) async {
   final items = HomeworkStore.instance
       .items(studentId)
-      .where((item) => item.status != HomeworkStatus.completed)
       .toList(growable: false);
   if (items.isEmpty) return const <String, HomeworkGradingProgressRate>{};
   final enabledIds = <String>{};
@@ -15952,12 +15976,37 @@ Future<Map<String, HomeworkGradingProgressRate>>
       enabledIds.add(item.id);
     }
   }
-  return HomeworkTestGradingResultService.instance
+  final itemIds = items.map((item) => item.id);
+  final live = await HomeworkTestGradingResultService.instance
+      .loadLiveAttemptProgressRatesForItems(
+    studentId: studentId,
+    homeworkItemIds: itemIds,
+    enabledItemIds: enabledIds,
+  );
+  final fallbackIds = itemIds
+      .where((id) =>
+          enabledIds.contains(id) &&
+          (live[id] == null || live[id]!.graded <= 0))
+      .toList(growable: false);
+  if (fallbackIds.isEmpty) return live;
+
+  // 과거 버전에서 교사 채점 스냅샷 저장 후 공통 원장 미러가 실패한 과제도
+  // 복구한다. 공통 원장에 채점이 하나라도 있으면 live를 항상 우선한다.
+  final fallback = await HomeworkTestGradingResultService.instance
       .loadLatestProgressRatesForItems(
-    items.map((item) => item.id),
+    fallbackIds,
     fallbackTotalByItemId: fallbackTotals,
     enabledItemIds: enabledIds,
   );
+  final merged = <String, HomeworkGradingProgressRate>{...live};
+  for (final entry in fallback.entries) {
+    final liveRate = merged[entry.key];
+    if (liveRate == null ||
+        (liveRate.graded <= 0 && entry.value.graded > 0)) {
+      merged[entry.key] = entry.value;
+    }
+  }
+  return merged;
 }
 
 String _normalizePageRangeForPrint(String raw) {

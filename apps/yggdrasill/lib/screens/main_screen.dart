@@ -4595,12 +4595,7 @@ class _MainScreenState extends State<MainScreen>
                     setId: t.setId,
                     sessionTypeId: t.classInfo?.id,
                   );
-                  if (attendanceId.isNotEmpty) {
-                    await HomeworkSessionPlanService.instance.finalizeDeparture(
-                      attendanceId: attendanceId,
-                    );
-                  }
-                  // 하원 시 숙제 선택 다이얼로그
+                  // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
                   if (selection.itemIds.isNotEmpty) {
                     final planItemIds = selection.planHomeworkItemIds.toSet();
                     final selectedItemIds = selection.itemIds

@@ -379,11 +379,14 @@ class HomeworkTestGradingResultService {
       if (itemRows.isNotEmpty) {
         await supa.from('homework_test_grading_attempt_items').insert(itemRows);
       }
-      await _mirrorGradingToLearningRecords(
+      final mirrored = await _mirrorGradingToLearningRecords(
         studentId: trimmedStudentId,
         homeworkItemId: homeworkItemId,
         rows: computed.rows,
       );
+      if (!mirrored) {
+        throw StateError('unified_homework_grading_write_failed');
+      }
       return true;
     } catch (error, stackTrace) {
       try {
@@ -412,11 +415,14 @@ class HomeworkTestGradingResultService {
                 .from('homework_test_grading_attempt_items')
                 .insert(fallbackItemRows);
           }
-          await _mirrorGradingToLearningRecords(
+          final mirrored = await _mirrorGradingToLearningRecords(
             studentId: trimmedStudentId,
             homeworkItemId: homeworkItemId,
             rows: computed.rows,
           );
+          if (!mirrored) {
+            throw StateError('unified_homework_grading_write_failed');
+          }
           return true;
         } catch (fallbackError, fallbackStackTrace) {
           try {
@@ -445,32 +451,44 @@ class HomeworkTestGradingResultService {
   ///
   /// 학생앱은 learning_attempts 를 읽어 과제 화면을 채우므로, 이 호출이 있어야
   /// 검사 결과(맞은 문항 통과, 틀린 문항만 재도전)가 학생앱에 전달된다.
-  /// 실패해도 채점 저장 자체는 유효하므로 로그만 남기고 삼킨다.
-  Future<void> _mirrorGradingToLearningRecords({
+  /// 현재 정오 원장 기록까지 성공해야 채점 저장을 성공으로 본다.
+  Future<bool> _mirrorGradingToLearningRecords({
     required String studentId,
     required String homeworkItemId,
     required List<_ComputedAttemptRow> rows,
   }) async {
-    final items = <Map<String, dynamic>>[
-      for (final row in rows)
-        if ((row.questionUid ?? '').trim().isNotEmpty)
-          {
-            'question_uid': row.questionUid!.trim(),
-            'state': row.state,
-          },
-    ];
-    if (items.isEmpty) return;
+    final itemsByHomework = <String, List<Map<String, dynamic>>>{};
+    for (final row in rows) {
+      final uid = (row.questionUid ?? '').trim();
+      if (uid.isEmpty) continue;
+      final keyItemId = row.questionKey.split('|').first.trim();
+      final targetItemId =
+          keyItemId.isEmpty ? homeworkItemId.trim() : keyItemId;
+      itemsByHomework.putIfAbsent(
+        targetItemId,
+        () => <Map<String, dynamic>>[],
+      ).add({
+        'question_uid': uid,
+        'state': row.state,
+      });
+    }
+    if (itemsByHomework.isEmpty) return false;
     try {
-      await Supabase.instance.client.rpc(
-        'staff_record_homework_grading_v1',
-        params: {
-          'p_student_id': studentId,
-          'p_homework_item_id': homeworkItemId,
-          'p_items': items,
-        },
-      );
+      for (final entry in itemsByHomework.entries) {
+        final raw = await Supabase.instance.client.rpc(
+          'staff_record_homework_grading_v1',
+          params: {
+            'p_student_id': studentId,
+            'p_homework_item_id': entry.key,
+            'p_items': entry.value,
+          },
+        );
+        if (raw is! Map || raw['ok'] != true) return false;
+      }
+      return true;
     } catch (error) {
       debugPrint('mirrorGradingToLearningRecords failed: $error');
+      return false;
     }
   }
 
@@ -564,6 +582,73 @@ class HomeworkTestGradingResultService {
         debugPrintStack(stackTrace: stackTrace);
       }
       return null;
+    }
+  }
+
+  /// 학생·자동·선생님 채점을 합친 현재 문항별 정오를 불러온다.
+  ///
+  /// `homework_test_grading_*`는 검사 스냅샷/이력이고, 현재 정오표는
+  /// `learning_attempts`의 마지막 채점 결과를 기준으로 한다.
+  Future<Map<String, HomeworkAnswerCellState>>
+      loadCurrentStatesForHomework({
+    required String studentId,
+    required String homeworkItemId,
+    required List<HomeworkAnswerGradingPage> gradingPages,
+  }) async {
+    final sid = studentId.trim();
+    final itemId = homeworkItemId.trim();
+    if (sid.isEmpty || itemId.isEmpty || gradingPages.isEmpty) {
+      return const <String, HomeworkAnswerCellState>{};
+    }
+
+    final keyByItemAndQuestionRef = <String, String>{};
+    final targetItemIds = <String>{itemId};
+    for (final page in gradingPages) {
+      for (final cell in page.cells) {
+        final key = cell.key.trim();
+        final questionRef = _questionUidFromKey(key);
+        if (key.isEmpty || questionRef == null || questionRef.isEmpty) continue;
+        final keyItemId = key.split('|').first.trim();
+        final targetItemId = keyItemId.isEmpty ? itemId : keyItemId;
+        targetItemIds.add(targetItemId);
+        keyByItemAndQuestionRef['$targetItemId|$questionRef'] = key;
+      }
+    }
+    if (keyByItemAndQuestionRef.isEmpty) {
+      return const <String, HomeworkAnswerCellState>{};
+    }
+
+    try {
+      final out = <String, HomeworkAnswerCellState>{};
+      for (final targetItemId in targetItemIds) {
+        final raw = await Supabase.instance.client.rpc(
+          'staff_homework_item_current_grading_v1',
+          params: {
+            'p_student_id': sid,
+            'p_homework_item_id': targetItemId,
+          },
+        );
+        final rows = raw is List ? raw : const <dynamic>[];
+        for (final row in rows.whereType<Map>()) {
+          final map = Map<String, dynamic>.from(row);
+          final questionRef = '${map['question_ref'] ?? ''}'.trim();
+          final key =
+              keyByItemAndQuestionRef['$targetItemId|$questionRef'];
+          if (key == null) continue;
+          switch ('${map['result'] ?? ''}'.trim().toLowerCase()) {
+            case 'correct':
+              out[key] = HomeworkAnswerCellState.correct;
+            case 'wrong':
+            case 'partial':
+              out[key] = HomeworkAnswerCellState.wrong;
+          }
+        }
+      }
+      return out;
+    } catch (error, stackTrace) {
+      debugPrint('loadCurrentStatesForHomework failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      return const <String, HomeworkAnswerCellState>{};
     }
   }
 
@@ -911,7 +996,66 @@ class HomeworkTestGradingResultService {
     }
   }
 
+  /// 배정 문항의 learning_attempts 로 진행률/완료율을 집계한다.
+  ///
+  /// 학생 자가채점·자동채점·선생님 채점이 같은 장부에 모이므로 카드는 이것을
+  /// 우선한다. 문항 행이 없는 레거시 과제는 빈 맵을 돌려 호출부가 교사
+  /// 스냅샷으로 폴백하게 한다.
+  Future<Map<String, HomeworkGradingProgressRate>>
+      loadLiveAttemptProgressRatesForItems({
+    required String studentId,
+    required Iterable<String> homeworkItemIds,
+    Set<String> enabledItemIds = const <String>{},
+  }) async {
+    final ids = homeworkItemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final sid = studentId.trim();
+    if (ids.isEmpty || sid.isEmpty) {
+      return const <String, HomeworkGradingProgressRate>{};
+    }
+
+    final out = <String, HomeworkGradingProgressRate>{};
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'staff_homework_item_live_progress_v1',
+        params: {
+          'p_student_id': sid,
+          'p_item_ids': ids,
+        },
+      );
+      final rows = raw is List ? raw : const <dynamic>[];
+      for (final row in rows.whereType<Map>()) {
+        final map = Map<String, dynamic>.from(row);
+        final itemId = '${map['homework_item_id'] ?? ''}'.trim();
+        if (itemId.isEmpty || !enabledItemIds.contains(itemId)) continue;
+        final total = math.max(0, _intOf(map['total']));
+        if (total <= 0) continue;
+        final graded = math.max(0, _intOf(map['graded'])).clamp(0, total);
+        final completed =
+            math.max(0, _intOf(map['completed'])).clamp(0, graded);
+        out[itemId] = HomeworkGradingProgressRate(
+          total: total,
+          graded: graded,
+          completed: completed,
+          recordedQuestionCount: total,
+          enabled: true,
+        );
+      }
+      return out;
+    } catch (error, stackTrace) {
+      debugPrint('loadLiveAttemptProgressRatesForItems failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      return const <String, HomeworkGradingProgressRate>{};
+    }
+  }
+
   /// 최신 교사 채점 attempt로 문항 진행률/완료율을 집계한다.
+  ///
+  /// 문항 행이 없는 레거시 과제 폴백용. 마이그레이션 과제는
+  /// [loadLiveAttemptProgressRatesForItems] 를 우선한다.
   Future<Map<String, HomeworkGradingProgressRate>>
       loadLatestProgressRatesForItems(
     Iterable<String> homeworkItemIds, {
@@ -1047,7 +1191,9 @@ class HomeworkTestGradingResultService {
         final rawPoint = hasScoreData ? (scoreByQuestionKey[key] ?? 1.0) : 1.0;
         final pointValue =
             (rawPoint.isFinite && rawPoint >= 0) ? rawPoint : 1.0;
-        final state = states[key] ?? HomeworkAnswerCellState.correct;
+        // 상태가 없다는 것은 아직 채점하지 않았다는 뜻이다. 정답으로
+        // 추정하면 빈 정오표를 저장하는 순간 전 문항 정답이 된다.
+        final state = states[key] ?? HomeworkAnswerCellState.notPerformed;
         // 세트형 파트 상태 — '<cellKey>#(1)' 서브 키를 part_states로 분리 기록.
         // 점수·통계는 문항 단위 state만 사용한다.
         final partStates = <String, String>{};
