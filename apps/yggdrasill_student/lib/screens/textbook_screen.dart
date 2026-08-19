@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/textbook_api.dart';
+import '../widgets/student_confirm_sheet.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_progress_summary_card.dart';
 import 'textbook_solve_screen.dart';
@@ -59,25 +60,15 @@ class _TextbookScreenState extends State<TextbookScreen> {
 
   /// 처음부터 다시 풀기. 지난 풀이는 회차로 남고 화면만 비워진다.
   Future<void> _resetBook(StudentTextbook book) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showStudentConfirmSheet(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('처음부터 다시 풀기'),
-        content: Text(
-          '${book.name}의 답을 모두 지우고 처음부터 다시 풉니다.\n'
+      title: '처음부터 다시 풀기',
+      message: '${book.name}의 답을 모두 지우고 처음부터 다시 풉니다.\n'
           '지금까지 푼 기록은 회차로 남아 있어요.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('다시 풀기'),
-          ),
-        ],
-      ),
+      confirmLabel: '다시 풀기',
+      cancelLabel: '취소',
+      confirmIcon: Icons.refresh_rounded,
+      cancelIcon: Icons.close_rounded,
     );
     if (confirmed != true || !mounted) return;
 
@@ -257,34 +248,6 @@ class _BookCard extends StatefulWidget {
 class _BookCardState extends State<_BookCard> {
   bool _expanded = false;
 
-  Future<void> _showCardMenu() async {
-    final reset = await showModalBottomSheet<bool>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => SafeArea(
-        child: Material(
-          color: Theme.of(context).cardColor,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.refresh_rounded),
-                title: const Text('처음부터 다시 풀기'),
-                subtitle: const Text('지금까지 푼 기록은 회차로 남아요'),
-                onTap: () => Navigator.of(context).pop(true),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (reset == true) widget.onReset();
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -308,7 +271,7 @@ class _BookCardState extends State<_BookCard> {
           color: Colors.transparent,
           child: InkWell(
             onTap: widget.onOpen,
-            onLongPress: _showCardMenu,
+            onLongPress: widget.onReset,
             borderRadius: BorderRadius.circular(_cardRadius),
             child: AspectRatio(
               aspectRatio: 1 / _coverA4Ratio,

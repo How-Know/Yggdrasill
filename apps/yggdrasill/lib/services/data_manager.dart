@@ -3378,6 +3378,16 @@ class DataManager {
     return active.isNotEmpty ? active.first : null;
   }
 
+  /// Open pause row (`paused_to` is null). Used by the 등원 button even if
+  /// [pausedFrom] is still in the future.
+  StudentPausePeriod? getOpenPauseForStudent(String studentId) {
+    final open = _studentPausePeriods
+        .where((p) => p.studentId == studentId && p.isOpen)
+        .toList()
+      ..sort((a, b) => b.pausedFrom.compareTo(a.pausedFrom));
+    return open.isNotEmpty ? open.first : null;
+  }
+
   bool isStudentPausedOn(String studentId, DateTime dateLocal) {
     final d = _dateOnlyStatic(dateLocal);
     return _studentPausePeriods
@@ -3406,7 +3416,8 @@ class DataManager {
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('student_pause_periods')
-          .select('id,academy_id,student_id,paused_from,paused_to,note')
+          .select(
+              'id,academy_id,student_id,paused_from,paused_to,expected_resume_on,note,snapshot_cycle,snapshot_session_cycle,snapshot_consumed_count,snapshot_remaining_count')
           .eq('academy_id', academyId)
           .order('paused_from', ascending: false)
           .limit(2000);
@@ -6909,7 +6920,8 @@ class DataManager {
     for (final s in _studentsWithInfo) {
       final id = s.student.id.trim();
       if (id.isEmpty) continue;
-      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+      if (excludePausedStudents &&
+          isStudentPausedOn(id, nowRef ?? DateTime.now())) {
         continue;
       }
       cohortIds.add(id);
@@ -7116,7 +7128,7 @@ class DataManager {
     for (final s in _studentsWithInfo) {
       final id = s.student.id.trim();
       if (id.isEmpty) continue;
-      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+      if (excludePausedStudents && isStudentPausedOn(id, now)) {
         continue;
       }
       cohortIds.add(id);
@@ -7235,7 +7247,7 @@ class DataManager {
     for (final s in _studentsWithInfo) {
       final id = s.student.id.trim();
       if (id.isEmpty) continue;
-      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+      if (excludePausedStudents && isStudentPausedOn(id, now)) {
         continue;
       }
       cohortIds.add(id);
@@ -7348,7 +7360,7 @@ class DataManager {
     for (final s in _studentsWithInfo) {
       final id = s.student.id.trim();
       if (id.isEmpty) continue;
-      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+      if (excludePausedStudents && isStudentPausedOn(id, DateTime.now())) {
         continue;
       }
       cohortIds.add(id);

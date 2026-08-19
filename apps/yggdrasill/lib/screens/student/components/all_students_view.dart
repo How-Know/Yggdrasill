@@ -253,18 +253,17 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     required Widget childWhenDragging,
     required Widget child,
   }) {
-    final bool isPausedNow =
-        DataManager.instance.getActivePauseForStudent(student.student.id) !=
-            null;
+    final now = DateTime.now();
+    final bool isPausedNow = DataManager.instance.isStudentPausedOn(
+      student.student.id,
+      DateTime(now.year, now.month, now.day),
+    );
 
     if (isPausedNow) {
-      // ✅ 휴원 학생은 비활성화(드래그 금지)
+      // 휴원 카드는 StudentCard가 흐리게 그리고, 여기서는 드래그만 막는다.
       return _wrapTextbookDropTargetForStudent(
         studentId: student.student.id,
-        child: Opacity(
-          opacity: 0.45,
-          child: child,
-        ),
+        child: child,
       );
     }
 
@@ -985,12 +984,16 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                     valueListenable: DataManager
                                         .instance.studentPausePeriodsRevision,
                                     builder: (context, _, __) {
+                                      final today = DateTime(
+                                        DateTime.now().year,
+                                        DateTime.now().month,
+                                        DateTime.now().day,
+                                      );
                                       final activeCount = widget.students
                                           .where((s) =>
-                                              DataManager.instance
-                                                  .getActivePauseForStudent(
-                                                      s.student.id) ==
-                                              null)
+                                              !DataManager.instance
+                                                  .isStudentPausedOn(
+                                                      s.student.id, today))
                                           .length;
                                       return Text(
                                         ' $activeCount명',
@@ -1075,21 +1078,37 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             behavior: HitTestBehavior.translucent,
                             onTap:
                                 _hasGroupFilter ? _handleStudentAreaTap : null,
-                            child: ListView(
-                              padding: const EdgeInsets.only(
-                                bottom: FabTabBarTokens
-                                    .fabStyleScreenTabBarBottomPadding,
-                              ),
-                              children: [
-                                _buildEducationLevelGroup('초등',
-                                    EducationLevel.elementary, groupedByGrade),
-                                const SizedBox(height: 52),
-                                _buildEducationLevelGroup('중등',
-                                    EducationLevel.middle, groupedByGrade),
-                                const SizedBox(height: 52),
-                                _buildEducationLevelGroup(
-                                    '고등', EducationLevel.high, groupedByGrade),
-                              ],
+                            child: ValueListenableBuilder<int>(
+                              valueListenable: DataManager
+                                  .instance.studentPausePeriodsRevision,
+                              builder: (context, _, __) {
+                                return ScrollConfiguration(
+                                  behavior: ScrollConfiguration.of(context)
+                                      .copyWith(scrollbars: false),
+                                  child: ListView(
+                                    padding: const EdgeInsets.only(
+                                      bottom: FabTabBarTokens
+                                          .fabStyleScreenTabBarBottomPadding,
+                                    ),
+                                    children: [
+                                    _buildEducationLevelGroup(
+                                        '초등',
+                                        EducationLevel.elementary,
+                                        groupedByGrade),
+                                    const SizedBox(height: 52),
+                                    _buildEducationLevelGroup(
+                                        '중등',
+                                        EducationLevel.middle,
+                                        groupedByGrade),
+                                    const SizedBox(height: 52),
+                                    _buildEducationLevelGroup(
+                                        '고등',
+                                        EducationLevel.high,
+                                        groupedByGrade),
+                                  ],
+                                  ),
+                                );
+                              },
                             ),
                           ),
                         ),
@@ -1327,7 +1346,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: ReorderableListView.builder(
+          child: ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context)
+                .copyWith(scrollbars: false),
+            child: ReorderableListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
             dragStartBehavior: DragStartBehavior.down,
             buildDefaultDragHandles: false,
@@ -1636,6 +1658,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               );
             },
             onReorder: widget.onReorder,
+          ),
           ),
         ),
       ],
@@ -2480,6 +2503,34 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                       style: const TextStyle(
                           color: Color(0xFFCFDBDB), fontSize: 15),
                     ),
+                    ...() {
+                      final openPause = DataManager.instance
+                          .getOpenPauseForStudent(student.id);
+                      if (openPause == null) return const <Widget>[];
+                      final pausedToday = DataManager.instance
+                          .isStudentPausedOn(student.id, todayStart);
+                      final expected = openPause.expectedResumeOn;
+                      final buf = StringBuffer(
+                        pausedToday ? '휴원 중' : '휴원 예정',
+                      );
+                      buf.write(
+                          ' · 시작 ${DateFormat('yyyy.MM.dd').format(openPause.pausedFrom)}');
+                      if (expected != null) {
+                        buf.write(
+                            ' · 예상 등원 ${DateFormat('yyyy.MM.dd').format(expected)}');
+                      }
+                      return <Widget>[
+                        const SizedBox(height: 6),
+                        Text(
+                          buf.toString(),
+                          style: const TextStyle(
+                            color: Color(0xFFD7B56D),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ];
+                    }(),
                   ],
                 ),
               ),
@@ -2689,7 +2740,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () async {
                     final activePause = DataManager.instance
-                        .getActivePauseForStudent(student.id);
+                        .getOpenPauseForStudent(student.id);
                     final now = DateTime.now();
                     final today = DateTime(now.year, now.month, now.day);
 
@@ -2707,7 +2758,9 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                       final picked = await showDatePicker(
                         context: context,
                         initialDate: today,
-                        firstDate: activePause.pausedFrom,
+                        firstDate: activePause.pausedFrom.isAfter(today)
+                            ? today
+                            : activePause.pausedFrom,
                         lastDate: DateTime(today.year + 2, 12, 31),
                         builder: (context, child) => Theme(
                           data: pickerTheme,
@@ -2752,7 +2805,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 const Text(
-                                  '휴원 기간에는 예정 수업이 생성되지 않습니다.',
+                                  '휴원 기간에는 예정 수업이 생성되지 않고 등원이 막힙니다.\n예상 등원일은 메모이며, 실제 종료일은 등원 처리할 때 정해집니다.',
                                   style: TextStyle(
                                       color: Colors.white70, height: 1.35),
                                 ),
@@ -2806,8 +2859,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                                         },
                                         child: Text(
                                           to == null
-                                              ? '예상 등원일(선택)'
-                                              : '등원: ${DateFormat('yyyy.MM.dd').format(to!)}',
+                                              ? '예상 등원일(메모, 선택)'
+                                              : '예상: ${DateFormat('yyyy.MM.dd').format(to!)}',
                                           style: const TextStyle(
                                               color: Colors.white70),
                                         ),
@@ -2883,14 +2936,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                         fontSize: 16, fontWeight: FontWeight.w700),
                   ),
                   icon: Icon(
-                    DataManager.instance.getActivePauseForStudent(student.id) !=
+                    DataManager.instance.getOpenPauseForStudent(student.id) !=
                             null
                         ? Icons.play_arrow_rounded
                         : Icons.pause_circle_outline,
                     size: 20,
                   ),
                   label: Text(
-                    DataManager.instance.getActivePauseForStudent(student.id) !=
+                    DataManager.instance.getOpenPauseForStudent(student.id) !=
                             null
                         ? '등원'
                         : '휴원',

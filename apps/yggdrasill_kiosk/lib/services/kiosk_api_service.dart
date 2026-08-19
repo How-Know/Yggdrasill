@@ -85,6 +85,8 @@ class KioskApiService {
         return '오늘 예정에 없는 학생입니다. 추가수업으로 다시 시도해 주세요.';
       case 'student_not_found':
         return '학생 정보를 찾을 수 없습니다.';
+      case 'student_paused':
+        return '휴원 중인 학생입니다. 등원할 수 없습니다.';
       default:
         return stringFor(payload, const [
           'message',

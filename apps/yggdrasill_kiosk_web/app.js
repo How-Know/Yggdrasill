@@ -153,6 +153,7 @@ function errorMessage(code, payload, status) {
     case 'already_checked_out': return '이미 하원 처리된 학생입니다.';
     case 'not_scheduled': return '오늘 예정에 없는 학생입니다. 추가수업으로 다시 시도해 주세요.';
     case 'student_not_found': return '학생 정보를 찾을 수 없습니다.';
+    case 'student_paused': return '휴원 중인 학생입니다. 등원할 수 없습니다.';
     default: return pickStr(payload, ['message', 'detail', 'error_description'], `서버 요청에 실패했습니다. (${status || ''})`);
   }
 }

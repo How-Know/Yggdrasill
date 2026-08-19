@@ -1178,7 +1178,17 @@ client.on('message', async (topic, payload) => {
         }
         // Record arrival time (upsert attendance)
         const { error: arrivalErr } = await supa.rpc('m5_record_arrival', { p_academy_id: academy_id, p_student_id: student_id });
-        if (arrivalErr) console.error('[gateway] record_arrival error', arrivalErr);
+        if (arrivalErr) {
+          console.error('[gateway] record_arrival error', arrivalErr);
+          const arrivalMsg = String(arrivalErr.message || '');
+          if (arrivalMsg.includes('STUDENT_PAUSED')) {
+            publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({
+              ok: false, action: 'bind', reason: 'student_paused', student_id
+            }), { qos: 1, retain: false });
+            await publishStudentsTodayToDevice(academy_id, device_id, 'bind:student_paused');
+            return;
+          }
+        }
         // after bind, ensure attendance and list homeworks (active + 숙제)
         const { data: groups, error: lerr } = await listM5GroupsWithHomework(academy_id, student_id);
         if (lerr) console.error('[gateway] list_homework_groups error', lerr);

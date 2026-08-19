@@ -585,3 +585,13 @@ test('suryeok toc prompt keeps unit review rows and drops concept sections', () 
   assert.match(prompt, /수력충전/);
   assert.match(prompt, /단원 마무리 평가/);
 });
+
+test('suryeok toc prompt claims the skill test block as a big unit', () => {
+  const prompt = buildParseTocPrompt({ series: 'suryeok' });
+  assert.match(prompt, /학교 시험 대비 실력 향상 테스트/);
+  // 로마숫자를 떼면 세 편의 이름이 모두 같아진다.
+  assert.match(prompt, /로마숫자를 \*\*빼지 말고\*\*/);
+  assert.match(prompt, /"name": "실력 향상 테스트"/);
+  // [T3] 부속물 배제 규칙이 이 묶음까지 삼키지 않도록 예외를 달아 둔다.
+  assert.match(prompt, /시리즈 규칙이 트리에 넣으라고 명시한 항목은 예외/);
+});

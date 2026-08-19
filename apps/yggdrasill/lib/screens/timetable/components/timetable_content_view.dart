@@ -3933,9 +3933,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           final bool isPausedHere = refForPause != null
               ? DataManager.instance
                   .isStudentPausedOn(info.student.id, refForPause)
-              : (DataManager.instance
-                      .getActivePauseForStudent(info.student.id) !=
-                  null);
+              : DataManager.instance
+                  .isStudentPausedOn(info.student.id, DateTime.now());
 
           final dragData = {
             'type': isClassRegisterMode ? 'register' : 'move',

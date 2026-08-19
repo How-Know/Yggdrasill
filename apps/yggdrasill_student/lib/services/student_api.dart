@@ -259,6 +259,16 @@ class HomeworkGroup {
   /// 목록을 불러온 시각. 수행 중 경과시간 표시에 사용.
   final DateTime fetchedAt = DateTime.now();
 
+  /// 학습앱 홈 카드 `시도 N`과 동일.
+  /// 대기(1)·확인(4)은 끝난 검사 횟수, 수행(2)·제출(3)은 다음 차수(+1).
+  int get performanceAttemptIndex {
+    final checks = checkCount < 0 ? 0 : checkCount;
+    if (phase == 2 || phase == 3) {
+      return checks + 1 < 1 ? 1 : checks + 1;
+    }
+    return checks < 1 ? 1 : checks;
+  }
+
   bool get running => phase == 2 && runStart != null;
 
   /// 지금 시점 기준 사이클 경과(초).

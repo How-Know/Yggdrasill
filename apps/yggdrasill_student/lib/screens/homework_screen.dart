@@ -10,6 +10,8 @@ import '../services/student_api.dart';
 import '../services/student_attendance_session.dart';
 import '../services/textbook_api.dart';
 import 'homework_solve_launcher.dart';
+import '../widgets/student_confirm_sheet.dart';
+import '../widgets/student_dot_flame.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_progress_summary_card.dart';
 
@@ -357,25 +359,14 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
 
   Future<void> _confirmFoundHomework(HomeworkGroup group) async {
     final title = group.title.isEmpty ? '과제' : group.title;
-    final yes = await showDialog<bool>(
+    final yes = await showStudentConfirmSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: const Text('과제를 찾아왔나요?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('아니요'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: YggGlassTokens.confirmActionColor,
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('네'),
-          ),
-        ],
-      ),
+      title: '과제를 찾아왔나요?',
+      message: title,
+      confirmLabel: '네, 찾아왔어요',
+      cancelLabel: '아니요',
+      confirmIcon: Icons.check_rounded,
+      cancelIcon: Icons.close_rounded,
     );
     if (yes != true) return;
 
@@ -573,7 +564,7 @@ class _HomeworkSectionHeader extends StatelessWidget {
 
 /// 과제 카드를 한 줄에 가로로 나란히 배치한다.
 ///
-/// 카드 너비는 화면 가용폭의 70.4%(이전 넓은 카드 88%의 80%)로 전부 동일.
+/// 카드 너비는 화면 가용폭의 64%로 전부 동일.
 /// 두 장이 한 화면에 안 들어가면 가로 스크롤한다.
 class _HomeworkHorizontalRow extends StatelessWidget {
   const _HomeworkHorizontalRow({required this.children});
@@ -583,8 +574,7 @@ class _HomeworkHorizontalRow extends StatelessWidget {
   static const double _cardHeight = 152;
   static const double _gap = 12;
 
-  /// 이전 스크롤 카드폭 비율(0.88)에서 20% 축소.
-  static const double _cardWidthFactor = 0.88 * 0.8;
+  static const double _cardWidthFactor = 0.64;
 
   @override
   Widget build(BuildContext context) {
@@ -636,7 +626,7 @@ class _HomeworkZigzagRow extends StatelessWidget {
 
   static const double _cardHeight = 152;
   static const double _gap = 12;
-  static const double _cardWidthFactor = 0.88 * 0.8;
+  static const double _cardWidthFactor = 0.64;
 
   /// 과제카드 표지와 동일 (_GroupCard._coverSize / 좌측 패딩).
   static const double _coverSize = 126.72;
@@ -3234,6 +3224,7 @@ class _GroupCard extends StatelessWidget {
                 bookLabel: group.sourceLabel,
                 courseLabel: group.courseLabel,
                 overlayLabels: coverLabels,
+                attemptCount: group.performanceAttemptIndex,
               ),
               const SizedBox(width: 28),
               Expanded(
@@ -3358,6 +3349,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
     this.bookLabel = '',
     this.courseLabel = '',
     this.overlayLabels = const [],
+    this.attemptCount = 0,
   });
 
   final double size;
@@ -3369,6 +3361,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
   final String bookLabel;
   final String courseLabel;
   final List<Widget> overlayLabels;
+  final int attemptCount;
 
   @override
   Widget build(BuildContext context) {
@@ -3381,6 +3374,9 @@ class _HomeworkCoverThumb extends StatelessWidget {
     final hasMeta =
         !hasCoverImage && (book.isNotEmpty || course.isNotEmpty);
     final hasOverlayLabels = overlayLabels.isNotEmpty;
+    final hasAttempt = attemptCount > 0;
+    final attempt = hasAttempt ? '시도 $attemptCount' : '';
+    final warningColor = studentAttemptWarningColor(attemptCount);
     Widget cover = coverRef == null
         ? ColoredBox(
             color: fallback,
@@ -3421,107 +3417,167 @@ class _HomeworkCoverThumb extends StatelessWidget {
     return SizedBox(
       width: size,
       height: size,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x1A000000),
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(radius),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              cover,
-              if (showEqualizer) ...[
-                const ColoredBox(color: Color(0x59000000)),
-                const Center(child: _CoverEqualizer()),
-              ] else if (hasBadge) ...[
-                const ColoredBox(color: Color(0x66000000)),
-                Center(child: _CoverBadgeIcon(badge: badge!)),
-              ] else if (hasMeta) ...[
-                // 하단 비네팅 — 여러 스톱으로 경계가 덜 보이게.
-                const DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Color(0x00000000),
-                        Color(0x00000000),
-                        Color(0x14000000),
-                        Color(0x2E000000),
-                        Color(0x52000000),
-                      ],
-                      stops: [0.0, 0.42, 0.62, 0.80, 1.0],
-                    ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(radius),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x1A000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
                   ),
-                ),
-                Positioned(
-                  left: 10,
-                  right: 10,
-                  bottom: 10,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (book.isNotEmpty)
-                        Text(
-                          book,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            height: 1.05,
-                            letterSpacing: -0.35,
-                            fontFamily: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.fontFamily,
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(radius),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    cover,
+                    if (showEqualizer) ...[
+                      const ColoredBox(color: Color(0x59000000)),
+                      const Center(child: _CoverEqualizer()),
+                    ] else if (hasBadge) ...[
+                      const ColoredBox(color: Color(0x66000000)),
+                      Center(child: _CoverBadgeIcon(badge: badge!)),
+                    ] else if (hasMeta) ...[
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0x00000000),
+                              Color(0x00000000),
+                              Color(0x14000000),
+                              Color(0x2E000000),
+                              Color(0x52000000),
+                            ],
+                            stops: [0.0, 0.42, 0.62, 0.80, 1.0],
                           ),
                         ),
-                      if (book.isNotEmpty && course.isNotEmpty)
-                        const SizedBox(height: 4),
-                      if (course.isNotEmpty)
-                        Text(
-                          course,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: const Color(0xFFD8D8DE),
-                            fontSize: 20,
-                            fontWeight: FontWeight.w500,
-                            height: 1.05,
-                            letterSpacing: -0.35,
-                            fontFamily: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.fontFamily,
-                          ),
+                      ),
+                      Positioned(
+                        left: 10,
+                        right: 10,
+                        bottom: hasAttempt ? 36 : 10,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (book.isNotEmpty)
+                              Text(
+                                book,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.05,
+                                  letterSpacing: -0.35,
+                                  fontFamily: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.fontFamily,
+                                ),
+                              ),
+                            if (book.isNotEmpty && course.isNotEmpty)
+                              const SizedBox(height: 4),
+                            if (course.isNotEmpty)
+                              Text(
+                                course,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: const Color(0xFFD8D8DE),
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.05,
+                                  letterSpacing: -0.35,
+                                  fontFamily: Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.fontFamily,
+                                ),
+                              ),
+                          ],
                         ),
+                      ),
                     ],
-                  ),
+                    if (hasOverlayLabels)
+                      Positioned(
+                        left: 8,
+                        right: 8,
+                        top: 8,
+                        child: Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: overlayLabels,
+                        ),
+                      ),
+                  ],
                 ),
-              ],
-              if (hasOverlayLabels)
-                Positioned(
-                  left: 8,
-                  right: 8,
-                  top: 8,
-                  child: Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: overlayLabels,
-                  ),
-                ),
-            ],
+              ),
+            ),
+          ),
+          if (hasAttempt)
+            Positioned(
+              left: 8,
+              bottom: 8,
+              child: _CoverAttemptLabel(
+                label: attempt,
+                warningColor: warningColor,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CoverAttemptLabel extends StatelessWidget {
+  const _CoverAttemptLabel({
+    required this.label,
+    this.warningColor,
+  });
+
+  final String label;
+  final Color? warningColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = warningColor ?? const Color(0x99000000);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: fill.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: [
+          const BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+          if (warningColor != null)
+            BoxShadow(
+              color: warningColor!.withValues(alpha: 0.32),
+              blurRadius: 6,
+            ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            height: 1,
           ),
         ),
       ),

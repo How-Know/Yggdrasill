@@ -101,6 +101,20 @@ async function isAcademyNotificationPaused(academyId, eventDateKey) {
   return Boolean(data && data.length > 0);
 }
 
+async function isStudentPausedOn(academyId, studentId, eventDateKey) {
+  if (!academyId || !studentId || !eventDateKey) return false;
+  const { data, error } = await supa.rpc('student_is_paused_on', {
+    p_academy_id: academyId,
+    p_student_id: studentId,
+    p_day: eventDateKey,
+  });
+  if (error) {
+    console.warn('[makeup-alimtalk-worker] student-pause check failed:', error.message);
+    return false;
+  }
+  return data === true;
+}
+
 async function fetchEgressIp() {
   const endpoints = [
     'https://api64.ipify.org?format=json',
@@ -296,6 +310,11 @@ async function processBatch() {
       }
       if (await isAcademyNotificationPaused(ov.academy_id, eventDateKey)) {
         await setQueueStatus(row.id, { status: 'skipped', last_error: 'academy_notification_paused' });
+        summary.skipped += 1;
+        continue;
+      }
+      if (await isStudentPausedOn(ov.academy_id, ov.student_id, eventDateKey)) {
+        await setQueueStatus(row.id, { status: 'skipped', last_error: 'student_paused' });
         summary.skipped += 1;
         continue;
       }

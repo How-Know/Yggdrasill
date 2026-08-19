@@ -3601,25 +3601,16 @@ class AttendanceService {
     }
   }
 
-  /// 오늘 기준 휴원 중인 학생마다, 가장 이른 휴원 시작일 이후 순수 planned를 DB·로컬에서 제거한다.
+  /// 휴원 구간 `[paused_from, paused_to]`(열린 휴원은 상한 없음) 안의 순수 planned를 제거한다.
+  /// 미래 시작 휴원도 시작일 이후 예정을 미리 지운다.
   Future<void> deletePlannedForAllCurrentlyPausedStudents(
       List<StudentPausePeriod> periods) async {
-    final now = DateTime.now();
-    final todayOnly = DateTime(now.year, now.month, now.day);
-    final byStudent = <String, DateTime>{};
+    if (periods.isEmpty) return;
     for (final p in periods) {
-      if (!p.isActiveOn(todayOnly)) continue;
-      final sid = p.studentId;
-      final existing = byStudent[sid];
-      if (existing == null || p.pausedFrom.isBefore(existing)) {
-        byStudent[sid] = p.pausedFrom;
-      }
-    }
-    if (byStudent.isEmpty) return;
-    for (final e in byStudent.entries) {
       await deletePlannedAttendanceForStudent(
-        e.key,
-        fromInclusiveLocal: e.value,
+        p.studentId,
+        fromInclusiveLocal: p.pausedFrom,
+        toInclusiveLocal: p.pausedTo,
       );
     }
     try {

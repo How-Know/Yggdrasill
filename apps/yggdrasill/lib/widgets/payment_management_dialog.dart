@@ -179,6 +179,10 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     final paidAll = <_PaymentItem>[];
 
     for (final studentWithInfo in students) {
+      if (DataManager.instance
+          .isStudentPausedOn(studentWithInfo.student.id, today)) {
+        continue;
+      }
       final reg0 = studentWithInfo.basicInfo.registrationDate;
       if (reg0 == null) continue;
       final reg = _dateOnly(reg0);
@@ -262,7 +266,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
           for (int i = 1; i <= 3; i++) {
             final nextCycle = last.cycle + i;
             if (byCycle.containsKey(nextCycle)) continue;
-            final due = _addMonthsEom(_dateOnly(last.dueDate), i);
+            final due = resolveDueDateForCycle(nextCycle);
             addItemForCycle(nextCycle, due, null);
           }
         }

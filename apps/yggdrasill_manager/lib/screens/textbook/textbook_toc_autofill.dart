@@ -99,6 +99,15 @@ const Set<String> kSuryeokCategoryLabels = <String>{
 bool _isSuryeokUnitEndName(String name) =>
     name.replaceAll(RegExp(r'\s+'), '').contains('단원마무리');
 
+/// 수력충전 목차 맨 끝의 "학교 시험 대비 실력 향상 테스트" 묶음인지.
+///
+/// 대단원마다 한 편씩("Ⅰ단원 실력 향상 테스트") 있고 목차에 소단원 줄이
+/// 따로 인쇄되지 않는다. 중단원 이름과 소단원 이름 양쪽에서 판정한다.
+String? _suryeokSkillTestRowName(String name) =>
+    name.replaceAll(RegExp(r'\s+'), '').contains('실력향상테스트')
+        ? '실력 향상 테스트'
+        : null;
+
 /// 목차 트리를 만들 때 쓰는 시리즈별 규칙.
 @immutable
 class TocAutofillSeriesRules {
@@ -107,6 +116,7 @@ class TocAutofillSeriesRules {
     required this.unitEndRowName,
     required this.isUnitEndName,
     this.mergeUnitEndRows = false,
+    this.specialExerciseRowName,
   });
 
   /// 단원명으로 잘못 올라온 문제 카테고리 라벨 — 트리에서 걸러낸다.
@@ -121,6 +131,12 @@ class TocAutofillSeriesRules {
   /// 연달아 나오는 마무리 행을 한 행으로 합칠지 여부. 개념+유형처럼 마무리
   /// 지면이 목차에서 여러 줄로 쪼개져 인쇄되는 교재에 쓴다.
   final bool mergeUnitEndRows;
+
+  /// 소단원 줄 없이 중단원 줄 하나로만 인쇄되는 특수 코너(수력충전
+  /// "실력 향상 테스트")의 표준 소단원 이름. 해당 코너가 아니면 null 을
+  /// 돌려준다. 마무리 지면이지만 대단원마다 따로 있어서 [unitEndRowName] 으로
+  /// 이름을 덮으면 서로 구분되지 않는다.
+  final String? Function(String name)? specialExerciseRowName;
 }
 
 TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
@@ -129,6 +145,7 @@ TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
       categoryLabels: kSuryeokCategoryLabels,
       unitEndRowName: '단원 마무리 평가',
       isUnitEndName: _isSuryeokUnitEndName,
+      specialExerciseRowName: _suryeokSkillTestRowName,
     );
   }
   if (seriesKey.trim().toLowerCase() == 'gaeyu') {
@@ -151,8 +168,13 @@ TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
 ///     "1. 다항식의 연산" → "다항식의 연산", "01 다항식의 덧셈과 뺄셈" → "다항식의 덧셈과 뺄셈"
 String stripTocUnitNumbering(String raw) {
   var s = raw.trim();
-  // 유니코드 로마숫자 (Ⅰ, Ⅱ, …) — 구분자 없이도 제거.
-  s = s.replaceFirst(RegExp(r'^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ]+\s*[.)\-·]?\s*'), '');
+  // 유니코드 로마숫자 (Ⅰ, Ⅱ, …). 뒤에 구분자나 공백이 있을 때만 번호 표기로
+  // 본다. 수력충전 "Ⅰ단원 실력 향상 테스트"처럼 붙여 쓴 것은 번호가 아니라
+  // 이름의 일부라, 떼어내면 세 대단원의 이름이 모두 같아진다.
+  s = s.replaceFirst(
+    RegExp(r'^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ]+(\s*[.)\-·]\s*|\s+)'),
+    '',
+  );
   // ASCII 로마숫자 (I, II, IV …) — 뒤에 구분자가 있을 때만 (일반 단어 보호).
   s = s.replaceFirst(RegExp(r'^[IVXivx]+\s*[.)\-·]\s*'), '');
   // 쎈 목차처럼 구분자 없이 "IV 통계"로 오는 경우. 뒤가 한글일 때만 제거해
@@ -245,6 +267,15 @@ List<TocAutofillBigUnit> buildTocAutofillTree(
         for (final sub in mid.subUnits) {
           final subName = stripTocUnitNumbering(sub.name);
           if (subName.isEmpty) continue;
+          final specialSub = rules.specialExerciseRowName?.call(subName);
+          if (specialSub != null) {
+            midOut.subUnits.add(TocAutofillSubUnit(
+              name: specialSub,
+              isExercise: true,
+              printedPage: sub.page,
+            ));
+            continue;
+          }
           if (sub.isExercise || rules.isUnitEndName(subName)) {
             // 개념+유형은 마무리 지면이 목차에서 두 줄로 쪼개져 인쇄되므로
             // 앞 행에 합치고 페이지는 먼저 인쇄된 값을 유지한다.
@@ -271,6 +302,18 @@ List<TocAutofillBigUnit> buildTocAutofillTree(
           midOut.subUnits.add(
             TocAutofillSubUnit(name: rules.unitEndRowName, isExercise: true),
           );
+        }
+        // 특수 코너는 목차에 소단원 줄이 없다. 중단원 줄 자체를 소단원 한
+        // 행으로 세워야 이후 문항 추출 스코프가 생긴다.
+        if (midOut.subUnits.isEmpty) {
+          final specialMid = rules.specialExerciseRowName?.call(midName);
+          if (specialMid != null) {
+            midOut.subUnits.add(TocAutofillSubUnit(
+              name: specialMid,
+              isExercise: true,
+              printedPage: mid.page,
+            ));
+          }
         }
       }
       bigOut.midUnits.add(midOut);

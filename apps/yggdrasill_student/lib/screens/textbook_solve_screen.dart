@@ -1594,31 +1594,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   int get _pendingGradeCount {
-    final problems = _problems ?? const <PageProblem>[];
-    var count = 0;
-    for (final problem in problems) {
-      if (_isOnHold(problem.cropId)) continue;
-      if (problem.hasParts) {
-        for (final part in problem.setParts) {
-          if (part.isSelfCheck) continue;
-          final k = _answerKeyOf(problem.cropId, part.key);
-          final answer = _answers[k]?.trim() ?? '';
-          if (answer.isEmpty || answer.contains('()')) continue;
-          if (_gradedAnswers[k] == answer && _results.containsKey(k)) {
-            continue;
-          }
-          count++;
-        }
-        continue;
-      }
-      if (problem.isSelfCheck) continue;
-      final answer = _answers[problem.cropId]?.trim() ?? '';
-      if (answer.isEmpty || answer.contains('()')) continue;
-      if (_gradedAnswers[problem.cropId] == answer &&
-          _results.containsKey(problem.cropId)) {
-        continue;
-      }
-      count++;
+    // 실제 일괄 채점과 같은 범위(_seenProblems)를 센다.
+    // 현재 페이지만 보면 다음 페이지로 넘어간 순간 배지가 사라진다.
+    final pending = _collectPendingSubmissions();
+    var count = pending.answers.length;
+    for (final parts in pending.parts.values) {
+      count += parts.length;
     }
     return count;
   }
