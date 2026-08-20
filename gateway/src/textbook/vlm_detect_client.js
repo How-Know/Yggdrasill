@@ -15,6 +15,7 @@ import {
   GAEYU_ITEM_CATEGORIES,
   SURYEOK_ITEM_CATEGORIES,
   VLM_DETECT_LABELS,
+  isSuryeokReviewHint,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
 import {
@@ -398,7 +399,10 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     ? section
     : 'unknown';
   const sectionHint = String(opts?.sectionHint || '').trim();
-  if (knownSections.includes(sectionHint)) {
+  if (sectionHint === 'skill_test') {
+    // 실력 향상 테스트는 B 슬롯(unit_review)과 같은 저장 경로를 쓴다.
+    out.section = 'unit_review';
+  } else if (knownSections.includes(sectionHint)) {
     out.section = sectionHint;
   }
 
@@ -617,6 +621,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   }
   backfillWonriCategories(out, series);
   backfillGaeyuCategories(out, series);
+  validateSuryeokItemNumbers(out, series);
   backfillSuryeokCategories(out, series);
   carrySuryeokContentGroups(out, series);
   stripGaeyuLabelsWithoutCorner(out, series);
@@ -685,6 +690,32 @@ export function formatSuryeokNumber(printedNumber) {
   const range = raw.match(/^(\d+)\s*[~\-\u2013\u2014\u301c]\s*(\d+)$/);
   if (range) return `${pad(range[1])}~${pad(range[2])}`;
   return raw;
+}
+
+// 수력충전 문항 번호로 인정할 표기인지. 지면에는 두 자리 숫자("01")만 인쇄되고
+// 독립형 세트 지문만 범위("01~05")로 온다.
+function isSuryeokItemNumber(printedNumber) {
+  const raw = String(printedNumber ?? '').trim();
+  if (!raw) return false;
+  return /^\d{1,3}$/.test(raw) || /^\d{1,3}~\d{1,3}$/.test(raw);
+}
+
+// 한 문항의 하위문항 표기("1)", "(2)", "①")를 문항에서 걷어낸다.
+//
+// 모델이 이것들을 개별 문항으로 올려보내면 두 가지가 함께 망가진다. 크롭이
+// 하위문항 단위로 쪼개지고, 무엇보다 그 숫자(1~5)가 소단원 번호열의 최댓값을
+// 밀어 올려서 다음 지면의 진짜 문항(03·04·05)이 번호 역행으로 오해받아 통째로
+// 사라진다. 상위 문항의 크롭 영역은 뒤의 [repairSuryeokItemRegions] 가 다음
+// 번호 앞까지 다시 늘려주므로 여기서 지워도 본문이 잘리지 않는다.
+function validateSuryeokItemNumbers(result, series) {
+  if (series !== 'suryeok') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+  const kept = result.items.filter((item) => isSuryeokItemNumber(item.number));
+  const dropped = result.items.length - kept.length;
+  if (dropped <= 0) return;
+  result.items = kept;
+  const suffix = `suryeok_sub_item_number_dropped=${dropped}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
 }
 
 // 수력충전 단일 패스 — 문항의 category 를 검증/보정한다.
@@ -1075,6 +1106,10 @@ function normalizeDifficultyLabel(input) {
   if (suryeokBadge === '계산조심') return '계산 조심';
   if (suryeokBadge === '생각더하기') return '생각 더하기';
   if (suryeokBadge === '조건확인') return '조건 확인';
+  // 실력 향상 테스트 전용. "시험에 꼭 나오는 문제"(RPM)와 구분하려고
+  // "시험에꼭" 완전 일치만 받는다.
+  if (suryeokBadge === '시험에꼭') return '시험에 꼭!';
+  if (suryeokBadge === '도전해얍') return '도전해 얍!';
   if (compact === '교육청기출') return '교육청기출';
   // 개념원리 연습문제 하단 기출 구간 라벨. "수능 기출"/"수능기출" 등 표기 변형 흡수.
   if (/^수능기출$/.test(compact)) return '수능기출';
@@ -1555,7 +1590,7 @@ function synthesizeNumberBboxFromItemRegion(item, section) {
 // 다시 계산한다: 위는 번호 줄, 아래는 다음 번호 직전, 좌우는 단 전체.
 export function suryeokMarksNeedRepair(result, sectionHint = '') {
   if (!result || !Array.isArray(result.items)) return false;
-  if (sectionHint === 'unit_review' || result.section === 'unit_review') return true;
+  if (isSuryeokReviewHint(sectionHint) || result.section === 'unit_review') return true;
   if (sectionHint !== 'type_problem') return false;
   const columns = new Map();
   for (const item of result.items) {
@@ -1588,7 +1623,7 @@ export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
       .map((item) => [formatSuryeokNumber(item?.number), item]),
   );
   const category =
-    sectionHint === 'unit_review' || result.section === 'unit_review'
+    isSuryeokReviewHint(sectionHint) || result.section === 'unit_review'
       ? 'unit_review'
       : 'type_problem';
   let added = 0;

@@ -215,9 +215,16 @@ class HomeworkAssignmentStore {
   final Map<String, List<HomeworkAssignmentDetail>>
       _activeAssignmentsCacheByStudent = {};
 
-  /// Students for whom [loadActiveAssignments] has finished at least once (success or handled error).
+  /// Students for whom [loadActiveAssignments] has finished successfully at least once.
   /// Used so UI does not paint "current" chips from [HomeworkStore] alone before assignment rows are known.
   final Set<String> _activeAssignmentsLoadCompletedForStudent = <String>{};
+  final Map<String, int> _activeAssignmentLoadGenerationByStudent =
+      <String, int>{};
+  final Map<String, Future<List<HomeworkAssignmentDetail>>>
+      _activeAssignmentLoadInFlightByStudent =
+      <String, Future<List<HomeworkAssignmentDetail>>>{};
+  final Map<String, int> _activeAssignmentInFlightGenerationByStudent =
+      <String, int>{};
 
   /// Item ids that must stay off "current" chip rows until server reservation row is seen.
   final Map<String, Set<String>> _pendingReservedHomeworkItemIdsByStudent = {};
@@ -250,13 +257,23 @@ class HomeworkAssignmentStore {
     final key = (studentId ?? '').trim();
     if (key.isEmpty) {
       _activeAssignmentsLoadCompletedForStudent.clear();
+      for (final id in _activeAssignmentLoadGenerationByStudent.keys.toList()) {
+        _activeAssignmentLoadGenerationByStudent[id] =
+            _activeAssignmentLoadGenerationByStudent[id]! + 1;
+      }
     } else {
       _activeAssignmentsLoadCompletedForStudent.remove(key);
+      _activeAssignmentLoadGenerationByStudent[key] =
+          (_activeAssignmentLoadGenerationByStudent[key] ?? 0) + 1;
     }
     _bump();
   }
 
   void clearActiveAssignmentsCache() {
+    for (final id in _activeAssignmentLoadGenerationByStudent.keys.toList()) {
+      _activeAssignmentLoadGenerationByStudent[id] =
+          _activeAssignmentLoadGenerationByStudent[id]! + 1;
+    }
     _activeAssignmentsCacheByStudent.clear();
     _pendingReservedHomeworkItemIdsByStudent.clear();
     _activeAssignmentsLoadCompletedForStudent.clear();
@@ -494,8 +511,8 @@ class HomeworkAssignmentStore {
         _rtAssignments!,
         key: 'homework_assignments:$academyId',
         onResync: () async {
-          clearActiveAssignmentsCache();
-          _bump();
+          // 마지막 성공 캐시는 새 응답이 올 때까지 유지한다.
+          invalidateActiveAssignments();
         },
       );
       _rtChecks ??= Supabase.instance.client
@@ -537,8 +554,7 @@ class HomeworkAssignmentStore {
         _rtChecks!,
         key: 'homework_assignment_checks:$academyId',
         onResync: () async {
-          clearActiveAssignmentsCache();
-          _bump();
+          invalidateActiveAssignments();
         },
       );
       _rtAcademyId = academyId;
@@ -1165,6 +1181,37 @@ class HomeworkAssignmentStore {
   Future<List<HomeworkAssignmentDetail>> loadActiveAssignments(
     String studentId,
   ) async {
+    final key = studentId.trim();
+    if (key.isEmpty) return <HomeworkAssignmentDetail>[];
+    final generation =
+        _activeAssignmentLoadGenerationByStudent.putIfAbsent(key, () => 0);
+    final running = _activeAssignmentLoadInFlightByStudent[key];
+    if (running != null &&
+        _activeAssignmentInFlightGenerationByStudent[key] == generation) {
+      return running;
+    }
+    final future = _loadActiveAssignmentsForGeneration(
+      studentId: studentId,
+      key: key,
+      generation: generation,
+    );
+    _activeAssignmentLoadInFlightByStudent[key] = future;
+    _activeAssignmentInFlightGenerationByStudent[key] = generation;
+    try {
+      return await future;
+    } finally {
+      if (identical(_activeAssignmentLoadInFlightByStudent[key], future)) {
+        _activeAssignmentLoadInFlightByStudent.remove(key);
+        _activeAssignmentInFlightGenerationByStudent.remove(key);
+      }
+    }
+  }
+
+  Future<List<HomeworkAssignmentDetail>> _loadActiveAssignmentsForGeneration({
+    required String studentId,
+    required String key,
+    required int generation,
+  }) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
@@ -1294,26 +1341,30 @@ class HomeworkAssignmentStore {
           ),
         );
       }
+      // 먼저 시작한 느린 요청이 최신 요청보다 늦게 끝나 캐시를 되돌리지 않게 한다.
+      if (_activeAssignmentLoadGenerationByStudent[key] != generation) {
+        return List<HomeworkAssignmentDetail>.from(
+          _activeAssignmentsCacheByStudent[key] ??
+              const <HomeworkAssignmentDetail>[],
+        );
+      }
       final merged =
           _mergeServerActiveWithOptimisticReservations(studentId, list);
       _prunePendingReservedAfterLoad(studentId, merged);
-      final key = studentId.trim();
-      if (key.isNotEmpty) {
-        _activeAssignmentsCacheByStudent[key] =
-            List<HomeworkAssignmentDetail>.unmodifiable(
-          List<HomeworkAssignmentDetail>.from(merged),
-        );
-        _activeAssignmentsLoadCompletedForStudent.add(key);
-      }
+      _activeAssignmentsCacheByStudent[key] =
+          List<HomeworkAssignmentDetail>.unmodifiable(
+        List<HomeworkAssignmentDetail>.from(merged),
+      );
+      _activeAssignmentsLoadCompletedForStudent.add(key);
       return List<HomeworkAssignmentDetail>.from(merged);
-    } catch (_) {
-      final key = studentId.trim();
-      if (key.isNotEmpty) {
-        _activeAssignmentsLoadCompletedForStudent.add(key);
-        _activeAssignmentsCacheByStudent[key] =
-            const <HomeworkAssignmentDetail>[];
-      }
-      return <HomeworkAssignmentDetail>[];
+    } catch (e, st) {
+      // 일시적인 네트워크 오류를 "활성 과제 없음"으로 확정하지 않는다.
+      // 마지막 성공 캐시를 유지하면 카드가 사라졌다 다시 나타나는 현상도 막는다.
+      debugPrint('[HW_ASSIGN][loadActive][ERROR] student=$key $e\n$st');
+      return List<HomeworkAssignmentDetail>.from(
+        _activeAssignmentsCacheByStudent[key] ??
+            const <HomeworkAssignmentDetail>[],
+      );
     }
   }
 

@@ -89,7 +89,7 @@ class TextbookExpectedAnswerBatch {
       }
     }
     // "1~5" 처럼 범위로 묶인 정답은 범위에 드는 기대 항목 전부에 붙는다.
-    final range = _answerNumberRange(detectedNumber);
+    final range = textbookAnswerNumberRange(detectedNumber);
     if (range == null) return const <int>[];
     final out = <int>[];
     for (var i = 0; i < entries.length; i += 1) {
@@ -216,7 +216,11 @@ String textbookAnswerNumberKey(String raw) {
   return numbers.first;
 }
 
-(int, int)? _answerNumberRange(String raw) {
+/// 답지에 "05~09" 처럼 범위로 인쇄된 머리표를 양 끝 번호로 읽는다.
+///
+/// 여러 문항의 답을 그림 하나(좌표평면·표·격자)로 묶어 인쇄한 묶음이 이렇게
+/// 나온다. 범위가 아니면 null 이다.
+(int, int)? textbookAnswerNumberRange(String raw) {
   final match = RegExp(r'^0*(\d+)\s*[~\-\u2013\u2014\u301c]\s*0*(\d+)$')
       .firstMatch(raw.trim());
   if (match == null) return null;

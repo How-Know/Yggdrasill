@@ -6595,6 +6595,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
     // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
     'type_problem',
     'unit_review',
+    'skill_test',
   ].includes(rawSectionHint)
     ? rawSectionHint
     : '';

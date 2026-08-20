@@ -39,6 +39,7 @@ import '../services/student_flow_store.dart';
 import '../services/student_behavior_assignment_store.dart';
 import '../services/right_sheet_grading_search_service.dart';
 import '../services/homework_batch_confirm_service.dart';
+import '../services/home_realtime_sync_coordinator.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
@@ -2056,7 +2057,9 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _resyncAttendanceAndPushWatch() async {
     try {
-      await DataManager.instance.loadAttendanceRecords();
+      await HomeRealtimeSyncCoordinator.instance.resync(
+        reason: 'main_screen_resumed',
+      );
     } catch (_) {
       // 복귀 동기화 실패 시 기존 로컬 상태를 유지한다.
     }
@@ -3940,7 +3943,8 @@ class _MainScreenState extends State<MainScreen>
                                                                 child:
                                                                     ScrollConfiguration(
                                                                   behavior:
-                                                                      ScrollConfiguration.of(
+                                                                      ScrollConfiguration
+                                                                          .of(
                                                                     context,
                                                                   ).copyWith(
                                                                     scrollbars:
@@ -4651,10 +4655,10 @@ class _MainScreenState extends State<MainScreen>
                         arrivalTime: arrival2,
                         departureTime: now,
                         selectedHomeworkIds: selection.itemIds,
-                        additionalHomeworkIds: (departureDraft
-                                    ?.autoRolloverToHomeworkItemIds ??
-                                const <String>{})
-                            .toList(growable: false),
+                        additionalHomeworkIds:
+                            (departureDraft?.autoRolloverToHomeworkItemIds ??
+                                    const <String>{})
+                                .toList(growable: false),
                         selectedBehaviorIds: selection.selectedBehaviorIds,
                         irregularBehaviorCounts:
                             selection.irregularBehaviorCounts,

@@ -364,6 +364,8 @@ class HomeworkStore {
   bool _supportsRecommendedMinutesColumns = true;
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
+  Future<void>? _loadAllInFlight;
+  bool _loadAllInFlightIsForceRefresh = false;
   RealtimeChannel? _rt;
   String? _rtAcademyId;
   final Map<String, Timer> _rtReloadDebounce = {};
@@ -372,6 +374,7 @@ class HomeworkStore {
   final Set<String> _rtReloadPendingStudentIds = <String>{};
   Timer? _rtFallbackPollTimer;
   DateTime? _rtPollCursorUtc;
+  String? _rtPollAcademyId;
   bool _rtPollInFlight = false;
   bool _rtHealthy = false;
   int _rtPollGeneration = 0;
@@ -2037,18 +2040,53 @@ class HomeworkStore {
     return templates;
   }
 
-  Future<void> loadAll() async {
-    if (_loaded) {
-      try {
-        final String academyId =
-            (await TenantService.instance.getActiveAcademyId()) ??
-                await TenantService.instance.ensureActiveAcademy();
-        _subscribeRealtime(academyId);
-        _startRealtimeFallbackPoll(academyId);
-      } catch (_) {}
+  Future<void> loadAll({bool forceRefresh = false}) async {
+    final inFlight = _loadAllInFlight;
+    if (inFlight != null) {
+      final needsFollowUpRefresh =
+          forceRefresh && !_loadAllInFlightIsForceRefresh;
+      await inFlight;
+      if (needsFollowUpRefresh) {
+        await loadAll(forceRefresh: true);
+      }
       return;
     }
+    final completer = Completer<void>();
+    final loadFuture = completer.future;
+    _loadAllInFlight = loadFuture;
+    _loadAllInFlightIsForceRefresh = forceRefresh;
+    final previousItems = forceRefresh && _loaded
+        ? _byStudentId.map(
+            (key, value) => MapEntry(key, List<HomeworkItem>.from(value)),
+          )
+        : null;
+    final previousGroups = forceRefresh && _loaded
+        ? _groupsByStudentId.map(
+            (key, value) => MapEntry(key, List<HomeworkGroup>.from(value)),
+          )
+        : null;
+    final previousGroupItems = forceRefresh && _loaded
+        ? _groupItemsByGroupId.map(
+            (key, value) => MapEntry(
+              key,
+              List<HomeworkGroupItem>.from(value),
+            ),
+          )
+        : null;
+    final previousGroupIdByItem = forceRefresh && _loaded
+        ? Map<String, String>.from(_groupIdByItemId)
+        : null;
     try {
+      if (_loaded && !forceRefresh) {
+        try {
+          final String academyId =
+              (await TenantService.instance.getActiveAcademyId()) ??
+                  await TenantService.instance.ensureActiveAcademy();
+          _subscribeRealtime(academyId);
+          _startRealtimeFallbackPoll(academyId);
+        } catch (_) {}
+        return;
+      }
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
@@ -2078,19 +2116,50 @@ class HomeworkStore {
         items: allItems,
       );
       await _reloadGroups(academyId: academyId, bump: false);
-      for (final sid in _byStudentId.keys.toList(growable: false)) {
-        await _unifyGroupAssignmentCodes(
-          academyId: academyId,
-          studentId: sid,
-        );
+      // 시작 시 1회 수행하는 정합성 보정은 서버 쓰기를 포함할 수 있으므로,
+      // 포커스/재연결 스냅샷에서는 반복하지 않는다.
+      if (!forceRefresh) {
+        for (final sid in _byStudentId.keys.toList(growable: false)) {
+          await _unifyGroupAssignmentCodes(
+            academyId: academyId,
+            studentId: sid,
+          );
+        }
       }
       _loaded = true;
       _bump();
       _subscribeRealtime(academyId);
-      _startRealtimeFallbackPoll(academyId);
+      // 방금 성공한 전체 스냅샷이 단절 구간의 추가·수정·삭제를 모두 포함한다.
+      // 이때만 poll cursor를 현재 시각 근처로 옮겨도 안전하다.
+      _startRealtimeFallbackPoll(academyId, resetCursor: true);
     } catch (e, st) {
+      // 전체 refresh 도중 후속 hydration/group 조회가 실패해도 마지막 성공
+      // 스냅샷을 잃지 않는다.
+      if (previousItems != null &&
+          previousGroups != null &&
+          previousGroupItems != null &&
+          previousGroupIdByItem != null) {
+        _byStudentId
+          ..clear()
+          ..addAll(previousItems);
+        _groupsByStudentId
+          ..clear()
+          ..addAll(previousGroups);
+        _groupItemsByGroupId
+          ..clear()
+          ..addAll(previousGroupItems);
+        _groupIdByItemId
+          ..clear()
+          ..addAll(previousGroupIdByItem);
+      }
       // ignore: avoid_print
       print('[HW][loadAll][ERROR] $e\n$st');
+    } finally {
+      if (!completer.isCompleted) completer.complete();
+      if (identical(_loadAllInFlight, loadFuture)) {
+        _loadAllInFlight = null;
+        _loadAllInFlightIsForceRefresh = false;
+      }
     }
   }
 
@@ -2103,11 +2172,20 @@ class HomeworkStore {
     return parsed?.toUtc();
   }
 
-  void _startRealtimeFallbackPoll(String academyId) {
+  void _startRealtimeFallbackPoll(
+    String academyId, {
+    bool resetCursor = false,
+  }) {
     final targetAcademyId = academyId.trim();
     if (targetAcademyId.isEmpty) return;
-    // 최근 2초 window부터 시작해 경계 타이밍 업데이트 유실을 줄인다.
-    _rtPollCursorUtc = _nowUtc().subtract(const Duration(seconds: 2));
+    // 단순 재구독/복귀에서는 기존 high-water mark를 유지해야 단절 중 변경을
+    // 놓치지 않는다. 전체 스냅샷을 성공한 경우나 학원 전환 때만 초기화한다.
+    if (resetCursor ||
+        _rtPollCursorUtc == null ||
+        _rtPollAcademyId != targetAcademyId) {
+      _rtPollCursorUtc = _nowUtc().subtract(const Duration(seconds: 2));
+      _rtPollAcademyId = targetAcademyId;
+    }
     _scheduleNextRealtimeFallbackPoll(targetAcademyId, immediate: true);
   }
 
@@ -2380,7 +2458,7 @@ class HomeworkStore {
         key: 'homework_items:$targetAcademyId',
         onResync: () async {
           try {
-            await loadAll();
+            await loadAll(forceRefresh: true);
           } catch (_) {}
         },
         onStatus: (status, error) {

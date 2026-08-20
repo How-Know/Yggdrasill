@@ -273,6 +273,24 @@ class _TextbookUnitAuthoringDialogState
     return index < rows.length ? rows[index] : null;
   }
 
+  bool _isSuryeokSkillTestFocus(_SubFocus focus) {
+    bool matches(String name) {
+      final compact = name.replaceAll(RegExp(r'\s+'), '');
+      return compact.contains('실력향상테스트') ||
+          compact.contains('학교시험대비');
+    }
+
+    final row = _wonriRowFor(focus);
+    if (row != null && matches(row.nameCtrl.text)) return true;
+    if (focus.bigIndex < 0 || focus.bigIndex >= _bigUnits.length) return false;
+    final big = _bigUnits[focus.bigIndex];
+    if (matches(big.nameCtrl.text)) return true;
+    if (focus.midIndex < 0 || focus.midIndex >= big.middles.length) {
+      return false;
+    }
+    return matches(big.middles[focus.midIndex].nameCtrl.text);
+  }
+
   /// raw_page 가 페이지 범위에 속하는 소단원 행의 포커스 키(`W<idx>`).
   /// DB에 저장된 크롭(sub_key A~D)을 소단원 작업 단위로 복원할 때 쓴다.
   String? _wonriRowSubKeyForPage(int bigIndex, int midIndex, int? rawPage) {
@@ -1179,7 +1197,8 @@ class _TextbookUnitAuthoringDialogState
     // unknown이 되어, 이어지는 지면의 특수 라벨이 모두 제거된다.
     if (_seriesKey == 'suryeok' && _isWonriRowFocus(focus)) {
       final row = _wonriRowFor(focus);
-      return row?.isExercise == true ? 'unit_review' : 'type_problem';
+      if (row?.isExercise != true) return 'type_problem';
+      return _isSuryeokSkillTestFocus(focus) ? 'skill_test' : 'unit_review';
     }
     return _sectionForSubKey(focus.subKey);
   }
@@ -2206,8 +2225,12 @@ class _TextbookUnitAuthoringDialogState
     List<_PageAnalysisRow> rows,
   ) {
     int? printedNumber(TextbookVlmItem item) {
-      final digits = RegExp(r'\d+').firstMatch(item.number);
-      return digits == null ? null : int.tryParse(digits[0]!);
+      // 하위문항 표기("1)", "(2)")가 섞여 들어오면 그 숫자가 번호열의 최댓값을
+      // 밀어 올려, 다음 지면의 진짜 문항이 역행으로 오해받아 통째로 지워진다.
+      // 인쇄된 문항번호 형태만 기준선으로 센다.
+      final raw = item.number.trim();
+      if (!RegExp(r'^\d{1,3}$').hasMatch(raw)) return null;
+      return int.tryParse(raw);
     }
 
     final order = rows.where((r) => r.ok).toList()
@@ -3235,8 +3258,8 @@ class _TextbookUnitAuthoringDialogState
               // 개념원리는 난이도가 없어 label 을 비운다. 개념+유형은 탄탄의
               // 난이도(상/중/하)와 쓱쓱의 갈래(예제/유제/연습)를 label 에 담고,
               // 코너 이름은 두 시리즈 모두 전용 컬럼(itemName)에 저장한다.
-              // 수력충전에 난이도는 없고, 단원 마무리 평가의
-              // 계산 조심 / 생각 더하기 / 조건 확인 배지만 label 에 담는다.
+              // 수력충전에 난이도는 없고, 단원 마무리·실력 향상 테스트의
+              // 특수 배지만 label 에 담는다.
               label: switch (_seriesKey) {
                 'gaeyu' => _gaeyuLabelForCategory(category, vlm.label),
                 'suryeok' => category == 'unit_review' ? vlm.label.trim() : '',

@@ -75,13 +75,20 @@ const GAEYU_LABELS = Object.freeze([
 
 // 수력충전 라벨 집합.
 //   계산 조심 / 생각 더하기 / 조건 확인 — 단원 마무리 평가 문항 번호 옆의 배지.
+//   시험에 꼭! / 도전해 얍! — 마지막 대단원 "학교 시험 대비 실력 향상 테스트".
 // 난이도 표기는 이 교재에 아예 없다.
 const SURYEOK_LABELS = Object.freeze([
   '계산 조심',
   '생각 더하기',
   '조건 확인',
   '조건 확인+생각 더하기',
+  '시험에 꼭!',
+  '도전해 얍!',
 ]);
+
+export function isSuryeokReviewHint(hint) {
+  return hint === 'unit_review' || hint === 'skill_test';
+}
 
 // 시리즈 전체 라벨 합집합. normalizeDetectResult 의 허용 집합으로 사용한다
 // (쎈 페이지에 상중/중요가 인쇄될 일이 없으므로 합집합이어도 오탐 위험은 낮다).
@@ -878,8 +885,21 @@ function buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint = '' }) {
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 교재(수력충전) 스캔본의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
       : `이 이미지는 교재(수력충전) 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
+  const isSkillTest = sectionHint === 'skill_test';
+  const reviewLabelSchema = isSkillTest
+    ? '<\\"시험에 꼭!\\"|\\"도전해 얍!\\", 없으면 \\"\\">'
+    : '<\\"계산 조심\\"|\\"생각 더하기\\"|\\"조건 확인\\"|\\"조건 확인+생각 더하기\\", 없으면 \\"\\">';
   const hintLines =
-    sectionHint === 'unit_review'
+    isSkillTest
+      ? [
+          '=== 이 지면의 코너 ===',
+          '지금 분석 중인 범위는 **학교 시험 대비 실력 향상 테스트**다.',
+          '이 지면의 문항은 모두 category="unit_review" 다. 유형 배지가 없으니 찾지 마라.',
+          '번호 옆 배지는 "시험에 꼭!" 또는 "도전해 얍!" 뿐이다. 계산 조심 / 생각 더하기 /',
+          '조건 확인은 이 코너에 없다. 배지가 없는 문항은 label="" 이다.',
+          '',
+        ]
+      : sectionHint === 'unit_review'
       ? [
           '=== 이 지면의 코너 ===',
           '지금 분석 중인 범위는 **단원 마무리 평가**다. 이 지면의 문항은 모두',
@@ -940,6 +960,14 @@ function buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint = '' }) {
     '        이 배지는 지면에 한두 개뿐이라 놓치기 쉬우니 번호 오른쪽을 매번',
     '        확인하라. 배지가 없는 문항은 label="" 이다. 지어내지 마라.',
     '      · 이 코너에는 "유형 01" 배지가 없다.',
+    '  (4) 학교 시험 대비 실력 향상 테스트 — 책의 마지막 대단원. 머리말에',
+    '      "실력 향상 테스트"가 인쇄된다. 문항 번호는 단원 마무리와 같이',
+    '      **파란 굵은 두 자리**이고 01부터 다시 시작한다. → category="unit_review".',
+    '      · 번호 옆 배지는 **"시험에 꼭!"**(분홍 글씨 + 원 안 흰 "꼭!")과',
+    '        **"도전해 얍!"**(노란 원 강조) 둘뿐이다. 계산 조심 / 생각 더하기 /',
+    '        조건 확인은 이 코너에 없다. 보이면 그대로 label="시험에 꼭!" 또는',
+    '        label="도전해 얍!" 으로 적어라. 다른 배지는 지어내지 마라.',
+    '      · 이 코너에도 "유형 01" 배지가 없다.',
     '',
     '=== 출력 스키마 ===',
     '{',
@@ -950,7 +978,7 @@ function buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint = '' }) {
     '    {',
     '      "number": "<인쇄된 문항번호 원문. 예: \\"01\\", \\"28\\". 세트 헤더는 \\"01~05\\">",',
     '      "category": "type_problem" | "concept_check" | "unit_review",',
-    '      "label": "<\\"계산 조심\\"|\\"생각 더하기\\"|\\"조건 확인\\"|\\"조건 확인+생각 더하기\\", 없으면 \\"\\">",',
+    `      "label": "${reviewLabelSchema}",`,
     '      "is_set_header": <bool — 대괄호 범위 지문 줄이면 true>,',
     '      "set_range": {"from": <int>, "to": <int>} | null,',
     '      "content_group": {',
@@ -1010,9 +1038,16 @@ function buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint = '' }) {
     '     number="01~05", is_set_header=true, set_range={"from":1,"to":5} 로 두고,',
     '     item_region 은 그 공통 지문(과 딸린 공통 그림)만 감싼다. 아래 개별',
     '     문항 01, 02 … 는 각각 따로 담는다.',
-    '[S5] 본문 안의 "(1), (2)" 소문항, "①~⑤" 선택지, 빈칸 "[   ]", 표 눈금,',
-    '     쪽번호, 오른쪽 위 "DAY 01" 배지, 아래쪽 "< 정답과 해설 p. 22 >" 안내는',
+    '[S5] 본문 안의 소문항 번호는 문항 번호가 아니다. "(1)", "1)", "①~⑤",',
+    '     "가)", "㉠" 처럼 어떤 표기든 마찬가지다. 빈칸 "[   ]", 표 눈금,',
+    '     쪽번호, 오른쪽 위 "DAY 01" 배지, 아래쪽 "< 정답과 해설 p. 22 >" 안내도',
     '     문항 번호가 아니다.',
+    '     - 문항 번호는 **초록/파랑 굵은 두 자리 숫자**뿐이다. 한 문항 아래에',
+    '       "1)" ~ "5)" 가 세로로 길게 이어져도 그것들은 모두 그 문항 하나의',
+    '       일부다. 각각을 items 에 담지 말고, 그 문항의 item_region 안에',
+    '       전부 포함시켜라.',
+    '     - number 에 괄호나 기호를 섞어 적지 마라("1)" 금지). 두 자리 숫자',
+    '       그대로이거나 세트 헤더 범위("01~05")뿐이다.',
     '[S6] 문항이 하나도 없는 지면(대단원 도입 개념 정리 지면 등)은',
     '     page_kind="concept_page", items=[] 로 반환한다. 개념 박스를 억지로',
     '     문항으로 감싸지 마라.',
@@ -1045,19 +1080,28 @@ function buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint = '' }) {
 }
 
 export function buildSuryeokMarkRepairPrompt({ rawPage, sectionHint = '' }) {
-  const unitReview = sectionHint === 'unit_review';
+  const isSkillTest = sectionHint === 'skill_test';
+  const unitReview = sectionHint === 'unit_review' || isSkillTest;
   return [
     '한국 수학 교재 수력충전 본문에서 문항 번호와 특수 배지만 재검사하세요.',
     `PDF raw page ${rawPage}. 이 작업은 누락 보정 전용입니다.`,
     '',
-    unitReview
+    isSkillTest
+      ? '이 페이지는 실력 향상 테스트입니다. 파란색 굵은 두 자리 문항번호를 모두 찾으세요.'
+      : unitReview
       ? '이 페이지는 단원 마무리 평가입니다. 파란색 굵은 두 자리 문항번호를 모두 찾으세요.'
       : '이 페이지는 소단원 유형 문제입니다. 초록색 굵은 두 자리 문항번호를 모두 찾으세요.',
     '개념 박스 바깥의 색 있는 두 자리 번호는 그 위에 도움말·풀이 팁·설명 배지가',
     '길게 이어져도 반드시 문항번호입니다. 번호만 보고 빠짐없이 찾으세요.',
     '수식·쪽번호·DAY 번호·(1)(2)·①②와 [03-08] 범위 머리는 제외하세요.',
     '',
-    ...(unitReview
+    ...(isSkillTest
+      ? [
+          '각 번호 바로 오른쪽 같은 줄의 배지를 독립적으로 확인하세요.',
+          '허용 배지: 시험에 꼭!, 도전해 얍!. 다른 배지는 없습니다.',
+          '보이면 느낌표를 포함해 정확히 "시험에 꼭!" 또는 "도전해 얍!"으로 적으세요.',
+        ]
+      : unitReview
       ? [
           '각 번호 바로 오른쪽 같은 줄의 배지를 독립적으로 확인하세요.',
           '허용 배지: 계산 조심, 조건 확인, 생각 더하기.',

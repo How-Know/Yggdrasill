@@ -186,8 +186,9 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
   //     지문이 붙고 2단으로 조판된다.
   //   - 개념 체크(둥근 사각형 배지가 붙은 빈칸 채우기)는 그 소단원 번호열을
   //     그대로 이어받는다. 지면 마지막 문항으로 불규칙하게 나타난다.
-  //   - 난이도 표기는 없다. 단원 마무리 평가에만 계산 조심 / 생각 더하기 /
-  //     조건 확인 배지가 붙는다.
+  //   - 난이도 표기는 없다. 단원 마무리 평가에는 계산 조심 / 생각 더하기 /
+  //     조건 확인 배지가, 마지막 대단원 실력 향상 테스트에는 시험에 꼭! /
+  //     도전해 얍! 만 붙는다.
   TextbookSeriesCatalogEntry(
     key: 'suryeok',
     displayName: '수력충전',

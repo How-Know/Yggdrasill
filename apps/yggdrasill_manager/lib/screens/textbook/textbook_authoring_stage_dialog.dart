@@ -1336,35 +1336,40 @@ class _TextbookAuthoringStageDialogState
           skippedHere += 1;
           continue;
         }
-        final position = byNumber[currentBlock]?[
-            textbookAnswerNumberKey(answer.problemNumber)];
-        if (position == null || !pending.remove(position)) {
+        final positions = _layoutPositionsForNumber(
+          byNumber: byNumber[currentBlock],
+          printedNumber: answer.problemNumber,
+          pending: pending,
+        );
+        if (positions.isEmpty) {
           skippedHere += 1;
           continue;
         }
-
-        final matchedAnswer = TextbookVlmAnswerItem(
-          problemNumber: targets[position].expected.number,
-          kind: answer.kind,
-          answerText: answer.answerText,
-          answerLatex2d: answer.answerLatex2d,
-          answerAssets: answer.answerAssets,
-          bbox: answer.bbox,
-        );
+        // 묶음이면 그림을 한 번만 잘라 문항끼리 나눠 쓴다.
         _ImageAnswerCrop? imageCrop;
-        if (matchedAnswer.isImage && matchedAnswer.bbox != null) {
+        if (answer.isImage && answer.bbox != null) {
           imageCrop = await _cropAnswerImageFromPage(
                 page: page,
-                bbox1k: matchedAnswer.bbox!,
+                bbox1k: answer.bbox!,
               ) ??
-              _cropAnswerImage(png, matchedAnswer.bbox!);
+              _cropAnswerImage(png, answer.bbox!);
         }
-        hits[position] = _AnswerHit(
-          item: matchedAnswer,
-          rawPage: page,
-          imageCrop: imageCrop,
-        );
-        matchedHere += 1;
+        for (final position in positions) {
+          pending.remove(position);
+          hits[position] = _AnswerHit(
+            item: TextbookVlmAnswerItem(
+              problemNumber: targets[position].expected.number,
+              kind: answer.kind,
+              answerText: answer.answerText,
+              answerLatex2d: answer.answerLatex2d,
+              answerAssets: answer.answerAssets,
+              bbox: answer.bbox,
+            ),
+            rawPage: page,
+            imageCrop: imageCrop,
+          );
+          matchedHere += 1;
+        }
       }
       debugPrint(
         '[stage2] p$page entries=${layout.entries.length} '
@@ -1376,6 +1381,33 @@ class _TextbookAuthoringStageDialogState
         _answerProgress = (page - startPage + 1) / (endPage - startPage + 1);
       });
     }
+  }
+
+  /// 답지 항목 하나가 채울 기대 문항 위치들.
+  ///
+  /// 대개 한 곳이다. 다만 답지는 여러 문항의 답을 그림 하나로 묶어 인쇄하기도
+  /// 한다(수력충전 1-1 "05~09" 아래 좌표평면 한 장). 그림 안에서 어느 점이 몇
+  /// 번 답인지 가릴 수 없으니, 범위에 드는 문항 전부가 그 그림을 답으로 갖는
+  /// 것이 맞다. 첫 번호에만 붙이면 나머지 정답이 통째로 빈다.
+  List<int> _layoutPositionsForNumber({
+    required Map<String, int>? byNumber,
+    required String printedNumber,
+    required Set<int> pending,
+    String Function(String) keyOf = textbookAnswerNumberKey,
+  }) {
+    if (byNumber == null || byNumber.isEmpty) return const <int>[];
+    final single = byNumber[keyOf(printedNumber)];
+    if (single != null) {
+      return pending.contains(single) ? <int>[single] : const <int>[];
+    }
+    final range = textbookAnswerNumberRange(printedNumber);
+    if (range == null) return const <int>[];
+    final out = <int>[];
+    for (var n = range.$1; n <= range.$2; n += 1) {
+      final position = byNumber['$n'];
+      if (position != null && pending.contains(position)) out.add(position);
+    }
+    return out;
   }
 
   Future<TextbookVlmAnswerPageResult> _extractAnswersOnPage({
@@ -1594,21 +1626,31 @@ class _TextbookAuthoringStageDialogState
           skipped += 1;
           continue;
         }
-        final position = byNumber[current]?[numberKey(entry.text)];
-        if (position == null || !pending.remove(position)) {
+        // 정답과 마찬가지로 "05~09 답 해설 참조" 처럼 여러 문항의 풀이가 한
+        // 덩어리로 묶인 지면이 있다. 범위에 드는 문항 모두 그 자리를 가리킨다.
+        final positions = _layoutPositionsForNumber(
+          byNumber: byNumber[current],
+          printedNumber: entry.text,
+          pending: pending,
+          keyOf: numberKey,
+        );
+        if (positions.isEmpty) {
           skipped += 1;
           continue;
         }
-        hits[position] = _SolutionRefWithPage(
-          item: TextbookVlmSolutionRefItem(
-            problemNumber: targets[position].expected.number,
-            numberRegion1k: region,
-            contentRegion1k: entry.contentRegion1k,
-          ),
-          rawPage: page,
-          displayPage: page,
-        );
-        matchedHere += 1;
+        for (final position in positions) {
+          pending.remove(position);
+          hits[position] = _SolutionRefWithPage(
+            item: TextbookVlmSolutionRefItem(
+              problemNumber: targets[position].expected.number,
+              numberRegion1k: region,
+              contentRegion1k: entry.contentRegion1k,
+            ),
+            rawPage: page,
+            displayPage: page,
+          );
+          matchedHere += 1;
+        }
       }
       debugPrint(
         '[stage3] p$page 번호=${res.sequence.where((e) => !e.isHeader).length} '

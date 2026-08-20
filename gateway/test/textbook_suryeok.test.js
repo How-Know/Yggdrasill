@@ -62,6 +62,23 @@ test('suryeok detect prompt lists unit review badges only for the B slot', () =>
   assert.match(prompt, /조건 확인\+생각 더하기/);
 });
 
+test('suryeok skill-test prompt uses only 시험에 꼭! / 도전해 얍! badges', () => {
+  const prompt = buildDetectProblemsPrompt({
+    rawPage: 200,
+    displayPage: 200,
+    pageOffset: 0,
+    series: 'suryeok',
+    sectionHint: 'skill_test',
+  });
+  assert.match(prompt, /실력 향상 테스트/);
+  assert.match(prompt, /시험에 꼭!/);
+  assert.match(prompt, /도전해 얍!/);
+  assert.match(
+    buildSuryeokMarkRepairPrompt({ rawPage: 200, sectionHint: 'skill_test' }),
+    /시험에 꼭!/,
+  );
+});
+
 test('suryeok mark repair adds a missed green number and keeps combined badges', () => {
   const result = {
     section: 'type_problem',
@@ -164,6 +181,29 @@ test('suryeok numbers are padded to two digits and set ranges kept', () => {
   assert.equal(out.items[1].number, '01~05');
   assert.equal(out.items[1].is_set_header, true);
   assert.deepEqual(out.items[1].set_range, { from: 1, to: 5 });
+});
+
+test('suryeok drops sub-item numbers that would poison the number sequence', () => {
+  // 1-1 p168: 유형 48 문항 01 아래에 "1)" ~ "5)" 소문항이 세로로 이어진다.
+  // 이 숫자들이 남으면 번호열 최댓값이 5로 올라가 다음 지면의 03·04·05가
+  // 번호 역행으로 통째로 지워진다.
+  const out = normalizeDetectResult(
+    {
+      items: [
+        { number: '01', category: 'type_problem', ...geometry },
+        { number: '1)', category: 'type_problem', ...geometry },
+        { number: '2)', category: 'type_problem', ...geometry },
+        { number: '(3)', category: 'type_problem', ...geometry },
+        { number: '02', category: 'type_problem', ...geometry },
+      ],
+    },
+    { rawPage: 168, displayPage: 168, series: 'suryeok', sectionHint: 'type_problem' },
+  );
+  assert.deepEqual(
+    out.items.map((item) => item.number),
+    ['01', '02'],
+  );
+  assert.match(out.notes, /suryeok_sub_item_number_dropped=3/);
 });
 
 test('suryeok concept check keeps its own category but stays in the A slot flow', () => {
@@ -416,6 +456,22 @@ test('suryeok labels survive only on unit review items', () => {
   assert.equal(out.items[1].label, '');
 });
 
+test('suryeok skill-test labels are kept and stored as unit_review', () => {
+  const out = normalizeDetectResult(
+    {
+      section: 'unit_review',
+      items: [
+        { number: '03', category: 'unit_review', label: '시험에 꼭!', ...geometry },
+        { number: '07', category: 'unit_review', label: '도전해 얍!', ...geometry },
+      ],
+    },
+    { rawPage: 200, displayPage: 200, series: 'suryeok', sectionHint: 'skill_test' },
+  );
+  assert.equal(out.section, 'unit_review');
+  assert.equal(out.items[0].label, '시험에 꼭!');
+  assert.equal(out.items[1].label, '도전해 얍!');
+});
+
 test('suryeok answer prompt anchors each expected item to its body page badge', () => {
   const prompt = buildExtractAnswersPrompt({
     rawPage: 3,
@@ -489,6 +545,54 @@ test('suryeok prompts explain header-less continuation blocks', () => {
   assert.match(answers, /이어지는 블록/);
 });
 
+// 답지에 "05~09" 머리표 아래 좌표평면 그림 한 장만 있는 묶음이 있다. 예전
+// 프롬프트는 [K4]("기대 번호 그대로") 때문에 범위 라벨을 쓸 길이 없어서 모델이
+// 첫 번호에만 그림을 붙이고 나머지 네 문항을 생략했고, 그 정답이 통째로 비었다.
+test('suryeok answer prompt spreads one shared figure over the whole range', () => {
+  const prompt = buildExtractAnswersPrompt({
+    rawPage: 11,
+    displayPage: 11,
+    series: 'suryeok',
+    expectedNumbers: ['05', '06', '07', '08', '09'],
+    expectedEntries: [
+      { number: '05', corner: '', page: 180 },
+      { number: '06', corner: '', page: 180 },
+      { number: '07', corner: '', page: 180 },
+      { number: '08', corner: '', page: 180 },
+      { number: '09', corner: '', page: 180 },
+    ],
+  });
+  assert.match(prompt, /\[K8\]/);
+  assert.match(prompt, /그림 하나에 함께/);
+  assert.match(prompt, /범위에 드는 기대 번호마다 item 을 하나씩/);
+  assert.match(prompt, /kind="image"/);
+});
+
+// 실제 정답 단계는 이 레이아웃 경로로 돈다. 모델이 "05~09" 를 "05" 로 줄여
+// 읽어서 06~09 의 정답이 통째로 비었다. 범위 표기를 그대로 실어 보내야 앱이
+// 그림 한 장을 다섯 문항에 나눠 붙일 수 있다.
+test('answer layout keeps a range header instead of shrinking it', () => {
+  assert.match(buildAnswerLayoutPrompt({ rawPage: 11 }), /\[A8\]/);
+  assert.match(buildAnswerLayoutPrompt({ rawPage: 11 }), /범위 그대로/);
+
+  const out = normalizeAnswerLayoutResult({
+    entries: [
+      { kind: 'header', title: '02 순서쌍과 좌표평면', page_start: 179, page_end: 181 },
+      {
+        kind: 'answer',
+        problem_number: '05~09',
+        answer_kind: 'image',
+        answer_text: '[image]',
+        bbox: [500, 100, 700, 400],
+      },
+    ],
+  });
+  const answer = out.entries.find((e) => e.kind !== 'header');
+  assert.equal(answer.problem_number, '05~09');
+  assert.equal(answer.kind, 'image');
+  assert.deepEqual(answer.bbox, [500, 100, 700, 400]);
+});
+
 test('suryeok prompts can exclude blocks that were already read', () => {
   const prompt = buildExtractAnswersPrompt({
     rawPage: 1,
@@ -540,6 +644,32 @@ test('answer layout reads headers and every green answer without matching', () =
   assert.equal(normalized.entries[0].page_start, 24);
   assert.equal(normalized.entries[1].problem_number, '01');
   assert.equal(normalized.entries[1].answer_text, '\\frac{7}{3}, \\frac{8}{3}');
+});
+
+// 해설도 "05~09  답 해설 참조" 처럼 여러 문항이 한 덩어리로 묶인다. 범위
+// 표기를 그대로 실어 보내야 앱이 그 자리를 다섯 문항에 나눠 붙일 수 있다.
+test('solution block index keeps a range number instead of shrinking it', () => {
+  assert.match(buildSolutionBlockIndexPrompt({ rawPage: 26 }), /\[P5\]/);
+  assert.match(buildSolutionBlockIndexPrompt({ rawPage: 26 }), /범위 그대로/);
+
+  const out = normalizeSolutionBlocksResult({
+    blocks: [
+      {
+        title: '02 순서쌍과 좌표평면',
+        page_start: 179,
+        page_end: 181,
+        header_region: [40, 40, 70, 480],
+      },
+    ],
+    numbers: [
+      { text: '04', number_region: [100, 45, 120, 80] },
+      { text: '05~09', number_region: [200, 45, 220, 120] },
+    ],
+  });
+  const texts = out.sequence.filter((e) => e.kind === 'number').map((e) => e.text);
+  assert.deepEqual(texts, ['04', '05~09']);
+  const range = out.numbers.find((n) => n.text === '05~09');
+  assert.ok(range.content_region);
 });
 
 test('solution block index keeps badge page ranges and flags empty pages', () => {

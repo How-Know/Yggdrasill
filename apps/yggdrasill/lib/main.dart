@@ -36,6 +36,7 @@ import 'services/runtime_flags.dart';
 import 'widgets/dialog_tokens.dart';
 import 'services/app_config.dart';
 import 'services/update_service.dart';
+import 'services/home_realtime_sync_coordinator.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
@@ -983,12 +984,18 @@ class _MyAppState extends State<MyApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
+      unawaited(
+        HomeRealtimeSyncCoordinator.instance.resync(reason: 'app_resumed'),
+      );
     }
   }
 
   @override
   void onWindowFocus() {
     unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
+    unawaited(
+      HomeRealtimeSyncCoordinator.instance.resync(reason: 'window_focus'),
+    );
   }
 
   void _showClosingOverlay() {
@@ -1799,9 +1806,8 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
                   ),
                 )
                 .toList(growable: false);
-            final title = session.title.trim().isEmpty
-                ? '정답 PDF'
-                : session.title.trim();
+            final title =
+                session.title.trim().isEmpty ? '정답 PDF' : session.title.trim();
             return AnimatedPositioned(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeInOut,

@@ -74,6 +74,16 @@ void main() {
     expect(batch.resolve(detectedNumber: '1~3'), <int>[0, 1, 2]);
   });
 
+  test('답지 머리표의 범위 표기를 양 끝 번호로 읽는다', () {
+    // 수력충전 1-1 답지에는 "05~09" 머리표 아래 좌표평면 그림 한 장만 있고
+    // 문항별 답이 따로 없다. 앞자리 0 과 여러 물결표 문자를 모두 받는다.
+    expect(textbookAnswerNumberRange('05~09'), (5, 9));
+    expect(textbookAnswerNumberRange('5-9'), (5, 9));
+    expect(textbookAnswerNumberRange('05\u301c09'), (5, 9));
+    expect(textbookAnswerNumberRange('05'), isNull);
+    expect(textbookAnswerNumberRange('09~05'), isNull);
+  });
+
   test('기대 목록에 없는 번호는 버린다', () {
     final batch = batchOf(const <TextbookExpectedAnswer>[
       TextbookExpectedAnswer(number: '1'),
