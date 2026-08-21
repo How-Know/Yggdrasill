@@ -472,6 +472,45 @@ test('suryeok skill-test labels are kept and stored as unit_review', () => {
   assert.equal(out.items[1].label, '도전해 얍!');
 });
 
+// 공통수학2 p44 는 좌단 맨 위가 "[08-13]" 로 시작한다. 앞 지면에서 이어진
+// 세트라 유형 머리말이 없고, 모델이 이것만 빠뜨려서 08~13 이 공통 지문 없이
+// 낱개로 저장됐다. 우단의 [14-16]·[17-19] 는 멀쩡히 잡혔었다.
+test('suryeok detect prompt claims range headers in both columns', () => {
+  const prompt = buildDetectProblemsPrompt({
+    rawPage: 44,
+    displayPage: 44,
+    series: 'suryeok',
+    sectionHint: 'type_problem',
+  });
+  assert.match(prompt, /\[08-13\]/);
+  assert.match(prompt, /좌단·우단 양쪽을 모두 훑어라/);
+  assert.match(prompt, /유형 머리말 없이 시작하는 범위 지문/);
+});
+
+// 지면에는 하이픈으로 인쇄되지만("[08-13]") 정답·해설 파일은 물결을 쓴다.
+// 한쪽으로 모으지 않으면 세트 헤더의 키가 어긋난다.
+test('suryeok range headers survive hyphen printing', () => {
+  const out = normalizeDetectResult(
+    {
+      items: [
+        {
+          number: '08-13',
+          category: 'type_problem',
+          is_set_header: true,
+          ...geometry,
+        },
+        { number: '8', category: 'type_problem', ...geometry },
+      ],
+    },
+    { rawPage: 44, displayPage: 44, series: 'suryeok', sectionHint: 'type_problem' },
+  );
+  assert.equal(out.items[0].number, '08~13');
+  assert.equal(out.items[0].is_set_header, true);
+  assert.deepEqual(out.items[0].set_range, { from: 8, to: 13 });
+  assert.equal(out.items[1].number, '08');
+  assert.equal(out.items[1].is_set_header, false);
+});
+
 test('suryeok answer prompt anchors each expected item to its body page badge', () => {
   const prompt = buildExtractAnswersPrompt({
     rawPage: 3,

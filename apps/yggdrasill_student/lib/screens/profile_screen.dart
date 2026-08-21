@@ -92,7 +92,8 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
 
   @override
   void dispose() {
-    StudentAttendanceSession.instance.removeListener(_onAttendanceSessionChanged);
+    StudentAttendanceSession.instance
+        .removeListener(_onAttendanceSessionChanged);
     StudentPointSession.instance.removeListener(_onPointsChanged);
     super.dispose();
   }
@@ -181,7 +182,7 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
     }
   }
 
-  Future<void> _openDesiredPicker() async {
+  Future<void> _openLevelPicker({required bool selfAssessed}) async {
     if (_savingDesired) return;
     var options = _desired.options;
     if (options.isEmpty) {
@@ -196,7 +197,7 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
     if (options.isEmpty) {
       TopGlassSnackBar.show(
         context,
-        message: '목표 선택지를 불러오지 못했어요.',
+        message: '수준 선택지를 불러오지 못했어요.',
         icon: Icons.error_outline_rounded,
       );
       return;
@@ -208,19 +209,37 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       isScrollControlled: true,
       builder: (ctx) => _DesiredLevelSheet(
         options: options,
-        selectedTopPercent: _desired.upperPercent?.round(),
+        selectedTopPercent: (selfAssessed
+                ? _desired.selfAssessedUpperPercent
+                : _desired.upperPercent)
+            ?.round(),
+        title: selfAssessed ? '내가 생각하는 현재 수준' : '고3 수능 희망 수준',
+        description: selfAssessed
+            ? '현재 자신의 위치를 상위 %로 선택해 주세요.'
+            : '고3 수능에서 도달하고 싶은 위치를 선택해 주세요.',
+        clearLabel: selfAssessed ? '자기평가 지우기' : '희망 수준 지우기',
       ),
     );
     if (!mounted || picked == null) return;
-    if (picked.topPercent == _desired.upperPercent?.round()) return;
+    final previous = (selfAssessed
+            ? _desired.selfAssessedUpperPercent
+            : _desired.upperPercent)
+        ?.round();
+    if (picked.topPercent == previous) return;
 
     setState(() => _savingDesired = true);
     try {
-      final saved =
-          await StudentApi.instance.setDesiredLevel(picked.topPercent);
+      final saved = await StudentApi.instance.setReportedLevels(
+        selfAssessedTopPercent: selfAssessed
+            ? picked.topPercent
+            : _desired.selfAssessedUpperPercent?.round(),
+        desiredTopPercent:
+            selfAssessed ? _desired.upperPercent?.round() : picked.topPercent,
+      );
       if (!mounted) return;
       setState(() {
         _desired = StudentDesiredLevelInfo(
+          selfAssessedUpperPercent: saved.selfAssessedUpperPercent,
           levelCode: saved.levelCode,
           upperPercent: saved.upperPercent,
           displayName: saved.displayName,
@@ -231,8 +250,10 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       TopGlassSnackBar.show(
         context,
         message: picked.topPercent == null
-            ? '내 목표를 지웠어요.'
-            : '내 목표를 ${saved.goalValueLabel}로 저장했어요.',
+            ? (selfAssessed ? '자기평가를 지웠어요.' : '희망 수준을 지웠어요.')
+            : (selfAssessed
+                ? '현재 자기평가를 상위 ${picked.topPercent}%로 저장했어요.'
+                : '고3 수능 희망을 ${saved.goalValueLabel}로 저장했어요.'),
         icon: Icons.check_circle_outline_rounded,
       );
     } catch (_) {
@@ -240,7 +261,7 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
       setState(() => _savingDesired = false);
       TopGlassSnackBar.show(
         context,
-        message: '내 목표를 저장하지 못했어요.',
+        message: '수준 정보를 저장하지 못했어요.',
         icon: Icons.error_outline_rounded,
       );
     }
@@ -292,8 +313,7 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
     });
     try {
       await StudentAttendanceSession.instance.refresh();
-      final recent =
-          await StudentApi.instance.listRecentAttendance(limit: 10);
+      final recent = await StudentApi.instance.listRecentAttendance(limit: 10);
       if (!mounted) return;
       setState(() {
         _attendance = StudentAttendanceSession.instance.today;
@@ -366,10 +386,18 @@ class _AttendanceScoreSectionState extends State<_AttendanceScoreSection> {
           subtitle: pointsSubtitle,
           showProgressBar: false,
           unit: 'P',
-          goalTitle: '내 목표',
+          goalTitle: '고3 수능 희망',
           goalValue: _desired.goalValueLabel,
-          onGoalTap: () => unawaited(_openDesiredPicker()),
+          onGoalTap: () => unawaited(_openLevelPicker(selfAssessed: false)),
           onTap: () => unawaited(_togglePoints()),
+        ),
+        const SizedBox(height: 10),
+        _StudentSelfAssessmentCard(
+          value: StudentLevelOption.formatTopPercent(
+            _desired.selfAssessedUpperPercent,
+          ),
+          saving: _savingDesired,
+          onTap: () => unawaited(_openLevelPicker(selfAssessed: true)),
         ),
         AnimatedSize(
           duration: const Duration(milliseconds: 320),
@@ -502,17 +530,14 @@ class _RecentPointHistoryCardState extends State<_RecentPointHistoryCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final surface = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : Colors.white;
+    final surface =
+        isDark ? theme.colorScheme.surfaceContainerHigh : Colors.white;
     final text = theme.colorScheme.onSurface;
     final subText = theme.colorScheme.onSurface.withValues(alpha: 0.45);
-    final divider = isDark
-        ? Colors.white.withValues(alpha: 0.12)
-        : const Color(0xFFC6C6C8);
-    final accent = isDark
-        ? Colors.white.withValues(alpha: 0.78)
-        : const Color(0xFF3A3A3C);
+    final divider =
+        isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFC6C6C8);
+    final accent =
+        isDark ? Colors.white.withValues(alpha: 0.78) : const Color(0xFF3A3A3C);
 
     final rows = widget.entries ?? const <PointHistoryEntry>[];
     final hasBody = widget.entries != null;
@@ -570,9 +595,8 @@ class _RecentPointHistoryCardState extends State<_RecentPointHistoryCard> {
                 sub: subText,
                 accent: accent,
                 expanded: _expanded.contains(rows[i].id),
-                onToggleDetail: rows[i].canExpand
-                    ? () => _toggle(rows[i].id)
-                    : null,
+                onToggleDetail:
+                    rows[i].canExpand ? () => _toggle(rows[i].id) : null,
               ),
             ],
         ],
@@ -740,14 +764,12 @@ class _TodayAttendanceDetailCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final surface = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : Colors.white;
+    final surface =
+        isDark ? theme.colorScheme.surfaceContainerHigh : Colors.white;
     final text = theme.colorScheme.onSurface;
     final subText = theme.colorScheme.onSurface.withValues(alpha: 0.45);
-    final divider = isDark
-        ? Colors.white.withValues(alpha: 0.12)
-        : const Color(0xFFC6C6C8);
+    final divider =
+        isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFC6C6C8);
 
     final hasBody = attendance != null || recent != null;
 
@@ -861,6 +883,70 @@ class _TodayAttendanceDetailCard extends StatelessWidget {
   }
 }
 
+class _StudentSelfAssessmentCard extends StatelessWidget {
+  const _StudentSelfAssessmentCard({
+    required this.value,
+    required this.saving,
+    required this.onTap,
+  });
+
+  final String value;
+  final bool saving;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final text = theme.colorScheme.onSurface;
+    final sub = text.withValues(alpha: 0.55);
+    return Material(
+      color: isDark ? theme.colorScheme.surfaceContainerHigh : Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: saving ? null : onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '내가 생각하는 현재 수준',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: text,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '현재 자신의 위치를 직접 평가한 값이에요.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: sub),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                value,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: text,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right_rounded, color: sub),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DesiredLevelPick {
   const _DesiredLevelPick(this.topPercent);
   final int? topPercent;
@@ -870,10 +956,16 @@ class _DesiredLevelSheet extends StatefulWidget {
   const _DesiredLevelSheet({
     required this.options,
     required this.selectedTopPercent,
+    required this.title,
+    required this.description,
+    required this.clearLabel,
   });
 
   final List<StudentLevelOption> options;
   final int? selectedTopPercent;
+  final String title;
+  final String description;
+  final String clearLabel;
 
   @override
   State<_DesiredLevelSheet> createState() => _DesiredLevelSheetState();
@@ -919,9 +1011,8 @@ class _DesiredLevelSheetState extends State<_DesiredLevelSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final surface = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : Colors.white;
+    final surface =
+        isDark ? theme.colorScheme.surfaceContainerHigh : Colors.white;
     final text = theme.colorScheme.onSurface;
     final sub = text.withValues(alpha: 0.55);
     final current = _optionForPercent(_percent);
@@ -948,7 +1039,7 @@ class _DesiredLevelSheetState extends State<_DesiredLevelSheet> {
                     alignment: Alignment.center,
                     children: [
                       Text(
-                        '내 목표',
+                        widget.title,
                         style: TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w700,
@@ -992,7 +1083,7 @@ class _DesiredLevelSheetState extends State<_DesiredLevelSheet> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      '수능·내신 9등급제 기준이에요. 오른쪽으로 갈수록 상위예요.',
+                      '${widget.description}\n오른쪽으로 갈수록 높은 수준이에요.',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
@@ -1074,9 +1165,9 @@ class _DesiredLevelSheetState extends State<_DesiredLevelSheet> {
                         onPressed: () => Navigator.of(context).pop(
                           const _DesiredLevelPick(null),
                         ),
-                        child: const Text(
-                          '목표 지우기',
-                          style: TextStyle(
+                        child: Text(
+                          widget.clearLabel,
+                          style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFFFF554F),

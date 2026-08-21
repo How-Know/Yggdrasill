@@ -78,6 +78,7 @@ class RightSideSheetTestGradingSession {
   final bool gradingLocked;
   final bool closeSheetOnAction;
   final bool closeBeforeActionCompletes;
+  final int autoFilledCorrectCount;
 
   /// 마이그레이션 과제용 단일 확인 버튼.
   ///
@@ -112,6 +113,7 @@ class RightSideSheetTestGradingSession {
     this.gradingLocked = false,
     this.closeSheetOnAction = true,
     this.closeBeforeActionCompletes = false,
+    this.autoFilledCorrectCount = 0,
     this.smartConfirmAction = false,
     this.showSearchChrome = true,
     this.scoreByQuestionKey = const <String, double>{},

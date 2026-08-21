@@ -273,14 +273,38 @@ class RightSheetGradingSearchService {
         await _gradingResultService.loadFirstSavedSessionForHomework(
       homeworkItemId: payload.homeworkId,
     );
-    final currentStates =
-        await _gradingResultService.loadCurrentStatesForHomework(
-      studentId: studentId,
-      homeworkItemId: payload.homeworkId,
-      gradingPages: payload.gradingPages,
-    );
+    final sourceSnapshotAt = DateTime.now();
+    late final Map<String, HomeworkAnswerCellState> currentStates;
+    try {
+      currentStates = await _gradingResultService.loadCurrentStatesForHomework(
+        studentId: studentId,
+        homeworkItemId: payload.homeworkId,
+        gradingPages: payload.gradingPages,
+        throwOnError: true,
+      );
+    } catch (_) {
+      if (context.mounted) {
+        _showSnackBar(context, '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.');
+      }
+      return true;
+    }
     if (!context.mounted) return false;
+    final recordedKeys = <String>{
+      ...cachedStates.keys,
+      if (savedSession != null) ...savedSession.states.keys,
+      ...currentStates.keys,
+    };
+    final autoFilledCorrectCount = payload.gradingPages
+        .expand((page) => page.cells)
+        .map((cell) => cell.key.trim())
+        .where((key) => key.isNotEmpty && !recordedKeys.contains(key))
+        .toSet()
+        .length;
     final initialStates = <String, HomeworkAnswerCellState>{
+      for (final page in payload.gradingPages)
+        for (final cell in page.cells)
+          if (cell.key.trim().isNotEmpty)
+            cell.key.trim(): HomeworkAnswerCellState.correct,
       ...cachedStates,
       if (savedSession != null) ...savedSession.states,
       ...currentStates,
@@ -329,6 +353,7 @@ class RightSheetGradingSearchService {
       gradingLocked: lockGrading,
       smartConfirmAction: !readOnly,
       closeSheetOnAction: false,
+      autoFilledCorrectCount: autoFilledCorrectCount,
       onStatesChanged: readOnly
           ? null
           : (states) {
@@ -360,37 +385,47 @@ class RightSheetGradingSearchService {
                       payload.homeworkId,
                     ) ??
                     hw;
-                final saved =
-                    await _gradingResultService.saveAttemptFromSession(
+                final groupId =
+                    (HomeworkStore.instance.groupIdOfItem(targetItem.id) ?? '')
+                        .trim();
+                final effectiveKeys = payload.gradingPages
+                    .expand((page) => page.cells)
+                    .map((cell) => cell.key)
+                    .where((key) =>
+                        decoded[key] != HomeworkAnswerCellState.abandoned)
+                    .toList(growable: false);
+                final performed = effectiveKeys
+                    .where((key) =>
+                        decoded[key] != HomeworkAnswerCellState.notPerformed)
+                    .length;
+                final progress = effectiveKeys.isEmpty
+                    ? 0
+                    : ((performed * 100) / effectiveKeys.length).round();
+                final draft =
+                    await _gradingResultService.buildDeferredReturnPayload(
                   studentId: studentId,
+                  groupId: groupId,
+                  homeworkItemIds: [targetItem.id],
                   homeworkItem: targetItem,
                   action: action,
+                  progress: progress,
                   states: decoded,
                   gradingPages: payload.gradingPages,
                   scoreByQuestionKey: payload.scoreByQuestionKey,
+                  sourceSnapshotAt: sourceSnapshotAt,
                   groupHomeworkTitleSnapshot: groupHomeworkTitle,
                   baselineAttemptId: baselineSession?.attempt.id ?? '',
                   baselineStates: baselineStates,
                   correctionStates: correctionStates,
                 );
-                if (!saved) {
+                if (draft == null) {
                   if (context.mounted) {
-                    _showSnackBar(context, '채점 결과 저장에 실패했습니다.');
+                    _showSnackBar(context, '채점 초안을 이 PC에 저장하지 못했습니다.');
                   }
                   return;
                 }
+                await _batchConfirmService.enqueueStructuredDraft(draft);
                 _testGradingSavedHomeworkIds.add(payload.homeworkId);
-                final pending = <HomeworkBatchConfirmKey, bool>{
-                  for (final key in keys) key: action == 'complete',
-                };
-                await _batchConfirmService.executeBatchConfirmNow(
-                  context: context,
-                  pending: pending,
-                );
-                for (final key in keys) {
-                  _batchConfirmService.pending.remove(key);
-                }
-                _batchConfirmService.syncPendingCount();
               }
             },
     );

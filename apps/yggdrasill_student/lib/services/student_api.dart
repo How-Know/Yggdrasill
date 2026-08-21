@@ -764,15 +764,17 @@ class RecentAttendanceSession {
   }
 }
 
-/// 학생 희망 등급(내 목표) — `student_level_states.desired_level_code`.
+/// 학생이 직접 입력하는 현재 자기평가와 고3 수능 희망 수준.
 class StudentDesiredLevelInfo {
   const StudentDesiredLevelInfo({
+    this.selfAssessedUpperPercent,
     this.levelCode,
     this.upperPercent,
     this.displayName,
     this.options = const <StudentLevelOption>[],
   });
 
+  final double? selfAssessedUpperPercent;
   final int? levelCode;
   final double? upperPercent;
   final String? displayName;
@@ -805,6 +807,8 @@ class StudentDesiredLevelInfo {
     final top = (row['desired_top_percent'] as num?)?.toDouble() ??
         (row['upper_percent'] as num?)?.toDouble();
     return StudentDesiredLevelInfo(
+      selfAssessedUpperPercent:
+          (row['self_assessed_top_percent'] as num?)?.toDouble(),
       levelCode: (row['desired_level_code'] as num?)?.toInt(),
       upperPercent: top,
       displayName: (row['display_name'] as String?)?.trim(),
@@ -1724,30 +1728,42 @@ class StudentApi {
     );
   }
 
-  /// 희망 등급(내 목표) + 선택지. 학습앱 스탯의 desired와 동일 테이블.
+  /// 학생 자기평가 + 고3 수능 희망 수준 + 9등급 선택지.
   Future<StudentDesiredLevelInfo> getDesiredLevel() async {
     final rows =
-        await _client.rpc('student_get_desired_level_v1') as List<dynamic>;
+        await _client.rpc('student_get_level_profile_v1') as List<dynamic>;
     if (rows.isEmpty) return const StudentDesiredLevelInfo();
     return StudentDesiredLevelInfo.fromRow(
       Map<String, dynamic>.from(rows.first as Map),
     );
   }
 
-  /// 희망 상위 %만 저장(1~100). null이면 미설정. 현재/예상 등급은 건드리지 않는다.
-  Future<StudentDesiredLevelInfo> setDesiredLevel(int? topPercent) async {
+  /// 학생이 입력하는 두 값만 저장한다. 선생님의 현재 추정/미래 예상은 건드리지 않는다.
+  Future<StudentDesiredLevelInfo> setReportedLevels({
+    required int? selfAssessedTopPercent,
+    required int? desiredTopPercent,
+  }) async {
     final rows = await _client.rpc(
-      'student_set_desired_level_v1',
-      params: {'p_top_percent': topPercent},
+      'student_set_reported_levels_v1',
+      params: {
+        'p_self_assessed_top_percent': selfAssessedTopPercent,
+        'p_desired_top_percent': desiredTopPercent,
+      },
     ) as List<dynamic>;
     if (rows.isEmpty) {
-      return StudentDesiredLevelInfo(upperPercent: topPercent?.toDouble());
+      return StudentDesiredLevelInfo(
+        selfAssessedUpperPercent: selfAssessedTopPercent?.toDouble(),
+        upperPercent: desiredTopPercent?.toDouble(),
+      );
     }
     final row = Map<String, dynamic>.from(rows.first as Map);
     final top = (row['desired_top_percent'] as num?)?.toDouble() ??
         (row['upper_percent'] as num?)?.toDouble() ??
-        topPercent?.toDouble();
+        desiredTopPercent?.toDouble();
     return StudentDesiredLevelInfo(
+      selfAssessedUpperPercent:
+          (row['self_assessed_top_percent'] as num?)?.toDouble() ??
+              selfAssessedTopPercent?.toDouble(),
       levelCode: (row['desired_level_code'] as num?)?.toInt(),
       upperPercent: top,
       displayName: (row['display_name'] as String?)?.trim(),
@@ -1993,8 +2009,7 @@ class StudentApi {
     if (id == null) {
       throw StateError('student_identity_missing');
     }
-    final result =
-        await _client.rpc('learning_log_homework_attempt', params: {
+    final result = await _client.rpc('learning_log_homework_attempt', params: {
       'p_student_id': id.studentId,
       'p_homework_group_id': groupId,
       'p_crop_id': cropId,

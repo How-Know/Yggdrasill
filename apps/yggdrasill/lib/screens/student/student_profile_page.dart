@@ -267,8 +267,11 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
   List<_LevelOption> _options = const <_LevelOption>[];
   int? _currentLevelCode;
   int? _desiredLevelCode;
+  int? _selfAssessedTopPercent;
   int? _desiredTopPercent;
   int? _targetLevelCode;
+  int? _currentTopPercent;
+  int? _predictedFutureTopPercent;
   late Future<Map<String, dynamic>> _homeworkScoreFuture;
   late Future<Map<String, dynamic>> _pointFuture;
   late Future<Map<String, dynamic>> _totalScoreFuture;
@@ -433,13 +436,30 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
           desiredTop = match.first.upperPercent.round();
         }
       }
+      int? topPercentOrLevel(String field, String levelField) {
+        final exact = _asInt(state?[field]);
+        if (exact != null) return exact;
+        final code = _asInt(state?[levelField]);
+        if (code == null) return null;
+        final opts = parsed.isNotEmpty ? parsed : _fallbackOptions();
+        final match = opts.where((o) => o.code == code);
+        return match.isEmpty ? null : match.first.upperPercent.round();
+      }
+
       if (!mounted) return;
       setState(() {
         _options = parsed.isNotEmpty ? parsed : _fallbackOptions();
         _currentLevelCode = _asInt(state?['current_level_code']);
         _desiredLevelCode = desiredCode;
+        _selfAssessedTopPercent = _asInt(state?['self_assessed_top_percent']);
         _desiredTopPercent = desiredTop;
         _targetLevelCode = _asInt(state?['target_level_code']);
+        _currentTopPercent =
+            topPercentOrLevel('current_top_percent', 'current_level_code');
+        _predictedFutureTopPercent = topPercentOrLevel(
+          'predicted_future_top_percent',
+          'target_level_code',
+        );
         _loading = false;
       });
     } catch (e) {
@@ -450,27 +470,6 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         _errorText = '레벨 정보를 불러오지 못했어요: $e';
       });
     }
-  }
-
-  String _labelForCode(int? code) {
-    if (code == null) return '미설정';
-    final match = _options.where((o) => o.code == code);
-    if (match.isNotEmpty) {
-      final o = match.first;
-      return '${o.label} (${_formatTopPercent(o.upperPercent)})';
-    }
-    return '${code}등급';
-  }
-
-  String _desiredSummaryLabel() {
-    if (_desiredTopPercent == null && _desiredLevelCode == null) {
-      return '미설정';
-    }
-    final grade = _labelForCode(_desiredLevelCode).split(' (').first;
-    if (_desiredTopPercent != null) {
-      return '$grade (${_formatTopPercent(_desiredTopPercent!.toDouble())})';
-    }
-    return _labelForCode(_desiredLevelCode);
   }
 
   _LevelOption? _optionForTopPercent(double percent) {
@@ -499,34 +498,95 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     });
   }
 
-  List<DropdownMenuItem<int?>> _buildLevelItems() {
-    return <DropdownMenuItem<int?>>[
-      const DropdownMenuItem<int?>(
-        value: null,
-        child: Text('미설정'),
-      ),
-      ..._options.map(
-        (o) => DropdownMenuItem<int?>(
-          value: o.code,
-          child: Text('${o.label} · ${_formatTopPercent(o.upperPercent)}'),
-        ),
-      ),
-    ];
+  int? _levelCodeForTopPercent(int? percent) {
+    if (percent == null) return null;
+    return _optionForTopPercent(percent.toDouble())?.code;
   }
 
-  InputDecoration _inputDecoration(String label) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: kDlgTextSub),
-      filled: true,
-      fillColor: const Color(0xFF15171C),
-      enabledBorder: OutlineInputBorder(
+  Widget _buildTopPercentEditor({
+    required String title,
+    required String description,
+    required int? value,
+    required ValueChanged<int?> onChanged,
+  }) {
+    final option =
+        value == null ? null : _optionForTopPercent(value.toDouble());
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: kDlgBorder),
+        border: Border.all(color: kDlgBorder),
       ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: kDlgAccent),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: kDlgText,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            description,
+            style: const TextStyle(color: kDlgTextSub, fontSize: 11.5),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            value == null
+                ? '미설정'
+                : '${option?.label ?? '등급 미정'} · ${_formatTopPercent(value.toDouble())}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: kDlgText,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              activeTrackColor: kDlgAccent,
+              inactiveTrackColor: kDlgBorder,
+              thumbColor: kDlgAccent,
+              overlayColor: kDlgAccent.withValues(alpha: 0.16),
+            ),
+            child: Slider(
+              min: 1,
+              max: 100,
+              divisions: 99,
+              value: (101 - (value ?? 40)).clamp(1, 100).toDouble(),
+              onChanged: (v) => onChanged((101 - v).clamp(1, 100).round()),
+            ),
+          ),
+          const Row(
+            children: [
+              Text(
+                '상위 100%',
+                style: TextStyle(color: kDlgTextSub, fontSize: 11),
+              ),
+              Spacer(),
+              Text(
+                '상위 1%',
+                style: TextStyle(color: kDlgTextSub, fontSize: 11),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: value == null ? null : () => onChanged(null),
+              child: const Text(
+                '지우기',
+                style: TextStyle(fontSize: 12, color: Color(0xFFEF6A6A)),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -539,23 +599,35 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     });
     try {
       final studentId = widget.studentWithInfo.student.id;
+      _currentLevelCode = _levelCodeForTopPercent(_currentTopPercent);
+      _desiredLevelCode = _levelCodeForTopPercent(_desiredTopPercent);
+      _targetLevelCode = _levelCodeForTopPercent(_predictedFutureTopPercent);
       await DataManager.instance.saveStudentLevelState(
         studentId: studentId,
         currentLevelCode: _currentLevelCode,
         desiredLevelCode: _desiredLevelCode,
+        selfAssessedTopPercent: _selfAssessedTopPercent,
         desiredTopPercent: _desiredTopPercent,
         targetLevelCode: _targetLevelCode,
+        currentTopPercent: _currentTopPercent,
+        predictedFutureTopPercent: _predictedFutureTopPercent,
       );
       final readBack =
           await DataManager.instance.loadStudentLevelState(studentId);
       final rbCurrent = _asInt(readBack?['current_level_code']);
       final rbDesired = _asInt(readBack?['desired_level_code']);
+      final rbSelf = _asInt(readBack?['self_assessed_top_percent']);
       final rbDesiredTop = _asInt(readBack?['desired_top_percent']);
       final rbTarget = _asInt(readBack?['target_level_code']);
+      final rbCurrentTop = _asInt(readBack?['current_top_percent']);
+      final rbFutureTop = _asInt(readBack?['predicted_future_top_percent']);
       final bool verified = rbCurrent == _currentLevelCode &&
           rbDesired == _desiredLevelCode &&
+          rbSelf == _selfAssessedTopPercent &&
           rbDesiredTop == _desiredTopPercent &&
-          rbTarget == _targetLevelCode;
+          rbTarget == _targetLevelCode &&
+          rbCurrentTop == _currentTopPercent &&
+          rbFutureTop == _predictedFutureTopPercent;
       final bool serverReadback = TagPresetService.preferSupabaseRead;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -563,8 +635,8 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
           content: Text(
             verified
                 ? (serverReadback
-                    ? '학생 등급(현재/희망/예상)을 저장했고 서버 반영까지 확인했어요.'
-                    : '학생 등급(현재/희망/예상)을 저장했고 재조회로 확인했어요.')
+                    ? '학생 수준 4가지를 저장했고 서버 반영까지 확인했어요.'
+                    : '학생 수준 4가지를 저장했고 재조회로 확인했어요.')
                 : (serverReadback
                     ? '학생 등급은 저장했지만 서버 확인값이 달라요. 다시 불러와 확인해 주세요.'
                     : '학생 등급은 저장했지만 확인값이 달라요. 다시 불러와 확인해 주세요.'),
@@ -574,8 +646,11 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       setState(() {
         _currentLevelCode = rbCurrent;
         _desiredLevelCode = rbDesired;
+        _selfAssessedTopPercent = rbSelf;
         _desiredTopPercent = rbDesiredTop;
         _targetLevelCode = rbTarget;
+        _currentTopPercent = rbCurrentTop;
+        _predictedFutureTopPercent = rbFutureTop;
         _saving = false;
       });
     } catch (e) {
@@ -894,8 +969,8 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
           pendingCount > 0
               ? '아직 기한이 지난 과제가 없어요. 배정된 ${pendingCount}건의 기한이 지나면 점수가 표시됩니다.'
               : '과제 점수를 계산할 기록이 아직 충분하지 않아요. 과제 배정/검사/완료 기록이 누적되면 점수가 표시됩니다.',
-          style: const TextStyle(
-              color: kDlgTextSub, fontSize: 12.5, height: 1.4),
+          style:
+              const TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.4),
         ),
       );
     }
@@ -1376,8 +1451,8 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     '적립 배수 ×${booster.toStringAsFixed(2)} '
                     '(${PointService.boosterMin.toStringAsFixed(1)}~${PointService.boosterMax.toStringAsFixed(1)}배). '
                     '같은 과제를 해도 총점이 높으면 더 많이 적립됩니다.',
-            style: const TextStyle(
-                color: kDlgTextSub, fontSize: 12, height: 1.35),
+            style:
+                const TextStyle(color: kDlgTextSub, fontSize: 12, height: 1.35),
           ),
           const SizedBox(height: 10),
           Text(
@@ -1462,7 +1537,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                             ),
                             const SizedBox(height: 20),
                             Text(
-                              '등급(레벨) 입력',
+                              '학생 수준 입력',
                               style: Theme.of(context)
                                   .textTheme
                                   .titleMedium
@@ -1473,137 +1548,64 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                             ),
                             const SizedBox(height: 6),
                             const Text(
-                              '현재·예상은 선생님이 입력하고, 희망은 학생앱 「내 목표」와 같은 값입니다. 과제 완료 스냅샷에도 사용됩니다.',
+                              '모두 상위 %로 기록하며 숫자가 낮을수록 높은 수준입니다. 희망과 미래 예상은 고3 수능 시점을 기준으로 합니다.',
                               style:
                                   TextStyle(color: kDlgTextSub, fontSize: 13),
                             ),
                             const SizedBox(height: 18),
                             Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Expanded(
-                                  child: DropdownButtonFormField<int?>(
-                                    value: _currentLevelCode,
-                                    items: _buildLevelItems(),
-                                    decoration: _inputDecoration('현재 등급'),
-                                    style: const TextStyle(color: kDlgText),
-                                    dropdownColor: const Color(0xFF15171C),
+                                  child: _buildTopPercentEditor(
+                                    title: '학생 자기평가',
+                                    description: '학생이 생각하는 현재 수준',
+                                    value: _selfAssessedTopPercent,
                                     onChanged: (value) => setState(
-                                        () => _currentLevelCode = value),
+                                        () => _selfAssessedTopPercent = value),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
-                                  child: DropdownButtonFormField<int?>(
-                                    value: _targetLevelCode,
-                                    items: _buildLevelItems(),
-                                    decoration: _inputDecoration('예상 등급'),
-                                    style: const TextStyle(color: kDlgText),
-                                    dropdownColor: const Color(0xFF15171C),
-                                    onChanged: (value) => setState(
-                                        () => _targetLevelCode = value),
+                                  child: _buildTopPercentEditor(
+                                    title: '학생 희망',
+                                    description: '고3 수능 때 원하는 수준',
+                                    value: _desiredTopPercent,
+                                    onChanged: (value) {
+                                      if (value == null) {
+                                        _setDesiredTopPercent(null);
+                                      } else {
+                                        _setDesiredTopPercent(value.toDouble());
+                                      }
+                                    },
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 16),
-                            Text(
-                              '희망 등급 (학생 · 9등급제)',
-                              style: TextStyle(
-                                color: kDlgTextSub,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF15171C),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: kDlgBorder),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Text(
-                                    _desiredTopPercent == null
-                                        ? '미설정'
-                                        : '${_optionForTopPercent(_desiredTopPercent!.toDouble())?.label ?? _labelForCode(_desiredLevelCode).split(' (').first} · ${_formatTopPercent(_desiredTopPercent!.toDouble())}',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: kDlgText,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  SliderTheme(
-                                    data: SliderTheme.of(context).copyWith(
-                                      trackHeight: 3,
-                                      thumbShape: const RoundSliderThumbShape(
-                                        enabledThumbRadius: 8,
-                                      ),
-                                      activeTrackColor: kDlgAccent,
-                                      inactiveTrackColor: kDlgBorder,
-                                      thumbColor: kDlgAccent,
-                                      overlayColor:
-                                          kDlgAccent.withValues(alpha: 0.16),
-                                    ),
-                                    child: Slider(
-                                      min: 1,
-                                      max: 100,
-                                      divisions: 99,
-                                      // 왼쪽=100 · 오른쪽=1 (학생앱과 동일)
-                                      value: (101 -
-                                              (_desiredTopPercent ?? 40))
-                                          .clamp(1, 100)
-                                          .toDouble(),
-                                      onChanged: (v) => _setDesiredTopPercent(
-                                        (101 - v).clamp(1, 100),
-                                      ),
-                                    ),
-                                  ),
-                                  Row(
-                                    children: [
-                                      const Text(
-                                        '상위 100%',
-                                        style: TextStyle(
-                                          color: kDlgTextSub,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      const Text(
-                                        '상위 1%',
-                                        style: TextStyle(
-                                          color: kDlgTextSub,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton(
-                                      onPressed: _desiredTopPercent == null
-                                          ? null
-                                          : () => _setDesiredTopPercent(null),
-                                      child: const Text(
-                                        '희망 지우기',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFFEF6A6A),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
                             const SizedBox(height: 12),
-                            Text(
-                              '현재: ${_labelForCode(_currentLevelCode)}   ·   희망: ${_desiredSummaryLabel()}   ·   예상: ${_labelForCode(_targetLevelCode)}',
-                              style: const TextStyle(
-                                  color: kDlgTextSub, fontSize: 12),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: _buildTopPercentEditor(
+                                    title: '현재 추정',
+                                    description: '선생님이 판단한 현재 수준',
+                                    value: _currentTopPercent,
+                                    onChanged: (value) => setState(
+                                        () => _currentTopPercent = value),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: _buildTopPercentEditor(
+                                    title: '미래 예상',
+                                    description: '고3 수능 때 예상되는 수준',
+                                    value: _predictedFutureTopPercent,
+                                    onChanged: (value) => setState(() =>
+                                        _predictedFutureTopPercent = value),
+                                  ),
+                                ),
+                              ],
                             ),
                             if (_errorText != null) ...[
                               const SizedBox(height: 10),

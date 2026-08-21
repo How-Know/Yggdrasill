@@ -35,7 +35,7 @@ class AcademyDbService {
         mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 57,
+      version: 58,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -128,6 +128,10 @@ class AcademyDbService {
             current_level_code INTEGER,
             target_level_code INTEGER,
             desired_level_code INTEGER,
+            self_assessed_top_percent INTEGER,
+            desired_top_percent INTEGER,
+            current_top_percent INTEGER,
+            predicted_future_top_percent INTEGER,
             updated_at TEXT
           )
         ''');
@@ -585,6 +589,24 @@ class AcademyDbService {
             created_at TEXT,
             updated_at TEXT
           )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS homework_grading_return_outbox (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            group_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_homework_grading_return_outbox_status
+          ON homework_grading_return_outbox(status, created_at)
         ''');
         await _createSeasonRoadmapTables(db);
       },
@@ -1823,15 +1845,16 @@ class AcademyDbService {
               await db.execute(ddl);
             }
 
-            await addColIfMissing('category', 'ALTER TABLE memos ADD COLUMN category TEXT');
             await addColIfMissing(
-                'inquiry_phone', 'ALTER TABLE memos ADD COLUMN inquiry_phone TEXT');
+                'category', 'ALTER TABLE memos ADD COLUMN category TEXT');
+            await addColIfMissing('inquiry_phone',
+                'ALTER TABLE memos ADD COLUMN inquiry_phone TEXT');
             await addColIfMissing('inquiry_school_grade',
                 'ALTER TABLE memos ADD COLUMN inquiry_school_grade TEXT');
             await addColIfMissing('inquiry_availability',
                 'ALTER TABLE memos ADD COLUMN inquiry_availability TEXT');
-            await addColIfMissing(
-                'inquiry_note', 'ALTER TABLE memos ADD COLUMN inquiry_note TEXT');
+            await addColIfMissing('inquiry_note',
+                'ALTER TABLE memos ADD COLUMN inquiry_note TEXT');
             await addColIfMissing('inquiry_sort_index',
                 'ALTER TABLE memos ADD COLUMN inquiry_sort_index INTEGER');
           } catch (e) {
@@ -1848,8 +1871,7 @@ class AcademyDbService {
                   'ALTER TABLE session_overrides ADD COLUMN change_reason TEXT');
             }
           } catch (e) {
-            print(
-                '[DB][마이그레이션] v55 session_overrides.change_reason 추가 실패: $e');
+            print('[DB][마이그레이션] v55 session_overrides.change_reason 추가 실패: $e');
           }
         }
         if (oldVersion < 56) {
@@ -1936,7 +1958,8 @@ class AcademyDbService {
                   'ALTER TABLE academy_settings ADD COLUMN active_exam_season_id INTEGER NOT NULL DEFAULT 1');
             }
           } catch (e) {
-            print('[DB][마이그레이션] v56 exam season_id / active_exam_season_id 실패: $e');
+            print(
+                '[DB][마이그레이션] v56 exam season_id / active_exam_season_id 실패: $e');
           }
         }
         if (oldVersion < 57) {
@@ -1944,6 +1967,30 @@ class AcademyDbService {
             await _createSeasonRoadmapTables(db);
           } catch (e) {
             print('[DB][마이그레이션] v57 season_roadmap_entries 생성 실패: $e');
+          }
+        }
+        if (oldVersion < 58) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS homework_grading_return_outbox (
+                id TEXT PRIMARY KEY,
+                student_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_homework_grading_return_outbox_status
+              ON homework_grading_return_outbox(status, created_at)
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v58 채점 반환 outbox 생성 실패: $e');
           }
         }
       },
@@ -2127,8 +2174,7 @@ class AcademyDbService {
     const where = 'school = ? AND level = ? AND grade = ? AND season_id = ?';
     final args = [school, level, grade, seasonId];
     final rows = await Future.wait([
-      dbClient.query('exam_schedules',
-          where: where, whereArgs: args),
+      dbClient.query('exam_schedules', where: where, whereArgs: args),
       dbClient.query('exam_ranges', where: where, whereArgs: args),
       dbClient.query('exam_days', where: where, whereArgs: args),
     ]);
@@ -2178,9 +2224,7 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureExamTables();
     return await dbClient.query('exam_schedules',
-        where: 'season_id = ?',
-        whereArgs: [seasonId],
-        orderBy: 'date ASC');
+        where: 'season_id = ?', whereArgs: [seasonId], orderBy: 'date ASC');
   }
 
   Future<List<Map<String, dynamic>>> loadAllExamDays() async {
@@ -2194,9 +2238,7 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureExamTables();
     return await dbClient.query('exam_days',
-        where: 'season_id = ?',
-        whereArgs: [seasonId],
-        orderBy: 'date ASC');
+        where: 'season_id = ?', whereArgs: [seasonId], orderBy: 'date ASC');
   }
 
   Future<List<Map<String, dynamic>>> loadAllExamRanges() async {
@@ -2210,9 +2252,7 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureExamTables();
     return await dbClient.query('exam_ranges',
-        where: 'season_id = ?',
-        whereArgs: [seasonId],
-        orderBy: 'date ASC');
+        where: 'season_id = ?', whereArgs: [seasonId], orderBy: 'date ASC');
   }
 
   Future<void> deleteExamDataForSchoolGrade({
@@ -2238,8 +2278,7 @@ class AcademyDbService {
 
   Future<void> setActiveExamSeasonId(int seasonId) async {
     final dbClient = await db;
-    final info =
-        await dbClient.rawQuery('PRAGMA table_info(academy_settings)');
+    final info = await dbClient.rawQuery('PRAGMA table_info(academy_settings)');
     if (!info.any((c) => c['name'] == 'active_exam_season_id')) {
       await dbClient.execute(
           'ALTER TABLE academy_settings ADD COLUMN active_exam_season_id INTEGER NOT NULL DEFAULT 1');
@@ -2363,7 +2402,8 @@ class AcademyDbService {
         await dbClient.execute(ddl);
       }
 
-      await addColIfMissing('category', 'ALTER TABLE memos ADD COLUMN category TEXT');
+      await addColIfMissing(
+          'category', 'ALTER TABLE memos ADD COLUMN category TEXT');
       await addColIfMissing(
           'inquiry_phone', 'ALTER TABLE memos ADD COLUMN inquiry_phone TEXT');
       await addColIfMissing('inquiry_school_grade',
@@ -3333,6 +3373,10 @@ class AcademyDbService {
         current_level_code INTEGER,
         target_level_code INTEGER,
         desired_level_code INTEGER,
+        self_assessed_top_percent INTEGER,
+        desired_top_percent INTEGER,
+        current_top_percent INTEGER,
+        predicted_future_top_percent INTEGER,
         updated_at TEXT
       )
     ''');
@@ -3351,6 +3395,18 @@ class AcademyDbService {
       await dbClient.execute(
         'ALTER TABLE student_level_states ADD COLUMN desired_top_percent INTEGER',
       );
+    }
+    for (final column in const [
+      'self_assessed_top_percent',
+      'current_top_percent',
+      'predicted_future_top_percent',
+    ]) {
+      final exists = cols.any((c) => '${c['name'] ?? ''}' == column);
+      if (!exists) {
+        await dbClient.execute(
+          'ALTER TABLE student_level_states ADD COLUMN $column INTEGER',
+        );
+      }
     }
   }
 
@@ -3410,15 +3466,21 @@ class AcademyDbService {
     required String studentId,
     int? currentLevelCode,
     int? desiredLevelCode,
+    int? selfAssessedTopPercent,
     int? desiredTopPercent,
     int? targetLevelCode,
+    int? currentTopPercent,
+    int? predictedFutureTopPercent,
   }) async {
     await ensureStudentLevelTables();
     final dbClient = await db;
     if (currentLevelCode == null &&
         desiredLevelCode == null &&
+        selfAssessedTopPercent == null &&
         desiredTopPercent == null &&
-        targetLevelCode == null) {
+        targetLevelCode == null &&
+        currentTopPercent == null &&
+        predictedFutureTopPercent == null) {
       await dbClient.delete(
         'student_level_states',
         where: 'student_id = ?',
@@ -3432,8 +3494,11 @@ class AcademyDbService {
         'student_id': studentId,
         'current_level_code': currentLevelCode,
         'desired_level_code': desiredLevelCode,
+        'self_assessed_top_percent': selfAssessedTopPercent,
         'desired_top_percent': desiredTopPercent,
         'target_level_code': targetLevelCode,
+        'current_top_percent': currentTopPercent,
+        'predicted_future_top_percent': predictedFutureTopPercent,
         'updated_at': DateTime.now().toIso8601String(),
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
@@ -3859,8 +3924,8 @@ class AcademyDbService {
         print('[DEBUG] student_payment_info 테이블 생성 완료');
       } else {
         print('[DEBUG] student_payment_info 테이블이 이미 존재함');
-        final cols = await dbClient.rawQuery(
-            "PRAGMA table_info(student_payment_info)");
+        final cols =
+            await dbClient.rawQuery("PRAGMA table_info(student_payment_info)");
         final names = cols.map((c) => (c['name'] as String?) ?? '').toSet();
         if (!names.contains('payment_channel')) {
           await dbClient.execute(

@@ -11,7 +11,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:uuid/uuid.dart';
 import '../services/data_manager.dart';
 import '../services/tenant_service.dart';
 import '../services/homework_store.dart';
@@ -149,9 +148,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _testGradingSerializedDraftByHomeworkId =
       <String, List<Map<String, dynamic>>>{};
   final Set<String> _testGradingSavedHomeworkIds = <String>{};
-  final Set<({String studentId, String itemId})>
-      _directStructuredHomeworkCheckKeys =
-      <({String studentId, String itemId})>{};
   final Set<({String studentId, String itemId})> _structuredPendingConfirmKeys =
       <({String studentId, String itemId})>{};
   final Set<({String studentId, String itemId})>
@@ -179,7 +175,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       if (!mounted) return;
       gradingModeActive.value = _isGradingMode;
       homeBatchConfirmFabVisible.value = true;
-      _batchConfirmService.syncPendingCount();
+      unawaited(_restoreDurableStructuredDrafts());
       _scheduleRightSheetAnswerPreload();
     });
     HomeworkStore.instance.revision
@@ -283,9 +279,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     gradingModeActive.value = value;
     _syncMemoFloatingForGradingMode(value);
     if (value) {
+      unawaited(_restoreDurableStructuredDrafts());
       blockRightSideSheetOpen.value = false;
       _scheduleRightSheetAnswerPreload();
     } else {
+      unawaited(_restoreDurableStructuredDrafts());
       blockRightSideSheetOpen.value = true;
       _rightSheetPreloadDebounce?.cancel();
       _lastRightSheetPreloadKey = '';
@@ -295,6 +293,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     }
     _syncHomeTabOverlay();
+  }
+
+  Future<void> _restoreDurableStructuredDrafts() async {
+    final keys = await _batchConfirmService.restoreStructuredDrafts();
+    if (!mounted) return;
+    setState(() {
+      _structuredPendingConfirmKeys
+        ..clear()
+        ..addAll(keys);
+    });
   }
 
   void _syncHomeTabOverlay() {
@@ -4217,6 +4225,32 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return out;
   }
 
+  Map<String, HomeworkAnswerCellState> _teacherInitialCorrectStates(
+    List<HomeworkAnswerGradingPage> gradingPages,
+  ) {
+    return {
+      for (final page in gradingPages)
+        for (final cell in page.cells)
+          if (cell.key.trim().isNotEmpty)
+            cell.key.trim(): HomeworkAnswerCellState.correct,
+    };
+  }
+
+  int _teacherAutoFilledCorrectCount({
+    required List<HomeworkAnswerGradingPage> gradingPages,
+    required Iterable<Map<String, HomeworkAnswerCellState>> recordedStates,
+  }) {
+    final recordedKeys = <String>{
+      for (final states in recordedStates) ...states.keys,
+    };
+    return gradingPages
+        .expand((page) => page.cells)
+        .map((cell) => cell.key.trim())
+        .where((key) => key.isNotEmpty && !recordedKeys.contains(key))
+        .toSet()
+        .length;
+  }
+
   Map<String, HomeworkAnswerCellState> _retryBaselineStates(
     HomeworkTestSavedGradingSession? session,
   ) {
@@ -5323,12 +5357,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final questionUid = _trimDynamic(row['pb_question_uid']).isNotEmpty
           ? _trimDynamic(row['pb_question_uid'])
           : cropId;
-      final assignedItemId =
-          _trimDynamic(row['homework_item_id']).isNotEmpty
-              ? _trimDynamic(row['homework_item_id'])
-              : baseItem.id;
-      final key =
-          '$assignedItemId|$pageNumber|$questionIndex|$questionUid';
+      final assignedItemId = _trimDynamic(row['homework_item_id']).isNotEmpty
+          ? _trimDynamic(row['homework_item_id'])
+          : baseItem.id;
+      final key = '$assignedItemId|$pageNumber|$questionIndex|$questionUid';
       final answerKind = _trimDynamic(row['answer_kind']).toLowerCase();
       final renderStyleVersion =
           _trimDynamic(row['answer_render_style_version']);
@@ -5626,14 +5658,27 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         await _gradingResultService.loadFirstSavedSessionForHomework(
       homeworkItemId: payload.homeworkId,
     );
-    final currentStates =
-        await _gradingResultService.loadCurrentStatesForHomework(
-      studentId: studentId,
-      homeworkItemId: payload.homeworkId,
-      gradingPages: payload.gradingPages,
-    );
+    final sourceSnapshotAt = DateTime.now();
+    late final Map<String, HomeworkAnswerCellState> currentStates;
+    try {
+      currentStates = await _gradingResultService.loadCurrentStatesForHomework(
+        studentId: studentId,
+        homeworkItemId: payload.homeworkId,
+        gradingPages: payload.gradingPages,
+        throwOnError: true,
+      );
+    } catch (_) {
+      if (context.mounted) {
+        _showHomeworkChipSnackBar(
+          context,
+          '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.',
+        );
+      }
+      return true;
+    }
     if (!context.mounted || !mounted) return true;
     final initialStates = <String, HomeworkAnswerCellState>{
+      ..._teacherInitialCorrectStates(payload.gradingPages),
       ...cachedStates,
       if (savedSession != null) ...savedSession.states,
       ...currentStates,
@@ -5667,6 +5712,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       smartConfirmAction: true,
       showSearchChrome: false,
       closeBeforeActionCompletes: true,
+      autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
+        gradingPages: payload.gradingPages,
+        recordedStates: [
+          cachedStates,
+          if (savedSession != null) savedSession.states,
+          currentStates,
+        ],
+      ),
       onStatesChanged: (states) {
         final decoded = _fromRightSheetStateMap(states);
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -5710,17 +5763,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 payload.homeworkId,
               ) ??
               hw;
-          final saved = await _gradingResultService.saveAttemptFromSession(
+          final saved = await _enqueueStructuredGradingReturn(
             studentId: studentId,
-            homeworkItem: targetItem,
+            keys: keys,
+            targetItem: targetItem,
             action: action,
             states: decoded,
             gradingPages: payload.gradingPages,
             scoreByQuestionKey: payload.scoreByQuestionKey,
-            groupHomeworkTitleSnapshot: payload.groupHomeworkTitle,
+            groupHomeworkTitle: payload.groupHomeworkTitle,
             baselineAttemptId: baselineSession?.attempt.id ?? '',
             baselineStates: baselineStates,
             correctionStates: correctionStates,
+            sourceSnapshotAt: sourceSnapshotAt,
           );
           if (!mounted) return;
           if (!saved) {
@@ -5731,36 +5786,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 snapshot: optimisticSnapshot,
               );
             }
-            _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
-          } else {
-            _testGradingSavedHomeworkIds.add(payload.homeworkId);
-            _gradingProgressRevisionByStudent.remove(studentId);
-            _gradingProgressFutureByStudent.remove(studentId);
-          }
-        }
-        if (savedGrading && shouldPersist) {
-          savedGrading = await _finalizeDirectStructuredHomeworkCheck(
-            studentId: studentId,
-            keys: keys,
-            states: decoded,
-            gradingPages: payload.gradingPages,
-            onCheckRecorded: () => _markPendingConfirms(
-              keys: keys,
-              action: action,
-              structuredGrading: true,
-            ),
-          );
-          if (!savedGrading && mounted) {
-            if (optimisticSnapshot != null) {
-              _restoreStructuredPendingSnapshot(
-                keys: keys,
-                snapshot: optimisticSnapshot,
-              );
-            }
             _showHomeworkChipSnackBar(
               this.context,
-              '숙제 검사 이력 저장에 실패했습니다.',
+              '채점 초안을 이 PC에 저장하지 못했습니다.',
             );
+          } else {
+            _testGradingSavedHomeworkIds.add(payload.homeworkId);
           }
         }
         if (shouldPersist) {
@@ -5857,14 +5888,28 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             await _gradingResultService.loadFirstSavedSessionForHomework(
           homeworkItemId: payload.homeworkId,
         );
-        final currentStates =
-            await _gradingResultService.loadCurrentStatesForHomework(
-          studentId: studentId,
-          homeworkItemId: payload.homeworkId,
-          gradingPages: payload.gradingPages,
-        );
+        final sourceSnapshotAt = DateTime.now();
+        late final Map<String, HomeworkAnswerCellState> currentStates;
+        try {
+          currentStates =
+              await _gradingResultService.loadCurrentStatesForHomework(
+            studentId: studentId,
+            homeworkItemId: payload.homeworkId,
+            gradingPages: payload.gradingPages,
+            throwOnError: true,
+          );
+        } catch (_) {
+          if (context.mounted) {
+            _showHomeworkChipSnackBar(
+              context,
+              '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.',
+            );
+          }
+          return;
+        }
         if (!context.mounted) return;
         final initialStates = <String, HomeworkAnswerCellState>{
+          ..._teacherInitialCorrectStates(payload.gradingPages),
           ...cachedStates,
           if (savedSession != null) ...savedSession.states,
           ...currentStates,
@@ -5950,6 +5995,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           smartConfirmAction: true,
           showSearchChrome: false,
           closeBeforeActionCompletes: true,
+          autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
+            gradingPages: payload.gradingPages,
+            recordedStates: [
+              cachedStates,
+              if (savedSession != null) savedSession.states,
+              currentStates,
+            ],
+          ),
           onStatesChanged: (states) {
             final decoded = _fromRightSheetStateMap(states);
             _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -5993,17 +6046,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     payload.homeworkId,
                   ) ??
                   hw;
-              final saved = await _gradingResultService.saveAttemptFromSession(
+              final saved = await _enqueueStructuredGradingReturn(
                 studentId: studentId,
-                homeworkItem: targetItem,
+                keys: keys,
+                targetItem: targetItem,
                 action: action,
                 states: decoded,
                 gradingPages: payload.gradingPages,
                 scoreByQuestionKey: payload.scoreByQuestionKey,
-                groupHomeworkTitleSnapshot: groupHomeworkTitle,
+                groupHomeworkTitle: groupHomeworkTitle,
                 baselineAttemptId: baselineSession?.attempt.id ?? '',
                 baselineStates: baselineStates,
                 correctionStates: correctionStates,
+                sourceSnapshotAt: sourceSnapshotAt,
               );
               if (!mounted) return;
               if (!saved) {
@@ -6014,36 +6069,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     snapshot: optimisticSnapshot,
                   );
                 }
-                _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
-              } else {
-                _testGradingSavedHomeworkIds.add(payload.homeworkId);
-                _gradingProgressRevisionByStudent.remove(studentId);
-                _gradingProgressFutureByStudent.remove(studentId);
-              }
-            }
-            if (savedGrading && shouldPersist) {
-              savedGrading = await _finalizeDirectStructuredHomeworkCheck(
-                studentId: studentId,
-                keys: keys,
-                states: decoded,
-                gradingPages: payload.gradingPages,
-                onCheckRecorded: () => _markPendingConfirms(
-                  keys: keys,
-                  action: action,
-                  structuredGrading: true,
-                ),
-              );
-              if (!savedGrading && mounted) {
-                if (optimisticSnapshot != null) {
-                  _restoreStructuredPendingSnapshot(
-                    keys: keys,
-                    snapshot: optimisticSnapshot,
-                  );
-                }
                 _showHomeworkChipSnackBar(
                   this.context,
-                  '숙제 검사 이력 저장에 실패했습니다.',
+                  '채점 초안을 이 PC에 저장하지 못했습니다.',
                 );
+              } else {
+                _testGradingSavedHomeworkIds.add(payload.homeworkId);
               }
             }
             if (shouldPersist) {
@@ -6106,14 +6137,28 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           await _gradingResultService.loadFirstSavedSessionForHomework(
         homeworkItemId: textbookProblemPayload.homeworkId,
       );
-      final currentStates =
-          await _gradingResultService.loadCurrentStatesForHomework(
-        studentId: studentId,
-        homeworkItemId: textbookProblemPayload.homeworkId,
-        gradingPages: textbookProblemPayload.gradingPages,
-      );
+      final sourceSnapshotAt = DateTime.now();
+      late final Map<String, HomeworkAnswerCellState> currentStates;
+      try {
+        currentStates =
+            await _gradingResultService.loadCurrentStatesForHomework(
+          studentId: studentId,
+          homeworkItemId: textbookProblemPayload.homeworkId,
+          gradingPages: textbookProblemPayload.gradingPages,
+          throwOnError: true,
+        );
+      } catch (_) {
+        if (context.mounted) {
+          _showHomeworkChipSnackBar(
+            context,
+            '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.',
+          );
+        }
+        return;
+      }
       if (!context.mounted) return;
       final initialStates = <String, HomeworkAnswerCellState>{
+        ..._teacherInitialCorrectStates(textbookProblemPayload.gradingPages),
         ...cachedStates,
         if (savedSession != null) ...savedSession.states,
         ...currentStates,
@@ -6165,6 +6210,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         smartConfirmAction: true,
         showSearchChrome: false,
         closeBeforeActionCompletes: true,
+        autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
+          gradingPages: textbookProblemPayload.gradingPages,
+          recordedStates: [
+            cachedStates,
+            if (savedSession != null) savedSession.states,
+            currentStates,
+          ],
+        ),
         onStatesChanged: (states) {
           final decoded = _fromRightSheetStateMap(states);
           _testGradingDraftStatesByHomeworkId[textbookProblemPayload
@@ -6211,17 +6264,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   textbookProblemPayload.homeworkId,
                 ) ??
                 hw;
-            final saved = await _gradingResultService.saveAttemptFromSession(
+            final saved = await _enqueueStructuredGradingReturn(
               studentId: studentId,
-              homeworkItem: targetItem,
+              keys: keys,
+              targetItem: targetItem,
               action: action,
               states: decoded,
               gradingPages: textbookProblemPayload.gradingPages,
               scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
-              groupHomeworkTitleSnapshot: groupHomeworkTitle,
+              groupHomeworkTitle: groupHomeworkTitle,
               baselineAttemptId: baselineSession?.attempt.id ?? '',
               baselineStates: baselineStates,
               correctionStates: correctionStates,
+              sourceSnapshotAt: sourceSnapshotAt,
             );
             if (!mounted) return;
             if (!saved) {
@@ -6232,37 +6287,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   snapshot: optimisticSnapshot,
                 );
               }
-              _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
+              _showHomeworkChipSnackBar(
+                this.context,
+                '채점 초안을 이 PC에 저장하지 못했습니다.',
+              );
             } else {
               _testGradingSavedHomeworkIds
                   .add(textbookProblemPayload.homeworkId);
-              _gradingProgressRevisionByStudent.remove(studentId);
-              _gradingProgressFutureByStudent.remove(studentId);
-            }
-          }
-          if (savedGrading && shouldPersist) {
-            savedGrading = await _finalizeDirectStructuredHomeworkCheck(
-              studentId: studentId,
-              keys: keys,
-              states: decoded,
-              gradingPages: textbookProblemPayload.gradingPages,
-              onCheckRecorded: () => _markPendingConfirms(
-                keys: keys,
-                action: action,
-                structuredGrading: true,
-              ),
-            );
-            if (!savedGrading && mounted) {
-              if (optimisticSnapshot != null) {
-                _restoreStructuredPendingSnapshot(
-                  keys: keys,
-                  snapshot: optimisticSnapshot,
-                );
-              }
-              _showHomeworkChipSnackBar(
-                this.context,
-                '숙제 검사 이력 저장에 실패했습니다.',
-              );
             }
           }
           if (shouldPersist) {
@@ -6664,7 +6695,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
     if (structuredSession == null || !context.mounted) return false;
 
-    _directStructuredHomeworkCheckKeys.addAll(keys);
     await _handleSubmittedChipTapForPending(
       context: context,
       studentId: studentId,
@@ -6695,37 +6725,53 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return ((performed * 100) / effectiveKeys.length).round().clamp(0, 100);
   }
 
-  /// 채점 화면을 어떤 경로로 열었든, 활성 숙제가 있는 문항은 채점 결과를 검사
-  /// 진행률로 반영한다. 이 동기화가 없으면 알림장이 0%로 남는다.
-  Future<void> _syncStructuredGradingProgress({
-    required List<({String studentId, String itemId})> keys,
+  Future<bool> _enqueueStructuredGradingReturn({
+    required String studentId,
+    required List<HomeworkBatchConfirmKey> keys,
+    required HomeworkItem targetItem,
+    required String action,
     required Map<String, HomeworkAnswerCellState> states,
     required List<HomeworkAnswerGradingPage> gradingPages,
+    required Map<String, double> scoreByQuestionKey,
+    required String groupHomeworkTitle,
+    required String baselineAttemptId,
+    required Map<String, HomeworkAnswerCellState> baselineStates,
+    required Map<String, String> correctionStates,
+    required DateTime sourceSnapshotAt,
   }) async {
-    final pendingKeys = keys
-        .where((key) => !_directStructuredHomeworkCheckKeys.contains(key))
-        .toList(growable: false);
-    if (pendingKeys.isEmpty) return;
-
-    final progress = _structuredHomeworkProgress(
+    final itemIds = <String>{
+      targetItem.id.trim(),
+      ...keys.map((key) => key.itemId.trim()),
+    }.where((itemId) => itemId.isNotEmpty).toList(growable: false);
+    final groupIds = itemIds
+        .map(HomeworkStore.instance.groupIdOfItem)
+        .whereType<String>()
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    if (itemIds.isEmpty || groupIds.length != 1) return false;
+    final payload = await _gradingResultService.buildDeferredReturnPayload(
+      studentId: studentId,
+      groupId: groupIds.single,
+      homeworkItemIds: itemIds,
+      homeworkItem: targetItem,
+      action: action,
+      progress: _structuredHomeworkProgress(
+        states: states,
+        gradingPages: gradingPages,
+      ),
       states: states,
       gradingPages: gradingPages,
+      scoreByQuestionKey: scoreByQuestionKey,
+      sourceSnapshotAt: sourceSnapshotAt,
+      groupHomeworkTitleSnapshot: groupHomeworkTitle,
+      baselineAttemptId: baselineAttemptId,
+      baselineStates: baselineStates,
+      correctionStates: correctionStates,
     );
-    for (final key in pendingKeys) {
-      final target = await _resolveHomeworkCheckTarget(
-        key.studentId,
-        key.itemId,
-        // 검사 직후 assignment가 완료/해제돼도 오늘 검사 이력을 갱신해야 한다.
-        includeHistory: true,
-      );
-      if (target == null) continue;
-      await HomeworkAssignmentStore.instance.syncCheckProgressFromGrading(
-        studentId: key.studentId,
-        homeworkItemId: key.itemId,
-        assignmentId: target.assignmentId,
-        progress: progress,
-      );
-    }
+    if (payload == null) return false;
+    await _batchConfirmService.enqueueStructuredDraft(payload);
+    return true;
   }
 
   void _markPendingConfirms({
@@ -6802,6 +6848,21 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final studentIds = keys.map((key) => key.studentId).toSet();
     if (studentIds.length != 1) return false;
     final studentId = studentIds.single;
+    if (await _batchConfirmService.removeStructuredDrafts(keys)) {
+      if (!mounted) return true;
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms.remove(key);
+          _structuredPendingConfirmKeys.remove(key);
+          _testGradingDraftStatesByHomeworkId.remove(key.itemId);
+          _testGradingSerializedDraftByHomeworkId.remove(key.itemId);
+          _testGradingSavedHomeworkIds.remove(key.itemId);
+        }
+      });
+      _batchConfirmService.syncPendingCount();
+      _showHomeworkChipSnackBar(context, '로컬 채점 초안을 취소했습니다.');
+      return true;
+    }
     final gradingIds = gradingHomeworkItemIds
         .map((id) => id.trim())
         .where((id) => id.isNotEmpty)
@@ -6936,143 +6997,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       context,
       '체크와 채점 기록을 취소했습니다.',
     );
-    return true;
-  }
-
-  Future<bool> _finalizeDirectStructuredHomeworkCheck({
-    required String studentId,
-    required List<({String studentId, String itemId})> keys,
-    required Map<String, HomeworkAnswerCellState> states,
-    required List<HomeworkAnswerGradingPage> gradingPages,
-    VoidCallback? onCheckRecorded,
-  }) async {
-    await _syncStructuredGradingProgress(
-      keys: keys,
-      states: states,
-      gradingPages: gradingPages,
-    );
-    final allItemIds = keys
-        .map((key) => key.itemId.trim())
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList();
-    final directKeys = keys
-        .where(_directStructuredHomeworkCheckKeys.contains)
-        .toList(growable: false);
-
-    if (directKeys.isNotEmpty) {
-      final progress = _structuredHomeworkProgress(
-        states: states,
-        gradingPages: gradingPages,
-      );
-      final itemIdsByGroup = <String, List<String>>{};
-      final orphanItemIds = <String>[];
-      final atomicallyFinalizedItemIds = <String>{};
-      final legacyFinalizeItemIds = <String>[];
-      for (final key in directKeys) {
-        final groupId =
-            (HomeworkStore.instance.groupIdOfItem(key.itemId) ?? '').trim();
-        if (groupId.isEmpty) {
-          orphanItemIds.add(key.itemId);
-          continue;
-        }
-        itemIdsByGroup.putIfAbsent(groupId, () => <String>[]).add(key.itemId);
-      }
-      for (final entry in itemIdsByGroup.entries) {
-        final requestId = const Uuid().v4();
-        final atomicSaved =
-            await HomeworkAssignmentStore.instance.recordStructuredGroupGrading(
-          studentId: studentId,
-          groupId: entry.key,
-          homeworkItemIds: entry.value,
-          progress: progress,
-          idempotencyKey: requestId,
-        );
-        if (atomicSaved != null) {
-          atomicallyFinalizedItemIds.addAll(entry.value);
-          HomeworkStore.instance.applyStructuredGradingSubmittedLocally(
-            studentId,
-            entry.value,
-          );
-          continue;
-        }
-
-        // RPC 미배포/일시 실패 환경에서는 기존 검증된 경로로 폴백한다.
-        final saved = await HomeworkAssignmentStore.instance.recordGroupOutcome(
-          studentId: studentId,
-          groupId: entry.key,
-          homeworkItemIds: entry.value,
-          outcome: HomeworkAssignmentOutcome.graded,
-          progress: progress,
-          idempotencyKey: requestId,
-        );
-        if (saved == null) {
-          // 활성 assignment가 없으면 outcome RPC가 실패한다. history 동기화로 오늘
-          // 검사 이력만이라도 남겨 과제현황/알림장이 비지 않게 한다.
-          for (final itemId in entry.value) {
-            final target = await _resolveHomeworkCheckTarget(
-              studentId,
-              itemId,
-              includeHistory: true,
-            );
-            if (target == null) continue;
-            await HomeworkAssignmentStore.instance.syncCheckProgressFromGrading(
-              studentId: studentId,
-              homeworkItemId: itemId,
-              assignmentId: target.assignmentId,
-              progress: progress,
-            );
-          }
-        } else {
-          legacyFinalizeItemIds.addAll(entry.value);
-        }
-      }
-      for (final itemId in orphanItemIds) {
-        final target = await _resolveHomeworkCheckTarget(
-          studentId,
-          itemId,
-          includeHistory: true,
-        );
-        if (target == null) continue;
-        await HomeworkAssignmentStore.instance.syncCheckProgressFromGrading(
-          studentId: studentId,
-          homeworkItemId: itemId,
-          assignmentId: target.assignmentId,
-          progress: progress,
-        );
-      }
-      // 검사 결과가 서버에 기록된 시점에 체크 UI를 먼저 갱신한다.
-      // 아래 활성 순서 조정·제출·assignment 정리는 후속 정합 작업이다.
-      onCheckRecorded?.call();
-      onCheckRecorded = null;
-      for (final itemId in legacyFinalizeItemIds) {
-        await HomeworkStore.instance.placeItemAtActiveTail(
-          studentId,
-          itemId,
-          activateFromHomework: true,
-        );
-      }
-      await HomeworkStore.instance.submitBatch(
-        studentId,
-        legacyFinalizeItemIds,
-      );
-
-      // 원자적 RPC가 처리한 항목은 assignment도 이미 completed 상태다.
-      allItemIds.removeWhere(atomicallyFinalizedItemIds.contains);
-    }
-
-    onCheckRecorded?.call();
-    // 채점 저장 후에는 검사 대상 칩/다이얼로그가 다시 뜨지 않도록 활성 assignment를 해제한다.
-    if (allItemIds.isNotEmpty) {
-      await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-        studentId,
-        allItemIds,
-        fromStatuses: const ['assigned', 'in_progress', 'carried_to_class'],
-      );
-    }
-    _directStructuredHomeworkCheckKeys.removeAll(keys);
-    _gradingProgressRevisionByStudent.remove(studentId);
-    _gradingProgressFutureByStudent.remove(studentId);
     return true;
   }
 
@@ -15963,9 +15887,7 @@ HomeworkGradingProgressRate _aggregateHomeworkProgressRates(
 
 Future<Map<String, HomeworkGradingProgressRate>>
     _loadHomeworkProgressRatesForStudent(String studentId) async {
-  final items = HomeworkStore.instance
-      .items(studentId)
-      .toList(growable: false);
+  final items = HomeworkStore.instance.items(studentId).toList(growable: false);
   if (items.isEmpty) return const <String, HomeworkGradingProgressRate>{};
   final enabledIds = <String>{};
   final fallbackTotals = <String, int>{};
@@ -16001,8 +15923,7 @@ Future<Map<String, HomeworkGradingProgressRate>>
   final merged = <String, HomeworkGradingProgressRate>{...live};
   for (final entry in fallback.entries) {
     final liveRate = merged[entry.key];
-    if (liveRate == null ||
-        (liveRate.graded <= 0 && entry.value.graded > 0)) {
+    if (liveRate == null || (liveRate.graded <= 0 && entry.value.graded > 0)) {
       merged[entry.key] = entry.value;
     }
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_overlays.dart';
 import '../widgets/app_snackbar.dart';
 import 'homework_assignment_store.dart';
+import 'homework_grading_return_outbox_service.dart';
 import 'homework_store.dart';
 
 typedef HomeworkBatchConfirmKey = ({String studentId, String itemId});
@@ -19,6 +20,15 @@ class HomeworkBatchConfirmService {
 
   int get pendingCount => _pending.length;
 
+  Future<Set<HomeworkBatchConfirmKey>> restoreStructuredDrafts() async {
+    await HomeworkGradingReturnOutboxService.instance.initialize();
+    final restored =
+        HomeworkGradingReturnOutboxService.instance.pendingValues();
+    _pending.addAll(restored);
+    syncPendingCount();
+    return HomeworkGradingReturnOutboxService.instance.structuredKeys();
+  }
+
   void syncPendingCount() {
     final count = _pending.length;
     if (homeBatchConfirmPendingCount.value != count) {
@@ -27,28 +37,86 @@ class HomeworkBatchConfirmService {
   }
 
   void clearPending() {
-    if (_pending.isEmpty) {
-      syncPendingCount();
-      return;
-    }
-    _pending.clear();
+    final durable = HomeworkGradingReturnOutboxService.instance.pendingValues();
+    _pending
+      ..clear()
+      ..addAll(durable);
     syncPendingCount();
+  }
+
+  Future<void> enqueueStructuredDraft(Map<String, dynamic> payload) async {
+    await HomeworkGradingReturnOutboxService.instance.enqueue(payload);
+    _pending.addAll(
+      HomeworkGradingReturnOutboxService.instance.pendingValues(),
+    );
+    syncPendingCount();
+  }
+
+  Future<bool> removeStructuredDrafts(
+    Iterable<HomeworkBatchConfirmKey> keys,
+  ) async {
+    final list = keys.toList(growable: false);
+    if (!HomeworkGradingReturnOutboxService.instance.containsAny(list)) {
+      return false;
+    }
+    await HomeworkGradingReturnOutboxService.instance.removeForKeys(list);
+    for (final key in list) {
+      _pending.remove(key);
+    }
+    syncPendingCount();
+    return true;
   }
 
   Future<void> executePendingBatchConfirm({
     required BuildContext context,
   }) async {
+    await restoreStructuredDrafts();
     if (_pending.isEmpty) {
       syncPendingCount();
       return;
     }
     final pending = Map<HomeworkBatchConfirmKey, bool>.from(_pending);
-    _pending.clear();
-    syncPendingCount();
-    await _processBatchConfirmInBackground(
-      context: context,
-      pending: pending,
+    final structuredResult =
+        await HomeworkGradingReturnOutboxService.instance.processForKeys(
+      pending.keys,
     );
+    for (final key in structuredResult.succeededKeys) {
+      _pending.remove(key);
+    }
+    final legacyPending = <HomeworkBatchConfirmKey, bool>{
+      for (final entry in pending.entries)
+        if (!structuredResult.succeededKeys.contains(entry.key) &&
+            !structuredResult.failedKeys.contains(entry.key))
+          entry.key: entry.value,
+    };
+    if (legacyPending.isNotEmpty) {
+      if (!context.mounted) {
+        syncPendingCount();
+        return;
+      }
+      for (final key in legacyPending.keys) {
+        _pending.remove(key);
+      }
+      await _processBatchConfirmInBackground(
+        context: context,
+        pending: legacyPending,
+      );
+    }
+    syncPendingCount();
+    if (structuredResult.succeededKeys.isNotEmpty) {
+      HomeworkAssignmentStore.instance.invalidateActiveAssignments();
+      final studentIds =
+          structuredResult.succeededKeys.map((key) => key.studentId).toSet();
+      await Future.wait(
+        studentIds.map(HomeworkStore.instance.reloadStudentHomework),
+      );
+    }
+    if (structuredResult.failedKeys.isNotEmpty && context.mounted) {
+      showAppSnackBar(
+        context,
+        '일부 채점 반환에 실패했습니다. 기록은 이 PC에 보관되어 다시 시도할 수 있어요.',
+      );
+    }
   }
 
   Future<void> executeBatchConfirmNow({
@@ -56,10 +124,42 @@ class HomeworkBatchConfirmService {
     required Map<HomeworkBatchConfirmKey, bool> pending,
   }) async {
     if (pending.isEmpty) return;
-    await _processBatchConfirmInBackground(
-      context: context,
-      pending: Map<HomeworkBatchConfirmKey, bool>.from(pending),
+    await restoreStructuredDrafts();
+    final structuredResult =
+        await HomeworkGradingReturnOutboxService.instance.processForKeys(
+      pending.keys,
     );
+    for (final key in structuredResult.succeededKeys) {
+      _pending.remove(key);
+    }
+    final legacyPending = <HomeworkBatchConfirmKey, bool>{
+      for (final entry in pending.entries)
+        if (!structuredResult.succeededKeys.contains(entry.key) &&
+            !structuredResult.failedKeys.contains(entry.key))
+          entry.key: entry.value,
+    };
+    if (legacyPending.isNotEmpty) {
+      if (!context.mounted) return;
+      await _processBatchConfirmInBackground(
+        context: context,
+        pending: legacyPending,
+      );
+    }
+    if (structuredResult.succeededKeys.isNotEmpty) {
+      HomeworkAssignmentStore.instance.invalidateActiveAssignments();
+      final studentIds =
+          structuredResult.succeededKeys.map((key) => key.studentId).toSet();
+      await Future.wait(
+        studentIds.map(HomeworkStore.instance.reloadStudentHomework),
+      );
+    }
+    syncPendingCount();
+    if (structuredResult.failedKeys.isNotEmpty && context.mounted) {
+      showAppSnackBar(
+        context,
+        '채점 반환에 실패했습니다. 기록은 이 PC에 보관되어 다시 시도할 수 있어요.',
+      );
+    }
   }
 
   Future<void> _processBatchConfirmInBackground({

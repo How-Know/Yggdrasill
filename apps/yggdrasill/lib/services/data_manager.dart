@@ -103,6 +103,7 @@ class DataManager {
   List<OperatingHours> _operatingHours = [];
   Map<String, GroupInfo> _groupsById = {};
   Map<String, String> _deviceBindings = {};
+
   /// student_id → 학생앱 presence (온라인·학원/집).
   Map<String, StudentAppPresence> _studentAppPresence = {};
   bool _isInitialized = false;
@@ -1539,25 +1540,22 @@ class DataManager {
             .select(
                 'id,name,school,education_level,grade,avatar_kind,avatar_url,avatar_emoji,avatar_monogram_style,nickname')
             .eq('academy_id', academyId);
-        final supaStudents = (rows as List)
-            .map((r) {
-              final nick = (r['nickname'] as String?)?.trim();
-              return Student(
-                  id: r['id'] as String,
-                  name: (r['name'] as String?) ?? '',
-                  school: (r['school'] as String?) ?? '',
-                  grade: (r['grade'] as int?) ?? 0,
-                  educationLevel: EducationLevel
-                      .values[(r['education_level'] as int?) ?? 0],
-                  avatarKind: r['avatar_kind'] as String?,
-                  avatarUrl: r['avatar_url'] as String?,
-                  avatarEmoji: r['avatar_emoji'] as String?,
-                  avatarMonogramStyle:
-                      (r['avatar_monogram_style'] as num?)?.toInt(),
-                  nickname: (nick == null || nick.isEmpty) ? null : nick,
-                );
-            })
-            .toList();
+        final supaStudents = (rows as List).map((r) {
+          final nick = (r['nickname'] as String?)?.trim();
+          return Student(
+            id: r['id'] as String,
+            name: (r['name'] as String?) ?? '',
+            school: (r['school'] as String?) ?? '',
+            grade: (r['grade'] as int?) ?? 0,
+            educationLevel:
+                EducationLevel.values[(r['education_level'] as int?) ?? 0],
+            avatarKind: r['avatar_kind'] as String?,
+            avatarUrl: r['avatar_url'] as String?,
+            avatarEmoji: r['avatar_emoji'] as String?,
+            avatarMonogramStyle: (r['avatar_monogram_style'] as num?)?.toInt(),
+            nickname: (nick == null || nick.isEmpty) ? null : nick,
+          );
+        }).toList();
         final sbiRows = await supa
             .from('student_basic_info')
             .select(
@@ -3219,7 +3217,7 @@ class DataManager {
         final row = await Supabase.instance.client
             .from('student_level_states')
             .select(
-                'student_id,current_level_code,desired_level_code,desired_top_percent,target_level_code')
+                'student_id,current_level_code,desired_level_code,self_assessed_top_percent,desired_top_percent,target_level_code,current_top_percent,predicted_future_top_percent')
             .eq('academy_id', academyId)
             .eq('student_id', studentId)
             .maybeSingle();
@@ -3228,8 +3226,13 @@ class DataManager {
             'student_id': row['student_id'],
             'current_level_code': _asIntMaybe(row['current_level_code']),
             'desired_level_code': _asIntMaybe(row['desired_level_code']),
+            'self_assessed_top_percent':
+                _asIntMaybe(row['self_assessed_top_percent']),
             'desired_top_percent': _asIntMaybe(row['desired_top_percent']),
             'target_level_code': _asIntMaybe(row['target_level_code']),
+            'current_top_percent': _asIntMaybe(row['current_top_percent']),
+            'predicted_future_top_percent':
+                _asIntMaybe(row['predicted_future_top_percent']),
           };
         }
         return null;
@@ -3251,20 +3254,26 @@ class DataManager {
     required String studentId,
     int? currentLevelCode,
     int? desiredLevelCode,
+    int? selfAssessedTopPercent,
     int? desiredTopPercent,
     int? targetLevelCode,
+    int? currentTopPercent,
+    int? predictedFutureTopPercent,
   }) async {
     if (studentId.trim().isEmpty) return;
     print(
-      '[LEVEL][state][save] request student=$studentId current=$currentLevelCode desired=$desiredLevelCode top%=$desiredTopPercent target=$targetLevelCode',
+      '[LEVEL][state][save] request student=$studentId self=$selfAssessedTopPercent desired=$desiredTopPercent current=$currentTopPercent future=$predictedFutureTopPercent',
     );
     if (!RuntimeFlags.serverOnly) {
       await AcademyDbService.instance.saveStudentLevelState(
         studentId: studentId,
         currentLevelCode: currentLevelCode,
         desiredLevelCode: desiredLevelCode,
+        selfAssessedTopPercent: selfAssessedTopPercent,
         desiredTopPercent: desiredTopPercent,
         targetLevelCode: targetLevelCode,
+        currentTopPercent: currentTopPercent,
+        predictedFutureTopPercent: predictedFutureTopPercent,
       );
     }
 
@@ -3275,8 +3284,11 @@ class DataManager {
         final supa = Supabase.instance.client;
         if (currentLevelCode == null &&
             desiredLevelCode == null &&
+            selfAssessedTopPercent == null &&
             desiredTopPercent == null &&
-            targetLevelCode == null) {
+            targetLevelCode == null &&
+            currentTopPercent == null &&
+            predictedFutureTopPercent == null) {
           await supa.from('student_level_states').delete().match({
             'academy_id': academyId,
             'student_id': studentId,
@@ -3289,8 +3301,11 @@ class DataManager {
           'student_id': studentId,
           'current_level_code': currentLevelCode,
           'desired_level_code': desiredLevelCode,
+          'self_assessed_top_percent': selfAssessedTopPercent,
           'desired_top_percent': desiredTopPercent,
           'target_level_code': targetLevelCode,
+          'current_top_percent': currentTopPercent,
+          'predicted_future_top_percent': predictedFutureTopPercent,
         }, onConflict: 'academy_id,student_id');
         print('[LEVEL][state][save] server upsert success student=$studentId');
       } catch (e, st) {
@@ -7315,8 +7330,7 @@ class DataManager {
     result['total'] = myTotal;
     result['rank'] = rank;
     result['cohortSize'] = cohortSize;
-    result['topPercent'] =
-        cohortSize > 0 ? (rank / cohortSize) * 100.0 : null;
+    result['topPercent'] = cohortSize > 0 ? (rank / cohortSize) * 100.0 : null;
     return result;
   }
 

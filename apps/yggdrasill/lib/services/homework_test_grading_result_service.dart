@@ -254,6 +254,18 @@ class HomeworkTestQuestionErrorRate {
   double get wrongRate => totalCount <= 0 ? 0 : (wrongCount / totalCount);
 }
 
+class _PreparedGradingAttempt {
+  const _PreparedGradingAttempt({
+    required this.attemptRow,
+    required this.itemRows,
+    required this.computedRows,
+  });
+
+  final Map<String, dynamic> attemptRow;
+  final List<Map<String, dynamic>> itemRows;
+  final List<_ComputedAttemptRow> computedRows;
+}
+
 class HomeworkTestGradingResultService {
   HomeworkTestGradingResultService._();
 
@@ -262,6 +274,77 @@ class HomeworkTestGradingResultService {
 
   static const _uuid = Uuid();
   static const int _idFilterBatchSize = 250;
+
+  Future<Map<String, dynamic>?> buildDeferredReturnPayload({
+    required String studentId,
+    required String groupId,
+    required List<String> homeworkItemIds,
+    required HomeworkItem homeworkItem,
+    required String action,
+    required int progress,
+    required Map<String, HomeworkAnswerCellState> states,
+    required List<HomeworkAnswerGradingPage> gradingPages,
+    required Map<String, double> scoreByQuestionKey,
+    DateTime? sourceSnapshotAt,
+    String groupHomeworkTitleSnapshot = '',
+    String baselineAttemptId = '',
+    Map<String, HomeworkAnswerCellState> baselineStates =
+        const <String, HomeworkAnswerCellState>{},
+    Map<String, String> correctionStates = const <String, String>{},
+  }) async {
+    final prepared = await _prepareAttempt(
+      studentId: studentId,
+      homeworkItem: homeworkItem,
+      action: action,
+      states: states,
+      gradingPages: gradingPages,
+      scoreByQuestionKey: scoreByQuestionKey,
+      groupHomeworkTitleSnapshot: groupHomeworkTitleSnapshot,
+      baselineAttemptId: baselineAttemptId,
+      baselineStates: baselineStates,
+      correctionStates: correctionStates,
+    );
+    if (prepared == null) return null;
+    final normalizedItemIds = homeworkItemIds
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (groupId.trim().isEmpty || normalizedItemIds.isEmpty) return null;
+    final learningByHomework = <String, List<Map<String, dynamic>>>{};
+    for (final row in prepared.itemRows) {
+      final uid = '${row['question_uid'] ?? ''}'.trim();
+      if (uid.isEmpty) continue;
+      final questionKey = '${row['question_key'] ?? ''}'.trim();
+      final keyItemId = questionKey.split('|').first.trim();
+      final targetItemId =
+          normalizedItemIds.contains(keyItemId) ? keyItemId : homeworkItem.id;
+      learningByHomework
+          .putIfAbsent(
+        targetItemId,
+        () => <Map<String, dynamic>>[],
+      )
+          .add({
+        'question_uid': uid,
+        'state': row['state'],
+      });
+    }
+    final requestId = '${prepared.attemptRow['id'] ?? ''}'.trim();
+    return {
+      'request_id': requestId,
+      'student_id': studentId.trim(),
+      'group_id': groupId.trim(),
+      'homework_item_ids': normalizedItemIds,
+      'action': action.trim().toLowerCase(),
+      'progress': progress.clamp(0, 150),
+      'checked_at': prepared.attemptRow['graded_at'],
+      if (sourceSnapshotAt != null)
+        'source_snapshot_at': sourceSnapshotAt.toUtc().toIso8601String(),
+      'attempt': prepared.attemptRow,
+      'attempt_items': prepared.itemRows,
+      'learning_items_by_homework': learningByHomework,
+    };
+  }
 
   Future<bool> saveAttemptFromSession({
     required String studentId,
@@ -276,17 +359,121 @@ class HomeworkTestGradingResultService {
         const <String, HomeworkAnswerCellState>{},
     Map<String, String> correctionStates = const <String, String>{},
   }) async {
+    final prepared = await _prepareAttempt(
+      studentId: studentId,
+      homeworkItem: homeworkItem,
+      action: action,
+      states: states,
+      gradingPages: gradingPages,
+      scoreByQuestionKey: scoreByQuestionKey,
+      groupHomeworkTitleSnapshot: groupHomeworkTitleSnapshot,
+      baselineAttemptId: baselineAttemptId,
+      baselineStates: baselineStates,
+      correctionStates: correctionStates,
+    );
+    if (prepared == null) return false;
+    final attemptRow = prepared.attemptRow;
+    final itemRows = prepared.itemRows;
+    final trimmedStudentId = studentId.trim();
+    final homeworkItemId = homeworkItem.id.trim();
+    final attemptId = '${attemptRow['id'] ?? ''}';
+
+    final supa = Supabase.instance.client;
+    try {
+      await supa.from('homework_test_grading_attempts').insert(attemptRow);
+      if (itemRows.isNotEmpty) {
+        await supa.from('homework_test_grading_attempt_items').insert(itemRows);
+      }
+      final mirrored = await _mirrorGradingToLearningRecords(
+        studentId: trimmedStudentId,
+        homeworkItemId: homeworkItemId,
+        rows: prepared.computedRows,
+      );
+      if (!mirrored) {
+        throw StateError('unified_homework_grading_write_failed');
+      }
+      return true;
+    } catch (error, stackTrace) {
+      try {
+        await supa
+            .from('homework_test_grading_attempts')
+            .delete()
+            .eq('id', attemptId);
+      } catch (_) {}
+      if (_isMissingRetryColumnError(error)) {
+        final fallbackAttemptId = _uuid.v4();
+        final fallbackAttemptRow = Map<String, dynamic>.from(attemptRow)
+          ..['id'] = fallbackAttemptId;
+        final fallbackItemRows = itemRows
+            .map(
+              (row) => homeworkGradingCompatibilityItemRow(row)
+                ..['id'] = _uuid.v4()
+                ..['attempt_id'] = fallbackAttemptId,
+            )
+            .toList(growable: false);
+        try {
+          await supa
+              .from('homework_test_grading_attempts')
+              .insert(fallbackAttemptRow);
+          if (fallbackItemRows.isNotEmpty) {
+            await supa
+                .from('homework_test_grading_attempt_items')
+                .insert(fallbackItemRows);
+          }
+          final mirrored = await _mirrorGradingToLearningRecords(
+            studentId: trimmedStudentId,
+            homeworkItemId: homeworkItemId,
+            rows: prepared.computedRows,
+          );
+          if (!mirrored) {
+            throw StateError('unified_homework_grading_write_failed');
+          }
+          return true;
+        } catch (fallbackError, fallbackStackTrace) {
+          try {
+            await supa
+                .from('homework_test_grading_attempts')
+                .delete()
+                .eq('id', fallbackAttemptId);
+          } catch (_) {}
+          if (!_isMissingTableError(fallbackError)) {
+            debugPrint(
+                'saveAttemptFromSession fallback failed: $fallbackError');
+            debugPrintStack(stackTrace: fallbackStackTrace);
+          }
+          return false;
+        }
+      }
+      if (!_isMissingTableError(error)) {
+        debugPrint('saveAttemptFromSession failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      return false;
+    }
+  }
+
+  Future<_PreparedGradingAttempt?> _prepareAttempt({
+    required String studentId,
+    required HomeworkItem homeworkItem,
+    required String action,
+    required Map<String, HomeworkAnswerCellState> states,
+    required List<HomeworkAnswerGradingPage> gradingPages,
+    required Map<String, double> scoreByQuestionKey,
+    required String groupHomeworkTitleSnapshot,
+    required String baselineAttemptId,
+    required Map<String, HomeworkAnswerCellState> baselineStates,
+    required Map<String, String> correctionStates,
+  }) async {
     final normalizedAction = action.trim().toLowerCase();
     if (normalizedAction != 'complete' && normalizedAction != 'confirm') {
-      return false;
+      return null;
     }
     final trimmedStudentId = studentId.trim();
     final homeworkItemId = homeworkItem.id.trim();
-    if (trimmedStudentId.isEmpty || homeworkItemId.isEmpty) return false;
+    if (trimmedStudentId.isEmpty || homeworkItemId.isEmpty) return null;
     final academyId = await _resolveAcademyId();
-    if (academyId.isEmpty) return false;
+    if (academyId.isEmpty) return null;
 
-    // 서로 독립적인 두 조회를 동시에 시작해 저장 전 네트워크 왕복을 줄인다.
     final attemptCountFuture =
         _loadAttemptCountForHomework(academyId, homeworkItemId);
     final correctionAttemptNumbersFuture =
@@ -318,7 +505,6 @@ class HomeworkTestGradingResultService {
     final attemptId = _uuid.v4();
     final nowIso = DateTime.now().toUtc().toIso8601String();
     final uid = (Supabase.instance.client.auth.currentUser?.id ?? '').trim();
-
     final attemptRow = <String, dynamic>{
       'id': attemptId,
       'academy_id': academyId,
@@ -372,79 +558,11 @@ class HomeworkTestGradingResultService {
           },
         )
         .toList(growable: false);
-
-    final supa = Supabase.instance.client;
-    try {
-      await supa.from('homework_test_grading_attempts').insert(attemptRow);
-      if (itemRows.isNotEmpty) {
-        await supa.from('homework_test_grading_attempt_items').insert(itemRows);
-      }
-      final mirrored = await _mirrorGradingToLearningRecords(
-        studentId: trimmedStudentId,
-        homeworkItemId: homeworkItemId,
-        rows: computed.rows,
-      );
-      if (!mirrored) {
-        throw StateError('unified_homework_grading_write_failed');
-      }
-      return true;
-    } catch (error, stackTrace) {
-      try {
-        await supa
-            .from('homework_test_grading_attempts')
-            .delete()
-            .eq('id', attemptId);
-      } catch (_) {}
-      if (_isMissingRetryColumnError(error)) {
-        final fallbackAttemptId = _uuid.v4();
-        final fallbackAttemptRow = Map<String, dynamic>.from(attemptRow)
-          ..['id'] = fallbackAttemptId;
-        final fallbackItemRows = itemRows
-            .map(
-              (row) => homeworkGradingCompatibilityItemRow(row)
-                ..['id'] = _uuid.v4()
-                ..['attempt_id'] = fallbackAttemptId,
-            )
-            .toList(growable: false);
-        try {
-          await supa
-              .from('homework_test_grading_attempts')
-              .insert(fallbackAttemptRow);
-          if (fallbackItemRows.isNotEmpty) {
-            await supa
-                .from('homework_test_grading_attempt_items')
-                .insert(fallbackItemRows);
-          }
-          final mirrored = await _mirrorGradingToLearningRecords(
-            studentId: trimmedStudentId,
-            homeworkItemId: homeworkItemId,
-            rows: computed.rows,
-          );
-          if (!mirrored) {
-            throw StateError('unified_homework_grading_write_failed');
-          }
-          return true;
-        } catch (fallbackError, fallbackStackTrace) {
-          try {
-            await supa
-                .from('homework_test_grading_attempts')
-                .delete()
-                .eq('id', fallbackAttemptId);
-          } catch (_) {}
-          if (!_isMissingTableError(fallbackError)) {
-            debugPrint(
-                'saveAttemptFromSession fallback failed: $fallbackError');
-            debugPrintStack(stackTrace: fallbackStackTrace);
-          }
-          return false;
-        }
-      }
-      if (!_isMissingTableError(error)) {
-        debugPrint('saveAttemptFromSession failed: $error');
-        debugPrintStack(stackTrace: stackTrace);
-      }
-      return false;
-    }
+    return _PreparedGradingAttempt(
+      attemptRow: attemptRow,
+      itemRows: itemRows,
+      computedRows: computed.rows,
+    );
   }
 
   /// 문항별 O/X 를 학습 기록(learning_attempts·회차·답 캐시)에도 남긴다.
@@ -464,10 +582,12 @@ class HomeworkTestGradingResultService {
       final keyItemId = row.questionKey.split('|').first.trim();
       final targetItemId =
           keyItemId.isEmpty ? homeworkItemId.trim() : keyItemId;
-      itemsByHomework.putIfAbsent(
+      itemsByHomework
+          .putIfAbsent(
         targetItemId,
         () => <Map<String, dynamic>>[],
-      ).add({
+      )
+          .add({
         'question_uid': uid,
         'state': row.state,
       });
@@ -589,11 +709,11 @@ class HomeworkTestGradingResultService {
   ///
   /// `homework_test_grading_*`는 검사 스냅샷/이력이고, 현재 정오표는
   /// `learning_attempts`의 마지막 채점 결과를 기준으로 한다.
-  Future<Map<String, HomeworkAnswerCellState>>
-      loadCurrentStatesForHomework({
+  Future<Map<String, HomeworkAnswerCellState>> loadCurrentStatesForHomework({
     required String studentId,
     required String homeworkItemId,
     required List<HomeworkAnswerGradingPage> gradingPages,
+    bool throwOnError = false,
   }) async {
     final sid = studentId.trim();
     final itemId = homeworkItemId.trim();
@@ -632,8 +752,7 @@ class HomeworkTestGradingResultService {
         for (final row in rows.whereType<Map>()) {
           final map = Map<String, dynamic>.from(row);
           final questionRef = '${map['question_ref'] ?? ''}'.trim();
-          final key =
-              keyByItemAndQuestionRef['$targetItemId|$questionRef'];
+          final key = keyByItemAndQuestionRef['$targetItemId|$questionRef'];
           if (key == null) continue;
           switch ('${map['result'] ?? ''}'.trim().toLowerCase()) {
             case 'correct':
@@ -641,6 +760,8 @@ class HomeworkTestGradingResultService {
             case 'wrong':
             case 'partial':
               out[key] = HomeworkAnswerCellState.wrong;
+            case 'skipped':
+              out[key] = HomeworkAnswerCellState.notPerformed;
           }
         }
       }
@@ -648,6 +769,7 @@ class HomeworkTestGradingResultService {
     } catch (error, stackTrace) {
       debugPrint('loadCurrentStatesForHomework failed: $error');
       debugPrintStack(stackTrace: stackTrace);
+      if (throwOnError) rethrow;
       return const <String, HomeworkAnswerCellState>{};
     }
   }

@@ -98,6 +98,7 @@ for (const page of pages) {
     const group = item.content_group || {};
     console.log(
       `  ${JSON.stringify(item.number)} cat=${item.category} label=${JSON.stringify(item.label)} ` +
+        `set=${item.is_set_header === true ? JSON.stringify(item.set_range) : '-'} ` +
         `col=${item.column ?? '-'} group=${group.kind || 'none'}/${JSON.stringify(group.label || '')}/${JSON.stringify(group.title || '')} ` +
         `bbox=${JSON.stringify(item.bbox)} region=${JSON.stringify(item.item_region)} ` +
         `w=${Array.isArray(item.bbox) ? item.bbox[3] - item.bbox[1] : '-'}`,

@@ -5085,6 +5085,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final session = widget.session;
     if (session == null || _actionBusy) return;
     setState(() {
+      for (final page in _visiblePages(applyWrongOnly: false)) {
+        for (final cell in page.cells) {
+          final partLabels =
+              _setPartsOf(cell).map((part) => part.label).toList();
+          if (partLabels.length < 2) continue;
+          _materializePartStates(cell.key, partLabels);
+          _syncSetCellStateFromParts(cell.key, partLabels);
+        }
+      }
       _actionBusy = true;
     });
     _emitStateChanged();
@@ -5720,6 +5729,28 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
               ),
             ),
+            if (session.autoFilledCorrectCount > 0) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4B8BFF).withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: const Color(0xFF4B8BFF).withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Text(
+                  '미기록 ${session.autoFilledCorrectCount}문항 정답',
+                  style: const TextStyle(
+                    color: Color(0xFF4B8BFF),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                ),
+              ),
+            ],
             if (assignmentCode.isNotEmpty) ...[
               const SizedBox(width: 8),
               Text(
