@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../problem_bank_models.dart';
+
 class ProblemBankQuestionCard extends StatelessWidget {
   const ProblemBankQuestionCard({
     required this.child,
@@ -24,6 +26,34 @@ class ProblemBankQuestionCard extends StatelessWidget {
           border: Border.all(color: borderColor),
         ),
         child: child,
+      ),
+    );
+  }
+}
+
+class ProblemBankTimedTestStatsFooter extends StatelessWidget {
+  const ProblemBankTimedTestStatsFooter({
+    required this.stats,
+    this.color,
+    super.key,
+  });
+
+  final ProblemBankQuestionTimedTestStats stats;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: Text(
+        stats.displayLabel,
+        key: const ValueKey<String>('timed-test-stats-label'),
+        textAlign: TextAlign.right,
+        style: TextStyle(
+          color: color ?? Theme.of(context).colorScheme.onSurfaceVariant,
+          fontSize: 10.8,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

@@ -74,6 +74,48 @@ ProblemBankQuestion _question({
 }
 
 void main() {
+  group('ProblemBankQuestionTimedTestStats', () {
+    test('RPC 학생 수를 typed 모델로 파싱한다', () {
+      final stats = ProblemBankQuestionTimedTestStats.fromMap(
+        <String, dynamic>{
+          'question_uid': 'question-uid',
+          'assigned_student_count': 12,
+          'exposed_student_count': '8',
+          'responded_student_count': 5.0,
+        },
+      );
+
+      expect(stats.questionUid, 'question-uid');
+      expect(stats.assignedStudentCount, 12);
+      expect(stats.exposedStudentCount, 8);
+      expect(stats.respondedStudentCount, 5);
+      expect(stats.displayLabel, '출제 12 · 노출 8 · 응답 5');
+    });
+
+    testWidgets('학생 수가 모두 0이어도 통계 footer를 표시한다', (tester) async {
+      const stats = ProblemBankQuestionTimedTestStats(
+        questionUid: 'question-uid',
+        assignedStudentCount: 0,
+        exposedStudentCount: 0,
+        respondedStudentCount: 0,
+      );
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ProblemBankTimedTestStatsFooter(stats: stats),
+          ),
+        ),
+      );
+
+      expect(find.text('출제 0 · 노출 0 · 응답 0'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('timed-test-stats-label')),
+        findsOneWidget,
+      );
+    });
+  });
+
   group('problemBankReviewModeOf', () {
     test('HWPX 시험지는 문서 검수 모드다', () {
       expect(

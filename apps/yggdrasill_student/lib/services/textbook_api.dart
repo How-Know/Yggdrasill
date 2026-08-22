@@ -283,6 +283,7 @@ class TextbookApi {
     required Map<String, String> answersByCropId,
     Map<String, Map<String, String>> partAnswersByCropId = const {},
     String? homeworkGroupId,
+    TimedTestGradeContext? timedTest,
   }) async {
     final items = <Map<String, dynamic>>[
       ...answersByCropId.entries
@@ -305,6 +306,7 @@ class TextbookApi {
           'items': items,
           if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
             'homework_group_id': homeworkGroupId,
+          if (timedTest != null) 'timed_test': timedTest.toJson(),
         },
       );
     } on FunctionException catch (error) {
@@ -313,6 +315,91 @@ class TextbookApi {
     return GradeResult.fromJson(
       (response.data as Map<String, dynamic>?) ?? const {},
     );
+  }
+
+  Future<TimedTestSubmissionResult> gradeTimedTest({
+    required String bookId,
+    required String gradeLabel,
+    required String cropId,
+    required String answer,
+    required TimedTestGradeContext timedTest,
+  }) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {
+          'action': 'grade',
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'items': [
+            {'crop_id': cropId, 'answer': answer}
+          ],
+          'timed_test': timedTest.toJson(),
+        },
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
+    return TimedTestSubmissionResult.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
+  Future<TimedTestSubmissionResult> passTimedTest({
+    required TimedTestGradeContext timedTest,
+  }) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {
+          'action': 'timed_test_pass',
+          'timed_test': timedTest.toJson(),
+        },
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
+    return TimedTestSubmissionResult.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
+  Future<bool> timedTestExposureAnswered({
+    required TimedTestGradeContext timedTest,
+  }) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {
+          'action': 'timed_test_status',
+          'timed_test': timedTest.toJson(),
+        },
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
+    final data = Map<String, dynamic>.from(response.data as Map);
+    return data['attempted'] == true;
+  }
+
+  Future<int> timedTestNextPosition(String sessionId) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_grade',
+        body: {
+          'action': 'timed_test_progress',
+          'timed_test': {'session_id': sessionId},
+        },
+      );
+    } on FunctionException catch (error) {
+      _throwGradeException(error);
+    }
+    final data = Map<String, dynamic>.from(response.data as Map);
+    return ((data['next_position'] as num?)?.toInt() ?? 1).clamp(1, 2147483647);
   }
 
   /// Edge Function 4xx/5xx 응답을 코드 있는 예외로 바꾼다 (잠금 등 구분용).
@@ -409,9 +496,8 @@ class TextbookApi {
       correct: data['correct'] == true,
       partResults: ProblemPartResult.listFromJson(data['part_results']),
       pointsGranted: _pointsGrantedFromMastery(data['mastery']),
-      homeworkLinked: homeworkGroupId == null
-          ? true
-          : data['homework_linked'] as bool?,
+      homeworkLinked:
+          homeworkGroupId == null ? true : data['homework_linked'] as bool?,
     );
   }
 
@@ -446,6 +532,50 @@ class TextbookApi {
       throw Exception('report_failed: ${data['error']}');
     }
     return data;
+  }
+}
+
+class TimedTestGradeContext {
+  const TimedTestGradeContext({
+    required this.sessionId,
+    required this.exposureId,
+    required this.durationMs,
+    required this.position,
+    this.wallDurationMs,
+    this.interruptionMs,
+  });
+
+  final String sessionId;
+  final String exposureId;
+  final int durationMs;
+  final int position;
+  final int? wallDurationMs;
+  final int? interruptionMs;
+
+  Map<String, dynamic> toJson() => {
+        'session_id': sessionId,
+        'exposure_id': exposureId,
+        'duration_ms': durationMs,
+        'position': position,
+        if (wallDurationMs != null) 'wall_duration_ms': wallDurationMs,
+        if (interruptionMs != null) 'interruption_ms': interruptionMs,
+      };
+}
+
+class TimedTestSubmissionResult {
+  const TimedTestSubmissionResult({
+    required this.accepted,
+    required this.alreadyAttempted,
+  });
+
+  final bool accepted;
+  final bool alreadyAttempted;
+
+  static TimedTestSubmissionResult fromJson(Map<String, dynamic> json) {
+    return TimedTestSubmissionResult(
+      accepted: json['ok'] == true && json['accepted'] == true,
+      alreadyAttempted: json['already_attempted'] == true,
+    );
   }
 }
 

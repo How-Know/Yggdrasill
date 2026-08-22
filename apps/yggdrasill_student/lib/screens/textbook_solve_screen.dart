@@ -457,8 +457,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           // 덧씌워도 정오가 사라지지 않게).
           final lastGraded = hp.lastGradedResult ??
               (hp.lastResult == 'skipped' ? null : hp.lastResult);
-          final gradedAttempts = hp.gradedAttemptCount ??
-              (lastGraded == null ? 0 : attempts);
+          final gradedAttempts =
+              hp.gradedAttemptCount ?? (lastGraded == null ? 0 : attempts);
           if (lastGraded == null && hp.passed) {
             // last_graded 컬럼이 아직 없는 서버에서도, 한 번이라도
             // 맞힌 문항은 정답으로 복원한다.
@@ -1171,8 +1171,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
         final rows =
             await StudentApi.instance.listHomeworkProblems(scope.groupId);
         for (final row in rows) {
-          if (row.cropId != cropId ||
-              row.attemptCount < expectedAttemptCount) {
+          if (row.cropId != cropId || row.attemptCount < expectedAttemptCount) {
             continue;
           }
           final lastGraded = row.lastGradedResult ??
@@ -3883,6 +3882,34 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 시간제한 테스트 등 다른 풀이 흐름에서도 동일한 문항 PDF 렌더를 쓴다.
+class TextbookProblemDocumentView extends StatelessWidget {
+  const TextbookProblemDocumentView({
+    super.key,
+    required this.view,
+  });
+
+  final StudentTextbookProblemView view;
+
+  @override
+  Widget build(BuildContext context) {
+    if (view.isQueued) {
+      return const Center(child: YggLoadingIndicator());
+    }
+    final url =
+        view.isFallback ? (view.bodyPdfUrl ?? view.pdfUrl) : view.pdfUrl;
+    final uri = url == null ? null : Uri.tryParse(url);
+    if (uri == null) {
+      return const Center(child: Text('문항 PDF를 열 수 없어요.'));
+    }
+    return _ProblemPdfView(
+      uri: uri,
+      fallbackPage: view.isFallback ? view.rawPage : null,
+      itemRegion1k: view.isFallback ? view.itemRegion1k : null,
     );
   }
 }

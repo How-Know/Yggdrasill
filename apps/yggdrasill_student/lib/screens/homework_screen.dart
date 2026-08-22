@@ -316,6 +316,11 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     HomeworkSession.instance.preferGroup(group.groupId);
     if (_busy) return;
 
+    if (group.isTimedTest) {
+      await _openDigitalHomework(group);
+      return;
+    }
+
     // 확인 완료(대기중) 탭 → 과제 찾아왔는지 묻고 대기로 전환.
     if (group.phase == 4) {
       await _confirmFoundHomework(group);
@@ -442,19 +447,15 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         ...groups.where((group) => group.isHomework && group.isDueForCheck),
       ]..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
       final priority = planPool.take(2).toList(growable: false);
-      final waiting = planPool.length > 2
-          ? planPool.sublist(2)
-          : const <HomeworkGroup>[];
+      final waiting =
+          planPool.length > 2 ? planPool.sublist(2) : const <HomeworkGroup>[];
       final homework = groups
           .where((group) => group.isHomework && !group.isDueForCheck)
           .toList(growable: false)
         ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
       final emptyStyle = TextStyle(
         fontSize: 15,
-        color: Theme.of(context)
-            .colorScheme
-            .onSurface
-            .withValues(alpha: 0.45),
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.45),
       );
       children.addAll([
         const _HomeworkSectionHeader(title: '우선 과제'),
@@ -2222,10 +2223,10 @@ class _TodayHomeworkProgressSectionState
       return _planProgress.groupCompletionLabel;
     }
     final completed = _completed?.length ?? 0;
-    final groups = HomeworkSession.instance.lastGroups ?? const <HomeworkGroup>[];
-    final active = groups
-        .where((g) => g.isInClass && !g.isAdditionalAfterSnapshot)
-        .length;
+    final groups =
+        HomeworkSession.instance.lastGroups ?? const <HomeworkGroup>[];
+    final active =
+        groups.where((g) => g.isInClass && !g.isAdditionalAfterSnapshot).length;
     final total = completed + active;
     return '$total개 중 $completed개 완료';
   }
@@ -3309,7 +3310,9 @@ class _AssignmentOriginBadge extends StatelessWidget {
         carryover ? const Color(0xFF5E5CE6) : YggGlassTokens.confirmActionColor;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: onCover ? color.withValues(alpha: 0.92) : color.withValues(alpha: 0.12),
+        color: onCover
+            ? color.withValues(alpha: 0.92)
+            : color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
         boxShadow: onCover
             ? const [
@@ -3371,8 +3374,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
     final course = courseLabel.trim();
     // 표지 이미지가 있으면 제목/과정·하단 그라데이션은 숨긴다.
     final hasCoverImage = (coverRef ?? '').trim().isNotEmpty;
-    final hasMeta =
-        !hasCoverImage && (book.isNotEmpty || course.isNotEmpty);
+    final hasMeta = !hasCoverImage && (book.isNotEmpty || course.isNotEmpty);
     final hasOverlayLabels = overlayLabels.isNotEmpty;
     final hasAttempt = attemptCount > 0;
     final attempt = hasAttempt ? '시도 $attemptCount' : '';

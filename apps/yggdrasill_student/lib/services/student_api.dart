@@ -143,6 +143,8 @@ class HomeworkGroup {
   bool get isInClass => listKind == HomeworkListKind.inClass;
   bool get isHomework => listKind == HomeworkListKind.homework;
   bool get isDueForCheck => inspectionStatus == 'due_for_check';
+  bool get isTimedTest =>
+      isTest && (timeLimitMinutes ?? 0) > 0 && digitalSolvable;
 
   String get inspectionLabel {
     if (!isDueForCheck) return '';
@@ -391,6 +393,7 @@ class HomeworkProblem {
     required this.itemId,
     required this.itemTitle,
     required this.cropId,
+    required this.pbQuestionUid,
     required this.bookId,
     required this.gradeLabel,
     required this.problemNumber,
@@ -414,6 +417,7 @@ class HomeworkProblem {
   final String itemId;
   final String itemTitle;
   final String cropId;
+  final String pbQuestionUid;
   final String bookId;
   final String gradeLabel;
   final String problemNumber;
@@ -454,6 +458,7 @@ class HomeworkProblem {
       itemId: (row['homework_item_id'] as String?) ?? '',
       itemTitle: (row['item_title'] as String?) ?? '',
       cropId: (row['crop_id'] as String?) ?? '',
+      pbQuestionUid: (row['pb_question_uid'] as String?) ?? '',
       bookId: (row['book_id'] as String?) ?? '',
       gradeLabel: (row['grade_label'] as String?) ?? '',
       problemNumber: (row['problem_number'] as String?) ?? '',
@@ -471,6 +476,98 @@ class HomeworkProblem {
       gradedAttemptCount: (row['graded_attempt_count'] as num?)?.toInt(),
       roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
       roundAttemptCount: (row['round_attempt_count'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class TimedTestSession {
+  const TimedTestSession({
+    required this.sessionId,
+    required this.status,
+    required this.startedAt,
+    required this.deadlineAt,
+    required this.remainingSeconds,
+    required this.timeLimitSeconds,
+    required this.expired,
+    required this.correct,
+    required this.wrong,
+    required this.skipped,
+    required this.timeout,
+    required this.exposed,
+    required this.accuracy,
+  });
+
+  final String sessionId;
+  final String status;
+  final DateTime startedAt;
+  final DateTime deadlineAt;
+  final int remainingSeconds;
+  final int timeLimitSeconds;
+  final bool expired;
+  final int correct;
+  final int wrong;
+  final int skipped;
+  final int timeout;
+  final int exposed;
+  final double? accuracy;
+
+  bool get isOpen => status == 'open' && !expired;
+  int get pass => skipped;
+
+  static TimedTestSession fromJson(Map<String, dynamic> json) {
+    DateTime requiredDate(String key) {
+      final parsed = DateTime.tryParse('${json[key] ?? ''}');
+      if (parsed == null) throw FormatException('timed_test_$key');
+      return parsed.toLocal();
+    }
+
+    return TimedTestSession(
+      sessionId: '${json['session_id'] ?? ''}',
+      status: '${json['status'] ?? ''}',
+      startedAt: requiredDate('started_at'),
+      deadlineAt: requiredDate('deadline_at'),
+      remainingSeconds: (json['remaining_sec'] as num?)?.toInt() ?? 0,
+      timeLimitSeconds: (json['time_limit_sec'] as num?)?.toInt() ?? 0,
+      expired: json['expired'] == true,
+      correct: (json['correct'] as num?)?.toInt() ?? 0,
+      wrong: (json['wrong'] as num?)?.toInt() ?? 0,
+      skipped: (json['skipped'] as num?)?.toInt() ?? 0,
+      timeout: (json['timeout'] as num?)?.toInt() ?? 0,
+      exposed: (json['exposed'] as num?)?.toInt() ?? 0,
+      accuracy: (json['accuracy'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class TimedTestExposure {
+  const TimedTestExposure({
+    required this.exposureId,
+    required this.sessionId,
+    required this.position,
+    required this.deadlineAt,
+    required this.remainingSeconds,
+    required this.expired,
+  });
+
+  final String exposureId;
+  final String sessionId;
+  final int position;
+  final DateTime deadlineAt;
+  final int remainingSeconds;
+  final bool expired;
+
+  static TimedTestExposure fromJson(Map<String, dynamic> json) {
+    final deadline = DateTime.tryParse('${json['deadline_at'] ?? ''}');
+    if (deadline == null) {
+      throw const FormatException('timed_test_deadline_at');
+    }
+    return TimedTestExposure(
+      exposureId: '${json['exposure_id'] ?? ''}',
+      sessionId: '${json['session_id'] ?? ''}',
+      position: (json['position_in_session'] as num?)?.toInt() ?? 0,
+      deadlineAt: deadline.toLocal(),
+      remainingSeconds: (json['remaining_sec'] as num?)?.toInt() ?? 0,
+      expired: json['expired'] == true || json['ok'] == false,
     );
   }
 }
@@ -1837,6 +1934,7 @@ class StudentApi {
 
   /// 과제 그룹 목록 (메인 + 하원숙제 + 플래그 병합).
   Future<List<HomeworkGroup>> listHomeworkGroups() async {
+    await _client.rpc('student_finalize_expired_timed_tests_v1');
     final results = await Future.wait([
       _client.rpc('student_list_homework_groups_v1'),
       _client.rpc('student_list_homework_only_groups_v1'),
@@ -1977,6 +2075,51 @@ class StudentApi {
         .whereType<Map<String, dynamic>>()
         .map(HomeworkProblem.fromRow)
         .toList(growable: false);
+  }
+
+  Future<TimedTestSession> startOrResumeTimedTest(String groupId) async {
+    final raw = await _client.rpc(
+      'student_start_or_resume_timed_test_v1',
+      params: {'p_homework_group_id': groupId},
+    );
+    return TimedTestSession.fromJson(Map<String, dynamic>.from(raw as Map));
+  }
+
+  Future<TimedTestSession> resumeTimedTest(String groupId) async {
+    final raw = await _client.rpc(
+      'student_resume_timed_test_v1',
+      params: {'p_homework_group_id': groupId},
+    );
+    return TimedTestSession.fromJson(Map<String, dynamic>.from(raw as Map));
+  }
+
+  Future<TimedTestExposure> exposeTimedTestProblem({
+    required String sessionId,
+    required HomeworkProblem problem,
+    required int position,
+  }) async {
+    final raw = await _client.rpc(
+      'student_timed_test_expose_v1',
+      params: {
+        'p_session_id': sessionId,
+        'p_crop_id': problem.cropId.isEmpty ? null : problem.cropId,
+        'p_pb_question_uid':
+            problem.pbQuestionUid.isEmpty ? null : problem.pbQuestionUid,
+        'p_position_in_session': position,
+      },
+    );
+    return TimedTestExposure.fromJson(Map<String, dynamic>.from(raw as Map));
+  }
+
+  Future<TimedTestSession> finishTimedTest(
+    String sessionId, {
+    String status = 'completed',
+  }) async {
+    final raw = await _client.rpc(
+      'student_finish_timed_test_v1',
+      params: {'p_session_id': sessionId, 'p_status': status},
+    );
+    return TimedTestSession.fromJson(Map<String, dynamic>.from(raw as Map));
   }
 
   /// 과제 이탈 시 안 푼 문항을 미수행(skipped)으로 기록한다.

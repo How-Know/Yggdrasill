@@ -2092,6 +2092,34 @@ class ProblemBankService {
         .toList(growable: false);
   }
 
+  Future<Map<String, ProblemBankQuestionTimedTestStats>>
+      loadTimedTestStatsForQuestions(Iterable<String> questionUids) async {
+    final uids = questionUids
+        .map((uid) => uid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (uids.isEmpty) {
+      return const <String, ProblemBankQuestionTimedTestStats>{};
+    }
+
+    final rows = await _client.rpc(
+      'pb_question_timed_test_stats_batch_v1',
+      params: <String, dynamic>{'p_question_uids': uids},
+    );
+    final statsByUid = <String, ProblemBankQuestionTimedTestStats>{};
+    for (final rawRow in rows as List<dynamic>) {
+      if (rawRow is! Map) continue;
+      final stats = ProblemBankQuestionTimedTestStats.fromMap(
+        rawRow.map((key, dynamic value) => MapEntry('$key', value)),
+      );
+      if (stats.questionUid.isNotEmpty) {
+        statsByUid[stats.questionUid] = stats;
+      }
+    }
+    return statsByUid;
+  }
+
   Future<List<ProblemBankQuestion>> listQuestionsForDocuments({
     required String academyId,
     required Iterable<String> documentIds,

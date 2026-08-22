@@ -711,6 +711,77 @@ test('solution block index keeps a range number instead of shrinking it', () => 
   assert.ok(range.content_region);
 });
 
+// 공통수학2 해설 p109 는 오른쪽 단에 "01 답 ⊂ | 02 답 ⊂ | 03 답 ⊄" 격자를
+// 6줄 싣는다. 번호가 한 지면에 38개 깔리자 모델이 06 하나를 통째로 흘렸고, 그
+// 문항만 해설 좌표가 비었다. 격자는 자로 잰 듯 규칙적이니 빈 칸은 계산으로 채운다.
+test('solution grid revives a number the model dropped', () => {
+  const numbers = [];
+  const colXs = [518, 657, 797];
+  const rowYs = [109, 148, 186, 225, 264, 302];
+  for (let r = 0; r < rowYs.length; r += 1) {
+    for (let c = 0; c < colXs.length; c += 1) {
+      const value = r * colXs.length + c + 1;
+      if (value === 6) continue; // 모델이 흘린 칸
+      numbers.push({
+        text: String(value).padStart(2, '0'),
+        number_region: [rowYs[r], colXs[c], rowYs[r] + 15, colXs[c] + 28],
+      });
+    }
+  }
+  // 격자 아래로 이어지는 보통 풀이. 단마다 한 칸씩만 쓴다.
+  for (const y of [341, 380, 476]) {
+    numbers.push({ text: '19', number_region: [y, 518, y + 15, 546] });
+  }
+  // 왼쪽 단은 앞 소단원의 풀이가 이어진다.
+  for (const y of [71, 138, 226]) {
+    numbers.push({ text: '32', number_region: [y, 74, y + 15, 102] });
+  }
+
+  const out = normalizeSolutionBlocksResult({ numbers });
+  const six = out.numbers.find((n) => n.text === '06');
+  assert.ok(six, '흘린 06 을 격자 좌표로 되살려야 한다');
+  assert.equal(six.repaired, true);
+  assert.deepEqual(six.number_region, [148, 797, 163, 825]);
+  assert.ok(six.content_region, '되살린 칸도 풀이 영역을 받는다');
+  // 없던 번호를 지어내지는 않는다.
+  assert.equal(out.numbers.filter((n) => n.repaired === true).length, 1);
+});
+
+test('solution grid repair leaves ordinary pages alone', () => {
+  // 좌우 2단에 풀이가 한 줄씩 놓인 보통 지면. 격자가 아니므로 손대지 않는다.
+  const numbers = [
+    { text: '11', number_region: [100, 74, 115, 102] },
+    { text: '12', number_region: [200, 74, 215, 102] },
+    { text: '13', number_region: [320, 74, 335, 102] },
+    { text: '14', number_region: [100, 518, 115, 546] },
+    { text: '15', number_region: [240, 518, 255, 546] },
+    { text: '16', number_region: [400, 518, 415, 546] },
+  ];
+  const out = normalizeSolutionBlocksResult({ numbers });
+  assert.equal(out.numbers.length, 6);
+  assert.equal(out.numbers.some((n) => n.repaired === true), false);
+});
+
+test('solution grid repair stops at the end of the last row', () => {
+  // 17 에서 끝나는 격자. 마지막 줄 오른쪽 빈 칸은 문항이 없는 것이지 누락이 아니다.
+  const colXs = [518, 657, 797];
+  const rowYs = [109, 148, 186, 225, 264, 302];
+  const numbers = [];
+  for (let r = 0; r < rowYs.length; r += 1) {
+    for (let c = 0; c < colXs.length; c += 1) {
+      const value = r * colXs.length + c + 1;
+      if (value > 17) continue;
+      numbers.push({
+        text: String(value).padStart(2, '0'),
+        number_region: [rowYs[r], colXs[c], rowYs[r] + 15, colXs[c] + 28],
+      });
+    }
+  }
+  const out = normalizeSolutionBlocksResult({ numbers });
+  assert.equal(out.numbers.some((n) => n.text === '18'), false);
+  assert.equal(out.numbers.length, 17);
+});
+
 test('solution block index keeps badge page ranges and flags empty pages', () => {
   const withHeads = normalizeSolutionBlocksResult({
     leading_continuation: true,

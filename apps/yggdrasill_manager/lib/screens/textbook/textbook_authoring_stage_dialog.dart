@@ -3214,7 +3214,7 @@ class _TextbookAuthoringStageDialogState
             ];
 
   String _scopeKey(TextbookAuthoringStageScope scope) =>
-      '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}';
+      '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}:${scope.unitRowIndex ?? 0}';
 
   ({int start, int end}) _pageRangeFromScopes({
     required bool answer,
@@ -3556,9 +3556,11 @@ class _TextbookAuthoringStageDialogState
     }
     await _refreshPbRunStatuses();
     if (!mounted) return;
-    final hasExistingPbRuns =
-        _pbRunStatusByKey.values.any((status) => status.trim().isNotEmpty);
-    if (!hasExistingPbRuns && widget.onStartProblemExtraction != null) {
+    // 한 스코프에 옛 런이 있어도 나머지 소단원은 비어 있을 수 있다.
+    // "하나라도 있으면 시작하지 않음"이면 그 빈 스코프가 런 없음으로 영원히 멈춘다.
+    final hasMissingPbRuns =
+        _pbRunStatusByKey.values.any((status) => status.trim().isEmpty);
+    if (hasMissingPbRuns && widget.onStartProblemExtraction != null) {
       final coverage = await _persistedSidecarCoverage();
       if (!mounted) return;
       if (coverage.answers < coverage.total ||

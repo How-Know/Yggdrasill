@@ -186,6 +186,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   final Set<String> _expandedTextbookSwitchGroups = <String>{};
   ProblemBankExtractJob? _activeExtractJob;
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
+  Map<String, ProblemBankQuestionTimedTestStats> _timedTestStatsByQuestionUid =
+      <String, ProblemBankQuestionTimedTestStats>{};
+  int _documentLoadVersion = 0;
+  int _timedTestStatsRequestVersion = 0;
   final List<_PipelineLogEntry> _pipelineLogs = <_PipelineLogEntry>[];
   final Map<String, String> _questionPreviewUrls = <String, String>{};
   final Map<String, Future<IssueQuestionView>> _issueQuestionViews =
@@ -2241,6 +2245,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     int? textbookPage,
     bool preferFirstTextbookQuestion = false,
   }) async {
+    final loadVersion = ++_documentLoadVersion;
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) return;
     final nextTextbookPage = textbookPage ??
@@ -2251,6 +2256,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         academyId: academyId,
         documentId: documentId,
       );
+      if (loadVersion != _documentLoadVersion) return;
       if (summary == null) {
         if (!mounted) return;
         setState(() {
@@ -2272,6 +2278,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               academyId: academyId,
               documentId: documentId,
             );
+      if (loadVersion != _documentLoadVersion) return;
       if (!mounted) return;
       final questionPages = textbookPagesOf(questions);
       final resolvedTextbookPage =
@@ -2306,6 +2313,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _requestedTextbookPage = resolvedTextbookPage;
         _activeExtractJob = summary.latestExtractJob;
         _questions = questions;
+        _timedTestStatsRequestVersion += 1;
+        _timedTestStatsByQuestionUid =
+            <String, ProblemBankQuestionTimedTestStats>{};
         _dirtyQuestionIds.clear();
         _applySourceMetaFromDocument(summary.document);
         _questionPreviewUrls.clear();
@@ -2338,6 +2348,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final initialQuestions = textbookReview && resolvedTextbookPage != null
           ? textbookQuestionsOnPage(questions, resolvedTextbookPage)
           : questions;
+      unawaited(
+        _loadTimedTestStats(
+          questions,
+          documentContextId: summary.document.id,
+        ),
+      );
       unawaited(_prefetchQuestionPreviewUrls(initialQuestions));
       unawaited(_prefetchFigurePreviewUrls(initialQuestions));
       unawaited(_syncFigurePollingForActiveDocument());
@@ -3417,6 +3433,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     _ensurePolling();
   }
 
+  Future<void> _loadTimedTestStats(
+    List<ProblemBankQuestion> questions, {
+    required String documentContextId,
+  }) async {
+    final requestedUids = questions
+        .map((question) => question.questionUid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toSet();
+    final requestVersion = ++_timedTestStatsRequestVersion;
+    if (requestedUids.isEmpty) {
+      if (!mounted || _activeDocument?.id != documentContextId) return;
+      setState(() {
+        _timedTestStatsByQuestionUid =
+            <String, ProblemBankQuestionTimedTestStats>{};
+      });
+      return;
+    }
+
+    try {
+      final stats =
+          await _service.loadTimedTestStatsForQuestions(requestedUids);
+      if (!mounted ||
+          requestVersion != _timedTestStatsRequestVersion ||
+          _activeDocument?.id != documentContextId) {
+        return;
+      }
+      final currentUids = _questions
+          .map((question) => question.questionUid.trim())
+          .where((uid) => uid.isNotEmpty)
+          .toSet();
+      if (currentUids.length != requestedUids.length ||
+          !currentUids.containsAll(requestedUids)) {
+        return;
+      }
+      setState(() {
+        _timedTestStatsByQuestionUid = stats;
+      });
+    } catch (error) {
+      debugPrint('[problem-bank] timed test stats load failed: $error');
+    }
+  }
+
   Future<void> _reloadQuestions() async {
     final academyId = _academyId;
     final doc = _activeDocument;
@@ -3426,9 +3484,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         academyId: academyId,
         documentId: doc.id,
       );
-      if (!mounted) return;
+      if (!mounted || _activeDocument?.id != doc.id) return;
       setState(() {
         _questions = questions;
+        _timedTestStatsRequestVersion += 1;
+        _timedTestStatsByQuestionUid =
+            <String, ProblemBankQuestionTimedTestStats>{};
         _dirtyQuestionIds.clear();
         _reextractingQuestionIds.clear();
         _questionPreviewUrls.clear();
@@ -3440,6 +3501,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isExtracting = false;
       });
       _appendPipelineLog('review', '문항 목록 갱신: ${questions.length}건');
+      unawaited(
+        _loadTimedTestStats(questions, documentContextId: doc.id),
+      );
       unawaited(_prefetchQuestionPreviewUrls(questions));
       unawaited(_prefetchFigurePreviewUrls(questions));
       unawaited(_syncFigurePollingForActiveDocument());
@@ -13878,6 +13942,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         problemBankReviewModeOf(doc) == ProblemBankReviewMode.textbookPdf
             ? textbookDisplayPageOf(q)
             : q.sourcePage;
+    final timedTestStats = _timedTestStatsByQuestionUid[q.questionUid.trim()];
     final metaFooter = 'p.$pageNumber'
         ' · 보기 $objectiveChoiceCount개'
         ' · 수식 ${q.equations.length}개'
@@ -14292,6 +14357,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ),
           ],
           const SizedBox(height: 4),
+          if (timedTestStats != null) ...[
+            ProblemBankTimedTestStatsFooter(
+              stats: timedTestStats,
+              color: _textSub,
+            ),
+            const SizedBox(height: 2),
+          ],
           SizedBox(
             width: double.infinity,
             child: Text(

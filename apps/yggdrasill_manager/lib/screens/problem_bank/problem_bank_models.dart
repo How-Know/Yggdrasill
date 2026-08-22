@@ -290,6 +290,38 @@ class ProblemBankChoice {
       };
 }
 
+/// 시간제한 테스트에서 한 문제은행 문항을 경험한 학생 수 집계.
+///
+/// DB RPC가 테스트 과제만 대상으로 학생을 distinct 집계하며, 응답 수에는
+/// correct/wrong만 포함되고 pass/timeout은 포함되지 않는다.
+class ProblemBankQuestionTimedTestStats {
+  const ProblemBankQuestionTimedTestStats({
+    required this.questionUid,
+    required this.assignedStudentCount,
+    required this.exposedStudentCount,
+    required this.respondedStudentCount,
+  });
+
+  final String questionUid;
+  final int assignedStudentCount;
+  final int exposedStudentCount;
+  final int respondedStudentCount;
+
+  String get displayLabel =>
+      '출제 $assignedStudentCount · 노출 $exposedStudentCount · 응답 $respondedStudentCount';
+
+  factory ProblemBankQuestionTimedTestStats.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    return ProblemBankQuestionTimedTestStats(
+      questionUid: '${map['question_uid'] ?? ''}'.trim(),
+      assignedStudentCount: _intOrZero(map['assigned_student_count']),
+      exposedStudentCount: _intOrZero(map['exposed_student_count']),
+      respondedStudentCount: _intOrZero(map['responded_student_count']),
+    );
+  }
+}
+
 class ProblemBankEquation {
   const ProblemBankEquation({
     required this.token,

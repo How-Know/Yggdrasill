@@ -25,6 +25,7 @@ import '../../models/student.dart';
 import '../../models/student_flow.dart';
 import '../../utils/naesin_exam_context.dart';
 import '../../utils/textbook_problem_source_order.dart';
+import '../../utils/wonri_timed_test_v0.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../resources/textbook_explorer_view.dart';
 
@@ -226,6 +227,12 @@ class HomeworkQuickAddProxyDialogState
   /// 자동 모드 리스트와 현재 선택 범위의 동기화 지문.
   String? _autoDraftFingerprint;
   String? _testOriginFlowId;
+  bool _testTimeLimitEnabled = true;
+  bool _timedTestEligibilityLoading = false;
+  int _timedTestEligibleCount = 0;
+  int _timedTestExcludedCount = 0;
+  String _timedTestEligibilityFingerprint = '';
+  bool _submitting = false;
   String _naesinGradeKey = '';
   String _naesinCourseKey = '';
   String _naesinExamTerm = '';
@@ -475,6 +482,140 @@ class HomeworkQuickAddProxyDialogState
 
   bool _isCurrentHomeworkTypeTest() {
     return _isTestTypeActive();
+  }
+
+  bool _looksLikeWonriBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final compact =
+        book.bookName.trim().replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    return compact.contains('개념원리') || compact.contains('wonri');
+  }
+
+  bool _isWonriTimedTestV0Active() {
+    return _isCurrentHomeworkTypeTest() &&
+        !_useNaesinSource &&
+        !_useCustomSource &&
+        (_looksLikeWonriBook(_selectedLinkedBook) ||
+            _isWonriLinkedBook(_selectedLinkedBook));
+  }
+
+  String _timedTestCategoryLabel(_TextbookProblemRegion region) {
+    return <String>[
+      region.wonriTypeName,
+      region.typeGroupLabel,
+      region.typeTitle,
+      region.typeLabel,
+      region.label,
+      region.section,
+    ].where((value) => value.trim().isNotEmpty).join(' ');
+  }
+
+  String _timedTestSelectionSeedMaterial(
+    _LinkedTextbook book,
+    Iterable<_TextbookProblemRegion> regions,
+  ) {
+    final ids = regions.map((region) => region.id.trim()).toList()..sort();
+    return '${widget.studentId}|${book.bookId}|${book.gradeLabel}|${ids.join(',')}';
+  }
+
+  Future<
+      ({
+        List<_TextbookProblemRegion> eligible,
+        int excluded,
+        String seedMaterial,
+      })> _loadWonriTimedTestEligibility(
+    _LinkedTextbook book,
+  ) async {
+    final selected = _selectedProblemRegions();
+    final seedMaterial = _timedTestSelectionSeedMaterial(book, selected);
+    if (selected.isEmpty) {
+      return (
+        eligible: const <_TextbookProblemRegion>[],
+        excluded: 0,
+        seedMaterial: seedMaterial,
+      );
+    }
+    final rows =
+        await DataManager.instance.loadTextbookProblemRegionsForGrading(
+      bookId: book.bookId,
+      gradeLabel: book.gradeLabel,
+      cropIds: selected.map((region) => region.id),
+    );
+    final rowsById = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      final id = '${row['id'] ?? row['crop_id'] ?? ''}'.trim();
+      if (id.isNotEmpty) rowsById[id] = row;
+    }
+    final eligible = <_TextbookProblemRegion>[];
+    for (final region in selected) {
+      final row = rowsById[region.id];
+      if (region.isSetHeader ||
+          row == null ||
+          !isWonriTimedTestAutoGradable(row)) {
+        continue;
+      }
+      eligible.add(region);
+    }
+    final ordered = wonriTimedTestWeightedOrder<_TextbookProblemRegion>(
+      candidates: eligible,
+      categoryLabelOf: _timedTestCategoryLabel,
+      stableIdOf: (region) => region.id,
+      seedMaterial: seedMaterial,
+    );
+    return (
+      eligible: ordered,
+      excluded: selected.length - ordered.length,
+      seedMaterial: seedMaterial,
+    );
+  }
+
+  Future<void> _refreshWonriTimedTestEligibility() async {
+    final book = _selectedLinkedBook;
+    if (book == null || !_isWonriTimedTestV0Active()) {
+      if (!mounted) return;
+      if (_timedTestEligibilityFingerprint.isEmpty &&
+          _timedTestEligibleCount == 0 &&
+          _timedTestExcludedCount == 0 &&
+          !_timedTestEligibilityLoading) {
+        return;
+      }
+      setState(() {
+        _timedTestEligibilityFingerprint = '';
+        _timedTestEligibleCount = 0;
+        _timedTestExcludedCount = 0;
+        _timedTestEligibilityLoading = false;
+      });
+      return;
+    }
+    final selected = _selectedProblemRegions();
+    final fingerprint = _timedTestSelectionSeedMaterial(book, selected);
+    if (fingerprint == _timedTestEligibilityFingerprint) return;
+    setState(() {
+      _timedTestEligibilityFingerprint = fingerprint;
+      _timedTestEligibilityLoading = true;
+      _timedTestEligibleCount = 0;
+      _timedTestExcludedCount = 0;
+    });
+    try {
+      final result = await _loadWonriTimedTestEligibility(book);
+      if (!mounted ||
+          _selectedLinkedBook?.key != book.key ||
+          _timedTestEligibilityFingerprint != fingerprint) {
+        return;
+      }
+      setState(() {
+        _timedTestEligibleCount = result.eligible.length;
+        _timedTestExcludedCount = result.excluded;
+        _timedTestEligibilityLoading = false;
+      });
+    } catch (_) {
+      if (!mounted || _timedTestEligibilityFingerprint != fingerprint) return;
+      setState(() {
+        _timedTestEligibleCount = 0;
+        _timedTestExcludedCount = selected.length;
+        _timedTestEligibilityLoading = false;
+      });
+    }
   }
 
   int _semesterFromNaesinCourseKey(String courseKey) {
@@ -1277,7 +1418,11 @@ class HomeworkQuickAddProxyDialogState
       // 전체 플로우 일괄 조회 결과에서 현재 플로우만 즉시 전환한다.
       // 플로우 변경 때마다 서버를 다시 호출하지 않는다.
       final links = _allLinkedTextbooks
-          .where((link) => link.flowId == _flowId)
+          .where(
+            (link) => _isTestFlowId(_flowId)
+                ? _looksLikeWonriBook(link)
+                : link.flowId == _flowId,
+          )
           .toList(growable: false);
       final preserveKey = _isChildAddMode
           ? lockedKeyForFlow
@@ -1505,17 +1650,14 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
 
-    // cropId → 트리 위치. 문항 단위로 센 뒤 페이지/소/중/대로 올린다.
+    // cropId → 트리 위치. 문항·쪽만 센 뒤, 소단원은 문항 있는 쪽을 모두
+    // 덮은 회차만 올린다. sub_key/중단원 폴백으로 빈 쪽까지 1/1 찍지 않는다.
     final cropToPageKey = <String, String>{};
     final cropToSmallKey = <String, String>{};
-    final cropToMidKey = <String, String>{};
-    final cropToBigKey = <String, String>{};
     final pageKeysByDisplay = <int, Set<String>>{};
     final smallToMid = <String, String>{};
     final smallToBig = <String, String>{};
-    // unitMappings.big/mid/smallOrder → explorer small.key
-    final smallKeyByOrder = <String, String>{};
-    final smallKeysByMidOrder = <String, Set<String>>{};
+    final questionPageKeysBySmall = <String, List<String>>{};
 
     for (final big in controller.data.units) {
       final bigKey = TextbookExplorerController.unitBigKey(big);
@@ -1524,26 +1666,22 @@ class HomeworkQuickAddProxyDialogState
         for (final small in mid.smalls) {
           smallToMid[small.key] = midKey;
           smallToBig[small.key] = bigKey;
-          smallKeyByOrder['${big.order}|${mid.order}|${small.order}'] =
-              small.key;
-          smallKeysByMidOrder
-              .putIfAbsent('${big.order}|${mid.order}', () => <String>{})
-              .add(small.key);
+          final questionKeys = <String>[];
           for (final page in small.pages) {
             final display = page.displayPage ?? page.rawPage;
             final pageKey = '${small.key}#${page.rawPage}';
             pageKeysByDisplay
                 .putIfAbsent(display, () => <String>{})
                 .add(pageKey);
+            if (!page.isConceptPage) questionKeys.add(pageKey);
           }
+          questionPageKeysBySmall[small.key] = questionKeys;
           for (final item in small.items) {
             final cropId = item.cropId.trim();
             if (cropId.isEmpty) continue;
             final pageKey = '${small.key}#${item.rawPage}';
             cropToPageKey[cropId] = pageKey;
             cropToSmallKey[cropId] = small.key;
-            cropToMidKey[cropId] = midKey;
-            cropToBigKey[cropId] = bigKey;
           }
         }
       }
@@ -1551,43 +1689,12 @@ class HomeworkQuickAddProxyDialogState
 
     final cropAssigned = <String, int>{};
     final cropCompleted = <String, int>{};
-    // problemCrops 없는 구데이터/폴백: 그룹당 1회로 페이지·소단원을 센다.
+    // crop id가 탐색 트리와 안 맞을 때: 과제 page 텍스트·매핑 쪽만 그룹당 1회.
     final fallbackPageAssigned = <String, int>{};
     final fallbackPageCompleted = <String, int>{};
-    final fallbackSmallAssigned = <String, int>{};
-    final fallbackSmallCompleted = <String, int>{};
 
     void bump(Map<String, int> map, String key) {
       map[key] = (map[key] ?? 0) + 1;
-    }
-
-    Set<String> smallKeysFromUnitMappings(HomeworkItem hw) {
-      final out = <String>{};
-      final mappings = hw.unitMappings;
-      if (mappings == null || mappings.isEmpty) return out;
-      for (final raw in mappings) {
-        final m = Map<String, dynamic>.from(raw);
-        final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
-        final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
-        if (bigOrder == null || midOrder == null) continue;
-        final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
-        if (smallOrder != null) {
-          final key = smallKeyByOrder['$bigOrder|$midOrder|$smallOrder'];
-          if (key != null) out.add(key);
-          continue;
-        }
-        final subKey = '${m['subKey'] ?? m['sub_key'] ?? ''}'.trim();
-        if (subKey.isNotEmpty) {
-          final key = '$bigOrder|$midOrder|$subKey';
-          if (smallToMid.containsKey(key)) {
-            out.add(key);
-            continue;
-          }
-        }
-        final midSmalls = smallKeysByMidOrder['$bigOrder|$midOrder'];
-        if (midSmalls != null) out.addAll(midSmalls);
-      }
-      return out;
     }
 
     final items = HomeworkStore.instance.items(widget.studentId);
@@ -1615,15 +1722,6 @@ class HomeworkQuickAddProxyDialogState
           (HomeworkStore.instance.groupIdOfItem(hw.id) ?? hw.id).trim();
       if (eventKey.isEmpty) continue;
 
-      // unitMappings 단원 order 폴백 (hydrate된 units 포함).
-      final touchedSmalls = smallKeysFromUnitMappings(hw);
-      for (final smallKey in touchedSmalls) {
-        final stampKey = '$smallKey@$eventKey';
-        if (fallbackSmallAssigned.containsKey(stampKey)) continue;
-        fallbackSmallAssigned[stampKey] = 1;
-        if (completed) fallbackSmallCompleted[stampKey] = 1;
-      }
-
       final pagesHw = _displayPagesFromHomework(hw);
       if (pagesHw.isEmpty) continue;
       final touchedPageKeys = <String>{};
@@ -1649,6 +1747,18 @@ class HomeworkQuickAddProxyDialogState
       return m;
     }
 
+    int minOf(Iterable<int> values) {
+      var m = 0;
+      var started = false;
+      for (final v in values) {
+        if (!started || v < m) {
+          m = v;
+          started = true;
+        }
+      }
+      return started ? m : 0;
+    }
+
     void takeMax(Map<String, int> target, String key, int value) {
       if (value > (target[key] ?? 0)) target[key] = value;
     }
@@ -1665,7 +1775,6 @@ class HomeworkQuickAddProxyDialogState
       if (a > 0) pageAssigned[e.key] = a;
       if (c > 0) pageCompleted[e.key] = c;
     }
-    // 폴백 스탬프 → 페이지별 합산
     for (final e in fallbackPageAssigned.entries) {
       final pageKey = e.key.split('@').first;
       pageAssigned[pageKey] = (pageAssigned[pageKey] ?? 0) + e.value;
@@ -1681,66 +1790,28 @@ class HomeworkQuickAddProxyDialogState
     }
     final smallAssigned = <String, int>{};
     final smallCompleted = <String, int>{};
-    for (final e in cropsBySmall.entries) {
-      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
-      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
-      if (a > 0) smallAssigned[e.key] = a;
-      if (c > 0) smallCompleted[e.key] = c;
-    }
-    // 페이지 폴백 스탬프 → 소단원 회차로 접기 (단원 order 폴백과 동일 eventKey면 1회).
-    for (final e in fallbackPageAssigned.entries) {
-      final at = e.key.lastIndexOf('@');
-      if (at <= 0) continue;
-      final pageKey = e.key.substring(0, at);
-      final eventKey = e.key.substring(at + 1);
-      final smallKey = pageKey.split('#').first;
-      if (smallKey.isEmpty || eventKey.isEmpty) continue;
-      fallbackSmallAssigned.putIfAbsent('$smallKey@$eventKey', () => 1);
-    }
-    for (final e in fallbackPageCompleted.entries) {
-      final at = e.key.lastIndexOf('@');
-      if (at <= 0) continue;
-      final pageKey = e.key.substring(0, at);
-      final eventKey = e.key.substring(at + 1);
-      final smallKey = pageKey.split('#').first;
-      if (smallKey.isEmpty || eventKey.isEmpty) continue;
-      fallbackSmallCompleted.putIfAbsent('$smallKey@$eventKey', () => 1);
-    }
-    // crop 경로 회차 + 폴백 회차를 합산 (crop 과제는 continue라 중복 없음).
-    for (final e in fallbackSmallAssigned.entries) {
-      final smallKey = e.key.split('@').first;
-      smallAssigned[smallKey] = (smallAssigned[smallKey] ?? 0) + e.value;
-    }
-    for (final e in fallbackSmallCompleted.entries) {
-      final smallKey = e.key.split('@').first;
-      smallCompleted[smallKey] = (smallCompleted[smallKey] ?? 0) + e.value;
+    for (final e in questionPageKeysBySmall.entries) {
+      final smallKey = e.key;
+      final questionKeys = e.value;
+      if (questionKeys.isEmpty) {
+        final cropIds = cropsBySmall[smallKey];
+        if (cropIds == null || cropIds.isEmpty) continue;
+        final a = maxOf(cropIds.map((id) => cropAssigned[id] ?? 0));
+        final c = maxOf(cropIds.map((id) => cropCompleted[id] ?? 0));
+        if (a > 0) smallAssigned[smallKey] = a;
+        if (c > 0) smallCompleted[smallKey] = c;
+        continue;
+      }
+      final minA = minOf(questionKeys.map((k) => pageAssigned[k] ?? 0));
+      final minC = minOf(questionKeys.map((k) => pageCompleted[k] ?? 0));
+      if (minA > 0) smallAssigned[smallKey] = minA;
+      if (minC > 0) smallCompleted[smallKey] = minC;
     }
 
     final midAssigned = <String, int>{};
     final midCompleted = <String, int>{};
     final bigAssigned = <String, int>{};
     final bigCompleted = <String, int>{};
-    final cropsByMid = <String, List<String>>{};
-    final cropsByBig = <String, List<String>>{};
-    for (final e in cropToMidKey.entries) {
-      cropsByMid.putIfAbsent(e.value, () => <String>[]).add(e.key);
-    }
-    for (final e in cropToBigKey.entries) {
-      cropsByBig.putIfAbsent(e.value, () => <String>[]).add(e.key);
-    }
-    for (final e in cropsByMid.entries) {
-      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
-      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
-      if (a > 0) midAssigned[e.key] = a;
-      if (c > 0) midCompleted[e.key] = c;
-    }
-    for (final e in cropsByBig.entries) {
-      final a = maxOf(e.value.map((id) => cropAssigned[id] ?? 0));
-      final c = maxOf(e.value.map((id) => cropCompleted[id] ?? 0));
-      if (a > 0) bigAssigned[e.key] = a;
-      if (c > 0) bigCompleted[e.key] = c;
-    }
-    // 소단원 집계를 중/대로 항상 승격 (crop·페이지·단원 order 폴백 포함).
     for (final e in smallAssigned.entries) {
       final midKey = smallToMid[e.key];
       final bigKey = smallToBig[e.key];
@@ -1782,7 +1853,8 @@ class HomeworkQuickAddProxyDialogState
     return out;
   }
 
-  /// 과제 page 텍스트·unitMappings에서 표시 쪽 번호를 수집한다.
+  /// 과제 page 텍스트·unitMappings에서 실제로 내준 표시 쪽을 수집한다.
+  /// pageCounts/문항이 있으면 start~end 구간을 채우지 않는다(빈 쪽 오탐 방지).
   Set<int> _displayPagesFromHomework(HomeworkItem hw) {
     final fromText = _pagesFromRawPageText(hw.page ?? '');
     if (fromText.isNotEmpty) return fromText;
@@ -1790,20 +1862,18 @@ class HomeworkQuickAddProxyDialogState
     final pages = <int>{};
     final mappings = hw.unitMappings;
     if (mappings == null || mappings.isEmpty) return pages;
+    var hasExplicitPages = false;
     for (final raw in mappings) {
       final m = Map<String, dynamic>.from(raw);
       final pageCounts = m['pageCounts'] ?? m['page_counts'];
       if (pageCounts is Map) {
         for (final key in pageCounts.keys) {
           final page = _toInt(key);
-          if (page != null && page > 0) pages.add(page);
+          if (page == null || page <= 0) continue;
+          pages.add(page);
+          hasExplicitPages = true;
         }
       }
-      _addPageRange(
-        pages,
-        _toInt(m['startPage'] ?? m['start_page']),
-        _toInt(m['endPage'] ?? m['end_page']),
-      );
       final crops = m['problemCrops'] ?? m['problem_crops'];
       if (crops is! List) continue;
       for (final crop in crops) {
@@ -1814,8 +1884,19 @@ class HomeworkQuickAddProxyDialogState
               crop['rawPage'] ??
               crop['raw_page'],
         );
-        if (page != null && page > 0) pages.add(page);
+        if (page == null || page <= 0) continue;
+        pages.add(page);
+        hasExplicitPages = true;
       }
+    }
+    if (hasExplicitPages) return pages;
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      _addPageRange(
+        pages,
+        _toInt(m['startPage'] ?? m['start_page']),
+        _toInt(m['endPage'] ?? m['end_page']),
+      );
     }
     return pages;
   }
@@ -2927,6 +3008,30 @@ class HomeworkQuickAddProxyDialogState
     return pagesBySmallKey;
   }
 
+  /// 문항이 있는 쪽만. 소단원 회차 배지는 이 쪽을 모두 내줬을 때만 올린다.
+  Map<String, Set<int>> _questionPagesBySmallKeyForIssuedScan(
+    List<_BigUnitSelectionNode> units,
+  ) {
+    final pagesBySmallKey = <String, Set<int>>{};
+    for (final big in units) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          final pages = <int>{};
+          for (final entry in small.pageCounts.entries) {
+            if (entry.value > 0) pages.add(entry.key);
+          }
+          if (pages.isEmpty) {
+            _addPageRange(pages, small.startPage, small.endPage);
+          }
+          pagesBySmallKey[
+                  _smallKey(big.orderIndex, mid.orderIndex, small.orderIndex)] =
+              pages;
+        }
+      }
+    }
+    return pagesBySmallKey;
+  }
+
   Map<String, _IssuedSmallSummary> _issuedSmallSummaryByBook({
     required String bookId,
     required String gradeLabel,
@@ -2935,8 +3040,11 @@ class HomeworkQuickAddProxyDialogState
     if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
       return <String, _IssuedSmallSummary>{};
     }
-    final pagesBySmallKey = _pagesBySmallKeyForIssuedScan(units);
-    if (pagesBySmallKey.isEmpty) return <String, _IssuedSmallSummary>{};
+    final questionPagesBySmallKey =
+        _questionPagesBySmallKeyForIssuedScan(units);
+    if (questionPagesBySmallKey.isEmpty) {
+      return <String, _IssuedSmallSummary>{};
+    }
 
     final latestFinishedAtBySmallKey = <String, DateTime?>{};
     final completedCountBySmallKey = <String, int>{};
@@ -2955,25 +3063,12 @@ class HomeworkQuickAddProxyDialogState
       final touched = <String>{};
       final isCompleted = _isCompletedForIssuedLock(hw);
 
-      final mappings = hw.unitMappings;
-      if (mappings != null && mappings.isNotEmpty) {
-        for (final raw in mappings) {
-          final m = Map<String, dynamic>.from(raw);
-          final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
-          final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
-          final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
-          if (bigOrder == null || midOrder == null || smallOrder == null)
-            continue;
-          touched.add(_smallKey(bigOrder, midOrder, smallOrder));
-        }
-      }
-
       final pages = _displayPagesFromHomework(hw);
-      if (pages.isNotEmpty) {
-        for (final entry in pagesBySmallKey.entries) {
-          if (_hasPageOverlap(pages, entry.value)) {
-            touched.add(entry.key);
-          }
+      if (pages.isEmpty) continue;
+      for (final entry in questionPagesBySmallKey.entries) {
+        if (entry.value.isEmpty) continue;
+        if (entry.value.every(pages.contains)) {
+          touched.add(entry.key);
         }
       }
 
@@ -4903,6 +4998,7 @@ class HomeworkQuickAddProxyDialogState
   void _refreshRangeAutoDraft() {
     final requestId = ++_rangeAiRequestId;
     final selectedBook = _selectedLinkedBook;
+    unawaited(_refreshWonriTimedTestEligibility());
     if (_manualPageMode || selectedBook == null) {
       if (mounted) {
         setState(() {
@@ -5225,19 +5321,6 @@ class HomeworkQuickAddProxyDialogState
             ),
           ],
         ),
-        if (_isCurrentHomeworkTypeTest()) ...[
-          const SizedBox(height: 10),
-          TextField(
-            controller: _timeLimitMinutes,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            style: const TextStyle(
-              color: kDlgText,
-              fontWeight: FontWeight.w600,
-            ),
-            decoration: _inputDecoration('제한시간(분)', hint: '예: 50'),
-          ),
-        ],
         const SizedBox(height: 12),
         TextField(
           controller: _memo,
@@ -5616,22 +5699,6 @@ class HomeworkQuickAddProxyDialogState
                           ),
                         ],
                       ),
-                      if (source.testMode || isNaesinDraft) ...[
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: timeLimitController,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
-                          ],
-                          style: const TextStyle(
-                            color: kDlgText,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          decoration:
-                              _inputDecoration('제한시간(분)', hint: '예: 50'),
-                        ),
-                      ],
                       const SizedBox(height: 10),
                       TextField(
                         controller: recommendedController,
@@ -6138,6 +6205,142 @@ class HomeworkQuickAddProxyDialogState
         infoCell('문항수', countText),
         infoCell('권장시간', recommendedText),
       ],
+    );
+  }
+
+  Widget _buildTestConstraintOptionsCard() {
+    Widget optionRow({
+      required String title,
+      required String subtitle,
+      required bool selected,
+      required bool enabled,
+      required ValueChanged<bool?>? onChanged,
+      Widget? trailing,
+    }) {
+      return Opacity(
+        opacity: enabled ? 1 : 0.5,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0x1A33A373) : kDlgFieldBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? kDlgAccent.withValues(alpha: 0.8) : kDlgBorder,
+            ),
+          ),
+          child: Row(
+            children: [
+              Checkbox(
+                value: selected,
+                onChanged: enabled ? onChanged : null,
+                activeColor: kDlgAccent,
+                checkColor: Colors.white,
+                visualDensity: VisualDensity.compact,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                trailing,
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    final eligibilityText = _timedTestEligibilityLoading
+        ? '자동채점 가능 문항을 확인 중입니다.'
+        : '선택 문항 $_timedTestEligibleCount개 · 자가채점 제외 $_timedTestExcludedCount개';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0x221C1C1E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: UtilityGlassDialogTokens.borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '테스트 제한 옵션',
+            style: TextStyle(
+              color: kDlgText,
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          optionRow(
+            title: '시간 제한',
+            subtitle: '그룹의 모든 하위 테스트에 같은 제한시간을 적용합니다.',
+            selected: _testTimeLimitEnabled,
+            enabled: true,
+            onChanged: (value) {
+              setState(() => _testTimeLimitEnabled = value ?? false);
+            },
+            trailing: SizedBox(
+              width: 112,
+              child: TextField(
+                controller: _timeLimitMinutes,
+                enabled: _testTimeLimitEnabled,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: const TextStyle(
+                  color: kDlgText,
+                  fontWeight: FontWeight.w700,
+                ),
+                decoration: _inputDecoration('제한시간(분)', hint: '예: 50'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          optionRow(
+            title: '문항 수 제한',
+            subtitle: '준비 중 · V0는 적격 문항 전체를 출제합니다.',
+            selected: false,
+            enabled: false,
+            onChanged: null,
+          ),
+          if (_isWonriTimedTestV0Active()) ...[
+            const SizedBox(height: 10),
+            Text(
+              eligibilityText,
+              style: TextStyle(
+                color: _timedTestEligibleCount > 0
+                    ? kDlgTextSub
+                    : const Color(0xFFE5A65B),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -7633,6 +7836,129 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Future<void> _submitWonriTimedTestV0({
+    required _LinkedTextbook book,
+    required String action,
+  }) async {
+    if (!_testTimeLimitEnabled) {
+      _showDialogSnackBar('시간 제한을 선택하세요.');
+      return;
+    }
+    final timeLimitMinutes = _parsePositiveIntText(_timeLimitMinutes.text);
+    if (timeLimitMinutes == null) {
+      _showDialogSnackBar('제한시간을 양의 분 단위로 입력하세요.');
+      return;
+    }
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    try {
+      final result = await _loadWonriTimedTestEligibility(book);
+      if (!mounted || _selectedLinkedBook?.key != book.key) return;
+      setState(() {
+        _timedTestEligibleCount = result.eligible.length;
+        _timedTestExcludedCount = result.excluded;
+        _timedTestEligibilityLoading = false;
+      });
+      if (result.eligible.isEmpty) {
+        _showDialogSnackBar(
+          result.excluded > 0
+              ? '자동채점 가능한 문항이 없습니다. 자가채점 문항 ${result.excluded}개를 제외했습니다.'
+              : '선택된 문항이 없습니다.',
+        );
+        return;
+      }
+
+      final base = _buildProblemSubtaskDraftItem(
+        book,
+        result.eligible,
+        _resolveSmallNodeForRegions(
+          result.eligible,
+          _smallNodeByUnitKey(),
+        ),
+        draftKey: 'wonri_timed_v0',
+      );
+      final seed = wonriTimedTestStableSeed(result.seedMaterial);
+      final seedLabel = seed.toRadixString(16).padLeft(8, '0');
+      final mappings = base.unitMappings.map((raw) {
+        final mapping = Map<String, dynamic>.from(raw);
+        final crops = result.eligible.map((region) {
+          final crop = region.toMappingJson();
+          crop['gradingMode'] = 'auto';
+          crop['recommenderCategory'] = normalizeWonriTimedTestCategory(
+                _timedTestCategoryLabel(region),
+              ) ??
+              'other';
+          crop['recommenderKey'] = wonriTimedTestRecommenderKey;
+          crop['recommenderVersion'] = wonriTimedTestRecommenderVersion;
+          crop['recommenderSeed'] = seedLabel;
+          crop['recommenderWeights'] =
+              Map<String, double>.from(wonriTimedTestCategoryWeights);
+          return crop;
+        }).toList(growable: false);
+        mapping
+          ..['sourceScope'] = wonriTimedTestRecommenderKey
+          ..['problemCount'] = crops.length
+          ..['problemNumbers'] =
+              result.eligible.map((region) => region.problemNumber).toList()
+          ..['problemCrops'] = crops
+          ..['recommender_key'] = wonriTimedTestRecommenderKey
+          ..['recommender_version'] = wonriTimedTestRecommenderVersion
+          ..['recommender_seed'] = seedLabel
+          ..['recommender_weights'] =
+              Map<String, double>.from(wonriTimedTestCategoryWeights)
+          ..['recommender'] = <String, dynamic>{
+            'key': wonriTimedTestRecommenderKey,
+            'version': wonriTimedTestRecommenderVersion,
+            'seed': seedLabel,
+            'weights': Map<String, double>.from(
+              wonriTimedTestCategoryWeights,
+            ),
+            'eligibleCount': result.eligible.length,
+            'excludedSelfGradeCount': result.excluded,
+          };
+        return mapping;
+      }).toList(growable: false);
+      const title = '시간 제한 테스트';
+      final content =
+          '${_bookMetaText(book)}\n자동채점 ${result.eligible.length}문항 · 자가채점 제외 ${result.excluded}문항';
+      final item = base.copyWith(
+        title: title,
+        count: '${result.eligible.length}',
+        content: content,
+        body: _composeBodyValues(
+          page: base.page,
+          count: '${result.eligible.length}',
+          content: content,
+          timeLimitMinutes: timeLimitMinutes,
+        ),
+        unitMappings: mappings,
+        splitParts: 1,
+        timeLimitMinutes: timeLimitMinutes,
+        testMode: true,
+        testOriginFlowId: _currentTestOriginFlowId(),
+      );
+      final groupTitle =
+          _groupTitle.text.trim().isEmpty ? title : _groupTitle.text.trim();
+      Navigator.pop(context, {
+        'studentId': widget.studentId,
+        'groupMode': true,
+        if (_isChildAddMode) 'childAddMode': true,
+        'groupTitle': groupTitle,
+        'flowId': _flowId,
+        'action': action,
+        if (widget.requirePlanDestination)
+          'planDestination': _selectedPlanDestination,
+        'items': <Map<String, dynamic>>[item.toJson()],
+      });
+    } catch (_) {
+      if (mounted) {
+        _showDialogSnackBar('자동채점 가능 문항을 확인하지 못했습니다. 다시 시도해주세요.');
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
   Future<void> _submit({String action = 'add'}) async {
     final resolvedAction = _isChildAddMode ? 'add' : action;
     if (_flowId.isEmpty) {
@@ -7640,12 +7966,34 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
 
+    final selectedBookForTest = _selectedLinkedBook;
+    if (selectedBookForTest != null && _isWonriTimedTestV0Active()) {
+      await _submitWonriTimedTestV0(
+        book: selectedBookForTest,
+        action: resolvedAction,
+      );
+      return;
+    }
+    final groupTimeLimitMinutes =
+        _isCurrentHomeworkTypeTest() && _testTimeLimitEnabled
+            ? _parsePositiveIntText(_timeLimitMinutes.text)
+            : null;
+    if (_isCurrentHomeworkTypeTest() &&
+        _testTimeLimitEnabled &&
+        groupTimeLimitMinutes == null) {
+      _showDialogSnackBar('제한시간을 양의 분 단위로 입력하세요.');
+      return;
+    }
+
     if (_draftGroupItems.isNotEmpty) {
       final groupTitle =
           _groupTitle.text.trim().isEmpty ? '그룹 과제' : _groupTitle.text.trim();
-      final normalizedDraftItems = _draftGroupItems.map((item) {
+      final normalizedDraftItems = _draftGroupItems.map((original) {
+        final item = original.testMode
+            ? original.copyWith(timeLimitMinutes: groupTimeLimitMinutes)
+            : original;
         final compactPage = _normalizePageTextCompact(item.page);
-        if (compactPage == item.page) return item;
+        if (compactPage == item.page && !item.testMode) return item;
         return item.copyWith(
           page: compactPage,
           body: _composeBodyValues(
@@ -8674,8 +9022,13 @@ class HomeworkQuickAddProxyDialogState
     final draftBookKey = _currentDraftBookKey();
     final lockedBookKey = _lockedBookIdentity;
     final testFlow = _testFlow;
+    final testFlowSelected = _isTestFlowId(_flowId);
     final visibleLinks = _allLinkedTextbooks
-        .where((link) => !_isChildAddMode || link.flowId == _flowId)
+        .where(
+          (link) => testFlowSelected
+              ? _looksLikeWonriBook(link)
+              : (!_isChildAddMode || link.flowId == _flowId),
+        )
         .where(
           (link) =>
               _isTextbookActive(link) ||
@@ -8719,11 +9072,12 @@ class HomeworkQuickAddProxyDialogState
             await _handleFlowChanged(forceNoBookSelection: true);
             return;
           }
+          final keepTestFlow = _isTestFlowId(_flowId);
           setState(() {
             _useNaesinSource = false;
             _useCustomSource = false;
-            _testOriginFlowId = null;
-            _flowId = link.flowId;
+            _testOriginFlowId = keepTestFlow ? link.flowId : null;
+            if (!keepTestFlow) _flowId = link.flowId;
             _selectedLinkedBookKey = link.key;
             _linkedHomeworkType = '교재';
             _syncLinkedHomeworkTypeToLinkedDraftItems('교재');
@@ -9463,8 +9817,9 @@ class HomeworkQuickAddProxyDialogState
           const Spacer(),
           confirmButton(
             label: _isChildAddMode ? '하위 과제 추가' : '과제 내기',
-            onTap: widget.requirePlanDestination &&
-                    _selectedPlanDestination == null
+            onTap: _submitting ||
+                    (widget.requirePlanDestination &&
+                        _selectedPlanDestination == null)
                 ? null
                 : () => _submit(action: 'add'),
           ),
@@ -9498,6 +9853,10 @@ class HomeworkQuickAddProxyDialogState
                 if (secondaryActions() case final naesinAdd?) naesinAdd,
               ],
             ),
+          ],
+          if (_isCurrentHomeworkTypeTest() && !showNaesinStandalone) ...[
+            const SizedBox(height: 12),
+            _buildTestConstraintOptionsCard(),
           ],
           const SizedBox(height: 10),
           primaryActions(),

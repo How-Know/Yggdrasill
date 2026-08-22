@@ -238,6 +238,143 @@ function assignColumns(entries) {
   return bounds;
 }
 
+function medianOf(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/// 비슷한 좌표끼리 묶어 줄(행 또는 열)의 중심값을 뽑는다.
+function clusterCenters(values, tolerance) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const groups = [];
+  for (const value of sorted) {
+    const last = groups[groups.length - 1];
+    if (last && value - last[last.length - 1] <= tolerance) last.push(value);
+    else groups.push([value]);
+  }
+  return groups.map((g) => g.reduce((a, b) => a + b, 0) / g.length);
+}
+
+function nearestIndex(centers, value) {
+  let best = 0;
+  let bestGap = Infinity;
+  for (let i = 0; i < centers.length; i += 1) {
+    const gap = Math.abs(centers[i] - value);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/// 격자로 짜인 빠른 정답 묶음에서 **모델이 흘린 칸**을 좌표로 되살린다.
+///
+/// 소단원 첫 지면의 앞머리는 "01 답 ⊂ | 02 답 ⊂ | 03 답 ⊄" 처럼 답만 한 줄인
+/// 문항을 3열 격자로 압축해 싣는다. 한 지면에 번호가 40개 가까이 깔리는 탓에
+/// 모델이 그중 하나를 통째로 빠뜨리는 일이 있다(공통수학2 해설 p109 에서 01~18
+/// 중 06 하나만 빠졌다). 그 문항은 해설 좌표를 못 받아 통째로 빈다.
+///
+/// 격자는 행·열 좌표가 자로 잰 듯 규칙적이고 번호도 행을 따라 순서대로 붙는다.
+/// 그러니 빈 칸의 자리와 번호는 계산으로 확정된다. 번호가 "시작번호 + 행*열수 +
+/// 열" 식에 **하나도 어긋나지 않을 때만** 채워 넣는다. 어긋나면 격자가 아니거나
+/// 좌표를 잘못 묶은 것이므로 아무것도 하지 않는다.
+export function repairSolutionNumberGrid(numbers) {
+  const added = [];
+  for (const side of [0, 1]) {
+    const items = numbers.filter(
+      (n) =>
+        (n.region[1] < 500 ? 0 : 1) === side && /^\d{1,2}$/.test(n.text),
+    );
+    if (items.length < 4) continue;
+
+    const height = medianOf(items.map((n) => n.region[2] - n.region[0]));
+    const width = medianOf(items.map((n) => n.region[3] - n.region[1]));
+    if (height <= 0 || width <= 0) continue;
+
+    const rows = clusterCenters(
+      items.map((n) => n.region[0]),
+      Math.max(4, height * 0.6),
+    );
+    const cols = clusterCenters(
+      items.map((n) => n.region[1]),
+      Math.max(6, width * 0.8),
+    );
+    if (cols.length < 2) continue;
+
+    const cells = new Map();
+    for (const item of items) {
+      const r = nearestIndex(rows, item.region[0]);
+      const c = nearestIndex(cols, item.region[1]);
+      cells.set(`${r},${c}`, item);
+    }
+
+    // 격자 행은 한 줄에 두 칸 이상 놓인 행이다. 그 아래로 이어지는 보통 풀이는
+    // 단마다 한 칸씩만 쓰므로 여기서 걸러진다.
+    const filled = rows.map(
+      (_, r) => cols.filter((__, c) => cells.has(`${r},${c}`)).length,
+    );
+    let start = -1;
+    let end = -1;
+    for (let r = 0; r < rows.length; r += 1) {
+      if (filled[r] >= 2) {
+        if (start < 0) start = r;
+        end = r;
+      } else if (start >= 0) {
+        break;
+      }
+    }
+    if (start < 0 || end - start < 1) continue;
+
+    const span = cols.length;
+    const holes = [];
+    let base = null;
+    let consistent = true;
+    for (let r = start; r <= end && consistent; r += 1) {
+      for (let c = 0; c < span; c += 1) {
+        const index = (r - start) * span + c;
+        const item = cells.get(`${r},${c}`);
+        if (!item) {
+          holes.push({ row: r, col: c, index });
+          continue;
+        }
+        const guess = Number.parseInt(item.text, 10) - index;
+        if (base === null) base = guess;
+        else if (base !== guess) consistent = false;
+      }
+    }
+    if (!consistent || base === null || !holes.length) continue;
+
+    // 마지막 줄의 오른쪽 끝이 비는 것은 문항이 거기서 끝났을 뿐이다.
+    const lastRowTail = new Set();
+    for (let c = span - 1; c >= 0; c -= 1) {
+      if (cells.has(`${end},${c}`)) break;
+      lastRowTail.add(c);
+    }
+
+    for (const hole of holes) {
+      if (hole.row === end && lastRowTail.has(hole.col)) continue;
+      const value = base + hole.index;
+      if (value <= 0 || value > 99) continue;
+      const top = Math.round(rows[hole.row]);
+      const left = Math.round(cols[hole.col]);
+      added.push({
+        text: String(value).padStart(2, '0'),
+        region: [
+          top,
+          left,
+          Math.min(1000, top + Math.round(height)),
+          Math.min(1000, left + Math.round(width)),
+        ],
+        repaired: true,
+      });
+    }
+  }
+  return added;
+}
+
 export function normalizeSolutionBlocksResult(parsedJson) {
   const out = {
     leading_continuation: false,
@@ -269,14 +406,29 @@ export function normalizeSolutionBlocksResult(parsedJson) {
   }
 
   const rawNumbers = Array.isArray(parsedJson.numbers) ? parsedJson.numbers : [];
+  const parsedNumbers = [];
   for (const one of rawNumbers) {
     if (!one || typeof one !== 'object') continue;
     const text = String(one.text ?? one.problem_number ?? '').trim();
     const region = parseBbox4(one.number_region);
     if (!text || !region) continue;
-    const number = { text, number_region: region, content_region: null };
+    parsedNumbers.push({ text, region });
+  }
+  const seen = new Set(parsedNumbers.map((n) => n.text));
+  for (const one of repairSolutionNumberGrid(parsedNumbers)) {
+    if (seen.has(one.text)) continue;
+    seen.add(one.text);
+    parsedNumbers.push(one);
+  }
+  for (const one of parsedNumbers) {
+    const number = {
+      text: one.text,
+      number_region: one.region,
+      content_region: null,
+    };
+    if (one.repaired === true) number.repaired = true;
     out.numbers.push(number);
-    entries.push({ kind: 'number', number, region });
+    entries.push({ kind: 'number', number, region: one.region });
   }
 
   if (!entries.length) {

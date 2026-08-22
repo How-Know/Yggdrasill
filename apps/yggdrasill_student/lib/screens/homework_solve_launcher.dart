@@ -4,6 +4,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/textbook_api.dart';
+import 'timed_test_solve_screen.dart';
 import 'textbook_solve_screen.dart';
 
 /// 문항 스냅샷이 있는 교재 숙제를 배정 범위만 교재 풀이 화면에서 연다.
@@ -26,6 +27,45 @@ Future<bool> openDigitalHomeworkSolve(
             problem.cropId.trim().isNotEmpty && problem.rawPage != null)
         .toList(growable: false);
     if (usable.isEmpty) return false;
+
+    if (group.isTimedTest) {
+      if (!context.mounted) return true;
+      final start = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('시간제한 테스트'),
+          content: Text(
+            '제한시간은 ${group.timeLimitMinutes}분이에요.\n'
+            '시작하면 앱을 나가도 시간이 계속 흐르고, 이 과제는 한 번만 응시할 수 있어요.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('시작'),
+            ),
+          ],
+        ),
+      );
+      if (start != true || !context.mounted) return true;
+      final session =
+          await StudentApi.instance.startOrResumeTimedTest(group.groupId);
+      if (!context.mounted) return true;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => TimedTestSolveScreen(
+            group: group,
+            problems: usable,
+            session: session,
+          ),
+        ),
+      );
+      await HomeworkSession.instance.refresh();
+      return true;
+    }
 
     final books = await TextbookApi.instance.listTextbooks();
     final first = usable.first;
@@ -102,6 +142,16 @@ Future<bool> openDigitalHomeworkSolve(
     await HomeworkSession.instance.refresh();
     return true;
   } catch (_) {
+    if (group.isTimedTest) {
+      if (context.mounted) {
+        TopGlassSnackBar.show(
+          context,
+          message: '시간제한 테스트를 열지 못했어요. 잠시 후 다시 시도해 주세요.',
+          icon: Icons.error_outline_rounded,
+        );
+      }
+      return true;
+    }
     // 문항 RPC가 없거나 legacy 과제면 기존 phase 타이머로 폴백한다.
     return false;
   }

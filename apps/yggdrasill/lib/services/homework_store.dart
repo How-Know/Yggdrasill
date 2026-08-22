@@ -3254,6 +3254,18 @@ class HomeworkStore {
             'typeGroupLabel': resolvedTypeGroupLabel,
             'bbox1k': crop['bbox1k'] ?? source['bbox_1k'],
             'itemRegion1k': crop['itemRegion1k'] ?? source['item_region_1k'],
+            if (asString(crop['recommenderKey']).isNotEmpty)
+              'recommenderKey': asString(crop['recommenderKey']),
+            if (asIntOpt(crop['recommenderVersion']) != null)
+              'recommenderVersion': asIntOpt(crop['recommenderVersion']),
+            if (asString(crop['recommenderSeed']).isNotEmpty)
+              'recommenderSeed': asString(crop['recommenderSeed']),
+            if (crop['recommenderWeights'] is Map)
+              'recommenderWeights': crop['recommenderWeights'],
+            if (asString(crop['recommenderCategory']).isNotEmpty)
+              'recommenderCategory': asString(crop['recommenderCategory']),
+            if (asString(crop['gradingMode']).isNotEmpty)
+              'gradingMode': asString(crop['gradingMode']),
           };
           rows.add({
             'academy_id': academyId,

@@ -518,6 +518,160 @@ interface CropRow {
   } | null;
 }
 
+interface TimedTestContext {
+  sessionId: string;
+  exposureId: string;
+  position: number;
+  durationMs: number;
+  wallDurationMs: number | null;
+  interruptionMs: number | null;
+  cropId: string;
+  pbQuestionUid: string | null;
+  homeworkItemProblemId: string;
+  bookId: string | null;
+  gradeLabel: string | null;
+  alreadyAttempted: boolean;
+}
+
+class TimedTestRequestError extends Error {
+  constructor(readonly code: string, readonly status: number) {
+    super(code);
+  }
+}
+
+async function resolveTimedTestContext(
+  admin: Admin,
+  student: { academyId: string; studentId: string },
+  body: Record<string, unknown>,
+  expectedCropId?: string,
+): Promise<TimedTestContext> {
+  const raw = body.timed_test;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TimedTestRequestError('timed_test_invalid', 400);
+  }
+  const payload = raw as Record<string, unknown>;
+  const sessionId = String(payload.session_id ?? '').trim();
+  const exposureId = String(payload.exposure_id ?? '').trim();
+  const position = Number(payload.position);
+  const durationMs = Number(payload.duration_ms);
+  const wallRaw = payload.wall_duration_ms;
+  const interruptionRaw = payload.interruption_ms;
+  if (
+    !sessionId || !exposureId || !Number.isInteger(position) || position <= 0 ||
+    !Number.isFinite(durationMs) || durationMs < 0
+  ) {
+    throw new TimedTestRequestError('timed_test_invalid', 400);
+  }
+
+  const { data: session } = await admin
+    .from('learning_sessions')
+    .select('id,academy_id,student_id,status,session_kind,homework_group_id,started_at,time_limit_sec,time_limit_enforced')
+    .eq('id', sessionId)
+    .maybeSingle();
+  if (
+    !session || session.academy_id !== student.academyId ||
+    session.student_id !== student.studentId ||
+    session.session_kind !== 'daily_test' || !session.homework_group_id ||
+    session.time_limit_enforced !== true || Number(session.time_limit_sec) <= 0
+  ) {
+    throw new TimedTestRequestError('timed_test_not_found', 404);
+  }
+  const deadline = new Date(session.started_at).getTime() +
+    Number(session.time_limit_sec) * 1000;
+  if (session.status !== 'open' || Date.now() >= deadline) {
+    throw new TimedTestRequestError('timed_test_session_closed', 409);
+  }
+
+  const { data: exposure } = await admin
+    .from('learning_exposures')
+    .select('id,session_id,student_id,academy_id,crop_id,pb_question_uid,homework_item_problem_id,book_id,grade_label,position_in_session,exposure_reason')
+    .eq('id', exposureId)
+    .eq('session_id', sessionId)
+    .maybeSingle();
+  if (
+    !exposure || exposure.academy_id !== student.academyId ||
+    exposure.student_id !== student.studentId ||
+    exposure.exposure_reason !== 'test_blueprint' ||
+    Number(exposure.position_in_session) !== position ||
+    !exposure.homework_item_problem_id ||
+    (expectedCropId && exposure.crop_id !== expectedCropId)
+  ) {
+    throw new TimedTestRequestError('timed_test_exposure_mismatch', 409);
+  }
+
+  const { data: attempt } = await admin
+    .from('learning_attempts')
+    .select('id')
+    .eq('exposure_id', exposureId)
+    .neq('result', 'void')
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    sessionId,
+    exposureId,
+    position,
+    durationMs: Math.min(Math.round(durationMs), 2147483647),
+    wallDurationMs: wallRaw == null
+      ? null
+      : Math.min(Math.max(0, Math.round(Number(wallRaw) || 0)), 2147483647),
+    interruptionMs: interruptionRaw == null
+      ? null
+      : Math.min(Math.max(0, Math.round(Number(interruptionRaw) || 0)), 2147483647),
+    cropId: String(exposure.crop_id ?? ''),
+    pbQuestionUid: exposure.pb_question_uid == null
+      ? null
+      : String(exposure.pb_question_uid),
+    homeworkItemProblemId: String(exposure.homework_item_problem_id),
+    bookId: exposure.book_id == null ? null : String(exposure.book_id),
+    gradeLabel: exposure.grade_label == null ? null : String(exposure.grade_label),
+    alreadyAttempted: attempt != null,
+  };
+}
+
+async function logTimedTestAttempt(
+  admin: Admin,
+  context: TimedTestContext,
+  result: 'correct' | 'wrong' | 'skipped',
+  answer: string | null,
+) {
+  if (context.alreadyAttempted) return { alreadyAttempted: true };
+  const { error } = await admin.rpc('learning_log_attempts', {
+    p_session_id: context.sessionId,
+    p_items: [{
+      exposure_id: context.exposureId,
+      crop_id: context.cropId || null,
+      pb_question_uid: context.pbQuestionUid,
+      homework_item_problem_id: context.homeworkItemProblemId,
+      book_id: context.bookId,
+      grade_label: context.gradeLabel,
+      result,
+      answer_text: answer,
+      assist_level: 'none',
+      duration_ms: context.durationMs,
+      duration_source: 'measured',
+      scored_by: 'auto',
+      meta: {
+        origin: 'student_textbook_grade_timed_test',
+        position: context.position,
+        wall_duration_ms: context.wallDurationMs,
+        interruption_ms: context.interruptionMs,
+      },
+    }],
+  });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (message.includes('already_attempted')) {
+      return { alreadyAttempted: true };
+    }
+    if (message.includes('session_closed')) {
+      throw new TimedTestRequestError('timed_test_session_closed', 409);
+    }
+    throw error;
+  }
+  return { alreadyAttempted: false };
+}
+
 async function loadCrop(admin: Admin, cropId: string): Promise<CropRow | null> {
   const { data } = await admin
     .from('textbook_problem_crops')
@@ -536,6 +690,25 @@ const answerTextOf = (c: CropRow) =>
   c.textbook_problem_answers?.answer_text ??
   c.textbook_problem_answers?.answer_latex_2d ??
   null;
+
+async function hasActiveTimedTest(admin: Admin, studentId: string) {
+  const { data } = await admin
+    .from('learning_sessions')
+    .select('started_at,time_limit_sec')
+    .eq('student_id', studentId)
+    .eq('session_kind', 'daily_test')
+    .eq('status', 'open')
+    .eq('time_limit_enforced', true);
+  const now = Date.now();
+  return (data ?? []).some((session: {
+    started_at: string;
+    time_limit_sec: number;
+  }) =>
+    new Date(session.started_at).getTime() +
+      Number(session.time_limit_sec) * 1000 >
+      now
+  );
+}
 
 // 실물 교재가 검사 신청으로 제출된 동안(phase=3)에는 같은 교재의 채점·정답
 // 공개를 잠근다 — 선생님 채점 후 답을 고쳐 쓰는 것을 막기 위해서다.
@@ -594,6 +767,22 @@ async function actionGrade(
   if (items.length > 100) {
     return json({ ok: false, error: 'too_many_items' }, 400);
   }
+  const timedTest = body.timed_test == null
+    ? null
+    : await resolveTimedTestContext(
+      admin,
+      student,
+      body,
+      items.length === 1
+        ? String((items[0] as Record<string, unknown>)?.crop_id ?? '')
+        : undefined,
+    );
+  if (timedTest !== null && items.length !== 1) {
+    return json({ ok: false, error: 'timed_test_single_item_required' }, 400);
+  }
+  if (timedTest === null && await hasActiveTimedTest(admin, student.studentId)) {
+    return json({ ok: false, error: 'timed_test_answer_access_blocked' }, 423);
+  }
   if (await isSubmitLocked(admin, student.studentId, bookId, gradeLabel)) {
     return json({ ok: false, error: 'book_submitted' }, 423);
   }
@@ -602,6 +791,7 @@ async function actionGrade(
   let correctCount = 0;
   let wrongCount = 0;
   let mastery: Record<string, unknown> | null = null;
+  let timedAttempt: { alreadyAttempted: boolean } | null = null;
 
   for (const raw of items) {
     const rawItem = raw as Record<string, unknown>;
@@ -707,25 +897,36 @@ async function actionGrade(
         results.push({ crop_id: cropId, parts: partOutcomes });
         continue;
       }
-      const merged = mergePartResults(
-        await loadPartResults(admin, student.studentId, cropId),
-        updates,
-      );
+      const merged = timedTest === null
+        ? mergePartResults(
+          await loadPartResults(admin, student.studentId, cropId),
+          updates,
+        )
+        : updates;
       const overall = allPartsCorrect(setParts, merged);
-      const logged = await upsertRecord(admin, {
-        academyId: student.academyId,
-        studentId: student.studentId,
-        bookId,
-        gradeLabel,
-        cropId,
-        answer: composePartAnswer(merged),
-        correct: overall,
-        gradedBy: 'auto',
-        flags: [],
-        partResults: merged,
-        homeworkGroupId,
-      });
-      mastery = masteryPayload(logged) ?? mastery;
+      if (timedTest !== null) {
+        timedAttempt = await logTimedTestAttempt(
+          admin,
+          timedTest,
+          overall ? 'correct' : 'wrong',
+          composePartAnswer(merged),
+        );
+      } else {
+        const logged = await upsertRecord(admin, {
+          academyId: student.academyId,
+          studentId: student.studentId,
+          bookId,
+          gradeLabel,
+          cropId,
+          answer: composePartAnswer(merged),
+          correct: overall,
+          gradedBy: 'auto',
+          flags: [],
+          partResults: merged,
+          homeworkGroupId,
+        });
+        mastery = masteryPayload(logged) ?? mastery;
+      }
       results.push({
         crop_id: cropId,
         correct: overall,
@@ -789,23 +990,43 @@ async function actionGrade(
       aiUnitSpecified,
     });
 
-    const logged = await upsertRecord(admin, {
-      academyId: student.academyId,
-      studentId: student.studentId,
-      bookId,
-      gradeLabel,
-      cropId,
-      answer,
-      correct,
-      gradedBy: 'auto',
-      flags,
-      homeworkGroupId,
-    });
-    mastery = masteryPayload(logged) ?? mastery;
+    if (timedTest !== null) {
+      timedAttempt = await logTimedTestAttempt(
+        admin,
+        timedTest,
+        correct ? 'correct' : 'wrong',
+        answer,
+      );
+    } else {
+      const logged = await upsertRecord(admin, {
+        academyId: student.academyId,
+        studentId: student.studentId,
+        bookId,
+        gradeLabel,
+        cropId,
+        answer,
+        correct,
+        gradedBy: 'auto',
+        flags,
+        homeworkGroupId,
+      });
+      mastery = masteryPayload(logged) ?? mastery;
+    }
 
     if (correct) correctCount += 1;
     else wrongCount += 1;
     results.push({ crop_id: cropId, correct, flags });
+  }
+
+  if (timedTest !== null) {
+    if (timedAttempt === null) {
+      return json({ ok: false, error: 'timed_test_not_auto_gradable' }, 409);
+    }
+    return json({
+      ok: true,
+      accepted: true,
+      already_attempted: timedAttempt.alreadyAttempted,
+    });
   }
 
   return json({
@@ -824,6 +1045,9 @@ async function actionReveal(
 ) {
   const cropId = String(body.crop_id ?? '');
   if (!cropId) return json({ ok: false, error: 'invalid_request' }, 400);
+  if (await hasActiveTimedTest(admin, student.studentId)) {
+    return json({ ok: false, error: 'timed_test_answer_access_blocked' }, 423);
+  }
 
   const crop = await loadCrop(admin, cropId);
   if (!crop || crop.academy_id !== student.academyId) {
@@ -931,6 +1155,9 @@ async function actionSelfMark(
   if (!bookId || !gradeLabel || !cropId) {
     return json({ ok: false, error: 'invalid_request' }, 400);
   }
+  if (await hasActiveTimedTest(admin, student.studentId)) {
+    return json({ ok: false, error: 'timed_test_answer_access_blocked' }, 423);
+  }
   if (await isSubmitLocked(admin, student.studentId, bookId, gradeLabel)) {
     return json({ ok: false, error: 'book_submitted' }, 423);
   }
@@ -1024,6 +1251,91 @@ async function actionSelfMark(
   });
 }
 
+async function actionTimedTestPass(
+  admin: Admin,
+  student: { academyId: string; studentId: string },
+  body: Record<string, unknown>,
+) {
+  const timedTest = await resolveTimedTestContext(admin, student, body);
+  const logged = await logTimedTestAttempt(
+    admin,
+    timedTest,
+    'skipped',
+    null,
+  );
+  return json({
+    ok: true,
+    accepted: true,
+    already_attempted: logged.alreadyAttempted,
+  });
+}
+
+async function actionTimedTestStatus(
+  admin: Admin,
+  student: { academyId: string; studentId: string },
+  body: Record<string, unknown>,
+) {
+  const timedTest = await resolveTimedTestContext(admin, student, body);
+  return json({ ok: true, attempted: timedTest.alreadyAttempted });
+}
+
+async function actionTimedTestProgress(
+  admin: Admin,
+  student: { academyId: string; studentId: string },
+  body: Record<string, unknown>,
+) {
+  const raw = body.timed_test;
+  const payload = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const sessionId = String(payload.session_id ?? '').trim();
+  if (!sessionId) throw new TimedTestRequestError('timed_test_invalid', 400);
+
+  const { data: session } = await admin
+    .from('learning_sessions')
+    .select('id,academy_id,student_id,status,session_kind,started_at,time_limit_sec')
+    .eq('id', sessionId)
+    .maybeSingle();
+  if (
+    !session || session.academy_id !== student.academyId ||
+    session.student_id !== student.studentId ||
+    session.session_kind !== 'daily_test'
+  ) {
+    throw new TimedTestRequestError('timed_test_not_found', 404);
+  }
+  const deadline = new Date(session.started_at).getTime() +
+    Number(session.time_limit_sec) * 1000;
+  if (session.status !== 'open' || Date.now() >= deadline) {
+    throw new TimedTestRequestError('timed_test_session_closed', 409);
+  }
+
+  const { data: exposures } = await admin
+    .from('learning_exposures')
+    .select('id,position_in_session')
+    .eq('session_id', sessionId)
+    .eq('exposure_reason', 'test_blueprint')
+    .order('position_in_session', { ascending: true });
+  const { data: attempts } = await admin
+    .from('learning_attempts')
+    .select('exposure_id')
+    .eq('session_id', sessionId)
+    .neq('result', 'void');
+  const attempted = new Set(
+    (attempts ?? []).map((row: { exposure_id: string | null }) => row.exposure_id),
+  );
+  let nextPosition = 1;
+  for (const exposure of exposures ?? []) {
+    const position = Number(exposure.position_in_session);
+    if (!Number.isInteger(position) || position <= 0) continue;
+    if (!attempted.has(exposure.id)) {
+      nextPosition = position;
+      break;
+    }
+    nextPosition = Math.max(nextPosition, position + 1);
+  }
+  return json({ ok: true, next_position: nextPosition });
+}
+
 // ---------------------------------------------------------------------------
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -1049,8 +1361,20 @@ Deno.serve(async (req) => {
     if (action === 'grade') return await actionGrade(admin, student, body);
     if (action === 'reveal') return await actionReveal(admin, student, body);
     if (action === 'self_mark') return await actionSelfMark(admin, student, body);
+    if (action === 'timed_test_pass') {
+      return await actionTimedTestPass(admin, student, body);
+    }
+    if (action === 'timed_test_status') {
+      return await actionTimedTestStatus(admin, student, body);
+    }
+    if (action === 'timed_test_progress') {
+      return await actionTimedTestProgress(admin, student, body);
+    }
     return json({ ok: false, error: 'unknown_action' }, 400);
   } catch (e) {
+    if (e instanceof TimedTestRequestError) {
+      return json({ ok: false, error: e.code }, e.status);
+    }
     return json(
       { ok: false, error: 'internal', detail: String((e as Error)?.message ?? e) },
       500,
