@@ -32,6 +32,7 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
     '교재',
     '학습',
     '테스트',
+    '앱',
   ];
 
   late final TextEditingController _title;
@@ -55,7 +56,8 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
     _content = ImeAwareTextEditingController(text: _seedContent());
     _page = ImeAwareTextEditingController(text: widget.initialPage ?? '');
     _count = ImeAwareTextEditingController(
-        text: widget.initialCount != null ? widget.initialCount.toString() : '');
+        text:
+            widget.initialCount != null ? widget.initialCount.toString() : '');
     final initialType = (widget.initialType ?? '').trim();
     if (initialType.isNotEmpty) {
       _type = _normalizeHomeworkType(initialType);
@@ -145,8 +147,8 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
     return AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title:
-          const Text('과제 편집', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+      title: const Text('과제 편집',
+          style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
       content: SizedBox(
         width: 520,
         child: Column(
@@ -166,13 +168,15 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
               }),
               decoration: _inputDecoration('과제 유형'),
               dropdownColor: kDlgPanelBg,
-              style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+              style:
+                  const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
               iconEnabledColor: kDlgTextSub,
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _title,
-              style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+              style:
+                  const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
               decoration: _inputDecoration('과제명', hint: '예: 프린트 1장'),
             ),
             const SizedBox(height: 12),
@@ -185,8 +189,8 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[0-9\-~,/ ]')),
                     ],
-                    style:
-                        const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: kDlgText, fontWeight: FontWeight.w600),
                     decoration: _inputDecoration('페이지', hint: '예: 10-12'),
                   ),
                 ),
@@ -196,8 +200,8 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
                     controller: _count,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style:
-                        const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: kDlgText, fontWeight: FontWeight.w600),
                     decoration: _inputDecoration('문항수', hint: '예: 12'),
                   ),
                 ),
@@ -246,8 +250,3 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
     );
   }
 }
-
-
-
-
-

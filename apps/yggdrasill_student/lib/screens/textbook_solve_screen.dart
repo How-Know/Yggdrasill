@@ -18,6 +18,7 @@ import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
 import '../widgets/math_latex_view.dart';
 import '../widgets/pencil_input_pad.dart';
+import '../widgets/student_confirm_sheet.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_status_island.dart';
 
@@ -58,6 +59,17 @@ class HomeworkSolveScope {
   bool get isEmpty => cropIds.isEmpty;
 }
 
+/// 기존 교재 풀이 UI를 그대로 사용하는 시간제한 시험 컨텍스트.
+class TimedTestSolveConfig {
+  const TimedTestSolveConfig({
+    required this.group,
+    required this.problems,
+  });
+
+  final HomeworkGroup group;
+  final List<HomeworkProblem> problems;
+}
+
 /// 교재 풀이 화면.
 /// 좌: 단원트리(대→중→소→페이지), 우: 페이지 문항 + 정답 입력 + 일괄 채점.
 ///
@@ -68,16 +80,19 @@ class TextbookSolveScreen extends StatefulWidget {
     super.key,
     required this.book,
     this.homework,
+    this.timedTest,
   });
 
   final StudentTextbook book;
   final HomeworkSolveScope? homework;
+  final TimedTestSolveConfig? timedTest;
 
   @override
   State<TextbookSolveScreen> createState() => _TextbookSolveScreenState();
 }
 
-class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
+class _TextbookSolveScreenState extends State<TextbookSolveScreen>
+    with WidgetsBindingObserver {
   TextbookUnitTree? _tree;
   String? _treeError;
   final Set<String> _expanded = <String>{};
@@ -184,28 +199,71 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
       GlobalKey<_ScratchPracticeSheetState>();
   final TextEditingController _keyboardController = TextEditingController();
 
+  Timer? _timedTimer;
+  TimedTestSession? _timedSession;
+  TimedTestExposure? _timedExposure;
+  late Duration _timedServerClockOffset;
+  final Stopwatch _timedActiveWatch = Stopwatch();
+  final Stopwatch _timedWallWatch = Stopwatch();
+  int _timedIndex = 0;
+  int _timedSubmittedAnswers = 0;
+  bool _timedPreparing = false;
+  bool _timedFinishing = false;
+
+  bool get _isTimedTest => widget.timedTest != null;
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _problemViewRequestEpoch++;
     _answersScrollController.removeListener(_onAnswersScroll);
     _questionScrollController.removeListener(_onQuestionScroll);
     _answersScrollController.dispose();
     _questionScrollController.dispose();
     _keyboardController.dispose();
+    _timedTimer?.cancel();
+    _timedActiveWatch.stop();
+    _timedWallWatch.stop();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_isTimedTest || _timedExposure == null || _timedFinishing) return;
+    if (state == AppLifecycleState.resumed) {
+      if (_timedRemainingSeconds <= 0) {
+        unawaited(_finishTimedTest());
+      } else {
+        _timedActiveWatch.start();
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _timedActiveWatch.stop();
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _answersScrollController.addListener(_onAnswersScroll);
     _questionScrollController.addListener(_onQuestionScroll);
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
-    _loadTree(selectLastPage: true);
+    if (_isTimedTest) {
+      _paneMode = _PaneMode.question;
+      unawaited(_prepareTimedTest());
+    } else {
+      _loadTree(selectLastPage: true);
+    }
   }
 
   /// 현재 페이지 문항을 렌더 큐에 넣는다.
@@ -351,6 +409,200 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     }
   }
 
+  int get _timedRemainingSeconds {
+    final session = _timedSession;
+    if (session == null) {
+      return (widget.timedTest?.group.timeLimitMinutes ?? 0) * 60;
+    }
+    final serverNow = DateTime.now().add(_timedServerClockOffset);
+    final milliseconds =
+        session.deadlineAt.difference(serverNow).inMilliseconds;
+    return milliseconds <= 0 ? 0 : (milliseconds / 1000).ceil();
+  }
+
+  String get _timedClockLabel {
+    final seconds = _timedRemainingSeconds;
+    final minutes = seconds ~/ 60;
+    return '$minutes:${(seconds % 60).toString().padLeft(2, '0')}';
+  }
+
+  void _syncTimedServerClock(DateTime deadline, int remainingSeconds) {
+    final estimatedServerNow =
+        deadline.subtract(Duration(seconds: remainingSeconds));
+    _timedServerClockOffset = estimatedServerNow.difference(DateTime.now());
+  }
+
+  ({TbPageStat page, String pathLabel})? _timedPageEntry(int rawPage) {
+    for (final entry in _flattenedPages()) {
+      if (entry.page.rawPage == rawPage) return entry;
+    }
+    return null;
+  }
+
+  Future<StudentTextbookProblemView> _loadTimedReadyView(
+    String cropId,
+  ) async {
+    var view = await TextbookApi.instance.problemView(cropId: cropId);
+    for (var attempt = 0; view.isQueued && attempt < 8; attempt++) {
+      await Future<void>.delayed(
+        Duration(milliseconds: view.pollAfterMs?.clamp(400, 2500) ?? 900),
+      );
+      view = await TextbookApi.instance.problemView(cropId: cropId);
+    }
+    if (view.isQueued && view.bodyPdfUrl != null) {
+      view = _fallbackFromQueued(view);
+    }
+    if (view.isQueued) {
+      throw StateError('timed_test_problem_not_ready');
+    }
+    if (view.isReady) {
+      await _QuestionPdfCache.prefetch(view.pdfUrl);
+    } else if (view.isFallback && view.bodyPdfUrl != null) {
+      await _QuestionPdfCache.prefetch(view.bodyPdfUrl);
+    }
+    return view;
+  }
+
+  Future<void> _loadTimedProblemAt(int index) async {
+    final timed = widget.timedTest!;
+    if (index < 0 || index >= timed.problems.length) {
+      await _finishTimedTest();
+      return;
+    }
+    _timedActiveWatch.stop();
+    _timedWallWatch.stop();
+    _timedIndex = index;
+    final target = timed.problems[index];
+    final rawPage = target.rawPage;
+    if (rawPage == null) {
+      throw StateError('timed_test_problem_page_missing');
+    }
+    final entry = _timedPageEntry(rawPage);
+    if (entry == null) {
+      throw StateError('timed_test_problem_page_not_found');
+    }
+    final view = await _loadTimedReadyView(target.cropId);
+    _problemViewCache[target.cropId] = view;
+    _answers.clear();
+    _answerDisplayLatex.clear();
+    _gradedAnswers.clear();
+    _results.clear();
+    _flags.clear();
+    _seenProblems.clear();
+    await _openPage(
+      entry.page,
+      entry.pathLabel,
+      select: _PageEntrySelect.first,
+    );
+    if (!mounted) return;
+    setState(() {
+      _paneMode = _PaneMode.question;
+      _problemView = view;
+      _problemViewError = null;
+      _loadingProblemView = false;
+    });
+  }
+
+  Future<void> _exposeTimedCurrentProblem() async {
+    final session = _timedSession;
+    final timed = widget.timedTest;
+    if (session == null ||
+        timed == null ||
+        _timedIndex >= timed.problems.length) {
+      return;
+    }
+    final exposure = await StudentApi.instance.exposeTimedTestProblem(
+      sessionId: session.sessionId,
+      problem: timed.problems[_timedIndex],
+      position: _timedIndex + 1,
+    );
+    if (exposure.expired || exposure.remainingSeconds <= 0) {
+      await _finishTimedTest();
+      return;
+    }
+    _syncTimedServerClock(exposure.deadlineAt, exposure.remainingSeconds);
+    _timedExposure = exposure;
+    _timedActiveWatch
+      ..reset()
+      ..start();
+    _timedWallWatch
+      ..reset()
+      ..start();
+  }
+
+  Future<void> _prepareTimedTest() async {
+    if (_timedPreparing) return;
+    setState(() => _timedPreparing = true);
+    try {
+      // 첫 문항의 메타데이터·렌더 PDF를 모두 준비한 다음 서버 세션을 시작한다.
+      // 따라서 최초 로딩 시간은 제한시간에서 차감되지 않는다.
+      await _loadTree();
+      if (!mounted) return;
+      await _loadTimedProblemAt(0);
+      if (!mounted) return;
+
+      final session = await StudentApi.instance.startOrResumeTimedTest(
+        widget.timedTest!.group.groupId,
+      );
+      _timedSession = session;
+      _timedSubmittedAnswers = session.correct + session.wrong;
+      _syncTimedServerClock(session.deadlineAt, session.remainingSeconds);
+      if (!session.isOpen || session.remainingSeconds <= 0) {
+        await _finishTimedTest();
+        return;
+      }
+
+      _timedTimer?.cancel();
+      _timedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || _timedFinishing) return;
+        if (_timedRemainingSeconds <= 0) {
+          unawaited(_finishTimedTest());
+        } else {
+          setState(() {});
+        }
+      });
+
+      final position = await TextbookApi.instance.timedTestNextPosition(
+        session.sessionId,
+      );
+      final nextIndex =
+          (position - 1).clamp(0, widget.timedTest!.problems.length);
+      if (nextIndex >= widget.timedTest!.problems.length) {
+        await _finishTimedTest();
+        return;
+      }
+      if (nextIndex != _timedIndex) {
+        await _loadTimedProblemAt(nextIndex);
+      }
+      await _exposeTimedCurrentProblem();
+      if (mounted) setState(() => _timedPreparing = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _timedPreparing = false);
+      TopGlassSnackBar.show(
+        context,
+        message: '시간제한 테스트를 준비하지 못했어요. 다시 시도해 주세요.',
+        icon: Icons.error_outline_rounded,
+      );
+    }
+  }
+
+  TimedTestGradeContext? _timedGradeContext() {
+    final exposure = _timedExposure;
+    final session = _timedSession;
+    if (exposure == null || session == null) return null;
+    final wall = _timedWallWatch.elapsedMilliseconds;
+    final active = _timedActiveWatch.elapsedMilliseconds;
+    return TimedTestGradeContext(
+      sessionId: session.sessionId,
+      exposureId: exposure.exposureId,
+      durationMs: active,
+      position: exposure.position,
+      wallDurationMs: wall,
+      interruptionMs: (wall - active).clamp(0, wall),
+    );
+  }
+
   void _selectFirstPage() {
     final pages = _flattenedPages();
     if (pages.isEmpty) return;
@@ -411,6 +663,16 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
 
   /// 과제 스코프면 배정된 문항만 남긴다.
   List<PageProblem> _scopedProblems(List<PageProblem> problems) {
+    if (_isTimedTest) {
+      final timed = widget.timedTest!;
+      if (_timedIndex < 0 || _timedIndex >= timed.problems.length) {
+        return const <PageProblem>[];
+      }
+      final cropId = timed.problems[_timedIndex].cropId;
+      return problems
+          .where((problem) => problem.cropId == cropId)
+          .toList(growable: false);
+    }
     final scope = widget.homework;
     if (scope == null) return problems;
     return problems
@@ -426,6 +688,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   Future<List<PageProblem>> _withHomeworkRoundState(
     List<PageProblem> problems,
   ) async {
+    if (_isTimedTest) {
+      return [
+        for (final problem in problems) problem.withSolveState(),
+      ];
+    }
     final scope = widget.homework;
     if (scope == null || problems.isEmpty) return problems;
 
@@ -741,7 +1008,120 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
     return (answers: toSubmit, parts: partSubmit, incomplete: incomplete);
   }
 
+  Future<void> _submitTimedAnswer({required bool skipped}) async {
+    if (_grading || _timedFinishing || _timedPreparing) return;
+    final timing = _timedGradeContext();
+    final timed = widget.timedTest;
+    if (timing == null ||
+        timed == null ||
+        _timedIndex >= timed.problems.length) {
+      return;
+    }
+    await _flushPencilInput();
+    if (!mounted) return;
+    final answerKey = _activeAnswerKey;
+    final answer = answerKey == null ? '' : (_answers[answerKey] ?? '').trim();
+    if (!skipped && answer.isEmpty) {
+      TopGlassSnackBar.show(
+        context,
+        message: '답을 입력해 주세요.',
+        icon: Icons.edit_outlined,
+      );
+      return;
+    }
+    if (_timedRemainingSeconds <= 0) {
+      await _finishTimedTest();
+      return;
+    }
+
+    setState(() => _grading = true);
+    _timedActiveWatch.stop();
+    _timedWallWatch.stop();
+    try {
+      final target = timed.problems[_timedIndex];
+      if (skipped) {
+        await TextbookApi.instance.passTimedTest(timedTest: timing);
+      } else {
+        await TextbookApi.instance.gradeTimedTest(
+          bookId: target.bookId,
+          gradeLabel: target.gradeLabel,
+          cropId: target.cropId,
+          answer: answer,
+          timedTest: timing,
+        );
+        _timedSubmittedAnswers++;
+      }
+      _timedExposure = null;
+      final nextIndex = _timedIndex + 1;
+      if (nextIndex >= timed.problems.length) {
+        await _finishTimedTest();
+        return;
+      }
+      if (mounted) setState(() => _timedPreparing = true);
+      await _loadTimedProblemAt(nextIndex);
+      await _exposeTimedCurrentProblem();
+      if (mounted) {
+        setState(() {
+          _timedPreparing = false;
+          _grading = false;
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _grading = false);
+      _timedActiveWatch.start();
+      TopGlassSnackBar.show(
+        context,
+        message: '답을 제출하지 못했어요. 다시 시도해 주세요.',
+        icon: Icons.wifi_off_rounded,
+      );
+    }
+  }
+
+  Future<void> _finishTimedTest({String status = 'completed'}) async {
+    if (_timedFinishing) return;
+    final session = _timedSession;
+    if (session == null) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    _timedFinishing = true;
+    _timedTimer?.cancel();
+    _timedActiveWatch.stop();
+    _timedWallWatch.stop();
+    try {
+      final result = await StudentApi.instance.finishTimedTest(
+        session.sessionId,
+        status: status,
+      );
+      await HomeworkSession.instance.refresh();
+      if (!mounted) return;
+      final accuracy = result.accuracy;
+      TopGlassSnackBar.show(
+        context,
+        message: '테스트 종료 · 정답 ${result.correct} · 오답 ${result.wrong} · '
+            '넘김 ${result.pass}'
+            '${accuracy == null ? '' : ' · 정답률 ${(accuracy * 100).round()}%'}',
+        icon: Icons.fact_check_rounded,
+      );
+      Navigator.of(context).pop();
+    } catch (_) {
+      if (!mounted) return;
+      _timedFinishing = false;
+      setState(() {});
+      TopGlassSnackBar.show(
+        context,
+        message: '테스트를 종료하지 못했어요. 다시 시도해 주세요.',
+        icon: Icons.wifi_off_rounded,
+      );
+    }
+  }
+
   Future<void> _grade() async {
+    if (_isTimedTest) {
+      await _submitTimedAnswer(skipped: false);
+      return;
+    }
     if (_grading) return;
     // 방금 쓴 필기가 아직 인식 전일 수 있다. 답을 모으기 전에 마무리한다.
     await _flushPencilInput();
@@ -840,6 +1220,20 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   ///    한 번도 안 푼 문항을 미수행(skipped)으로 기록한다 — 학생이 스스로
   ///    검사를 받고 나간 것과 같은 셈이다. 학습앱 회차 이력에도 남는다.
   Future<void> _handleExit() async {
+    if (_isTimedTest) {
+      if (_timedFinishing) return;
+      final end = await showStudentConfirmSheet(
+        context: context,
+        title: '테스트를 종료할까요?',
+        message: '종료하면 다시 응시할 수 없어요. 지금까지 제출한 답으로 결과가 확정됩니다.',
+        confirmLabel: '테스트 종료',
+        cancelLabel: '계속 풀기',
+        confirmIcon: Icons.stop_circle_outlined,
+        cancelIcon: Icons.play_arrow_rounded,
+      );
+      if (end) await _finishTimedTest(status: 'abandoned');
+      return;
+    }
     if (_exitFlushing) return;
     setState(() => _exitFlushing = true);
     try {
@@ -1593,6 +1987,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   int get _pendingGradeCount {
+    if (_isTimedTest) {
+      final answerKey = _activeAnswerKey;
+      if (answerKey == null) return 0;
+      return (_answers[answerKey]?.trim().isNotEmpty ?? false) ? 1 : 0;
+    }
     // 실제 일괄 채점과 같은 범위(_seenProblems)를 센다.
     // 현재 페이지만 보면 다음 페이지로 넘어간 순간 배지가 사라진다.
     final pending = _collectPendingSubmissions();
@@ -1604,6 +2003,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   Future<void> _moveProblem(int delta) async {
+    if (_isTimedTest) {
+      if (delta > 0) {
+        await _submitTimedAnswer(skipped: true);
+      }
+      return;
+    }
     if (_loadingProblems || delta == 0) return;
     final problems = _problems ?? const <PageProblem>[];
     if (problems.isEmpty) return;
@@ -1661,6 +2066,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   void _togglePaneMode() {
+    if (_isTimedTest) return;
     setState(() {
       _resetTitleCollapse();
       _paneMode = switch (_paneMode) {
@@ -1932,9 +2338,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
             // 딤 배리어 — 항상 두고 opacity 로 페이드 (시트 슬라이드와 동기).
             Positioned.fill(
               child: IgnorePointer(
-                ignoring: !_treeOpen,
+                ignoring: _isTimedTest || !_treeOpen,
                 child: AnimatedOpacity(
-                  opacity: _treeOpen ? 1 : 0,
+                  opacity: !_isTimedTest && _treeOpen ? 1 : 0,
                   duration: const Duration(milliseconds: 280),
                   curve: Curves.easeOutCubic,
                   child: GestureDetector(
@@ -1951,8 +2357,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
               duration: const Duration(milliseconds: 320),
               curve: Curves.easeOutCubic,
               // 시트 폭 + 왼쪽 그림자 blur 만큼 더 내보내 접힌 상태 잔상 제거.
-              right:
-                  _treeOpen ? 0 : -(_kPageSheetWidth + _kPageSheetShadowBleed),
+              right: !_isTimedTest && _treeOpen
+                  ? 0
+                  : -(_kPageSheetWidth + _kPageSheetShadowBleed),
               // 타이틀 바 높이만큼 내려 이전 AppBar 아래 정렬과 동일하게 맞춤.
               top: titleExtent,
               bottom: 0,
@@ -1965,7 +2372,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                 ),
               ),
             ),
-            if (!_treeOpen)
+            if (!_isTimedTest && !_treeOpen)
               Positioned(
                 top: titleExtent,
                 right: 0,
@@ -2001,6 +2408,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                 child: ColoredBox(
                   color: Color(0x33000000),
                   child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+            if (_timedPreparing)
+              const Positioned.fill(
+                child: ColoredBox(
+                  color: Color(0x33000000),
+                  child: Center(child: YggLoadingIndicator()),
                 ),
               ),
           ],
@@ -2040,7 +2454,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: bookNameMaxW),
                   child: Text(
-                    widget.book.name,
+                    _isTimedTest
+                        ? (widget.timedTest!.group.title.isEmpty
+                            ? '시간제한 테스트'
+                            : widget.timedTest!.group.title)
+                        : widget.book.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.headlineMedium?.copyWith(
@@ -2051,7 +2469,32 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                   ),
                 ),
                 const Spacer(),
-                if (page != null)
+                if (_isTimedTest)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '제 ${_timedIndex + 1}문제',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        Text(
+                          '남은 시간 $_timedClockLabel',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: _timedRemainingSeconds <= 60
+                                ? Colors.red
+                                : null,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (page != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
                     child: ConstrainedBox(
@@ -2080,11 +2523,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                       ),
                     ),
                   ),
-                IconButton(
-                  tooltip: '소단원·페이지 선택',
-                  onPressed: () => _setTreeOpen(!_treeOpen),
-                  icon: const Icon(Icons.segment_rounded),
-                ),
+                if (!_isTimedTest)
+                  IconButton(
+                    tooltip: '소단원·페이지 선택',
+                    onPressed: () => _setTreeOpen(!_treeOpen),
+                    icon: const Icon(Icons.segment_rounded),
+                  ),
                 const SizedBox(width: 6),
               ],
             ),
@@ -2493,12 +2937,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                             ?.isNotEmpty ??
                         false),
                 scratchOpen: _scratchOpen,
-                onPrevious: () => unawaited(_moveProblem(-1)),
+                onPrevious:
+                    _isTimedTest ? null : () => unawaited(_moveProblem(-1)),
                 onNext: () => unawaited(_moveProblem(1)),
                 onErase: _eraseCurrentInput,
                 onClear: _clearCurrentInput,
                 onNote: _toggleScratchPad,
                 onGrade: _grade,
+                gradeLabel: _isTimedTest ? '제출' : '채점',
               ),
             ),
           ],
@@ -2525,6 +2971,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
   }
 
   Widget _buildPaneModeButton() {
+    if (_isTimedTest) {
+      return _SolveGlassButton(
+        tooltip: '현재까지 정답을 제출한 문항 수',
+        icon: Icons.fact_check_outlined,
+        label: '정답 제출 $_timedSubmittedAnswers문제',
+        onPressed: () {},
+      );
+    }
     // 라벨은 다음에 갈 모드 (정답 → 문항 → 본문 → 정답).
     final (tooltip, icon, label) = switch (_paneMode) {
       _PaneMode.answers => (
@@ -2966,22 +3420,25 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen> {
                 Row(
                   children: [
                     SizedBox(
-                      width: 64,
+                      width: _isTimedTest ? 96 : 64,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            problem.problemNumber,
+                            _isTimedTest
+                                ? '제 ${_timedIndex + 1}문제'
+                                : problem.problemNumber,
                             style: theme.textTheme.titleMedium
                                 ?.copyWith(fontWeight: FontWeight.w800),
                           ),
-                          if (problem.label.isNotEmpty)
+                          if (!_isTimedTest && problem.label.isNotEmpty)
                             Text(
                               problem.label,
                               style: theme.textTheme.bodySmall
                                   ?.copyWith(color: theme.hintColor),
                             ),
-                          if (_showCategoryLabel &&
+                          if (!_isTimedTest &&
+                              _showCategoryLabel &&
                               problem.categoryLabel != null)
                             Text(
                               problem.categoryLabel!,
@@ -4591,6 +5048,7 @@ class _TextbookSolveFabBar extends StatelessWidget {
     required this.onClear,
     required this.onNote,
     required this.onGrade,
+    this.gradeLabel = '채점',
   });
 
   final int pendingCount;
@@ -4598,12 +5056,13 @@ class _TextbookSolveFabBar extends StatelessWidget {
   final bool canEdit;
   final bool hasAnswer;
   final bool scratchOpen;
-  final VoidCallback onPrevious;
+  final VoidCallback? onPrevious;
   final VoidCallback onNext;
   final VoidCallback onErase;
   final VoidCallback onClear;
   final VoidCallback onNote;
   final VoidCallback onGrade;
+  final String gradeLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -4634,11 +5093,12 @@ class _TextbookSolveFabBar extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _SolveFabIconButton(
-                tooltip: '이전 문제',
-                icon: Icons.chevron_left_rounded,
-                onPressed: onPrevious,
-              ),
+              if (onPrevious != null)
+                _SolveFabIconButton(
+                  tooltip: '이전 문제',
+                  icon: Icons.chevron_left_rounded,
+                  onPressed: onPrevious,
+                ),
               _SolveFabIconButton(
                 tooltip: '다음 문제',
                 icon: Icons.chevron_right_rounded,
@@ -4687,9 +5147,9 @@ class _TextbookSolveFabBar extends StatelessWidget {
                           size: 20,
                         ),
                       ),
-                label: const Text(
-                  '채점',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                label: Text(
+                  gradeLabel,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
             ],

@@ -5081,9 +5081,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     await _persistRecentSearches();
   }
 
-  Future<void> _runAction(String action) async {
+  Future<void> _runAction(
+    String action, {
+    bool advanceAfter = false,
+  }) async {
     final session = widget.session;
     if (session == null || _actionBusy) return;
+    final keepSheetOpen = advanceAfter && session.onNext != null;
     setState(() {
       for (final page in _visiblePages(applyWrongOnly: false)) {
         for (final cell in page.cells) {
@@ -5103,7 +5107,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         Map<String, String>.from(_gradingStates),
         Map<String, String>.from(_correctionStates),
       );
-      if (session.closeBeforeActionCompletes) {
+      if (!keepSheetOpen && session.closeBeforeActionCompletes) {
         widget.onClearSession();
         if (session.closeSheetOnAction) {
           final closeAction = closeRightSideSheetAction;
@@ -5113,7 +5117,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         }
       }
       await actionFuture;
-      if (!session.closeBeforeActionCompletes) {
+      if (keepSheetOpen) {
+        if (!mounted || !identical(widget.session, session)) return;
+        await session.onNext?.call();
+      } else if (!session.closeBeforeActionCompletes) {
         widget.onClearSession();
         if (session.closeSheetOnAction) {
           final closeAction = closeRightSideSheetAction;
@@ -7271,7 +7278,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Widget _buildScoreCalculator(RightSideSheetTestGradingSession session) {
     final result = _computeScoreResult(session);
     final hasScoreData = session.scoreByQuestionKey.isNotEmpty;
-    final label = hasScoreData ? '총점' : '맞은 개수';
+    final label = hasScoreData ? '총점' : '정답';
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -8434,9 +8441,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     required String label,
     required VoidCallback? onTap,
     VoidCallback? onLongPress,
-    bool emphasized = false,
   }) {
-    final color = emphasized ? _rsTextSub : _rsAccent;
+    final fabStyle = _rightSheetFabColors(context);
+    final color = onTap == null
+        ? fabStyle.subText.withValues(alpha: 0.45)
+        : fabStyle.subText;
     return Tooltip(
       message: onLongPress == null ? label : '$label · 길게 눌러 이후 페이지까지',
       child: Material(
@@ -8450,10 +8459,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             child: Text(
               label,
               style: TextStyle(
-                color:
-                    onTap == null ? _rsTextSub.withValues(alpha: 0.45) : color,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
+                color: color,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
                 height: 1,
               ),
             ),
@@ -8463,61 +8471,78 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  Widget _buildPageDividerLabel(_RightSheetGradingPageVm page) {
+  /// 정답 카드와 섞이지 않게 페이지를 섹션 구획으로 그린다.
+  /// (풀폭 가로선 + 본문색 페이지 번호. 액션은 보조 톤.)
+  Widget _buildPageDividerLabel(
+    _RightSheetGradingPageVm page, {
+    bool isFirst = false,
+  }) {
+    final fabStyle = _rightSheetFabColors(context);
     return Padding(
-      // 페이지 라벨=문항번호 왼쪽, 액션 버튼=오른쪽.
-      padding: const EdgeInsets.fromLTRB(
-        _rsAnswerQuestionColLeftPad,
-        4,
-        _rsAnswerQuestionColLeftPad,
-        4,
+      padding: EdgeInsets.only(
+        top: isFirst ? 0 : _gradingPageSectionGapAbove,
+        bottom: _gradingPageSectionGapBelow,
       ),
-      child: SizedBox(
-        height: _gradingPageHeaderHeight - 8,
-        child: Row(
-          children: [
-            Text(
-              'p.${page.pageNumber}',
-              style: const TextStyle(
-                color: _rsTextSub,
-                fontWeight: FontWeight.w800,
-                fontSize: 18,
-                height: 1.0,
-              ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ColoredBox(
+            color: fabStyle.border,
+            child: const SizedBox(height: 2),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              _rsAnswerQuestionColLeftPad,
+              8,
+              _rsAnswerQuestionColLeftPad,
+              0,
             ),
-            const Spacer(),
-            _buildPageBulkAction(
-              label: '모두 정답',
-              onTap: _answerListReadOnly
-                  ? null
-                  : () => unawaited(
-                        _applyPageBulkState(page, targetState: 'correct'),
-                      ),
+            child: Row(
+              children: [
+                Text(
+                  'p.${page.pageNumber}',
+                  style: TextStyle(
+                    color: fabStyle.text,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                    height: 1.0,
+                  ),
+                ),
+                const Spacer(),
+                _buildPageBulkAction(
+                  label: '모두 정답',
+                  onTap: _answerListReadOnly
+                      ? null
+                      : () => unawaited(
+                            _applyPageBulkState(page, targetState: 'correct'),
+                          ),
+                ),
+                const SizedBox(width: 2),
+                _buildPageBulkAction(
+                  label: '미수행',
+                  onTap: _answerListReadOnly
+                      ? null
+                      : () => unawaited(
+                            _applyPageBulkState(
+                              page,
+                              targetState: 'not_performed',
+                            ),
+                          ),
+                  onLongPress: _answerListReadOnly
+                      ? null
+                      : () => unawaited(
+                            _applyPageBulkState(
+                              page,
+                              targetState: 'not_performed',
+                              includeFollowing: true,
+                            ),
+                          ),
+                ),
+              ],
             ),
-            const SizedBox(width: 2),
-            _buildPageBulkAction(
-              label: '미수행',
-              emphasized: true,
-              onTap: _answerListReadOnly
-                  ? null
-                  : () => unawaited(
-                        _applyPageBulkState(
-                          page,
-                          targetState: 'not_performed',
-                        ),
-                      ),
-              onLongPress: _answerListReadOnly
-                  ? null
-                  : () => unawaited(
-                        _applyPageBulkState(
-                          page,
-                          targetState: 'not_performed',
-                          includeFollowing: true,
-                        ),
-                      ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -8547,7 +8572,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return (effective: effective, remaining: remaining);
   }
 
-  Future<void> _runSmartConfirmAction() async {
+  Future<void> _runSmartConfirmAction({
+    bool advanceAfter = false,
+  }) async {
     final counts = _smartConfirmCounts();
     final action = resolveMigratedHomeworkGradingAction(
       effectiveCount: counts.effective,
@@ -8564,7 +8591,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       return;
     }
     if (action == 'confirm') {
-      await _runAction(action);
+      await _runAction(action, advanceAfter: advanceAfter);
       return;
     }
 
@@ -8575,7 +8602,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       confirmLabel: '완료',
     );
     if (complete == true) {
-      await _runAction(action);
+      await _runAction(action, advanceAfter: advanceAfter);
     }
   }
 
@@ -8663,7 +8690,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _gradingAnswerListBottomInset = 4;
   static const double _gradingBottomBarScrollPadding =
       _gradingBottomBarHeight + _gradingAnswerListBottomInset;
-  static const double _gradingPageHeaderHeight = 62;
+  static const double _gradingPageSectionGapAbove = 28;
+  static const double _gradingPageSectionGapBelow = 20;
   static const double _gradingSheetHorizontalInset = 10;
 
   ButtonStyle _gradingBottomBarButtonStyle({
@@ -8717,12 +8745,29 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Widget _buildActionButtons() {
     final session = widget.session;
     if (session?.smartConfirmAction == true) {
-      return _buildGradingBottomBarButton(
-        label: _actionBusy ? '확인중' : '확인',
-        onPressed:
-            _actionBusy ? null : () => unawaited(_runSmartConfirmAction()),
-        width: _gradingBottomActionButtonWidth,
-        filled: true,
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (session?.onNext != null) ...[
+            _buildGradingBottomBarButton(
+              label: _actionBusy ? '처리중' : '다음',
+              onPressed: _actionBusy
+                  ? null
+                  : () => unawaited(
+                        _runSmartConfirmAction(advanceAfter: true),
+                      ),
+              width: _gradingBottomActionButtonWidth,
+            ),
+            const SizedBox(width: 8),
+          ],
+          _buildGradingBottomBarButton(
+            label: _actionBusy ? '확인중' : '확인',
+            onPressed:
+                _actionBusy ? null : () => unawaited(_runSmartConfirmAction()),
+            width: _gradingBottomActionButtonWidth,
+            filled: true,
+          ),
+        ],
       );
     }
 
@@ -8837,7 +8882,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         pageIndex < pages.length;
                         pageIndex++) ...[
                       SliverToBoxAdapter(
-                        child: _buildPageDividerLabel(pages[pageIndex]),
+                        child: _buildPageDividerLabel(
+                          pages[pageIndex],
+                          isFirst: pageIndex == 0,
+                        ),
                       ),
                       SliverToBoxAdapter(
                         child: Column(

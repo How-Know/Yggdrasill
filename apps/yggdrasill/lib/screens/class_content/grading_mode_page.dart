@@ -141,8 +141,9 @@ typedef GradingGroupTapCallback = Future<void> Function(
   String studentId,
   HomeworkGroup? group,
   HomeworkItem summary,
-  List<HomeworkItem> children,
-);
+  List<HomeworkItem> children, {
+  AsyncUiAction? openNext,
+});
 
 class GradingModePage extends StatefulWidget {
   final List<String> attendingStudentIds;
@@ -1025,6 +1026,25 @@ class _GradingModePageState extends State<GradingModePage> {
                 final onCardTap = entry.section == _GradingSection.submitted
                     ? widget.onSubmittedCardTap
                     : widget.onHomeworkCardTap;
+                final nextEntry = stackIndex + 1 < stack.entries.length
+                    ? stack.entries[stackIndex + 1]
+                    : null;
+                final nextOnCardTap =
+                    nextEntry?.section == _GradingSection.submitted
+                        ? widget.onSubmittedCardTap
+                        : widget.onHomeworkCardTap;
+                final canOpenNext = nextEntry != null &&
+                    nextOnCardTap != null &&
+                    (nextEntry.section != _GradingSection.submitted ||
+                        nextEntry.hasSubmittedChild);
+                final AsyncUiAction? openNext = canOpenNext
+                    ? () => nextOnCardTap(
+                          nextEntry.studentId,
+                          nextEntry.group,
+                          nextEntry.summary,
+                          nextEntry.children,
+                        )
+                    : null;
                 return SizedBox(
                   width: cardLayout.width,
                   height: cardLayout.height,
@@ -1057,6 +1077,7 @@ class _GradingModePageState extends State<GradingModePage> {
                               entry.group,
                               entry.summary,
                               entry.children,
+                              openNext: openNext,
                             );
                           },
                   ),
@@ -1390,6 +1411,7 @@ class _GradingModePageState extends State<GradingModePage> {
     required _GradingSection section,
   }) {
     final out = <_GradingGroupEntry>[];
+    final now = DateTime.now();
     final assignmentByItemId = <String, List<HomeworkAssignmentDetail>>{};
     for (final assignment in assignments) {
       final itemId = assignment.homeworkItemId.trim();
@@ -1418,7 +1440,14 @@ class _GradingModePageState extends State<GradingModePage> {
           )
           .toList(growable: false);
       final hasSubmitted = submittedChildren.isNotEmpty;
-      final hasHomeworkAssignment = assignedChildren.isNotEmpty;
+      final hasHomeworkAssignment = assignedChildren.isNotEmpty &&
+          shouldShowUnsubmittedHomeworkInGradingMode(
+            assignedAt: assignedChildren.expand(
+              (child) => (assignmentByItemId[child.id] ?? const [])
+                  .map((assignment) => assignment.assignedAt),
+            ),
+            now: now,
+          );
 
       final include = section == _GradingSection.submitted
           ? hasSubmitted
@@ -1487,8 +1516,13 @@ class _GradingModePageState extends State<GradingModePage> {
         .toList(growable: false);
     for (final item in looseItems) {
       final hasSubmitted = _isSubmittedVisible(item);
-      final hasHomeworkAssignment =
-          assignmentByItemId.containsKey(item.id) && item.phase != 0;
+      final itemAssignments = assignmentByItemId[item.id] ?? const [];
+      final hasHomeworkAssignment = item.phase != 0 &&
+          shouldShowUnsubmittedHomeworkInGradingMode(
+            assignedAt:
+                itemAssignments.map((assignment) => assignment.assignedAt),
+            now: now,
+          );
       final include = section == _GradingSection.submitted
           ? hasSubmitted
           : (!hasSubmitted && hasHomeworkAssignment);
@@ -1496,7 +1530,7 @@ class _GradingModePageState extends State<GradingModePage> {
 
       DateTime? dueDate;
       String titleSnapshot = '';
-      for (final assignment in assignmentByItemId[item.id] ?? const []) {
+      for (final assignment in itemAssignments) {
         dueDate = _mergeDueDate(dueDate, _dateOnly(assignment.dueDate));
         if (titleSnapshot.isEmpty) {
           final snapshot = (assignment.groupTitleSnapshot ?? '').trim();

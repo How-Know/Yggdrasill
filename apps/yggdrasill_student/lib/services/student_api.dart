@@ -143,8 +143,13 @@ class HomeworkGroup {
   bool get isInClass => listKind == HomeworkListKind.inClass;
   bool get isHomework => listKind == HomeworkListKind.homework;
   bool get isDueForCheck => inspectionStatus == 'due_for_check';
-  bool get isTimedTest =>
-      isTest && (timeLimitMinutes ?? 0) > 0 && digitalSolvable;
+
+  /// 시간 제한이 설정된 테스트는 전용 응시 흐름으로 연다.
+  ///
+  /// 초기 V0에서 과제 유형이 `프린트`로 저장되어 `digital_solvable=false`인
+  /// 과제도 문항 스냅샷은 존재하므로, 여기서는 서버 테스트 플래그와 제한시간을
+  /// 기준으로 판별하고 실제 문항 존재 여부는 응시 진입 시 검증한다.
+  bool get isTimedTest => isTest && (timeLimitMinutes ?? 0) > 0;
 
   String get inspectionLabel {
     if (!isDueForCheck) return '';

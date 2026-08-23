@@ -55,6 +55,9 @@ app.*.map.json
 /android/app/release
 apps/yggdrasill/dist/Yggdrasill_portable_*.zip
 
+# Gateway local diagnostics and extraction dumps
+gateway/.tmp_*
+
 # Apple signing / push credentials (절대 커밋 금지)
 *.p8
 *.p12

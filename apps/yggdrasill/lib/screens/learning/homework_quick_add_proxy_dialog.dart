@@ -314,6 +314,7 @@ class HomeworkQuickAddProxyDialogState
     _page = ImeAwareTextEditingController(text: '');
     _count = ImeAwareTextEditingController(text: '');
     _timeLimitMinutes = ImeAwareTextEditingController(text: '');
+    _timeLimitMinutes.addListener(_onTimeLimitChanged);
     _memo = ImeAwareTextEditingController(text: '');
     final initialGroupTitle = _isChildAddMode
         ? (widget.lockedGroupTitle ?? widget.initialTitle ?? '').trim()
@@ -330,6 +331,9 @@ class HomeworkQuickAddProxyDialogState
       _flowId = initial;
     } else {
       _flowId = widget.flows.isNotEmpty ? widget.flows.first.id : '';
+    }
+    if (_isTestFlowId(_flowId)) {
+      _applyTimedTestDefaults();
     }
     _initNaesinFilterDefaults();
     unawaited(_loadAllFlowLinkedBooks());
@@ -358,6 +362,7 @@ class HomeworkQuickAddProxyDialogState
     _rangeContent.dispose();
     _page.dispose();
     _count.dispose();
+    _timeLimitMinutes.removeListener(_onTimeLimitChanged);
     _timeLimitMinutes.dispose();
     _memo.dispose();
     _groupTitle.removeListener(_onGroupTitleEdited);
@@ -404,6 +409,7 @@ class HomeworkQuickAddProxyDialogState
     '프린트',
     '교재',
     '학습',
+    '앱',
   ];
 
   static const List<String> _migratedProblemStageValues = <String>[
@@ -2658,6 +2664,25 @@ class HomeworkQuickAddProxyDialogState
   void _onGroupTitleEdited() {
     if (_suppressGroupTitleListener || _isChildAddMode) return;
     _groupTitleManuallyEdited = true;
+  }
+
+  void _onTimeLimitChanged() {
+    if (!_isCurrentHomeworkTypeTest() ||
+        _isChildAddMode ||
+        _groupTitleManuallyEdited) {
+      return;
+    }
+    final minutes = _parsePositiveIntText(_timeLimitMinutes.text);
+    _setGroupTitleText(
+      minutes == null ? '시간 제한 테스트' : '$minutes분 테스트',
+    );
+  }
+
+  void _applyTimedTestDefaults() {
+    _linkedHomeworkType = '앱';
+    _type = '앱';
+    _syncLinkedHomeworkTypeToLinkedDraftItems('앱');
+    _onTimeLimitChanged();
   }
 
   void _setGroupTitleText(String text) {
@@ -5874,6 +5899,17 @@ class HomeworkQuickAddProxyDialogState
                             _units = const <_BigUnitSelectionNode>[];
                             _expandedLeftMidSmallsKey = null;
                           });
+                          if (_isTestFlowId(nextId)) {
+                            _applyTimedTestDefaults();
+                          } else if (_linkedHomeworkType == '앱') {
+                            setState(() {
+                              _linkedHomeworkType = '교재';
+                              _type = '프린트';
+                            });
+                            if (!_groupTitleManuallyEdited) {
+                              _setGroupTitleText('그룹 과제');
+                            }
+                          }
                           await _handleFlowChanged(forceNoBookSelection: true);
                         },
                       ),
@@ -6220,7 +6256,7 @@ class HomeworkQuickAddProxyDialogState
       return Opacity(
         opacity: enabled ? 1 : 0.5,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           decoration: BoxDecoration(
             color: selected ? const Color(0x1A33A373) : kDlgFieldBg,
             borderRadius: BorderRadius.circular(12),
@@ -6236,34 +6272,39 @@ class HomeworkQuickAddProxyDialogState
                 activeColor: kDlgAccent,
                 checkColor: Colors.white,
                 visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: kDlgText,
-                        fontSize: 14,
+                        fontSize: 13.5,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: kDlgTextSub,
-                        fontSize: 12,
-                        height: 1.3,
+                        fontSize: 11.5,
+                        height: 1.25,
                       ),
                     ),
                   ],
                 ),
               ),
               if (trailing != null) ...[
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 trailing,
               ],
             ],
@@ -6277,34 +6318,35 @@ class HomeworkQuickAddProxyDialogState
         : '선택 문항 $_timedTestEligibleCount개 · 자가채점 제외 $_timedTestExcludedCount개';
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       decoration: BoxDecoration(
         color: const Color(0x221C1C1E),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: UtilityGlassDialogTokens.borderColor),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             '테스트 제한 옵션',
             style: TextStyle(
               color: kDlgText,
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: FontWeight.w900,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           optionRow(
             title: '시간 제한',
-            subtitle: '그룹의 모든 하위 테스트에 같은 제한시간을 적용합니다.',
+            subtitle: '제한시간 안에 가능한 많이 풉니다.',
             selected: _testTimeLimitEnabled,
             enabled: true,
             onChanged: (value) {
               setState(() => _testTimeLimitEnabled = value ?? false);
             },
             trailing: SizedBox(
-              width: 112,
+              width: 104,
               child: TextField(
                 controller: _timeLimitMinutes,
                 enabled: _testTimeLimitEnabled,
@@ -6312,29 +6354,38 @@ class HomeworkQuickAddProxyDialogState
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 style: const TextStyle(
                   color: kDlgText,
+                  fontSize: 13.5,
                   fontWeight: FontWeight.w700,
                 ),
-                decoration: _inputDecoration('제한시간(분)', hint: '예: 50'),
+                decoration: _inputDecoration('제한시간(분)', hint: '예: 50').copyWith(
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 10,
+                  ),
+                ),
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           optionRow(
             title: '문항 수 제한',
-            subtitle: '준비 중 · V0는 적격 문항 전체를 출제합니다.',
+            subtitle: '준비 중 · 지금은 적격 문항 전체를 출제합니다.',
             selected: false,
             enabled: false,
             onChanged: null,
           ),
           if (_isWonriTimedTestV0Active()) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Text(
               eligibilityText,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: _timedTestEligibleCount > 0
                     ? kDlgTextSub
                     : const Color(0xFFE5A65B),
-                fontSize: 12.5,
+                fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -6546,27 +6597,6 @@ class HomeworkQuickAddProxyDialogState
             ),
           ),
         ),
-        const SizedBox(height: 6),
-        if (_isCurrentHomeworkTypeTest()) ...[
-          const SizedBox(height: 10.4),
-          SizedBox(
-            height: singleLineInputHeight,
-            child: TextField(
-              controller: _timeLimitMinutes,
-              enabled: hasSelection,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: const TextStyle(
-                color: kDlgText,
-                fontWeight: FontWeight.w600,
-              ),
-              decoration: _inputDecoration(
-                '제한시간(분)',
-                hint: hasSelection ? '예: 50' : '범위를 선택하면 입력할 수 있어요',
-              ),
-            ),
-          ),
-        ],
         const SizedBox(height: 12),
         boundedReadonlyLine(
           '범위',
@@ -9079,9 +9109,11 @@ class HomeworkQuickAddProxyDialogState
             _testOriginFlowId = keepTestFlow ? link.flowId : null;
             if (!keepTestFlow) _flowId = link.flowId;
             _selectedLinkedBookKey = link.key;
-            _linkedHomeworkType = '교재';
-            _syncLinkedHomeworkTypeToLinkedDraftItems('교재');
+            final nextType = keepTestFlow ? '앱' : '교재';
+            _linkedHomeworkType = nextType;
+            _syncLinkedHomeworkTypeToLinkedDraftItems(nextType);
           });
+          if (keepTestFlow) _onTimeLimitChanged();
           await _handleFlowChanged(
             preferredLinkedBookKey: link.key,
           );
@@ -9468,11 +9500,14 @@ class HomeworkQuickAddProxyDialogState
                 .toDouble()
             : naesinBodyHeight)
         : (hasBookSelection ? 620 : (_useCustomSource ? 620 : 0));
+    final testOptionsExtraHeight =
+        (_isCurrentHomeworkTypeTest() && !showNaesinStandalone) ? 176.0 : 0.0;
     final double targetDialogHeight = showNaesinStandalone
         ? math.min(maxDialogHeight, bodyHeight + 76)
         : (showBody
-            ? math.min(maxDialogHeight, bodyHeight + 360)
-            : math.min(maxDialogHeight, 620));
+            ? math.min(
+                maxDialogHeight, bodyHeight + 360 + testOptionsExtraHeight)
+            : math.min(maxDialogHeight, 620 + testOptionsExtraHeight));
 
     final rangeContent = _buildRangeSelectionPanel(
       selectedBook: selectedBook,
@@ -9831,33 +9866,60 @@ class HomeworkQuickAddProxyDialogState
       required bool includeBody,
       required bool includeBottomPadding,
     }) {
+      final showTestOptions =
+          _isCurrentHomeworkTypeTest() && !showNaesinStandalone;
+      final naesinFooter =
+          showNaesinPanel && !hasBookSelection && !_useCustomSource
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Row(
+                    children: [
+                      _buildAutoCheckbox(),
+                      const Spacer(),
+                      if (secondaryActions() case final naesinAdd?) naesinAdd,
+                    ],
+                  ),
+                )
+              : null;
+      final testOptionsCard = showTestOptions
+          ? Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 220),
+                child: SingleChildScrollView(
+                  child: _buildTestConstraintOptionsCard(),
+                ),
+              ),
+            )
+          : null;
+
       return Column(
-        mainAxisSize: includeBody ? MainAxisSize.max : MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          topRegion(),
           if (includeBody) ...[
+            topRegion(),
             SizedBox(height: hasMigratedBookSelection ? 16 : 14),
             Expanded(
               child: hasBookSelection || _useCustomSource
                   ? detailsPanel(compact: true)
                   : bodyRegion(),
             ),
-          ],
-          if (showNaesinPanel && !hasBookSelection && !_useCustomSource) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                _buildAutoCheckbox(),
-                const Spacer(),
-                if (secondaryActions() case final naesinAdd?) naesinAdd,
-              ],
+            if (naesinFooter != null) naesinFooter,
+            if (testOptionsCard != null) testOptionsCard,
+          ] else
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    topRegion(),
+                    if (naesinFooter != null) naesinFooter,
+                    if (testOptionsCard != null) testOptionsCard,
+                  ],
+                ),
+              ),
             ),
-          ],
-          if (_isCurrentHomeworkTypeTest() && !showNaesinStandalone) ...[
-            const SizedBox(height: 12),
-            _buildTestConstraintOptionsCard(),
-          ],
           const SizedBox(height: 10),
           primaryActions(),
           if (includeBottomPadding) const SizedBox(height: dialogBottomPadding),

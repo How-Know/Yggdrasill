@@ -1134,6 +1134,42 @@ export function buildSuryeokMarkRepairPrompt({ rawPage, sectionHint = '' }) {
   ].join('\n');
 }
 
+// 범위 지문("[14-17] 그림과 같이 …")만 다시 묻는 보충 판독.
+//
+// 1차 판독은 한 지면의 문항을 전부 세느라 이 한 줄을 흘릴 때가 있다(1-2 p137
+// 좌단, 공통수학2 p44 좌단). 개별 문항은 멀쩡히 오므로 지면을 다시 통째로
+// 읽히지 않고, 범위 지문만 찾게 해서 놓친 것을 메운다.
+export function buildSuryeokRangeHeaderPrompt({ rawPage }) {
+  return [
+    '한국 수학 교재 수력충전 본문에서 **대괄호 범위 지문**만 찾으세요.',
+    `PDF raw page ${rawPage}. 이 작업은 누락 보정 전용입니다.`,
+    '',
+    '범위 지문은 여러 문항이 함께 쓰는 공통 지문이며 이렇게 인쇄됩니다:',
+    '  "[14-17] 그림과 같이 구멍이 뚫린 각기둥에 대하여 다음을 구하여라."',
+    '  "[08~13] 다음 직선의 방정식을 구하여라."',
+    '- 대괄호 안이 두 번호를 잇는 형태(하이픈·물결·가운뎃점)면 모두 범위입니다.',
+    '- 아래에 공통 그림·표가 딸려 있기도 합니다.',
+    '- **좌단과 우단을 모두 훑으세요.** 유형 머리말 바로 아래에 오기도 하고,',
+    '  앞 지면에서 이어져 머리말 없이 단 맨 위에서 시작하기도 합니다.',
+    '',
+    '다음은 범위 지문이 **아닙니다**:',
+    '- 낱개 문항 번호("14"), 소문항 "(1)", 원문자 ①~⑤',
+    '- 쪽 아래 "< 정답과 해설 p. 68~69 >" 안내, 오른쪽 위 "DAY 22" 배지',
+    '- 유형 머리말("유형 30 구멍이 뚫린 각기둥의 겉넓이")',
+    '',
+    '하나도 없으면 items 를 빈 배열로 두세요. 없는 것을 지어내지 마세요.',
+    '',
+    'JSON만 출력:',
+    '{ "items": [',
+    '  { "number":"14~17", "bbox":[ymin,xmin,ymax,xmax],',
+    '    "item_region":[ymin,xmin,ymax,xmax] }',
+    '] }',
+    'number 는 대괄호를 빼고 "14~17" 처럼 물결로 이어 적으세요.',
+    'bbox 는 범위 표기 글자만, item_region 은 공통 지문과 딸린 공통 그림까지',
+    '감싸는 0..1000 [ymin,xmin,ymax,xmax] 좌표입니다.',
+  ].join('\n');
+}
+
 function buildGaeyuDetectPrompt({ displayPage, rawPage }) {
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)

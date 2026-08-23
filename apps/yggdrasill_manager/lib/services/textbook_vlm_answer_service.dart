@@ -453,6 +453,7 @@ class TextbookVlmAnswerLayoutEntry {
     this.pageStart = 0,
     this.pageEnd = 0,
     this.answer,
+    this.bbox,
   });
 
   final bool isHeader;
@@ -461,11 +462,31 @@ class TextbookVlmAnswerLayoutEntry {
   final int pageEnd;
   final TextbookVlmAnswerItem? answer;
 
+  /// 이 요소가 지면에서 차지한 자리 [ymin, xmin, ymax, xmax] (0..1000).
+  ///
+  /// 소단원 머리와 정답의 앞뒤 관계를 좌표로 다시 세울 때 쓴다.
+  final List<int>? bbox;
+
   factory TextbookVlmAnswerLayoutEntry.fromMap(Map<String, dynamic> map) {
     int asInt(dynamic value) {
       if (value is int) return value;
       if (value is num) return value.toInt();
       return int.tryParse('$value') ?? 0;
+    }
+
+    List<int>? asBbox(dynamic value) {
+      if (value is! List || value.length != 4) return null;
+      final out = <int>[];
+      for (final v in value) {
+        if (v is num) {
+          out.add(v.toInt());
+          continue;
+        }
+        final parsed = int.tryParse('$v');
+        if (parsed == null) return null;
+        out.add(parsed);
+      }
+      return out;
     }
 
     final isHeader = '${map['kind']}' == 'header';
@@ -475,8 +496,39 @@ class TextbookVlmAnswerLayoutEntry {
       pageStart: asInt(map['page_start']),
       pageEnd: asInt(map['page_end']),
       answer: isHeader ? null : TextbookVlmAnswerItem.fromMap(map),
+      bbox: asBbox(map['bbox']),
     );
   }
+}
+
+/// 답지 판독 결과를 지면 읽기 순서로 다시 세운다.
+///
+/// 순서는 왼쪽 단 위→아래, 그다음 오른쪽 단 위→아래다. 모델은 대개 그렇게
+/// 내놓지만 같은 지면을 조금 다르게 렌더하면 오른쪽 단을 먼저 적어 오기도
+/// 한다. 그러면 소단원 머리보다 먼저 온 정답이 "아직 블록이 없다"며 버려져
+/// 그 단이 통째로 빈다(1-2 답지 10쪽 "05 도수분포표" 06~45번 40개).
+///
+/// 좌표가 하나라도 없으면 순서를 건드리지 않고 모델이 준 대로 쓴다.
+List<TextbookVlmAnswerLayoutEntry> textbookAnswerLayoutReadingOrder(
+  List<TextbookVlmAnswerLayoutEntry> entries,
+) {
+  if (entries.length < 2) return entries;
+  for (final entry in entries) {
+    final bbox = entry.bbox;
+    if (bbox == null || bbox.length != 4) return entries;
+  }
+  // 단 구분은 지면 가운데(500)를 기준으로 한다. 두 단을 다 덮는 머리 띠는
+  // 왼쪽 단 것으로 보아 그 위치의 흐름을 그대로 따른다.
+  int columnOf(TextbookVlmAnswerLayoutEntry entry) =>
+      entry.bbox![1] >= 500 ? 2 : 1;
+  final order = <int>[for (var i = 0; i < entries.length; i += 1) i];
+  order.sort((a, b) {
+    final byColumn = columnOf(entries[a]).compareTo(columnOf(entries[b]));
+    if (byColumn != 0) return byColumn;
+    final byTop = entries[a].bbox![0].compareTo(entries[b].bbox![0]);
+    return byTop != 0 ? byTop : a.compareTo(b);
+  });
+  return <TextbookVlmAnswerLayoutEntry>[for (final i in order) entries[i]];
 }
 
 class TextbookVlmAnswerLayoutPage {

@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -348,7 +348,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   /// 본체는 [openDigitalHomeworkSolve] — 재생 시트의 「문제 풀기」 버튼과
   /// 같은 경로를 쓴다.
   Future<bool> _openDigitalHomework(HomeworkGroup group) async {
-    if (!group.digitalSolvable || group.isPrintSource) return false;
+    if (!group.isTimedTest && (!group.digitalSolvable || group.isPrintSource)) {
+      return false;
+    }
 
     setState(() => _busy = true);
     try {

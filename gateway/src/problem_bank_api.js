@@ -63,8 +63,10 @@ import {
   detectRpmSetHeadersOnPage,
   detectSsenBasicDrillOnPage,
   detectSuryeokMarksOnPage,
+  detectSuryeokRangeHeadersOnPage,
   classifyWonriPage,
   mergeSuryeokMarks,
+  mergeSuryeokRangeHeaders,
   mergeItemGeometry,
   normalizeDetectResult,
   numberBboxesLookTemplated,
@@ -72,6 +74,7 @@ import {
   repairSuryeokItemRegions,
   shouldTreatWonriPageAsConcept,
   suryeokMarksNeedRepair,
+  suryeokRangeHeadersMayBeMissing,
 } from './textbook/vlm_detect_client.js';
 import {
   extractAnswersOnPage,
@@ -6798,6 +6801,36 @@ async function handleTextbookVlmDetectProblems(body, res) {
     } catch (err) {
       console.warn(
         '[textbook-vlm-detect] suryeok_mark_repair_failed',
+        JSON.stringify({
+          rawPage,
+          bookId,
+          gradeLabel,
+          message: compact(err?.message || err),
+        }),
+      );
+    }
+  }
+  // 여러 문항이 함께 쓰는 범위 지문("[14-17] …")을 1차 판독이 통째로 흘리는
+  // 일이 있다(1-2 p137 좌단). 그러면 그 아래 문항들이 공통 지문 없이 저장되어
+  // 무슨 문제인지 알 수 없게 되므로, 자리가 비어 보이면 범위 지문만 되묻는다.
+  if (series === 'suryeok' && suryeokRangeHeadersMayBeMissing(normalized)) {
+    try {
+      const ranges = await detectSuryeokRangeHeadersOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      });
+      if (mergeSuryeokRangeHeaders(normalized, ranges.parsedJson) > 0) {
+        repairSuryeokItemRegions(normalized, series);
+      }
+    } catch (err) {
+      console.warn(
+        '[textbook-vlm-detect] suryeok_range_header_repair_failed',
         JSON.stringify({
           rawPage,
           bookId,

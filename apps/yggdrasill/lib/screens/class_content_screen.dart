@@ -1005,8 +1005,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       showAnchorDateHint:
                                           !isAttendanceAnchorToday(anchorDate),
                                       pendingConfirms: _pendingConfirms,
-                                      onSubmittedCardTap: (studentId, group,
-                                          summary, children) async {
+                                      onSubmittedCardTap:
+                                          (studentId, group, summary, children,
+                                              {openNext}) async {
                                         final gradingChildren = children
                                             .where(
                                               (e) =>
@@ -1046,6 +1047,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             studentId: studentId,
                                             hw: gradingChildren.first,
                                             targetKeys: pendingKeys,
+                                            openNext: openNext,
                                           );
                                         }
                                         HomeworkItem answerSeed =
@@ -1062,10 +1064,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           studentId: studentId,
                                           hw: answerSeed,
                                           targetKeys: pendingKeys,
+                                          openNext: openNext,
                                         );
                                       },
-                                      onHomeworkCardTap: (studentId, group,
-                                          summary, children) async {
+                                      onHomeworkCardTap:
+                                          (studentId, group, summary, children,
+                                              {openNext}) async {
                                         if (_printPickMode) {
                                           if (group != null) {
                                             return _handleHomeworkGroupPrintPick(
@@ -1088,6 +1092,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           group: group,
                                           summary: summary,
                                           children: children,
+                                          openNext: openNext,
                                         );
                                       },
                                       onTogglePending: (studentId, itemId) {
@@ -2902,7 +2907,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             for (final entry in entries) {
               if (!_isTestHomeworkEntry(entry)) continue;
               entry['flowId'] = testFlowId;
-              entry['type'] = '프린트';
               final existingOrigin =
                   (entry['testOriginFlowId'] as String?)?.trim() ?? '';
               if (existingOrigin.isEmpty &&
@@ -2988,8 +2992,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           final splitParts =
               parseSplitParts(entry['splitParts'] ?? item['splitParts']);
           final bool isTestCard = _isTestHomeworkEntry(entry);
+          final rawTypeLabel = (entry['type'] as String?)?.trim();
           final typeLabel =
-              isTestCard ? '프린트' : (entry['type'] as String?)?.trim();
+              isTestCard && (rawTypeLabel ?? '').isEmpty ? '앱' : rawTypeLabel;
           final resolvedFlowId = isTestCard ? testFlowId : flowId;
           final existingOrigin =
               (entry['testOriginFlowId'] as String?)?.trim() ?? '';
@@ -5623,6 +5628,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkItem hw,
     required List<({String studentId, String itemId})> keys,
     required RightSheetPreloadedSessionPayload payload,
+    AsyncUiAction? onNext,
   }) async {
     final seenItemIds = <String>{};
     var expectedQuestionCount = 0;
@@ -5731,6 +5737,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           states: decoded,
         );
       },
+      onNext: onNext,
       onAction: (action, states, correctionStates) async {
         if (!mounted) return;
         final decoded = _fromRightSheetStateMap(states);
@@ -5820,6 +5827,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required HomeworkItem hw,
     List<({String studentId, String itemId})>? targetKeys,
+    AsyncUiAction? openNext,
   }) async {
     final keys = (targetKeys == null || targetKeys.isEmpty)
         ? <({String studentId, String itemId})>[
@@ -5827,6 +5835,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           ]
         : targetKeys;
     if (keys.isEmpty) return;
+    final AsyncUiAction? onNext = openNext == null
+        ? null
+        : () async {
+            // 저장 실패 시 optimistic pending 표시가 복원되므로 현재 시트를 유지한다.
+            if (!mounted || !keys.every(_pendingConfirms.containsKey)) return;
+            await openNext();
+          };
     final allSelected = keys.every(_pendingConfirms.containsKey);
     if (allSelected) {
       if (keys.any(_structuredPendingConfirmKeys.contains)) {
@@ -5856,6 +5871,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           hw: hw,
           keys: keys,
           payload: preloadedPayload,
+          onNext: onNext,
         );
         if (opened) return;
       }
@@ -6014,6 +6030,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               states: decoded,
             );
           },
+          onNext: onNext,
           onAction: (action, states, correctionStates) async {
             if (!mounted) return;
             final decoded = _fromRightSheetStateMap(states);
@@ -6229,6 +6246,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             states: decoded,
           );
         },
+        onNext: onNext,
         onAction: (action, states, correctionStates) async {
           if (!mounted) return;
           final decoded = _fromRightSheetStateMap(states);
@@ -6565,6 +6583,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkGroup? group,
     required HomeworkItem summary,
     required List<HomeworkItem> children,
+    AsyncUiAction? openNext,
   }) async {
     final activeChildren = children
         .where((item) => item.status != HomeworkStatus.completed)
@@ -6614,6 +6633,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         studentId: studentId,
         summary: summary,
         children: activeChildren,
+        openNext: openNext,
       );
       if (opened || !context.mounted) return;
       final checkResult = await _runHomeworkCheckDialogForGroup(
@@ -6672,6 +6692,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required HomeworkItem summary,
     required List<HomeworkItem> children,
+    AsyncUiAction? openNext,
   }) async {
     final targetChildren = children
         .where((item) => item.status != HomeworkStatus.completed)
@@ -6700,6 +6721,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       studentId: studentId,
       hw: answerSeed,
       targetKeys: keys,
+      openNext: openNext,
     );
     return true;
   }
@@ -12107,6 +12129,7 @@ const List<String> _homeworkTypeValues = <String>[
   '교재',
   '학습',
   '테스트',
+  '앱',
 ];
 
 String _normalizeHomeworkTypeLabel(String raw) {
@@ -12126,6 +12149,8 @@ Color _colorForHomeworkTypeLabel(String type) {
       return Colors.purple;
     case '테스트':
       return Colors.red;
+    case '앱':
+      return Colors.blue;
     default:
       return Colors.blue;
   }
@@ -12525,7 +12550,9 @@ Future<void> _showAddChildHomeworkDialog({
   int createdCount = 0;
   for (final entry in entries) {
     final isTestCard = _isTestHomeworkEntry(entry);
-    final typeLabel = isTestCard ? '프린트' : (entry['type'] as String?)?.trim();
+    final rawTypeLabel = (entry['type'] as String?)?.trim();
+    final typeLabel =
+        isTestCard && (rawTypeLabel ?? '').isEmpty ? '앱' : rawTypeLabel;
     final resolvedFlowId = isTestCard ? testFlowId : flowId;
     final existingOrigin = (entry['testOriginFlowId'] as String?)?.trim() ?? '';
     final resolvedTestOriginFlowId = isTestCard

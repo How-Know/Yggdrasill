@@ -5,14 +5,17 @@ import {
   normalizeDetectResult,
   mergeItemGeometry,
   mergeSuryeokMarks,
+  mergeSuryeokRangeHeaders,
   numberBboxesLookTemplated,
   overwriteItemGeometry,
   repairSuryeokItemRegions,
   suryeokMarksNeedRepair,
+  suryeokRangeHeadersMayBeMissing,
 } from '../src/textbook/vlm_detect_client.js';
 import {
   buildDetectProblemsPrompt,
   buildSuryeokMarkRepairPrompt,
+  buildSuryeokRangeHeaderPrompt,
 } from '../src/textbook/vlm_detect_prompt.js';
 import { buildExtractAnswersPrompt } from '../src/textbook/vlm_answer_prompt.js';
 import { buildDetectSolutionRefsPrompt } from '../src/textbook/vlm_solution_refs_prompt.js';
@@ -420,6 +423,63 @@ test('templated number bboxes are recognized as unmeasured', () => {
   assert.equal(numberBboxesLookTemplated(measured), false);
 });
 
+test('two digit numbers alone do not look templated', () => {
+  // 1-2 p179: 11~16 이 나란한 지면. 번호가 모두 두 자리라 상자 크기가 같은 게
+  // 당연한데 이를 "찍은 값"으로 의심해 2차 판독을 돌리면 번호 상자가 본문으로
+  // 갈려 크롭이 문항을 덮었다.
+  const twoDigits = [
+    { number: '11', bbox: [111, 83, 126, 110] },
+    { number: '12', bbox: [400, 83, 415, 110] },
+    { number: '13', bbox: [687, 83, 702, 110] },
+    { number: '14', bbox: [67, 518, 82, 545] },
+    { number: '15', bbox: [427, 518, 442, 545] },
+    { number: '16', bbox: [753, 518, 768, 545] },
+  ];
+  assert.equal(numberBboxesLookTemplated(twoDigits), false);
+
+  // 글자 수가 다른데도 상자가 똑같으면 잰 값이 아니다.
+  const mixedWidths = twoDigits.map((item, index) =>
+    index === 0 ? { ...item, number: '02~03', is_set_header: true } : item,
+  );
+  assert.equal(numberBboxesLookTemplated(mixedWidths), true);
+
+  // 같은 상자를 그대로 복사해 온 흔적.
+  const duplicated = twoDigits.map((item, index) =>
+    index === 1 ? { ...item, bbox: [111, 83, 126, 110] } : item,
+  );
+  assert.equal(numberBboxesLookTemplated(duplicated), true);
+});
+
+test('nested number bbox keeps the number, not the body', () => {
+  // 좌표 2차 판독이 번호 글자 상자와 본문 상자를 한 배열에 겹쳐 담아 왔다.
+  // 합치면 번호 상자가 본문을 덮으므로 앞의 것만 쓴다. 본문 영역은 조각을
+  // 아울러야 하니 합친다.
+  const out = normalizeDetectResult(
+    {
+      page_layout: 'two_column',
+      items: [
+        {
+          number: '11',
+          category: 'type_problem',
+          column: 1,
+          bbox: [
+            [112, 83, 129, 110],
+            [112, 110, 292, 466],
+          ],
+          item_region: [
+            [112, 110, 200, 466],
+            [200, 110, 292, 466],
+          ],
+        },
+      ],
+    },
+    { rawPage: 179, displayPage: 179, series: 'suryeok', sectionHint: 'type_problem' },
+  );
+  assert.deepEqual(out.items[0].bbox, [112, 83, 129, 110]);
+  const region = out.items[0].item_region;
+  assert.ok(region[0] <= 112 && region[2] >= 292, JSON.stringify(region));
+});
+
 test('overwriting geometry lets the suryeok region repair run again', () => {
   const out = normalizeDetectResult(
     {
@@ -509,6 +569,133 @@ test('suryeok range headers survive hyphen printing', () => {
   assert.deepEqual(out.items[0].set_range, { from: 8, to: 13 });
   assert.equal(out.items[1].number, '08');
   assert.equal(out.items[1].is_set_header, false);
+});
+
+// 1-2 p137 응답: 세트 헤더의 bbox 가 같은 상자 두 개를 겹친 중첩 배열로 왔다.
+// 좌표를 버리면 뒤의 보정이 번호 상자를 지어내고, 그 자리가 실제보다 위라
+// 크롭이 "유형 30" 머리말까지 삼킨다.
+test('suryeok set header keeps its coordinates when the model nests them', () => {
+  const out = normalizeDetectResult(
+    {
+      page_layout: 'two_column',
+      type_headers: [
+        { label: '유형 30', title: '구멍이 뚫린 각기둥의 겉넓이', bbox: [69, 82, 89, 380] },
+      ],
+      items: [
+        {
+          number: '14~17',
+          category: 'type_problem',
+          column: 1,
+          is_set_header: true,
+          bbox: [
+            [113, 82, 126, 150],
+            [113, 82, 126, 150],
+          ],
+          item_region: [[113, 82, 271, 470]],
+        },
+        {
+          number: '14',
+          category: 'type_problem',
+          column: 1,
+          bbox: [293, 84, 309, 112],
+          item_region: [293, 84, 453, 470],
+        },
+      ],
+    },
+    { rawPage: 137, displayPage: 137, series: 'suryeok', sectionHint: 'type_problem' },
+  );
+  const header = out.items[0];
+  assert.deepEqual(header.bbox, [113, 82, 126, 150]);
+  // 머리말(아래끝 89) 아래에서 시작해야 한다.
+  assert.ok(header.item_region[0] > 89);
+  assert.doesNotMatch(out.notes, /synthesized_bbox/);
+});
+
+// 1-2 p137 좌단: 유형 30 머리말(아래끝 89) 아래로 "[14-17]" 공통 지문과 공통
+// 그림이 있는데 모델이 이 한 줄을 흘렸다. 첫 번호 14 가 293 까지 내려가 있어
+// 그 빈자리를 보고 되물어야 한다. 우단은 세트 헤더가 이미 있으니 조용하다.
+test('suryeok suspects a dropped range header from the empty column head', () => {
+  const page = {
+    type_headers: [{ label: '유형 30', title: '구멍이 뚫린 각기둥의 겉넓이', bbox: [69, 82, 89, 380] }],
+    items: [
+      { number: '14', category: 'type_problem', column: 1, bbox: [293, 84, 309, 112] },
+      { number: '15', category: 'type_problem', column: 1, bbox: [452, 85, 468, 113] },
+      {
+        number: '18~20',
+        category: 'type_problem',
+        column: 2,
+        is_set_header: true,
+        bbox: [66, 517, 82, 585],
+      },
+      { number: '18', category: 'type_problem', column: 2, bbox: [117, 518, 133, 546] },
+    ],
+  };
+  assert.equal(suryeokRangeHeadersMayBeMissing(page), true);
+
+  // 세트 헤더가 제자리에 온 응답은 되묻지 않는다.
+  const complete = {
+    ...page,
+    items: [
+      {
+        number: '14~17',
+        category: 'type_problem',
+        column: 1,
+        is_set_header: true,
+        bbox: [113, 82, 126, 150],
+      },
+      ...page.items,
+    ],
+  };
+  assert.equal(suryeokRangeHeadersMayBeMissing(complete), false);
+});
+
+test('suryeok range header repair fills the header and inherits its type', () => {
+  const out = normalizeDetectResult(
+    {
+      page_layout: 'two_column',
+      type_headers: [
+        { label: '유형 30', title: '구멍이 뚫린 각기둥의 겉넓이', bbox: [69, 82, 89, 380] },
+      ],
+      items: [
+        {
+          number: '14',
+          category: 'type_problem',
+          column: 1,
+          content_group: { kind: 'type', label: '유형 30', title: '구멍이 뚫린 각기둥의 겉넓이' },
+          bbox: [293, 84, 309, 112],
+          item_region: [293, 84, 453, 470],
+        },
+      ],
+    },
+    { rawPage: 137, displayPage: 137, series: 'suryeok', sectionHint: 'type_problem' },
+  );
+  const added = mergeSuryeokRangeHeaders(out, {
+    items: [{ number: '14-17', bbox: [113, 82, 126, 150], item_region: [113, 82, 271, 470] }],
+  });
+  assert.equal(added, 1);
+  repairSuryeokItemRegions(out, 'suryeok');
+
+  const header = out.items.find((item) => item.number === '14~17');
+  assert.equal(header.is_set_header, true);
+  assert.deepEqual(header.set_range, { from: 14, to: 17 });
+  assert.equal(header.content_group_label, '유형 30');
+  // 머리말 아래에서 시작해 첫 문항 위에서 끊긴다.
+  assert.ok(header.item_region[0] > 89);
+  assert.ok(header.item_region[2] < 293);
+  assert.match(out.notes, /suryeok_range_header_repaired=1/);
+
+  // 같은 헤더를 두 번 받아도 늘어나지 않는다.
+  assert.equal(
+    mergeSuryeokRangeHeaders(out, { items: [{ number: '14~17', bbox: [113, 82, 126, 150] }] }),
+    0,
+  );
+});
+
+test('suryeok range header prompt asks for both columns and nothing else', () => {
+  const prompt = buildSuryeokRangeHeaderPrompt({ rawPage: 137 });
+  assert.match(prompt, /\[14-17\]/);
+  assert.match(prompt, /좌단과 우단/);
+  assert.match(prompt, /지어내지 마세요/);
 });
 
 test('suryeok answer prompt anchors each expected item to its body page badge', () => {

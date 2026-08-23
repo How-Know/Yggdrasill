@@ -73,7 +73,11 @@ module.exports = {
       merge_logs: true,
       time: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
-      env: { NODE_ENV: 'production' }
+      env: {
+        NODE_ENV: 'production',
+        TEXTBOOK_VLM_DUMP_DIR:
+          process.env.TEXTBOOK_VLM_DUMP_DIR || ''
+      }
     },
     {
       name: 'ygg-pb-extract',

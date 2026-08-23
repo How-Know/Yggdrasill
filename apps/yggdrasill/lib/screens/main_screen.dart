@@ -5749,7 +5749,6 @@ extension on _MainScreenState {
             for (final entry in entries) {
               if (!_isTestHomeworkEntry(entry)) continue;
               entry['flowId'] = testFlowId;
-              entry['type'] = '프린트';
               final existingOrigin =
                   (entry['testOriginFlowId'] as String?)?.trim() ?? '';
               if (existingOrigin.isEmpty &&
@@ -5834,8 +5833,9 @@ extension on _MainScreenState {
             entry['splitParts'] ?? result['splitParts'],
           );
           final isTestCard = _isTestHomeworkEntry(entry);
+          final rawTypeLabel = (entry['type'] as String?)?.trim();
           final typeLabel =
-              isTestCard ? '프린트' : (entry['type'] as String?)?.trim();
+              isTestCard && (rawTypeLabel ?? '').isEmpty ? '앱' : rawTypeLabel;
           final resolvedFlowId = isTestCard ? testFlowId : flowId;
           final existingOrigin =
               (entry['testOriginFlowId'] as String?)?.trim() ?? '';

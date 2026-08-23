@@ -75,6 +75,7 @@ class RightSideSheetTestGradingSession {
   final bool wrongOnlyDefault;
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
+  final AsyncUiAction? onNext;
   final bool gradingLocked;
   final bool closeSheetOnAction;
   final bool closeBeforeActionCompletes;
@@ -110,6 +111,7 @@ class RightSideSheetTestGradingSession {
     this.wrongOnlyDefault = false,
     this.onStatesChanged,
     this.onAction,
+    this.onNext,
     this.gradingLocked = false,
     this.closeSheetOnAction = true,
     this.closeBeforeActionCompletes = false,

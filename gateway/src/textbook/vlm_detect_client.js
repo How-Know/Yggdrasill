@@ -11,6 +11,7 @@ import {
   buildRpmSetHeaderPrompt,
   buildSsenBasicDrillRescuePrompt,
   buildSuryeokMarkRepairPrompt,
+  buildSuryeokRangeHeaderPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
   SURYEOK_ITEM_CATEGORIES,
@@ -212,6 +213,122 @@ export async function detectSuryeokMarksOnPage(options) {
   });
 }
 
+export function detectSuryeokRangeHeadersOnPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    series: 'suryeok',
+    includeContentGroups: false,
+    promptOverride: buildSuryeokRangeHeaderPrompt({ rawPage: options?.rawPage }),
+  });
+}
+
+/// 단 맨 위의 범위 지문("[14-17] …")을 1차 판독이 흘렸는지 의심한다.
+///
+/// 범위 지문과 공통 그림은 자리를 꽤 차지하므로, 그 단의 첫 번호가 유형 머리말
+/// (없으면 지면 위쪽)에서 한참 아래에 있는데 세트 헤더가 없으면 그 빈자리에
+/// 있었을 가능성이 크다. 여기서 놓치면 아래 문항들이 공통 지문 없이 저장되어
+/// 무슨 문제인지 알 수 없게 된다. 헛짚어도 짧은 보충 판독 한 번이 전부다.
+const SURYEOK_RANGE_HEADER_GAP = 120;
+
+export function suryeokRangeHeadersMayBeMissing(result) {
+  const items = Array.isArray(result?.items) ? result.items : [];
+  if (items.length === 0) return false;
+  const headers = Array.isArray(result.type_headers) ? result.type_headers : [];
+  const columns = new Map();
+  for (const item of items) {
+    if (!Array.isArray(item?.bbox)) continue;
+    const key =
+      item.column === 1 || item.column === 2 ? item.column : inferColumn(item.bbox);
+    if (!columns.has(key)) columns.set(key, []);
+    columns.get(key).push(item);
+  }
+  for (const list of columns.entries()) {
+    const [column, entries] = list;
+    if (entries.some((item) => item.is_set_header === true)) continue;
+    const first = entries.reduce((acc, item) =>
+      acc == null || item.bbox[0] < acc.bbox[0] ? item : acc,
+    );
+    // 그 단에 걸친 유형 머리말이 있으면 그 아래부터가 빈자리다.
+    const headerBottom = headers
+      .filter(
+        (header) =>
+          Array.isArray(header.bbox) &&
+          header.bbox[0] < first.bbox[0] &&
+          inferColumn(header.bbox) === column,
+      )
+      .map((header) => header.bbox[2])
+      .sort((a, b) => b - a)[0];
+    const top = headerBottom != null ? headerBottom : 60;
+    if (first.bbox[0] - top >= SURYEOK_RANGE_HEADER_GAP) return true;
+  }
+  return false;
+}
+
+/// 보충 판독으로 찾은 범위 지문을 1차 결과에 더한다. 이미 있는 번호는 두고,
+/// 새로 넣은 헤더의 크롭 영역은 뒤의 [repairSuryeokItemRegions] 가 다음 번호
+/// 앞까지 다시 그린다. 더한 개수를 돌려준다.
+export function mergeSuryeokRangeHeaders(result, parsedJson) {
+  if (!result || !Array.isArray(result.items)) return 0;
+  const found = Array.isArray(parsedJson?.items) ? parsedJson.items : [];
+  if (found.length === 0) return 0;
+  const known = new Set(
+    result.items.map((item) => formatSuryeokNumber(item?.number)),
+  );
+  const category = result.section === 'unit_review' ? 'unit_review' : 'type_problem';
+  let added = 0;
+  for (const raw of found) {
+    const number = formatSuryeokNumber(raw?.number);
+    const range = parseBasicDrillRange(number, true);
+    if (!range || known.has(number)) continue;
+    const bbox = parseBbox4(raw?.bbox);
+    if (!bbox) continue;
+    const region = parseBbox4(raw?.item_region ?? raw?.itemRegion, {
+      nested: 'union',
+    });
+    const column = inferColumn(bbox);
+    // 세트가 이끄는 첫 문항의 유형을 그대로 쓴다. 유형이 비면 그 아래 문항만
+    // 유형을 갖고 공통 지문은 미분류로 남아 소단원 유형 목록이 어긋난다.
+    const leads = result.items
+      .filter(
+        (item) =>
+          Array.isArray(item.bbox) &&
+          item.bbox[0] > bbox[0] &&
+          (item.column === 1 || item.column === 2
+            ? item.column
+            : inferColumn(item.bbox)) === column,
+      )
+      .sort((a, b) => a.bbox[0] - b.bbox[0])[0];
+    result.items.push({
+      number,
+      label: '',
+      category,
+      is_important: false,
+      is_set_header: true,
+      set_range: range,
+      content_group: leads?.content_group || {
+        kind: 'none',
+        label: '',
+        title: '',
+        order: null,
+      },
+      content_group_kind: leads?.content_group_kind || 'none',
+      content_group_label: leads?.content_group_label || '',
+      content_group_title: leads?.content_group_title || '',
+      content_group_order: leads?.content_group_order ?? null,
+      column,
+      bbox,
+      item_region: region || [...bbox],
+    });
+    known.add(number);
+    added += 1;
+  }
+  if (added > 0) {
+    const suffix = `suryeok_range_header_repaired=${added}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+  return added;
+}
+
 export function detectRpmSetHeadersOnPage(options) {
   return detectProblemsOnPage({
     ...options,
@@ -274,7 +391,9 @@ export function mergeItemGeometry(result, parsedJson) {
     const hit = byNumber.get(key(item.number));
     if (!hit) continue;
     const bbox = parseBbox4(hit.bbox);
-    const region = parseBbox4(hit.item_region ?? hit.itemRegion);
+    const region = parseBbox4(hit.item_region ?? hit.itemRegion, {
+      nested: 'union',
+    });
     if (!hasRegion && region) item.item_region = region;
     if (!hasBbox && bbox) item.bbox = bbox;
     if (Array.isArray(item.item_region) && item.item_region.length === 4) {
@@ -303,7 +422,17 @@ export function numberBboxesLookTemplated(items) {
   const widths = boxed.map((item) => item.bbox[3] - item.bbox[1]);
   const heights = boxed.map((item) => item.bbox[2] - item.bbox[0]);
   const uniform = (values) => values.every((v) => v === values[0]);
-  if (uniform(widths) && uniform(heights)) return true;
+  if (uniform(widths) && uniform(heights)) {
+    // 두 자리 번호만 나란한 지면(11~16)은 상자가 같은 크기인 게 당연하다.
+    // 글자 수가 다른데도 상자가 똑같거나, 같은 상자를 그대로 두 번 담아 온
+    // 경우만 "재지 않고 찍었다"고 본다.
+    const lengths = boxed.map(
+      (item) => String(item?.number ?? '').replace(/\s+/g, '').length,
+    );
+    if (!uniform(lengths)) return true;
+    const distinct = new Set(boxed.map((item) => item.bbox.join(',')));
+    return distinct.size < boxed.length;
+  }
   const plain = boxed.filter((item) => !item.is_set_header);
   return plain.length >= 3 && plain.every((item) => item.bbox[3] - item.bbox[1] > 60);
 }
@@ -327,7 +456,9 @@ export function overwriteItemGeometry(result, parsedJson) {
     const bbox = parseBbox4(hit.bbox);
     if (!bbox) continue;
     item.bbox = bbox;
-    const region = parseBbox4(hit.item_region ?? hit.itemRegion);
+    const region = parseBbox4(hit.item_region ?? hit.itemRegion, {
+      nested: 'union',
+    });
     if (region) item.item_region = region;
     if (hit.column === 1 || hit.column === 2) item.column = hit.column;
     delete item.__suryeokRegionRepaired;
@@ -536,6 +667,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
         raw.region ??
         raw.content_region ??
         raw.content_bbox,
+      { nested: 'union' },
     );
     // 개념서 단일 패스: 문항마다 카테고리를 붙인다. 모델이 category 를
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
@@ -1410,16 +1542,29 @@ function normalizeContentGroup(raw) {
   };
 }
 
-function parseBbox4(arr) {
-  // Gemini occasionally wraps coordinates once: [[ymin, xmin, ymax, xmax]].
-  // Treat that as the same bbox instead of dropping the whole page silently.
-  const value =
+function parseBbox4(arr, { nested = 'first' } = {}) {
+  // Gemini occasionally wraps coordinates: [[ymin, xmin, ymax, xmax]]. 겹쳐 온
+  // 좌표를 통째로 버리면 뒤의 보정이 상자를 지어내 크롭이 어긋나므로(1-2 p137
+  // "[14-17]") 겉껍질을 벗겨 쓴다. 다만 벗기는 방식이 갈린다.
+  //   nested='first' — 번호 상자처럼 하나여야 하는 값. 겹쳐 온 두 상자가
+  //     번호 글자와 본문일 때가 있어(1-2 p179) 합치면 번호가 본문을 덮는다.
+  //   nested='union' — 본문 영역처럼 여러 조각을 아울러야 하는 값.
+  const rows =
     Array.isArray(arr) &&
-    arr.length === 1 &&
-    Array.isArray(arr[0]) &&
-    arr[0].length === 4
-      ? arr[0]
-      : arr;
+    arr.length > 0 &&
+    arr.every((row) => Array.isArray(row) && row.length === 4)
+      ? arr
+      : null;
+  const value = !rows
+    ? arr
+    : nested === 'union'
+      ? rows.reduce((acc, row) => [
+          Math.min(acc[0], Number(row[0])),
+          Math.min(acc[1], Number(row[1])),
+          Math.max(acc[2], Number(row[2])),
+          Math.max(acc[3], Number(row[3])),
+        ])
+      : rows[0];
   if (!Array.isArray(value) || value.length !== 4) return null;
   const [ymin, xmin, ymax, xmax] = value.map((v) => Number(v));
   if (![ymin, xmin, ymax, xmax].every((v) => Number.isFinite(v))) return null;

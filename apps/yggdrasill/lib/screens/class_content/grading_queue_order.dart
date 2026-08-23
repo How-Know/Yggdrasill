@@ -21,3 +21,20 @@ DateTime retainGradingQueueTime(
 }) {
   return retainedTimes.putIfAbsent(entryIdentity, () => candidate);
 }
+
+/// 미제출 숙제를 채점 모드에 노출할지 결정한다.
+///
+/// 오늘 배정된 숙제만 있으면 숨기고, 하나라도 이전 날짜의 배정이면 기존 검사
+/// 대상을 놓치지 않도록 노출한다. 제출 카드는 이 필터를 거치지 않는다.
+bool shouldShowUnsubmittedHomeworkInGradingMode({
+  required Iterable<DateTime> assignedAt,
+  required DateTime now,
+}) {
+  final localNow = now.toLocal();
+  return assignedAt.any((value) {
+    final local = value.toLocal();
+    return local.year != localNow.year ||
+        local.month != localNow.month ||
+        local.day != localNow.day;
+  });
+}

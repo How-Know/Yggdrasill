@@ -848,6 +848,46 @@ async function slicePdfPagesFromLoadedDocument(src, pageRange) {
   return Buffer.from(await out.save({ useObjectStreams: false }));
 }
 
+// 여러 쪽을 묶은 청크를 쪽 단위 청크로 쪼갠다. 기대 문항 목록과 세트 지문도
+// 쪽 범위에 맞춰 다시 계산하므로, 쪼갠 청크는 원래 청크와 같은 규칙으로 검증된다.
+async function splitChunkInputsByPage({
+  originalPdfBuffer,
+  input,
+  cropPagesByNumber,
+  setHeaderRanges,
+}) {
+  const start = Number(input?.pageRange?.start);
+  const end = Number(input?.pageRange?.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+  const src = await PDFDocument.load(originalPdfBuffer);
+  const out = [];
+  for (let page = start; page <= end; page += 1) {
+    const pageRange = { start: page, end: page };
+    const sub = {
+      buffer: await slicePdfPagesFromLoadedDocument(src, pageRange),
+      pageRange,
+      slicedPageCount: 1,
+      textbookScope: buildTextbookScopeForPageRange(
+        input.textbookScope,
+        pageRange,
+      ),
+      chunkIndex: input.chunkIndex,
+      totalChunks: input.totalChunks,
+    };
+    sub.expectedQuestionNumbers = expectedQuestionNumbersForInput(
+      cropPagesByNumber,
+      sub,
+    );
+    sub.expectedIndependentSetRanges = expectedIndependentSetRangesForInput(
+      setHeaderRanges,
+      sub,
+    );
+    if (sub.expectedQuestionNumbers.length === 0) continue;
+    out.push(sub);
+  }
+  return out;
+}
+
 async function buildVlmPdfInputs({
   originalPdfBuffer,
   textbookScope,
@@ -1039,8 +1079,12 @@ async function callGeminiChunkWithRetry({
       }
       if (missingExpected.length > 0) {
         const found = foundQuestionNumbers(chunkQuestions);
+        // finish/out 을 함께 남긴다. 번호만 보면 모델이 지면을 못 읽은 것인지,
+        // 표가 많아 출력 한도에 걸려 잘린 것인지(MAX_TOKENS) 구분할 수 없다.
         throw new Error(
-          `vlm_missing_expected_questions:${missingExpected.join(',')};found=${found.slice(0, 24).join(',')};count=${found.length}`,
+          `vlm_missing_expected_questions:${missingExpected.join(',')};found=${found.slice(0, 24).join(',')};count=${found.length}` +
+            `;finish=${compact(result?.finishReason) || '-'}` +
+            `;out=${Number(result?.usageMetadata?.candidatesTokenCount || 0)}`,
         );
       }
       if (
@@ -1793,27 +1837,66 @@ export async function runVlmExtraction({
 
   const chunkResults = [];
   const vlmQuestions = [];
-  for (const input of extractionInputs) {
-    const geminiResult = await callGeminiChunkWithRetry({
-      input,
-      model,
-      apiKey,
-      timeoutMs,
-      log,
-    });
-    chunkResults.push(geminiResult);
-    const chunkQuestions = Array.isArray(geminiResult?.parsedJson?.questions)
-      ? geminiResult.parsedJson.questions
+  const collectChunkQuestions = (result, usedInput) => {
+    chunkResults.push(result);
+    const chunkQuestions = Array.isArray(result?.parsedJson?.questions)
+      ? result.parsedJson.questions
       : [];
     for (const rawQuestion of chunkQuestions) {
       vlmQuestions.push({
         ...(rawQuestion || {}),
         source_page: rebaseSourcePageToOriginal(
           rawQuestion?.source_page,
-          input.pageRange,
-          input.slicedPageCount,
+          usedInput.pageRange,
+          usedInput.slicedPageCount,
         ),
       });
+    }
+  };
+  for (const input of extractionInputs) {
+    try {
+      collectChunkQuestions(
+        await callGeminiChunkWithRetry({ input, model, apiKey, timeoutMs, log }),
+        input,
+      );
+      continue;
+    } catch (err) {
+      const message = compact(err?.message || err);
+      const subInputs =
+        message.includes('vlm_missing_expected_questions') &&
+        Number(input.slicedPageCount || 1) > 1
+          ? await splitChunkInputsByPage({
+              originalPdfBuffer,
+              input,
+              cropPagesByNumber,
+              setHeaderRanges,
+            })
+          : [];
+      // 같은 입력으로 재시도해도 같은 곳에서 무너진다. 표가 빽빽한 지면(1-2
+      // p180~181 도수분포표)은 한 번에 두 쪽을 받아쓰다 출력이 잘리므로,
+      // 청크를 쪽 단위로 쪼개 부담을 줄여 한 번 더 시도한다.
+      if (subInputs.length < 2) throw err;
+      if (typeof log === 'function') {
+        log('vlm_chunk_split_retry', {
+          chunkIndex: input.chunkIndex,
+          totalChunks: input.totalChunks,
+          pageRange: input.pageRange,
+          parts: subInputs.length,
+          message,
+        });
+      }
+      for (const sub of subInputs) {
+        collectChunkQuestions(
+          await callGeminiChunkWithRetry({
+            input: sub,
+            model,
+            apiKey,
+            timeoutMs,
+            log,
+          }),
+          sub,
+        );
+      }
     }
   }
 

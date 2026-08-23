@@ -4873,6 +4873,8 @@ class HomeworkStore {
     for (final item in list) {
       if (item.status == HomeworkStatus.completed) continue;
       if (!_isTestItem(item)) continue;
+      // 학생앱에서 응시하는 디지털 테스트는 하원 시 종이 과제로 변환하지 않는다.
+      if ((item.type ?? '').trim() == '앱') continue;
       bool updated = false;
       final keepTimedOutTestAsHomework =
           item.status == HomeworkStatus.homework &&

@@ -61,4 +61,41 @@ void main() {
 
     expect(after, before);
   });
+
+  group('미제출 숙제 채점모드 노출', () {
+    final now = DateTime(2026, 8, 23, 22);
+
+    test('오늘 배정만 있으면 숨긴다', () {
+      expect(
+        shouldShowUnsubmittedHomeworkInGradingMode(
+          assignedAt: [DateTime(2026, 8, 23, 9)],
+          now: now,
+        ),
+        isFalse,
+      );
+    });
+
+    test('이전 배정이 하나라도 있으면 노출한다', () {
+      expect(
+        shouldShowUnsubmittedHomeworkInGradingMode(
+          assignedAt: [
+            DateTime(2026, 8, 23, 9),
+            DateTime(2026, 8, 22, 18),
+          ],
+          now: now,
+        ),
+        isTrue,
+      );
+    });
+
+    test('활성 배정이 없으면 노출하지 않는다', () {
+      expect(
+        shouldShowUnsubmittedHomeworkInGradingMode(
+          assignedAt: const [],
+          now: now,
+        ),
+        isFalse,
+      );
+    });
+  });
 }

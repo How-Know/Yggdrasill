@@ -1270,6 +1270,14 @@ class _TextbookAuthoringStageDialogState
       );
     }
 
+    debugPrint(
+      '[stage2] 블록 ${<String>[
+        for (final block in (byNumber.keys.toList()..sort()))
+          'b$block(p${lowPage[block]}~${highPage[block]}:'
+              '${byNumber[block]!.length})',
+      ].join(' ')}',
+    );
+
     int blockForHeader(TextbookVlmAnswerLayoutEntry header) {
       if (header.title.replaceAll(' ', '').contains('단원마무리')) {
         for (final entry in cornerOf.entries) {
@@ -1325,15 +1333,25 @@ class _TextbookAuthoringStageDialogState
 
       if (!layout.leadingContinuation) currentBlock = -1;
       var matchedHere = 0;
-      var skippedHere = 0;
-      for (final entry in layout.entries) {
+      // 건너뛴 항목은 번호와 이유를 남긴다. 개수만 남기면 "어느 블록의 어느
+      // 번호가 왜 빠졌는지" 알 수 없어 답지를 다시 판독해도 원인을 못 찾는다.
+      final skippedHere = <String>[];
+      for (final entry in textbookAnswerLayoutReadingOrder(layout.entries)) {
         if (entry.isHeader) {
           currentBlock = blockForHeader(entry);
+          debugPrint(
+            '[stage2] p$page 머리 "${entry.title}" '
+            '${entry.pageStart}~${entry.pageEnd} → b$currentBlock',
+          );
           continue;
         }
         final answer = entry.answer;
-        if (currentBlock < 0 || answer == null) {
-          skippedHere += 1;
+        if (answer == null) {
+          skippedHere.add('?:정답없음');
+          continue;
+        }
+        if (currentBlock < 0) {
+          skippedHere.add('${answer.problemNumber}:블록없음');
           continue;
         }
         final positions = _layoutPositionsForNumber(
@@ -1342,7 +1360,11 @@ class _TextbookAuthoringStageDialogState
           pending: pending,
         );
         if (positions.isEmpty) {
-          skippedHere += 1;
+          final known = byNumber[currentBlock]
+              ?.containsKey(textbookAnswerNumberKey(answer.problemNumber));
+          skippedHere.add(
+            '${answer.problemNumber}:${known == true ? '이미채움' : '번호없음'}',
+          );
           continue;
         }
         // 묶음이면 그림을 한 번만 잘라 문항끼리 나눠 쓴다.
@@ -1373,8 +1395,9 @@ class _TextbookAuthoringStageDialogState
       }
       debugPrint(
         '[stage2] p$page entries=${layout.entries.length} '
-        'matched=$matchedHere skipped=$skippedHere '
-        'block=$currentBlock pending=${pending.length}',
+        'matched=$matchedHere skipped=${skippedHere.length} '
+        'block=$currentBlock pending=${pending.length}'
+        '${skippedHere.isEmpty ? '' : ' · ${skippedHere.take(20).join(' ')}'}',
       );
       if (!mounted) return;
       setState(() {

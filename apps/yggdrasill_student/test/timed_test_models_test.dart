@@ -45,7 +45,7 @@ void main() {
     expect(payload['interruption_ms'], 300);
   });
 
-  test('테스트·시간·디지털 조건이 모두 맞아야 전용 흐름이다', () {
+  test('테스트 플래그와 제한시간이 있으면 전용 흐름이다', () {
     HomeworkGroup group(
         {required bool test, int? minutes, bool digital = true}) {
       return HomeworkGroup.fromRow({
@@ -60,6 +60,7 @@ void main() {
     expect(group(test: true, minutes: 10).isTimedTest, isTrue);
     expect(group(test: true, minutes: 0).isTimedTest, isFalse);
     expect(group(test: false, minutes: 10).isTimedTest, isFalse);
-    expect(group(test: true, minutes: 10, digital: false).isTimedTest, isFalse);
+    // 초기 V0에서 프린트로 잘못 저장된 기존 테스트도 복구해 연다.
+    expect(group(test: true, minutes: 10, digital: false).isTimedTest, isTrue);
   });
 }

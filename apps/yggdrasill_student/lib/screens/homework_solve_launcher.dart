@@ -4,7 +4,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/textbook_api.dart';
-import 'timed_test_solve_screen.dart';
+import '../widgets/student_confirm_sheet.dart';
 import 'textbook_solve_screen.dart';
 
 /// 문항 스냅샷이 있는 교재 숙제를 배정 범위만 교재 풀이 화면에서 연다.
@@ -17,7 +17,11 @@ Future<bool> openDigitalHomeworkSolve(
   HomeworkGroup group, {
   String? coverRef,
 }) async {
-  if (!group.digitalSolvable || group.isPrintSource) return false;
+  // 시간제한 테스트는 초기 V0에서 `프린트` 유형으로 잘못 저장된 기존 과제도
+  // 문항 스냅샷이 있으면 전용 시험 화면으로 복구해 연다.
+  if (!group.isTimedTest && (!group.digitalSolvable || group.isPrintSource)) {
+    return false;
+  }
 
   try {
     final problems =
@@ -30,41 +34,18 @@ Future<bool> openDigitalHomeworkSolve(
 
     if (group.isTimedTest) {
       if (!context.mounted) return true;
-      final start = await showDialog<bool>(
+      final start = await showStudentConfirmSheet(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('시간제한 테스트'),
-          content: Text(
-            '제한시간은 ${group.timeLimitMinutes}분이에요.\n'
-            '시작하면 앱을 나가도 시간이 계속 흐르고, 이 과제는 한 번만 응시할 수 있어요.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('시작'),
-            ),
-          ],
-        ),
+        title: '시간제한 테스트',
+        message: '제한시간은 ${group.timeLimitMinutes}분이에요.\n'
+            '첫 문항이 준비된 뒤 시간이 시작되며, 앱을 나가도 시간은 계속 흘러요.\n\n'
+            '제출하거나 다음 문제로 넘어가면 이전 문제로 돌아갈 수 없고, '
+            '답 없이 넘어간 문제는 오답으로 처리돼요.',
+        confirmLabel: '테스트 시작',
+        cancelLabel: '취소',
+        confirmIcon: Icons.timer_outlined,
       );
-      if (start != true || !context.mounted) return true;
-      final session =
-          await StudentApi.instance.startOrResumeTimedTest(group.groupId);
-      if (!context.mounted) return true;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => TimedTestSolveScreen(
-            group: group,
-            problems: usable,
-            session: session,
-          ),
-        ),
-      );
-      await HomeworkSession.instance.refresh();
-      return true;
+      if (!start || !context.mounted) return true;
     }
 
     final books = await TextbookApi.instance.listTextbooks();
@@ -113,6 +94,23 @@ Future<bool> openDigitalHomeworkSolve(
       cropIds: usable.map((problem) => problem.cropId).toSet(),
       rawPages: usable.map((problem) => problem.rawPage!).toSet(),
     );
+    if (!context.mounted) return true;
+    if (group.isTimedTest) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => TextbookSolveScreen(
+            book: book!,
+            homework: scope,
+            timedTest: TimedTestSolveConfig(
+              group: group,
+              problems: usable,
+            ),
+          ),
+        ),
+      );
+      await HomeworkSession.instance.refresh();
+      return true;
+    }
     if (!group.running && (group.phase == 1 || group.phase == 2)) {
       final result = await StudentApi.instance.groupTransition(
         groupId: group.groupId,
