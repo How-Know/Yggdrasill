@@ -1203,6 +1203,7 @@ class RightSheetGradingSearchService {
         'title': title,
         'page': pageRaw.isEmpty ? '-' : 'p.$pageRaw',
         'memo': memoRaw.isEmpty ? '-' : memoRaw,
+        'count': (hw.count ?? 0) <= 0 ? '-' : '${hw.count}문항',
       }
     ];
   }

@@ -1386,8 +1386,15 @@ class _GradingModePageState extends State<GradingModePage> {
   ) {
     final out = <({String studentId, String itemId})>[];
     for (final child in entry.children) {
-      if (!_isSubmittedVisible(child)) continue;
-      out.add((studentId: entry.studentId, itemId: child.id));
+      if (child.status == HomeworkStatus.completed) continue;
+      final key = (studentId: entry.studentId, itemId: child.id);
+      // 숙제 검사에서 만든 채점 초안은 배치 확정 전까지 phase 1을 유지한다.
+      // 실제 제출 카드뿐 아니라 명시적으로 pending인 숙제도 체크 표시 대상이다.
+      if (!_isSubmittedVisible(child) &&
+          !widget.pendingConfirms.containsKey(key)) {
+        continue;
+      }
+      out.add(key);
     }
     return out;
   }
@@ -1442,9 +1449,15 @@ class _GradingModePageState extends State<GradingModePage> {
       final hasSubmitted = submittedChildren.isNotEmpty;
       final hasHomeworkAssignment = assignedChildren.isNotEmpty &&
           shouldShowUnsubmittedHomeworkInGradingMode(
-            assignedAt: assignedChildren.expand(
-              (child) => (assignmentByItemId[child.id] ?? const [])
-                  .map((assignment) => assignment.assignedAt),
+            schedules: assignedChildren.expand(
+              (child) => (assignmentByItemId[child.id] ?? const []).map(
+                (assignment) => GradingHomeworkSchedule(
+                  assignedAt: assignment.assignedAt,
+                  dueForCheckAt: assignment.dueForCheckAt,
+                  originalDueDate: assignment.originalDueDate,
+                  dueDate: assignment.dueDate,
+                ),
+              ),
             ),
             now: now,
           );
@@ -1519,8 +1532,14 @@ class _GradingModePageState extends State<GradingModePage> {
       final itemAssignments = assignmentByItemId[item.id] ?? const [];
       final hasHomeworkAssignment = item.phase != 0 &&
           shouldShowUnsubmittedHomeworkInGradingMode(
-            assignedAt:
-                itemAssignments.map((assignment) => assignment.assignedAt),
+            schedules: itemAssignments.map(
+              (assignment) => GradingHomeworkSchedule(
+                assignedAt: assignment.assignedAt,
+                dueForCheckAt: assignment.dueForCheckAt,
+                originalDueDate: assignment.originalDueDate,
+                dueDate: assignment.dueDate,
+              ),
+            ),
             now: now,
           );
       final include = section == _GradingSection.submitted

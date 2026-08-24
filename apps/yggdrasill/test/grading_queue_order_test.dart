@@ -65,22 +65,43 @@ void main() {
   group('미제출 숙제 채점모드 노출', () {
     final now = DateTime(2026, 8, 23, 22);
 
-    test('오늘 배정만 있으면 숨긴다', () {
+    test('오늘 배정했고 검사일이 미래면 숨긴다', () {
       expect(
         shouldShowUnsubmittedHomeworkInGradingMode(
-          assignedAt: [DateTime(2026, 8, 23, 9)],
+          schedules: [
+            GradingHomeworkSchedule(
+              assignedAt: DateTime(2026, 8, 23, 9),
+              dueForCheckAt: DateTime(2026, 8, 24, 13),
+            ),
+          ],
           now: now,
         ),
         isFalse,
       );
     });
 
-    test('이전 배정이 하나라도 있으면 노출한다', () {
+    test('오늘 생성된 반복 배정이어도 검사일이 오늘이면 노출한다', () {
       expect(
         shouldShowUnsubmittedHomeworkInGradingMode(
-          assignedAt: [
-            DateTime(2026, 8, 23, 9),
-            DateTime(2026, 8, 22, 18),
+          schedules: [
+            GradingHomeworkSchedule(
+              assignedAt: DateTime(2026, 8, 23, 0, 0, 5),
+              dueForCheckAt: DateTime(2026, 8, 23, 13),
+            ),
+          ],
+          now: now,
+        ),
+        isTrue,
+      );
+    });
+
+    test('검사일이 없으면 이전 배정만 노출한다', () {
+      expect(
+        shouldShowUnsubmittedHomeworkInGradingMode(
+          schedules: [
+            GradingHomeworkSchedule(
+              assignedAt: DateTime(2026, 8, 22, 18),
+            ),
           ],
           now: now,
         ),
@@ -91,7 +112,7 @@ void main() {
     test('활성 배정이 없으면 노출하지 않는다', () {
       expect(
         shouldShowUnsubmittedHomeworkInGradingMode(
-          assignedAt: const [],
+          schedules: const [],
           now: now,
         ),
         isFalse,

@@ -22,19 +22,46 @@ DateTime retainGradingQueueTime(
   return retainedTimes.putIfAbsent(entryIdentity, () => candidate);
 }
 
+class GradingHomeworkSchedule {
+  final DateTime assignedAt;
+  final DateTime? dueForCheckAt;
+  final DateTime? originalDueDate;
+  final DateTime? dueDate;
+
+  const GradingHomeworkSchedule({
+    required this.assignedAt,
+    this.dueForCheckAt,
+    this.originalDueDate,
+    this.dueDate,
+  });
+
+  DateTime? get effectiveCheckAt => dueForCheckAt ?? originalDueDate ?? dueDate;
+}
+
 /// 미제출 숙제를 채점 모드에 노출할지 결정한다.
 ///
-/// 오늘 배정된 숙제만 있으면 숨기고, 하나라도 이전 날짜의 배정이면 기존 검사
-/// 대상을 놓치지 않도록 노출한다. 제출 카드는 이 필터를 거치지 않는다.
+/// 검사 예정일이 오늘 또는 과거면 노출한다. 반복·예약 숙제는 검사 당일 자정에
+/// 새 배정 행이 생길 수 있으므로 `assignedAt`은 검사일이 없을 때만 보조 기준으로
+/// 사용한다. 제출 카드는 이 필터를 거치지 않는다.
 bool shouldShowUnsubmittedHomeworkInGradingMode({
-  required Iterable<DateTime> assignedAt,
+  required Iterable<GradingHomeworkSchedule> schedules,
   required DateTime now,
 }) {
   final localNow = now.toLocal();
-  return assignedAt.any((value) {
-    final local = value.toLocal();
-    return local.year != localNow.year ||
-        local.month != localNow.month ||
-        local.day != localNow.day;
+  final today = DateTime(localNow.year, localNow.month, localNow.day);
+  return schedules.any((schedule) {
+    final effectiveCheckAt = schedule.effectiveCheckAt;
+    if (effectiveCheckAt != null) {
+      final local = effectiveCheckAt.toLocal();
+      final checkDate = DateTime(local.year, local.month, local.day);
+      return !checkDate.isAfter(today);
+    }
+    final assigned = schedule.assignedAt.toLocal();
+    final assignedDate = DateTime(
+      assigned.year,
+      assigned.month,
+      assigned.day,
+    );
+    return assignedDate.isBefore(today);
   });
 }

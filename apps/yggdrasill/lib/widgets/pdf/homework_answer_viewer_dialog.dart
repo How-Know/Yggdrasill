@@ -100,11 +100,21 @@ class HomeworkAnswerOverlayEntry {
   final String title;
   final String page;
   final String memo;
+  final String count;
+  final String materialTitle;
+  final String courseTitle;
+  final String summaryPage;
+  final String summaryCount;
 
   const HomeworkAnswerOverlayEntry({
     required this.title,
     required this.page,
     required this.memo,
+    this.count = '',
+    this.materialTitle = '',
+    this.courseTitle = '',
+    this.summaryPage = '',
+    this.summaryCount = '',
   });
 }
 
@@ -250,7 +260,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   bool _isViewerReady = false;
   bool _openingSolution = false;
   late bool _showingSolution;
-  bool _overlayCollapsed = false;
+  bool _overlayCollapsed = true;
   bool _gradingPanelCollapsed = false;
   late Map<String, HomeworkAnswerCellState> _gradingStates;
   double? _cachedInitialZoom;
@@ -1608,8 +1618,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     if (entries.isEmpty) return const SizedBox.shrink();
     final brightness = Theme.of(context).brightness;
     final maxWidth = math.min(MediaQuery.of(context).size.width * 0.29, 380.0);
-    final visibleEntries =
-        _overlayCollapsed ? entries.take(1).toList(growable: false) : entries;
+    final summary = entries.first;
     final titleColor = SolidCapsuleActionBarTokens.iconColor(brightness);
     final metaColor = brightness == Brightness.dark
         ? const Color(0xFF9AA3AD)
@@ -1630,6 +1639,48 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     String normalize(String raw, {String fallback = '-'}) {
       final trimmed = raw.trim();
       return trimmed.isEmpty ? fallback : trimmed;
+    }
+
+    final materialTitle = normalize(
+      summary.materialTitle,
+      fallback: widget.title,
+    );
+    final courseTitle = normalize(
+      summary.courseTitle,
+      fallback: summary.title,
+    );
+    final summaryPage = normalize(
+      summary.summaryPage,
+      fallback: summary.page,
+    );
+    final summaryCount = normalize(
+      summary.summaryCount,
+      fallback: summary.count.trim().isEmpty ? summary.memo : summary.count,
+    );
+
+    Widget summaryRow(String left, String right, TextStyle style) {
+      return Row(
+        children: [
+          Expanded(
+            child: Text(
+              left,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+              style: style,
+            ),
+          ),
+        ],
+      );
     }
 
     return Align(
@@ -1661,7 +1712,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
               ),
               child: ConstrainedBox(
                 constraints:
-                    BoxConstraints(maxHeight: _overlayCollapsed ? 78 : 320),
+                    BoxConstraints(maxHeight: _overlayCollapsed ? 96 : 320),
                 child: SingleChildScrollView(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
@@ -1672,48 +1723,63 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (int i = 0; i < visibleEntries.length; i++) ...[
-                          Text(
-                            normalize(
-                              visibleEntries[i].title,
-                              fallback: '(제목 없음)',
+                        Row(
+                          children: [
+                            Expanded(
+                              child: summaryRow(
+                                materialTitle,
+                                courseTitle,
+                                titleStyle,
+                              ),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: titleStyle,
+                            const SizedBox(width: 8),
+                            Icon(
+                              _overlayCollapsed
+                                  ? Icons.expand_more_rounded
+                                  : Icons.expand_less_rounded,
+                              size: 22,
+                              color: metaColor,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        summaryRow(summaryPage, summaryCount, metaStyle),
+                        if (!_overlayCollapsed) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            height: 1,
+                            color: dividerColor,
                           ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  normalize(visibleEntries[i].page),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.left,
-                                  style: metaStyle,
-                                ),
+                          const SizedBox(height: 10),
+                          for (int i = 0; i < entries.length; i++) ...[
+                            Text(
+                              normalize(
+                                entries[i].title,
+                                fallback: '(제목 없음)',
                               ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  normalize(visibleEntries[i].memo),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.right,
-                                  style: metaStyle,
-                                ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: titleStyle,
+                            ),
+                            const SizedBox(height: 6),
+                            summaryRow(
+                              normalize(entries[i].page),
+                              normalize(
+                                entries[i].count,
+                                fallback: entries[i].memo,
                               ),
+                              metaStyle,
+                            ),
+                            if (i != entries.length - 1) ...[
+                              const SizedBox(height: 9),
+                              Container(
+                                width: double.infinity,
+                                height: 1,
+                                color: dividerColor,
+                              ),
+                              const SizedBox(height: 9),
                             ],
-                          ),
-                          if (i != visibleEntries.length - 1) ...[
-                            const SizedBox(height: 9),
-                            Container(
-                              width: double.infinity,
-                              height: 1,
-                              color: dividerColor,
-                            ),
-                            const SizedBox(height: 9),
                           ],
                         ],
                       ],

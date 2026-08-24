@@ -6687,12 +6687,37 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         ? 'right_sheet_answer:${session.sessionId}'
         : session.answerViewerCacheKey.trim();
     final title = session.title.trim().isEmpty ? '답지 확인' : session.title.trim();
+    final pageNumbers = session.gradingPages
+        .map(
+          (page) => page['pageNumber'] is int
+              ? page['pageNumber'] as int
+              : int.tryParse('${page['pageNumber']}') ?? 0,
+        )
+        .where((page) => page > 0)
+        .toSet()
+        .toList()
+      ..sort();
+    final summaryPage = pageNumbers.isEmpty
+        ? ''
+        : pageNumbers.length == 1
+            ? 'p.${pageNumbers.first}'
+            : 'p.${pageNumbers.first}-${pageNumbers.last}';
+    final questionCount = session.gradingPages.fold<int>(
+      0,
+      (sum, page) =>
+          sum + (page['cells'] is List ? (page['cells'] as List).length : 0),
+    );
     final overlayEntries = session.overlayEntries
         .map(
           (entry) => <String, String>{
-            'title': '${entry['title'] ?? ''}',
-            'page': '${entry['page'] ?? ''}',
-            'memo': '${entry['memo'] ?? ''}',
+            'title': entry['title'] ?? '',
+            'page': entry['page'] ?? '',
+            'memo': entry['memo'] ?? '',
+            'count': entry['count'] ?? '',
+            'materialTitle': title,
+            'courseTitle': session.groupHomeworkTitle,
+            'summaryPage': summaryPage,
+            'summaryCount': questionCount <= 0 ? '' : '$questionCount문항',
           },
         )
         .toList(growable: false);

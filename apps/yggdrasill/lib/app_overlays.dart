@@ -193,6 +193,10 @@ class RightSideSheetPdfPanelSession {
 /// - 오른쪽 사이드시트(메모 슬라이드)
 final GlobalKey<OverlayState> fabDropdownOverlayKey = GlobalKey<OverlayState>();
 
+/// 정답 PDF를 포함한 모든 전역 패널보다 위에 표시할 숙제 검사 선택창.
+final ValueNotifier<Widget?> homeworkInspectionForegroundOverlay =
+    ValueNotifier<Widget?>(null);
+
 /// 전역 메모 플로팅 배너 표시 여부 제어 (true면 숨김)
 final ValueNotifier<bool> hideGlobalMemoFloatingBanners =
     ValueNotifier<bool>(false);

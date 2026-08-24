@@ -1267,6 +1267,13 @@ class _MyAppState extends State<MyApp>
                     builder: (ctx) => const _GlobalStartupUpdateCard()),
                 OverlayEntry(
                     builder: (ctx) => const TopGlassUpdateNoticeBridge()),
+                OverlayEntry(
+                  builder: (ctx) => ValueListenableBuilder<Widget?>(
+                    valueListenable: homeworkInspectionForegroundOverlay,
+                    builder: (context, foreground, _) =>
+                        foreground ?? const SizedBox.shrink(),
+                  ),
+                ),
               ]);
             },
             home: const MainScreen(),
@@ -1803,6 +1810,11 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
                     title: entry['title'] ?? '',
                     page: entry['page'] ?? '',
                     memo: entry['memo'] ?? '',
+                    count: entry['count'] ?? '',
+                    materialTitle: entry['materialTitle'] ?? '',
+                    courseTitle: entry['courseTitle'] ?? '',
+                    summaryPage: entry['summaryPage'] ?? '',
+                    summaryCount: entry['summaryCount'] ?? '',
                   ),
                 )
                 .toList(growable: false);

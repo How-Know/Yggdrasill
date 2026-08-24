@@ -478,6 +478,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 'title': entry.title,
                 'page': entry.page,
                 'memo': entry.memo,
+                'count': entry.count,
               },
             )
             .toList(growable: false);
@@ -561,6 +562,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             'title': entry.title,
             'page': entry.page,
             'memo': entry.memo,
+            'count': entry.count,
           },
         )
         .toList(growable: false);
@@ -1084,6 +1086,32 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             context: context,
                                             studentId: studentId,
                                             hw: summary,
+                                          );
+                                        }
+                                        final gradingChildren = children
+                                            .where(
+                                              (child) =>
+                                                  child.status !=
+                                                  HomeworkStatus.completed,
+                                            )
+                                            .toList(growable: false);
+                                        final pendingKeys = gradingChildren
+                                            .map(
+                                              (child) => (
+                                                studentId: studentId,
+                                                itemId: child.id,
+                                              ),
+                                            )
+                                            .toList(growable: false);
+                                        if (pendingKeys.any(
+                                          _pendingConfirms.containsKey,
+                                        )) {
+                                          return _handleSubmittedChipTapForPending(
+                                            context: context,
+                                            studentId: studentId,
+                                            hw: gradingChildren.first,
+                                            targetKeys: pendingKeys,
+                                            openNext: openNext,
                                           );
                                         }
                                         await _handleHomeworkInspectionTap(
@@ -4157,17 +4185,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final pageText = pageRaw.isEmpty ? '-' : 'p.$pageRaw';
       final memoRaw = (item.memo ?? '').trim();
       final memoText = memoRaw.isEmpty ? '-' : memoRaw;
+      final count = item.count ?? 0;
       overlayEntries.add(
         HomeworkAnswerOverlayEntry(
           title: title,
           page: pageText,
           memo: memoText,
+          count: count <= 0 ? '-' : '$count문항',
         ),
       );
     }
     if (overlayEntries.isEmpty) {
       final fallbackPage = (fallbackHomework.page ?? '').trim();
       final fallbackMemo = (fallbackHomework.memo ?? '').trim();
+      final fallbackCount = fallbackHomework.count ?? 0;
       overlayEntries.add(
         HomeworkAnswerOverlayEntry(
           title: fallbackHomework.title.trim().isEmpty
@@ -4175,6 +4206,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               : fallbackHomework.title.trim(),
           page: fallbackPage.isEmpty ? '-' : 'p.$fallbackPage',
           memo: fallbackMemo.isEmpty ? '-' : fallbackMemo,
+          count: fallbackCount <= 0 ? '-' : '$fallbackCount문항',
         ),
       );
     }
@@ -5986,6 +6018,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   'title': entry.title,
                   'page': entry.page,
                   'memo': entry.memo,
+                  'count': entry.count,
                 },
               )
               .toList(growable: false),
@@ -6208,6 +6241,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 'title': entry.title,
                 'page': entry.page,
                 'memo': entry.memo,
+                'count': entry.count,
               },
             )
             .toList(growable: false),
@@ -6615,7 +6649,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         ? group!.title.trim()
         : summary.title.trim();
     final choice = await _showHomeworkInspectionChoiceDialog(
-      context: context,
       title: title,
       dueDate: dueDate,
       absenceCarryover: absenceCarryover,
@@ -7779,7 +7812,6 @@ enum _HomeworkInspectionChoice {
 }
 
 Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
-  required BuildContext context,
   required String title,
   required DateTime? dueDate,
   required bool absenceCarryover,
@@ -7791,12 +7823,20 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
       ? '$dueLabel · 결석 이월'
       : (missedInspection ? '$dueLabel · 미검사 이월' : dueLabel);
   final homeworkTitle = title.trim().isEmpty ? '그룹 숙제' : title.trim();
-  return showModalBottomSheet<_HomeworkInspectionChoice>(
-    context: context,
-    isScrollControlled: true,
-    useRootNavigator: true,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withValues(alpha: 0.18),
+  final completer = Completer<_HomeworkInspectionChoice?>();
+  late final Widget foreground;
+  var closed = false;
+
+  void close([_HomeworkInspectionChoice? value]) {
+    if (closed) return;
+    closed = true;
+    if (identical(homeworkInspectionForegroundOverlay.value, foreground)) {
+      homeworkInspectionForegroundOverlay.value = null;
+    }
+    completer.complete(value);
+  }
+
+  foreground = Builder(
     builder: (dialogContext) {
       final dlg = YggDialogColors.of(dialogContext);
 
@@ -7811,7 +7851,7 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
           child: _HomeworkCheckCard(
             child: InkWell(
               borderRadius: BorderRadius.circular(12),
-              onTap: () => Navigator.of(dialogContext).pop(value),
+              onTap: () => close(value),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(
@@ -7856,88 +7896,106 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
         );
       }
 
-      return _HomeworkCheckGlassPanel(
-        icon: Icons.fact_check_outlined,
-        title: '숙제 검사 대상입니다',
-        shrinkWrap: true,
-        onClose: () => Navigator.of(dialogContext).pop(),
-        actions: const <Widget>[],
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+      return Material(
+        type: MaterialType.transparency,
+        child: Stack(
           children: [
-            Text(
-              homeworkTitle,
-              style: TextStyle(
-                color: dlg.text,
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: close,
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: 0.18),
+                ),
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              dueMetaLabel,
-              style: TextStyle(
-                color: dlg.textSub,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 18),
-            actionCard(
-              label: '채점 시작',
-              description: '제출한 숙제를 채점하고 원래 숙제를 종료합니다.',
-              value: _HomeworkInspectionChoice.grade,
+            _HomeworkCheckGlassPanel(
               icon: Icons.fact_check_outlined,
-            ),
-            actionCard(
-              label: '숙제 안 함',
-              description: '0%로 기록하고 그룹 전체를 다음 수업으로 연기합니다.',
-              value: _HomeworkInspectionChoice.notDone,
-              icon: Icons.assignment_late_outlined,
-            ),
-            actionCard(
-              label: '두고 옴',
-              description: '안 함과 동일하게 처리하고 알림장에 사유를 표시합니다.',
-              value: _HomeworkInspectionChoice.leftBehind,
-              icon: Icons.inventory_2_outlined,
+              title: '숙제 검사 대상입니다',
+              shrinkWrap: true,
+              onClose: close,
+              actions: const <Widget>[],
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    homeworkTitle,
+                    style: TextStyle(
+                      color: dlg.text,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    dueMetaLabel,
+                    style: TextStyle(
+                      color: dlg.textSub,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  actionCard(
+                    label: '채점 시작',
+                    description: '제출한 숙제를 채점하고 원래 숙제를 종료합니다.',
+                    value: _HomeworkInspectionChoice.grade,
+                    icon: Icons.fact_check_outlined,
+                  ),
+                  actionCard(
+                    label: '숙제 안 함',
+                    description: '0%로 기록하고 그룹 전체를 다음 수업으로 연기합니다.',
+                    value: _HomeworkInspectionChoice.notDone,
+                    icon: Icons.assignment_late_outlined,
+                  ),
+                  actionCard(
+                    label: '두고 옴',
+                    description: '안 함과 동일하게 처리하고 알림장에 사유를 표시합니다.',
+                    value: _HomeworkInspectionChoice.leftBehind,
+                    icon: Icons.inventory_2_outlined,
+                  ),
+                ],
+              ),
+              bottomChild: Align(
+                alignment: Alignment.centerRight,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(
+                      _homeworkCheckActionButtonHeight / 2,
+                    ),
+                    onTap: close,
+                    child: Container(
+                      height: _homeworkCheckActionButtonHeight,
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: dlg.chipBg,
+                        borderRadius: BorderRadius.circular(
+                          _homeworkCheckActionButtonHeight / 2,
+                        ),
+                      ),
+                      child: Text(
+                        '취소',
+                        style: TextStyle(
+                          color: dlg.chipText,
+                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
-        ),
-        bottomChild: Align(
-          alignment: Alignment.centerRight,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(
-                _homeworkCheckActionButtonHeight / 2,
-              ),
-              onTap: () => Navigator.of(dialogContext).pop(),
-              child: Container(
-                height: _homeworkCheckActionButtonHeight,
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: dlg.chipBg,
-                  borderRadius: BorderRadius.circular(
-                    _homeworkCheckActionButtonHeight / 2,
-                  ),
-                ),
-                child: Text(
-                  '취소',
-                  style: TextStyle(
-                    color: dlg.chipText,
-                    fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ),
         ),
       );
     },
   );
+  homeworkInspectionForegroundOverlay.value = foreground;
+  return completer.future;
 }
 
 Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(
