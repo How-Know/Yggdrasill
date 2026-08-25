@@ -146,6 +146,54 @@ final class WatchAPIClient {
         }
     }
 
+    func registerPushToken(
+        _ deviceToken: String,
+        completion: @escaping (Result<String, WatchAPIError>) -> Void
+    ) {
+        guard let auth, auth.isUsable else {
+            completion(.failure(.noAuth))
+            return
+        }
+        guard let url = URL(string: "\(auth.supabaseUrl)/functions/v1/watch_api") else {
+            completion(.failure(.badURL))
+            return
+        }
+        let body: [String: Any] = [
+            "action": "register_push_token",
+            "academyId": auth.academyId,
+            "deviceToken": deviceToken,
+            "bundleId": Bundle.main.bundleIdentifier ?? "com.beleunu.yggdrasill.watchkitapp",
+            // 개발/Ad Hoc/App Store 프로파일을 서버가 BadDeviceToken 응답으로 판별해
+            // 올바른 APNs 환경을 저장한다.
+            "environment": "unknown",
+            "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+            "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+        ]
+        sendJSON(url: url, method: "POST", body: body) { result in
+            completion(result.map { ($0["message"] as? String) ?? "watch_push_ready" })
+        }
+    }
+
+    func sendPushTest(
+        completion: @escaping (Result<String, WatchAPIError>) -> Void
+    ) {
+        guard let auth, auth.isUsable else {
+            completion(.failure(.noAuth))
+            return
+        }
+        guard let url = URL(string: "\(auth.supabaseUrl)/functions/v1/watch_push_send") else {
+            completion(.failure(.badURL))
+            return
+        }
+        let body: [String: Any] = [
+            "action": "test",
+            "academyId": auth.academyId,
+        ]
+        sendJSON(url: url, method: "POST", body: body) { result in
+            completion(result.map { _ in "테스트 알림을 보냈어요" })
+        }
+    }
+
     func homeworkCheck(
         item: WatchHomeworkItem,
         progress: Int,

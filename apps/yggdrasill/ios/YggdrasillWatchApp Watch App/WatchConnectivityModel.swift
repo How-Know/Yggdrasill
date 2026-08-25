@@ -1,6 +1,8 @@
 import Foundation
 import Combine
 import WatchConnectivity
+import WatchKit
+import UserNotifications
 
 /// iPhone이 내려준 오늘 출결 타깃 1건.
 struct WatchTarget: Identifiable {
@@ -194,13 +196,38 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     @Published private(set) var statusText = "iPhone 연결 대기 중"
     @Published private(set) var targets: [WatchTarget] = []
     @Published private(set) var homeworkItems: [WatchHomeworkItem] = []
+    @Published private(set) var lastSyncedAt: Date?
+    @Published private(set) var notificationsAuthorized = false
+    @Published private(set) var standaloneOnline = false
+    @Published private(set) var pushReady = false
+    @Published private(set) var pushStatusText = "푸시 확인 중"
     /// 사용자에게 잠깐 보여줄 액션 결과 메시지.
     @Published var toast: String?
     private var liveRefreshTimer: Timer?
+    private var pushObserver: NSObjectProtocol?
+    private var pushStatusObserver: NSObjectProtocol?
     private let api = WatchAPIClient.shared
 
     /// iPhone 없이 서버와 직접 통신할 수 있는 상태인지.
     var isStandaloneReady: Bool { api.hasAuth }
+
+    var isIPhoneReachable: Bool { iphoneReachable }
+
+    var readinessTitle: String {
+        if iphoneReachable { return "iPhone 연결 · 준비됨" }
+        if api.hasAuth && standaloneOnline { return "Watch 단독 · 온라인" }
+        if api.hasAuth { return "Watch 단독 · 연결 확인" }
+        return "초기 동기화 필요"
+    }
+
+    var readinessDetail: String {
+        var parts = [statusText]
+        if let lastSyncedAt {
+            parts.append("최근 \(Self.shortTime(lastSyncedAt))")
+        }
+        parts.append(notificationsAuthorized ? pushStatusText : "알림 권한 필요")
+        return parts.joined(separator: " · ")
+    }
 
     /// iPhone 앱이 실행 중이라 브리지(검증된 경로)를 쓸 수 있는지.
     /// 이때는 iPhone의 DataManager 로직을 그대로 태워야 데이터가 정확하다.
@@ -211,6 +238,22 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     override init() {
         super.init()
         loadCachedTargets()
+        pushObserver = NotificationCenter.default.addObserver(
+            forName: .watchAttendancePushReceived,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.requestSnapshot(silent: true)
+        }
+        pushStatusObserver = NotificationCenter.default.addObserver(
+            forName: .watchPushStatusChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.pushReady = notification.userInfo?["ready"] as? Bool ?? false
+            self?.pushStatusText =
+                notification.userInfo?["text"] as? String ?? "푸시 확인 중"
+        }
 
         guard WCSession.isSupported() else {
             statusText = "WatchConnectivity 미지원"
@@ -219,17 +262,42 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
 
         WCSession.default.delegate = self
         WCSession.default.activate()
+        requestNotificationAuthorization()
         startLiveRefresh()
+    }
+
+    deinit {
+        liveRefreshTimer?.invalidate()
+        if let pushObserver {
+            NotificationCenter.default.removeObserver(pushObserver)
+        }
+        if let pushStatusObserver {
+            NotificationCenter.default.removeObserver(pushStatusObserver)
+        }
     }
 
     var isReachable: Bool { WCSession.default.isReachable }
 
+    func sendPushTest() {
+        toast = "테스트 알림 요청 중"
+        api.sendPushTest { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let message):
+                    self?.toast = message
+                case .failure:
+                    self?.toast = "푸시 등록 상태를 확인해주세요"
+                }
+            }
+        }
+    }
+
     /// 최신 출결 스냅샷을 요청한다.
     /// 단독 동작 토큰이 있으면 서버에서 직접 조회하고, 없으면 iPhone 브리지로 폴백한다.
-    func requestSnapshot() {
+    func requestSnapshot(silent: Bool = false) {
         // iPhone이 켜져 있으면 검증된 브리지 경로를 우선 사용한다.
         if iphoneReachable {
-            bridgeRequestSnapshot()
+            bridgeRequestSnapshot(silent: silent)
             return
         }
         if api.hasAuth {
@@ -238,27 +306,32 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
                     guard let self else { return }
                     switch result {
                     case .success(let items):
+                        self.standaloneOnline = true
                         self.applyContext([
                             "type": "todayTargets",
                             "items": items,
                             "date": Self.isoString(Date()),
                         ])
-                        self.statusText = "서버 동기화됨"
+                        self.markSynced(status: "Watch 서버 직접 동기화")
                     case .failure:
-                        self.bridgeRequestSnapshot()
+                        self.standaloneOnline = false
+                        self.statusText = "Watch 서버 연결 실패"
+                        self.bridgeRequestSnapshot(silent: silent)
                     }
                 }
             }
             return
         }
-        bridgeRequestSnapshot()
+        bridgeRequestSnapshot(silent: silent)
     }
 
     /// iPhone에 최신 출결 스냅샷을 다시 요청한다(도달 가능할 때만).
-    private func bridgeRequestSnapshot() {
+    private func bridgeRequestSnapshot(silent: Bool) {
         guard WCSession.default.activationState == .activated,
               WCSession.default.isReachable else {
-            toast = targets.isEmpty ? "iPhone 앱을 먼저 열어주세요" : "최근 목록 표시 중"
+            if !silent {
+                toast = targets.isEmpty ? "iPhone 앱을 먼저 열어주세요" : "최근 목록 표시 중"
+            }
             return
         }
         WCSession.default.sendMessage(["type": "requestSnapshot"], replyHandler: { [weak self] reply in
@@ -266,11 +339,15 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
                 if (reply["type"] as? String) == "todayTargets" {
                     self?.applyContext(reply)
                 }
-                self?.toast = (reply["message"] as? String) ?? "새로고침 요청됨"
+                if !silent {
+                    self?.toast = (reply["message"] as? String) ?? "새로고침 요청됨"
+                }
             }
         }, errorHandler: { [weak self] error in
             DispatchQueue.main.async {
-                self?.toast = "새로고침 실패: \(error.localizedDescription)"
+                if !silent {
+                    self?.toast = "새로고침 실패: \(error.localizedDescription)"
+                }
             }
         })
     }
@@ -278,8 +355,13 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
     func startLiveRefresh() {
         liveRefreshTimer?.invalidate()
         liveRefreshTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
-            self?.requestSnapshot()
+            self?.requestSnapshot(silent: true)
         }
+    }
+
+    func stopLiveRefresh() {
+        liveRefreshTimer?.invalidate()
+        liveRefreshTimer = nil
     }
 
     func requestHomework(for target: WatchTarget) {
@@ -520,8 +602,11 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
         let rawItems = (context["items"] as? [[String: Any]]) ?? []
         let parsed = rawItems.compactMap(WatchTarget.init(dict:))
         let apply = {
+            let previous = self.targets
             self.targets = parsed
             self.cacheTargets(rawItems, snapshotDate: context["date"] as? String)
+            self.lastSyncedAt = Date()
+            self.notifyAttendanceTransitions(from: previous, to: parsed)
         }
         if Thread.isMainThread {
             apply()
@@ -584,6 +669,111 @@ final class WatchConnectivityModel: NSObject, ObservableObject {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
     }
+
+    private static func shortTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func markSynced(status: String) {
+        statusText = status
+        lastSyncedAt = Date()
+    }
+
+    private func requestNotificationAuthorization() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            if settings.authorizationStatus == .notDetermined {
+                UNUserNotificationCenter.current().requestAuthorization(
+                    options: [.alert, .sound]
+                ) { granted, _ in
+                    DispatchQueue.main.async {
+                        self?.notificationsAuthorized = granted
+                    }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self?.notificationsAuthorized =
+                        settings.authorizationStatus == .authorized ||
+                        settings.authorizationStatus == .provisional
+                }
+            }
+        }
+    }
+
+    private func notifyAttendanceTransitions(
+        from previous: [WatchTarget],
+        to current: [WatchTarget]
+    ) {
+        guard !previous.isEmpty else { return }
+        var oldById: [String: WatchTarget] = [:]
+        for item in previous {
+            oldById[item.id] = item
+        }
+        for target in current {
+            guard let old = oldById[target.id], old.status != target.status else { continue }
+            let action: String
+            let eventTime: String?
+            switch target.status {
+            case "attended":
+                action = "등원"
+                eventTime = target.arrivalTime
+            case "leaved":
+                action = "하원"
+                eventTime = target.departureTime
+            default:
+                continue
+            }
+            // 오래된 캐시를 처음 갱신할 때 지난 출결을 새 알림처럼 울리지 않는다.
+            if let eventTime,
+               let date = Self.parseDate(eventTime),
+               abs(date.timeIntervalSinceNow) > 10 * 60 {
+                continue
+            }
+            presentAttendanceAlert(name: target.name, action: action)
+        }
+    }
+
+    private func presentAttendanceAlert(name: String, action: String) {
+        let message = "\(name) 학생 \(action)"
+        if WKExtension.shared().applicationState == .active {
+            WKInterfaceDevice.current().play(.notification)
+            toast = message
+            return
+        }
+        guard notificationsAuthorized else { return }
+        let content = UNMutableNotificationContent()
+        content.title = action == "등원" ? "학생 등원" : "학생 하원"
+        content.body = message
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "attendance.\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: value) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        if let date = iso.date(from: value) { return date }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        for pattern in [
+            "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+            "yyyy-MM-dd'T'HH:mm:ss.SSS",
+            "yyyy-MM-dd'T'HH:mm:ss",
+        ] {
+            formatter.dateFormat = pattern
+            if let date = formatter.date(from: value) { return date }
+        }
+        return nil
+    }
 }
 
 extension WatchConnectivityModel: WCSessionDelegate {
@@ -596,22 +786,50 @@ extension WatchConnectivityModel: WCSessionDelegate {
             if let error {
                 self.statusText = "활성화 실패: \(error.localizedDescription)"
             } else {
-                self.statusText = activationState == .activated ? "iPhone 연결됨" : "연결 대기 중"
+                if activationState == .activated {
+                    self.statusText = self.iphoneReachable
+                        ? "iPhone 브리지 연결"
+                        : (self.api.hasAuth ? "Watch 서버 연결 가능" : "iPhone 연결 대기")
+                } else {
+                    self.statusText = "연결 대기 중"
+                }
             }
         }
         // 활성화 직후 마지막 스냅샷을 즉시 반영.
-        applyContext(session.receivedApplicationContext)
-        requestSnapshot()
+        handleApplicationContext(session.receivedApplicationContext)
+        requestSnapshot(silent: true)
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        applyContext(applicationContext)
+        handleApplicationContext(applicationContext)
+        DispatchQueue.main.async {
+            self.markSynced(status: "iPhone에서 동기화")
+        }
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         if (userInfo["type"] as? String) == "watchAuth" {
             handleAuthPayload(userInfo)
         }
+    }
+
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        DispatchQueue.main.async {
+            self.statusText = session.isReachable
+                ? "iPhone 브리지 연결"
+                : (self.api.hasAuth ? "Watch 서버 직접 연결" : "iPhone 연결 대기")
+            self.objectWillChange.send()
+            if session.isReachable {
+                self.requestSnapshot(silent: true)
+            }
+        }
+    }
+
+    private func handleApplicationContext(_ context: [String: Any]) {
+        if let auth = context["watchAuth"] as? [String: Any] {
+            handleAuthPayload(auth)
+        }
+        applyContext(context)
     }
 
     /// iPhone이 릴레이한 Supabase 토큰을 저장하고, 즉시 서버에서 최신 데이터를 가져온다.
@@ -626,9 +844,11 @@ extension WatchConnectivityModel: WCSessionDelegate {
         )
         guard auth.isUsable else { return }
         api.updateAuth(auth)
+        WatchPushService.shared.syncStoredToken()
         DispatchQueue.main.async {
-            self.statusText = "단독 동작 준비됨"
-            self.requestSnapshot()
+            self.standaloneOnline = false
+            self.statusText = "단독 동작 인증됨 · 연결 확인 중"
+            self.requestSnapshot(silent: true)
         }
     }
 }

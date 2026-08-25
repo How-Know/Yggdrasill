@@ -5,6 +5,7 @@ import WatchConnectivity
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, WCSessionDelegate {
   private var watchChannel: FlutterMethodChannel?
+  private var lastWatchAuthPayload: [String: Any]?
 
   override func application(
     _ application: UIApplication,
@@ -84,9 +85,12 @@ import WatchConnectivity
       result(FlutterError(code: "unsupported", message: "WatchConnectivity 미지원", details: nil))
       return
     }
-    guard let payload = arguments as? [String: Any] else {
+    guard var payload = arguments as? [String: Any] else {
       result(FlutterError(code: "bad_args", message: "스냅샷 형식 오류", details: nil))
       return
+    }
+    if let auth = lastWatchAuthPayload {
+      payload["watchAuth"] = auth
     }
     do {
       try WCSession.default.updateApplicationContext(payload)
@@ -107,7 +111,13 @@ import WatchConnectivity
       result(FlutterError(code: "bad_args", message: "토큰 형식 오류", details: nil))
       return
     }
+    lastWatchAuthPayload = payload
     WCSession.default.transferUserInfo(payload)
+    // applicationContext는 상대 앱이 현재 실행 중이지 않아도 최신 상태 1건을
+    // 전달한다. 재설치 직후 sendMessage가 불가능한 경우에도 인증을 복구한다.
+    var context = WCSession.default.applicationContext
+    context["watchAuth"] = payload
+    try? WCSession.default.updateApplicationContext(context)
     result(nil)
   }
 

@@ -13,7 +13,7 @@
 // 그대로 반환한다(서버/Swift에 출결·숙제 계산 로직을 중복 구현하지 않는다).
 
 import { corsHeaders } from '../_shared/cors.ts';
-import { createUserClient } from '../_shared/supabase.ts';
+import { createAdminClient, createUserClient } from '../_shared/supabase.ts';
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,6 +30,14 @@ function fail(message: string, status = 200) {
   return json({ ok: false, message }, status);
 }
 
+function uuidOrNull(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(text)
+    ? text
+    : null;
+}
+
 function kstToday(): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul',
@@ -37,6 +45,114 @@ function kstToday(): string {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date());
+}
+
+function parseSnapshotDate(value: unknown): number | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  // Flutter의 DateTime.toIso8601String()은 로컬 시각에 offset을 붙이지 않는다.
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(text)
+    ? text
+    : `${text}+09:00`;
+  const millis = Date.parse(normalized);
+  return Number.isFinite(millis) ? millis : null;
+}
+
+function mergeLiveAttendance(
+  rawItems: unknown,
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  if (!Array.isArray(rawItems)) return [];
+  return rawItems.map((raw) => {
+    const item = { ...((raw ?? {}) as Record<string, unknown>) };
+    const studentId = String(item.studentId ?? '');
+    const setId = String(item.setId ?? '');
+    const targetTime = parseSnapshotDate(item.classDateTime);
+    const candidates = rows.filter((row) =>
+      String(row.student_id ?? '') === studentId
+    );
+    let matched = candidates.find((row) =>
+      setId && String(row.set_id ?? '') === setId
+    );
+    if (!matched && targetTime !== null) {
+      matched = candidates
+        .map((row) => ({
+          row,
+          distance: Math.abs(
+            (parseSnapshotDate(row.class_date_time) ?? Number.MAX_SAFE_INTEGER) -
+              targetTime,
+          ),
+        }))
+        .filter(({ distance }) => distance <= 60_000)
+        .sort((a, b) => a.distance - b.distance)[0]?.row;
+    }
+    if (!matched && candidates.length === 1) matched = candidates[0];
+    if (!matched) return item;
+
+    const arrivalTime = matched.arrival_time;
+    const departureTime = matched.departure_time;
+    item.status = departureTime
+      ? 'leaved'
+      : (arrivalTime || matched.is_present ? 'attended' : 'waiting');
+    if (arrivalTime) item.arrivalTime = arrivalTime;
+    else delete item.arrivalTime;
+    if (departureTime) item.departureTime = departureTime;
+    else delete item.departureTime;
+    return item;
+  });
+}
+
+function buildTargetsFromAttendance(
+  rows: Record<string, unknown>[],
+  studentNames: Map<string, string>,
+): Record<string, unknown>[] {
+  const bySession = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const studentId = String(row.student_id ?? '');
+    const rowId = String(row.id ?? '');
+    if (!studentId || !rowId) continue;
+    const key = String(row.set_id ?? '') || `attendance:${rowId}`;
+    const previous = bySession.get(key);
+    const hasAttendance = Boolean(row.arrival_time || row.is_present);
+    const previousHasAttendance = Boolean(
+      previous?.arrival_time || previous?.is_present,
+    );
+    if (
+      previous &&
+      (previousHasAttendance && !hasAttendance ||
+        (previousHasAttendance === hasAttendance &&
+          String(previous.class_date_time ?? '') <=
+            String(row.class_date_time ?? '')))
+    ) {
+      continue;
+    }
+    bySession.set(key, row);
+  }
+
+  return [...bySession.entries()]
+    .map(([setId, row]) => {
+      const studentId = String(row.student_id ?? '');
+      const arrivalTime = row.arrival_time;
+      const departureTime = row.departure_time;
+      const item: Record<string, unknown> = {
+        setId,
+        studentId,
+        name: studentNames.get(studentId) ?? '학생',
+        classDateTime: row.class_date_time,
+        classEndTime: row.class_end_time ?? row.class_date_time,
+        className: row.class_name ?? '수업',
+        status: departureTime
+          ? 'leaved'
+          : (arrivalTime || row.is_present ? 'attended' : 'waiting'),
+      };
+      if (row.session_type_id) item.sessionTypeId = row.session_type_id;
+      if (arrivalTime) item.arrivalTime = arrivalTime;
+      if (departureTime) item.departureTime = departureTime;
+      return item;
+    })
+    .sort((a, b) =>
+      String(a.classDateTime ?? '').localeCompare(String(b.classDateTime ?? ''))
+    );
 }
 
 Deno.serve(async (req) => {
@@ -87,11 +203,51 @@ Deno.serve(async (req) => {
           .maybeSingle();
         if (error) return fail(error.message);
         const payload = (data?.payload ?? {}) as Record<string, unknown>;
+        const snapshotItems = Array.isArray(payload.items) ? payload.items : [];
+        let items = snapshotItems as Record<string, unknown>[];
+        let attendanceUpdatedAt: string | null = null;
+        const { data: attendance, error: attendanceError } = await supa
+          .from('attendance_records')
+          .select(
+            'id,student_id,set_id,session_type_id,class_date_time,class_end_time,class_name,arrival_time,departure_time,is_present,is_planned,updated_at',
+          )
+          .eq('academy_id', academyId)
+          .eq('date', date);
+        if (attendanceError) return fail(attendanceError.message);
+        const rows = (attendance ?? []) as Record<string, unknown>[];
+        if (snapshotItems.length > 0) {
+          items = mergeLiveAttendance(snapshotItems, rows);
+        } else if (rows.length > 0) {
+          const ids = [
+            ...new Set(rows.map((row) => String(row.student_id ?? ''))),
+          ].filter(Boolean);
+          const { data: students, error: studentError } = await supa
+            .from('students')
+            .select('id,name')
+            .eq('academy_id', academyId)
+            .in('id', ids);
+          if (studentError) return fail(studentError.message);
+          const names = new Map<string, string>(
+            ((students ?? []) as Record<string, unknown>[]).map((student) => [
+              String(student.id ?? ''),
+              String(student.name ?? '학생'),
+            ]),
+          );
+          items = buildTargetsFromAttendance(rows, names);
+        }
+        if (rows.length > 0) {
+          attendanceUpdatedAt = rows
+            .map((row) => String(row.updated_at ?? ''))
+            .filter(Boolean)
+            .sort()
+            .at(-1) ?? null;
+        }
         return ok({
           type: 'todayTargets',
           date,
           updatedAt: data?.updated_at ?? null,
-          items: payload.items ?? [],
+          attendanceUpdatedAt,
+          items,
         });
       }
 
@@ -132,13 +288,59 @@ Deno.serve(async (req) => {
           p_action: attAction,
           p_class_end_time: body.classEndTime ? String(body.classEndTime) : null,
           p_class_name: body.className ? String(body.className) : null,
-          p_set_id: body.setId ? String(body.setId) : null,
-          p_session_type_id: body.sessionTypeId ? String(body.sessionTypeId) : null,
+          p_set_id: uuidOrNull(body.setId),
+          p_session_type_id: uuidOrNull(body.sessionTypeId),
         });
         if (error) return fail(error.message);
         return ok({
           message: attAction === 'arrival' ? '등원 기록됨' : '하원 기록됨',
         });
+      }
+
+      case 'register_push_token': {
+        const deviceToken = String(body.deviceToken ?? '')
+          .trim()
+          .toLowerCase();
+        const bundleId = String(
+          body.bundleId ?? 'com.beleunu.yggdrasill.watchkitapp',
+        ).trim();
+        const rawEnvironment = String(body.environment ?? 'unknown');
+        const environment = ['development', 'production'].includes(
+            rawEnvironment,
+          )
+          ? rawEnvironment
+          : 'unknown';
+        if (!/^[0-9a-f]{32,256}$/.test(deviceToken)) {
+          return fail('invalid_device_token');
+        }
+        if (bundleId !== 'com.beleunu.yggdrasill.watchkitapp') {
+          return fail('invalid_bundle_id');
+        }
+        const { data: membership, error: membershipError } = await supa
+          .from('memberships')
+          .select('academy_id')
+          .eq('academy_id', academyId)
+          .eq('user_id', userData.user.id)
+          .maybeSingle();
+        if (membershipError || !membership) return fail('not_a_member', 403);
+
+        const admin = createAdminClient();
+        const { error } = await admin.from('watch_push_devices').upsert({
+          academy_id: academyId,
+          user_id: userData.user.id,
+          device_token: deviceToken,
+          bundle_id: bundleId,
+          environment,
+          enabled: true,
+          app_version: body.appVersion
+            ? String(body.appVersion)
+            : null,
+          os_version: body.osVersion ? String(body.osVersion) : null,
+          last_seen_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'device_token' });
+        if (error) return fail(error.message);
+        return ok({ message: 'watch_push_ready' });
       }
 
       case 'homework_check': {

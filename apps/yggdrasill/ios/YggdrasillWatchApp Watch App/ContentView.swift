@@ -52,10 +52,8 @@ struct ContentView: View {
                 .foregroundStyle(.green)
             Text("오늘 수업 없음")
                 .font(.headline)
-            Text(connectivity.statusText)
-                .font(.footnote)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+            ConnectionStatusView()
+                .environmentObject(connectivity)
             Button("새로고침") {
                 connectivity.requestSnapshot()
             }
@@ -67,6 +65,10 @@ struct ContentView: View {
     private var targetList: some View {
         ScrollViewReader { proxy in
             List {
+                ConnectionStatusView()
+                    .environmentObject(connectivity)
+                    .listRowBackground(Color.clear)
+
                 ForEach(connectivity.targets) { target in
                     TargetRow(
                         target: target,
@@ -128,6 +130,55 @@ struct ContentView: View {
             if let date = formatter.date(from: value) { return date }
         }
         return nil
+    }
+}
+
+private struct ConnectionStatusView: View {
+    @EnvironmentObject private var connectivity: WatchConnectivityModel
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: statusSymbol)
+                .font(.caption)
+                .foregroundStyle(statusColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(connectivity.readinessTitle)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                Text(connectivity.readinessDetail)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            if connectivity.pushReady {
+                Button {
+                    connectivity.sendPushTest()
+                } label: {
+                    Image(systemName: "bell.badge")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("푸시 알림 테스트")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(statusColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var statusSymbol: String {
+        if connectivity.isIPhoneReachable { return "iphone.radiowaves.left.and.right" }
+        if connectivity.isStandaloneReady { return "applewatch.radiowaves.left.and.right" }
+        return "exclamationmark.triangle"
+    }
+
+    private var statusColor: Color {
+        if connectivity.isIPhoneReachable || connectivity.standaloneOnline {
+            return .green
+        }
+        return .orange
     }
 }
 

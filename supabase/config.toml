@@ -6,4 +6,7 @@ project_id = "jkanrdxaidumlvpntudy"
 [functions.kiosk_api]
 verify_jwt = false
 
+[functions.watch_push_send]
+verify_jwt = false
+
 

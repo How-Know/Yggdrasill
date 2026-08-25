@@ -4,13 +4,31 @@
 > iPhone 동반 앱을 통해 기존 Supabase `attendance_records` 파이프라인에 반영되도록 한다.
 > 이 문서는 **코드 변경 없이 합의용 설계도**이며, 확정되면 Phase별 마이그레이션/구현으로 이어간다.
 
+## 2026-08-24 구현 현황
+
+- Watch 앱과 iPhone의 `WatchConnectivity` 브리지, `watch_api` Edge Function,
+  `watch_snapshots`, `watch_record_attendance`가 구현되어 있다.
+- iPhone에서 한 번 로그인 세션을 전달받은 Watch는 Wi-Fi/LTE가 있으면
+  iPhone이 근처에 없어도 목록 조회, 등·하원 기록, 숙제 검사를 직접 수행한다.
+- Watch 상단 상태 카드가 `iPhone 연결`, `Watch 단독 온라인`, `초기 동기화 필요`,
+  최근 동기화 시각과 알림 권한을 구분해 표시한다.
+- `watch_api.today_targets`는 기존 일정 스냅샷 위에 당일 `attendance_records`를
+  실시간 병합한다. 당일 스냅샷이 없어도 계획 출결 레코드와 학생 이름으로 목록을
+  재구성하므로 PC·키오스크에서 생긴 등·하원이 Watch 직접 새로고침에 반영된다.
+- Watch 앱이 실행 중이면 12초 간격 직접 갱신과 상태 변화 햅틱·인앱 토스트를 제공한다.
+- Watch 전용 APNs 토큰 등록, 출결 전이 큐/트리거, `watch_push_send` Edge Function,
+  Sandbox·Production 공용 APNs 인증 키를 구축했다. 앱이 닫혔거나 iPhone이 없어도
+  PC·키오스크에서 발생한 등·하원을 Watch 시스템 배너와 진동으로 직접 받는다.
+- APNs 일시 오류는 지수 백오프로 재시도하며, 1분 cron이 멈춘 delivery를 복구한다.
+- Watch 상태 카드에 알림 권한뿐 아니라 APNs 토큰의 서버 등록 완료 여부도 표시한다.
+
 ## 0. 결정 사항 요약 (Design Inputs)
 
 | 항목 | 결정 |
 |---|---|
 | 사용자 | **선생님(강사) 본인** — 학생이 아님 |
 | 체크 방식 | **수동 버튼** (손목에서 학생 탭 → 등원/하원 확정) |
-| 앱 구조 | **iPhone 동반 앱 + watchOS companion app** (Independent watch app 아님) |
+| 앱 구조 | **iPhone 동반 앱 + 네트워크 직접 통신 가능한 watchOS companion app** |
 | 인증 | 학생 인증은 **불필요**. 단, "누가 찍었는지"(선생님)는 감사 기록으로 반드시 남김 |
 | 범위 | **문서/설계만 우선**, 이후 Phase로 구현 |
 
@@ -425,17 +443,18 @@ Apple Watch 경로도 **동일 RPC를 거치므로 별도 작업 없이 학부�
 | **2. 학생 검색 UI** | **스크롤만 제공**, 검색 보류. (watchOS 한글 자판 미지원, 음성검색은 별도 복잡도) 단, **"수업 없는 날 온 학생" 등록 케이스는 Phase 2 이후 재검토**. |
 | **3. 자동 하원 처리** | **도입하지 않음.** 하원은 반드시 선생님이 직접 Watch/iPhone/PC에서 탭. → 서버 크론 신규 추가 없음. 기존 정책 유지. |
 | **4. Apple Developer Program** | **아직 준비 안 됨.** → 별도 `docs/apple_developer_onboarding.md` 단계별 가이드 작성. |
-| **5. Watch 단독(LTE) 운영** | **지원하지 않음.** iPhone이 근처에 있을 때만 작동. → Watch 직접 네트워크 폴백 경로(`event_source='watch_direct'`) 제거. |
+| **5. Watch 단독(LTE/Wi-Fi) 운영** | 이후 구현에서 지원으로 변경. 최초 인증 전달은 iPhone이 필요하지만, 인증 후 Watch가 `watch_api`를 직접 호출한다. |
 
-### 10.1 확정 사항이 설계에 미친 변경점 (Delta)
+### 10.1 당시 확정 사항과 이후 변경점
 
-- **§2.2 컴포넌트 역할 "Watch 폴백 URLSession" 삭제** — Watch는 iPhone과의 `WCSession`만 사용.
-- **§4.2 `attendance_entry_audit.event_source` CHECK 제약에서 `'watch_direct'` 제거.**
-  → 허용값: `'via_phone' | 'phone_only' | 'flutter_desktop' | 'api'`.
-- **§5.2 watchOS 화면에서 "LTE 직전송" 시나리오 삭제** — 오프라인이면 iPhone 복귀 대기만.
+- 2026-04-21에는 직접 통신을 보류했으나, 이후 `WatchAPIClient`와 `watch_api`를
+  추가해 Wi-Fi/LTE 직접 통신을 구현했다.
+- 출결 직접 기록은 `watch_record_attendance`를 사용한다. 별도 audit source 확장은
+  아직 적용하지 않았다.
 - **§5.3 iPhone Companion "current academy" 개념 단순화** — `memberships` 중 첫 행을 고정 사용, 멀티 학원 전환 UI 없음.
 - **§5.2 Watch UI에 "검색"/"필터" 제거**, 대신 **반(class) 필터만** 단일 피커로 제공(선생님이 보통 한 반만 담당하는 가정).
-- **§6 오프라인 큐 전략은 유지** (Watch↔Phone 간 전송 실패 대비용, 네트워크 복귀는 Phone 쪽에서만 발생).
+- iPhone 브리지 경로의 `transferUserInfo` 큐는 유지한다. Watch 직접 요청 실패를
+  영속 재전송하는 별도 큐는 아직 없다.
 
 ## 11. Apple Developer 계정/빌드 환경 준비
 
