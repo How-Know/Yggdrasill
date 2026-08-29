@@ -124,8 +124,7 @@ class UpdateService {
 
   static void startAvailableUpdateNoticeAutoRefresh() {
     stopAvailableUpdateNoticeAutoRefresh();
-    _noticeRefreshTimer =
-        Timer.periodic(_kNoticeRefreshInterval, (_) {
+    _noticeRefreshTimer = Timer.periodic(_kNoticeRefreshInterval, (_) {
       unawaited(triggerAvailableUpdateNoticeCheck());
     });
   }
@@ -261,10 +260,18 @@ class UpdateService {
 
       final tempDir = await getTemporaryDirectory();
       final zipPath = p.join(tempDir.path, 'ygg_update.zip');
+      final partPath = '$zipPath.part';
       final zipFile = File(zipPath);
+      final partFile = File(partPath);
       final total = streamResp.contentLength ?? -1;
       int received = 0;
-      final sink = zipFile.openWrite();
+      try {
+        if (await zipFile.exists()) await zipFile.delete();
+      } catch (_) {}
+      try {
+        if (await partFile.exists()) await partFile.delete();
+      } catch (_) {}
+      final sink = partFile.openWrite();
       final sw = Stopwatch()..start();
       int lastTick = 0;
       _setProgress(UpdateInfo(
@@ -274,38 +281,68 @@ class UpdateService {
             : '다운로드 중...',
         tag: tag,
       ));
-      await for (final chunk
-          in streamResp.stream.timeout(const Duration(seconds: 30))) {
-        received += chunk.length;
-        sink.add(chunk);
-        final now = sw.elapsedMilliseconds;
-        if (now - lastTick > 900) {
-          lastTick = now;
-          if (total > 0) {
-            final pct =
-                (received / total * 100).clamp(0, 100).toStringAsFixed(0);
-            final mb = (received / (1024 * 1024)).toStringAsFixed(0);
-            final tmb = (total / (1024 * 1024)).toStringAsFixed(0);
-            _setProgress(UpdateInfo(
-                phase: UpdatePhase.downloading,
-                message: '다운로드 중... ($pct% · ${mb}MB/${tmb}MB)',
-                tag: tag));
-          } else {
-            final mb = (received / (1024 * 1024)).toStringAsFixed(0);
-            _setProgress(UpdateInfo(
-                phase: UpdatePhase.downloading,
-                message: '다운로드 중... (${mb}MB)',
-                tag: tag));
+      try {
+        await for (final chunk
+            in streamResp.stream.timeout(const Duration(minutes: 2))) {
+          received += chunk.length;
+          sink.add(chunk);
+          final now = sw.elapsedMilliseconds;
+          if (now - lastTick > 900) {
+            lastTick = now;
+            if (total > 0) {
+              final pct =
+                  (received / total * 100).clamp(0, 100).toStringAsFixed(0);
+              final mb = (received / (1024 * 1024)).toStringAsFixed(0);
+              final tmb = (total / (1024 * 1024)).toStringAsFixed(0);
+              _setProgress(UpdateInfo(
+                  phase: UpdatePhase.downloading,
+                  message: '다운로드 중... ($pct% · ${mb}MB/${tmb}MB)',
+                  tag: tag));
+            } else {
+              final mb = (received / (1024 * 1024)).toStringAsFixed(0);
+              _setProgress(UpdateInfo(
+                  phase: UpdatePhase.downloading,
+                  message: '다운로드 중... (${mb}MB)',
+                  tag: tag));
+            }
           }
         }
+      } catch (_) {
+        try {
+          await sink.close();
+        } catch (_) {}
+        try {
+          if (await partFile.exists()) await partFile.delete();
+        } catch (_) {}
+        rethrow;
       }
       await sink.flush();
       await sink.close();
 
-      if (!await zipFile.exists() || (await zipFile.length()) < 1024 * 1024) {
-        _showSnack(context, '다운로드에 실패했습니다.');
+      if (!await partFile.exists() || (await partFile.length()) < 1024 * 1024) {
+        _showSnack(context, '다운로드에 실패했습니다. 다시 시도해주세요.');
         return;
       }
+      if (total > 0 && received != total) {
+        try {
+          await partFile.delete();
+        } catch (_) {}
+        _showSnack(context,
+            '다운로드가 중간에 끊겼습니다. (${(received / (1024 * 1024)).toStringAsFixed(0)}MB/${(total / (1024 * 1024)).toStringAsFixed(0)}MB)');
+        _setProgress(UpdateInfo(
+            phase: UpdatePhase.error, message: '다운로드가 중간에 끊겼습니다.', tag: tag));
+        return;
+      }
+      if (!await _looksLikeCompleteZip(partFile)) {
+        try {
+          await partFile.delete();
+        } catch (_) {}
+        _showSnack(context, '다운로드 파일이 손상되었습니다. 다시 시도해주세요.');
+        _setProgress(UpdateInfo(
+            phase: UpdatePhase.error, message: '다운로드 ZIP 검증 실패', tag: tag));
+        return;
+      }
+      await partFile.rename(zipPath);
 
       final exePath = Platform.resolvedExecutable;
       final exeDir = _preferredInstallDir(exePath);
@@ -401,6 +438,42 @@ class UpdateService {
           phase: UpdatePhase.error, message: e.toString(), tag: tag));
     } finally {
       client.close();
+    }
+  }
+
+  static Future<bool> _looksLikeCompleteZip(File file) async {
+    try {
+      final length = await file.length();
+      if (length < 22) return false;
+      final raf = await file.open();
+      try {
+        final head = await raf.read(4);
+        if (head.length != 4 ||
+            head[0] != 0x50 ||
+            head[1] != 0x4B ||
+            head[2] != 0x03 ||
+            head[3] != 0x04) {
+          return false;
+        }
+
+        // End of central directory signature must exist near the end of a ZIP.
+        final tailLength = length < 65557 ? length : 65557;
+        await raf.setPosition(length - tailLength);
+        final tail = await raf.read(tailLength);
+        for (var i = tail.length - 4; i >= 0; i--) {
+          if (tail[i] == 0x50 &&
+              tail[i + 1] == 0x4B &&
+              tail[i + 2] == 0x05 &&
+              tail[i + 3] == 0x06) {
+            return true;
+          }
+        }
+        return false;
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return false;
     }
   }
 
